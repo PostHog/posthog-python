@@ -78,6 +78,40 @@ For example:
 posthog.alias('anonymous session id', 'distinct id')
 ```
 
+## Django
+
+For Django, you can do the initialisation of the key in the AppConfig, so that it's available everywhere.
+
+in `yourapp/apps.py`
+```python
+from django.apps import AppConfig
+import posthog
+
+class YourAppConfig(AppConfig):
+    def ready(self):
+        posthog.write_key = 'your key'
+```
+
+Then, anywhere else in your app you can do
+```python
+import posthog
+
+def homepage(request):
+    # example capture
+    posthog.capture(request.session.session_key, 'page view', ....)
+```
+
+# Development
+
+## Naming confusion
+
+As our open source project [PostHog](https://github.com/PostHog/posthog) shares the same module name, we create a special `posthog-analytics` package, mostly for internal use to avoid module collision. It is the exact same.
+
+## How to release
+1. Increase `VERSION` in `posthog/version.py`
+2. run `make release` and `make release_analytics`
+3. `git commit -am "Release X.Y.Z."` (where X.Y.Z is the new version)
+4. `git tag -a X.Y.Z -m "Version X.Y.Z"` (where X.Y.Z is the new version).
 
 ## Thank you
 
