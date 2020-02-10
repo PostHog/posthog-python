@@ -9,7 +9,7 @@ except ImportError:
     from Queue import Queue
 
 from posthog.consumer import Consumer, MAX_MSG_SIZE
-from posthogequest import APIError
+from posthog.request import APIError
 
 
 class TestConsumer(unittest.TestCase):

@@ -3,7 +3,7 @@ import unittest
 import json
 import requests
 
-from posthogequest import post, DatetimeSerializer
+from posthog.request import post, DatetimeSerializer
 
 
 class TestRequests(unittest.TestCase):

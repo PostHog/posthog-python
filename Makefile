@@ -11,15 +11,17 @@ release:
 release_analytics:
 	rm -rf dist
 	rm -rf build
-	rm -rf posthog-analytics
-	mkdir posthog-analytics
-	cp -r posthog/* posthog-analytics/
+	rm -rf posthoganalytics
+	mkdir posthoganalytics
+	cp -r posthog/* posthoganalytics/
+	find ./posthoganalytics -type f -exec sed -i '' -e 's/from posthog\./from posthoganalytics\./g' {} \;
 	rm -rf posthog
 	python setup_analytics.py sdist bdist_wheel
 	twine upload dist/*
 	mkdir posthog
-	cp -r posthog-analytics/* posthog/
-	rm -rf posthog-analytics
+	find ./posthoganalytics -type f -exec sed -i '' -e 's/from posthoganalytics\./from posthog\./g' {} \;
+	cp -r posthoganalytics/* posthog/
+	rm -rf posthoganalytics
 
 e2e_test:
 	.buildscripts/e2e.sh

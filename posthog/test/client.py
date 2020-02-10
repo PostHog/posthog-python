@@ -5,7 +5,7 @@ import mock
 import time
 
 from posthog.version import VERSION
-from posthoglient import Client
+from posthog.client import Client
 
 
 class TestClient(unittest.TestCase):

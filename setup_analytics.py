@@ -8,7 +8,7 @@ except ImportError:
     from distutils.core import setup
 
 # Don't import module here, since deps may not be installed
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'posthog-analytics'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'posthoganalytics'))
 from version import VERSION
 
 long_description = '''
@@ -28,15 +28,15 @@ tests_require = [
 ]
 
 setup(
-    name='posthog-analytics',
+    name='posthoganalytics',
     version=VERSION,
     url='https://github.com/posthog/posthog-python',
     author='Posthog',
     author_email='hey@posthog.com',
     maintainer='PostHog',
     maintainer_email='hey@posthog.com',
-    test_suite='posthog-analytics.test.all',
-    packages=['posthog-analytics', 'posthog-analytics.test'],
+    test_suite='posthoganalytics.test.all',
+    packages=['posthoganalytics', 'posthoganalytics.test'],
     license='MIT License',
     install_requires=install_requires,
     tests_require=tests_require,
