@@ -10,11 +10,15 @@ release:
 
 release_analytics:
 	rm -rf dist
+	rm -rf build
 	rm -rf posthog-analytics
 	mkdir posthog-analytics
 	cp -r posthog/* posthog-analytics/
+	rm -rf posthog
 	python setup_analytics.py sdist bdist_wheel
 	twine upload dist/*
+	mkdir posthog
+	cp -r posthog-analytics/* posthog/
 	rm -rf posthog-analytics
 
 e2e_test:
