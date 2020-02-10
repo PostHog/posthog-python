@@ -1,0 +1,14 @@
+**sublime**
+*.pyc
+dist
+*.egg-info
+dist
+MANIFEST
+build
+.eggs
+.coverage
+.vscode/
+env
+flake8.out
+pylint.out
+
