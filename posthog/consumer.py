@@ -22,7 +22,7 @@ class Consumer(Thread):
     """Consumes the messages from the client's queue."""
     log = logging.getLogger('posthog')
 
-    def __init__(self, queue, write_key, flush_at=100, host=None,
+    def __init__(self, queue, api_key, flush_at=100, host=None,
                  on_error=None, flush_interval=0.5, gzip=False, retries=10,
                  timeout=15):
         """Create a consumer thread."""
@@ -31,7 +31,7 @@ class Consumer(Thread):
         self.daemon = True
         self.flush_at = flush_at
         self.flush_interval = flush_interval
-        self.write_key = write_key
+        self.api_key = api_key
         self.host = host
         self.on_error = on_error
         self.queue = queue
@@ -128,7 +128,7 @@ class Consumer(Thread):
             max_tries=self.retries + 1,
             giveup=fatal_exception)
         def send_request():
-            post(self.host, gzip=self.gzip,
+            post(self.api_key, self.host, gzip=self.gzip,
                  timeout=self.timeout, batch=batch)
 
         send_request()

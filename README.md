@@ -15,7 +15,7 @@ In your app, import the posthog library and set your api key **before** making a
 ```python
 import posthog
 
-posthog.write_key = 'YOUR API KEY'
+posthog.api_key = 'YOUR API KEY'
 ```
 
 You can find your key in the /setup page in PostHog.
@@ -89,7 +89,7 @@ import posthog
 
 class YourAppConfig(AppConfig):
     def ready(self):
-        posthog.write_key = 'your key'
+        posthog.api_key = 'your key'
 ```
 
 Then, anywhere else in your app you can do

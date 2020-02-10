@@ -74,7 +74,7 @@ def unknown():
     print()
 
 
-analytics.write_key = options.writeKey
+analytics.api_key = options.writeKey
 analytics.on_error = failed
 analytics.debug = True
 

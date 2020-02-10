@@ -25,14 +25,14 @@ class Client(object):
     """Create a new PostHog client."""
     log = logging.getLogger('posthog')
 
-    def __init__(self, write_key=None, host=None, debug=False,
+    def __init__(self, api_key=None, host=None, debug=False,
                  max_queue_size=10000, send=True, on_error=None, flush_at=100,
                  flush_interval=0.5, gzip=False, max_retries=3,
                  sync_mode=False, timeout=15, thread=1):
-        require('write_key', write_key, string_types)
+        require('api_key', api_key, string_types)
 
         self.queue = queue.Queue(max_queue_size)
-        self.write_key = write_key
+        self.api_key = api_key
         self.on_error = on_error
         self.debug = debug
         self.send = send
@@ -58,7 +58,7 @@ class Client(object):
             for n in range(thread):
                 self.consumers = []
                 consumer = Consumer(
-                    self.queue, write_key, host=host, on_error=on_error,
+                    self.queue, api_key, host=host, on_error=on_error,
                     flush_at=flush_at, flush_interval=flush_interval,
                     gzip=gzip, retries=max_retries, timeout=timeout,
                 )
@@ -68,19 +68,19 @@ class Client(object):
                 if send:
                     consumer.start()
 
-    def identify(self, distinct_id=None, traits=None, context=None, timestamp=None,
+    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None,
                 message_id=None):
-        traits = traits or {}
+        properties = properties or {}
         context = context or {}
         require('distinct_id', distinct_id, ID_TYPES)
-        require('traits', traits, dict)
+        require('properties', properties, dict)
 
         msg = {
             'timestamp': timestamp,
             'context': context,
             'type': 'identify',
             'distinct_id': distinct_id,
-            '$set': traits,
+            '$set': properties,
             'event': '$identify',
             'messageId': message_id,
         }
@@ -220,7 +220,6 @@ class Client(object):
         msg['messageId'] = stringify_id(message_id)
         msg['library'] = 'posthog-python'
         msg['library_version'] = VERSION
-        msg['api_key'] = self.write_key
 
         msg['distinct_id'] = stringify_id(msg.get('distinct_id', None))
 
@@ -233,7 +232,7 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug('enqueued with blocking %s.', msg['type'])
-            post(self.host, gzip=self.gzip,
+            post(self.api_key, self.host, gzip=self.gzip,
                  timeout=self.timeout, batch=[msg])
 
             return True, msg

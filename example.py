@@ -4,7 +4,7 @@
 import posthog
 
 # You can find this key on the /setup page in PostHog
-posthog.write_key = '<your key>'
+posthog.api_key = '<your key>'
 
 # Where you host PostHog, with no trailing /.
 # You can remove this line if you're using posthog.com

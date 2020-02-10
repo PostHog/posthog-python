@@ -13,12 +13,13 @@ from posthog.utils import remove_trailing_slash
 _session = sessions.Session()
 
 
-def post(host=None, gzip=False, timeout=15, **kwargs):
+def post(api_key, host=None, gzip=False, timeout=15, **kwargs):
     """Post the `kwargs` to the API"""
     log = logging.getLogger('posthog')
     body = kwargs
     body["sentAt"] = datetime.utcnow().replace(tzinfo=tzutc()).isoformat()
     url = remove_trailing_slash(host or 'https://t.posthog.com') + '/batch/'
+    body['api_key'] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
     log.debug('making request: %s', data)
     headers = {
