@@ -63,10 +63,8 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg['properties'], {'property': 'value'})
         self.assertEqual(msg['context']['ip'], '192.168.0.1')
         self.assertEqual(msg['event'], 'python test event')
-        self.assertEqual(msg['context']['library'], {
-            'name': 'analytics-python',
-            'version': VERSION
-        })
+        self.assertEqual(msg['properties']['$lib'], 'posthog-python')
+        self.assertEqual(msg['properties']['$lib_version'], VERSION)
         self.assertEqual(msg['messageId'], 'messageId')
         self.assertEqual(msg['distinct_id'], 'distinct_id')
         self.assertEqual(msg['type'], 'track')
