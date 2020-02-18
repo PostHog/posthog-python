@@ -218,6 +218,8 @@ class Client(object):
         timestamp = guess_timezone(timestamp)
         msg['timestamp'] = timestamp.isoformat()
         msg['messageId'] = stringify_id(message_id)
+        if not msg.get('properties'):
+            msg['properties'] = {}
         msg['properties']['$lib'] = 'posthog-python'
         msg['properties']['$lib_version'] = VERSION
 
