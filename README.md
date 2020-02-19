@@ -69,6 +69,8 @@ In a purely back-end implementation, this means whenever an anonymous user does 
 
 The same concept applies for when a user logs in.
 
+If you're using PostHog in the front-end and back-end, doing the `identify` call in the frontend will be enough.
+
 An `alias` call requires
 - `previous distinct id` the unique ID of the user before
 - `distinct id` the current unique id
