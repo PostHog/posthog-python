@@ -53,7 +53,7 @@ An `identify` call requires
 
 For example:
 ```python
-posthog.capture('distinct id', {
+posthog.identify('distinct id', {
     'email': 'dwayne@gmail.com',
     'name': 'Dwayne Johnson'
 })
