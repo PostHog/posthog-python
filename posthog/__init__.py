@@ -12,6 +12,7 @@ on_error: Callable = None
 debug: bool = False
 send: bool = True
 sync_mode:bool = False
+disabled: bool = False
 
 default_client = None
 
@@ -109,6 +110,8 @@ def shutdown():
 def _proxy(method, *args, **kwargs):
     """Create an analytics client if one doesn't exist and send to it."""
     global default_client
+    if disabled:
+        return None
     if not default_client:
         default_client = Client(api_key, host=host, debug=debug,
                                 on_error=on_error, send=send,
