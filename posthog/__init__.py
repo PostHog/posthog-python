@@ -48,7 +48,7 @@ def identify(distinct_id: str, properties: Optional[Dict]=None, context: Optiona
 
     For example:
     ```python
-    posthog.capture('distinct id', {
+    posthog.identify('distinct id', {
         'email': 'dwayne@gmail.com',
         'name': 'Dwayne Johnson'
     })
