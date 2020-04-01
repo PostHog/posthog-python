@@ -6,19 +6,26 @@ from typing import Optional, Dict, Callable
 __version__ = VERSION
 
 """Settings."""
-api_key: str = None
-host: str = None
-on_error: Callable = None
-debug: bool = False
-send: bool = True
-sync_mode:bool = False
-disabled: bool = False
+api_key = None # type: str
+host = None # type: str
+on_error = None # type: Callable
+debug = False # type: bool
+send = True # type: bool
+sync_mode = False # type: bool
+disabled = False # type: bool
 
 default_client = None
 
 
-def capture(distinct_id: str, event: str, properties: Optional[Dict]=None, context: Optional[Dict]=None,
-              timestamp: Optional[str]=None, message_id: Optional[str]=None) -> None:
+def capture(
+    distinct_id, # type: str,
+    event, # type: str,
+    properties=None, # type: Optional[Dict]
+    context=None, # type: Optional[Dict]
+    timestamp=None, # type: Optional[str]
+    message_id=None, # type: Optional[str]
+    ):
+    # type: (...) -> None
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
 
@@ -37,8 +44,14 @@ def capture(distinct_id: str, event: str, properties: Optional[Dict]=None, conte
     """
     _proxy('capture', distinct_id=distinct_id, event=event, properties=properties, context=context, timestamp=timestamp, message_id=message_id)
 
-def identify(distinct_id: str, properties: Optional[Dict]=None, context: Optional[Dict]=None, timestamp: Optional[str]=None,
-                message_id=None) -> None:
+def identify(
+    distinct_id, # type: str,
+    properties=None, # type: Optional[Dict]
+    context=None, # type: Optional[Dict]
+    timestamp=None, # type: Optional[str]
+    message_id=None, # type: Optional[str]
+    ):
+    # type: (...) -> None
     """
     Identify lets you add metadata on your users so you can more easily identify who they are in PostHog, and even do things like segment users by these properties.
 
@@ -61,7 +74,14 @@ def group(*args, **kwargs):
     _proxy('group', *args, **kwargs)
 
 
-def alias(previous_id: str, distinct_id: str, context: Optional[Dict]=None, timestamp: Optional[str]=None, message_id: Optional[str]=None) -> None:
+def alias(
+    previous_id, # type: str,
+    distinct_id, # type: str,
+    context=None, # type: Optional[Dict]
+    timestamp=None, # type: Optional[str]
+    message_id=None, # type: Optional[str]
+    ):
+    # type: (...) -> None
     """
     To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
 
