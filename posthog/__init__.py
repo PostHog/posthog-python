@@ -22,7 +22,7 @@ def capture(
     event, # type: str,
     properties=None, # type: Optional[Dict]
     context=None, # type: Optional[Dict]
-    timestamp=None, # type: Optional[str]
+    timestamp=None, # type: Optional[datetime.datetime]
     message_id=None, # type: Optional[str]
     ):
     # type: (...) -> None
@@ -48,7 +48,7 @@ def identify(
     distinct_id, # type: str,
     properties=None, # type: Optional[Dict]
     context=None, # type: Optional[Dict]
-    timestamp=None, # type: Optional[str]
+    timestamp=None, # type: Optional[datetime.datetime]
     message_id=None, # type: Optional[str]
     ):
     # type: (...) -> None
@@ -78,7 +78,7 @@ def alias(
     previous_id, # type: str,
     distinct_id, # type: str,
     context=None, # type: Optional[Dict]
-    timestamp=None, # type: Optional[str]
+    timestamp=None, # type: Optional[datetime.datetime]
     message_id=None, # type: Optional[str]
     ):
     # type: (...) -> None
