@@ -34,7 +34,7 @@ class TestModule(unittest.TestCase):
         posthog.flush()
 
     def test_page(self):
-        posthog.page('distinct_id')
+        posthog.page('distinct_id', 'https://posthog.com/contact')
         posthog.flush()
 
     def test_flush(self):
