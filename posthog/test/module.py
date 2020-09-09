@@ -33,8 +33,8 @@ class TestModule(unittest.TestCase):
         posthog.alias('previousId', 'distinct_id')
         posthog.flush()
 
-    def test_screen(self):
-        posthog.screen('distinct_id')
+    def test_page(self):
+        posthog.page('distinct_id')
         posthog.flush()
 
     def test_flush(self):

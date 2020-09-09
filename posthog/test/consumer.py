@@ -10,6 +10,7 @@ except ImportError:
 
 from posthog.consumer import Consumer, MAX_MSG_SIZE
 from posthog.request import APIError
+from posthog.test.utils import TEST_API_KEY
 
 
 class TestConsumer(unittest.TestCase):
@@ -41,7 +42,7 @@ class TestConsumer(unittest.TestCase):
 
     def test_upload(self):
         q = Queue()
-        consumer = Consumer(q, 'testsecret')
+        consumer = Consumer(q, TEST_API_KEY)
         track = {
             'type': 'track',
             'event': 'python event',
@@ -57,7 +58,7 @@ class TestConsumer(unittest.TestCase):
         # The consumer should upload _n_ times.
         q = Queue()
         flush_interval = 0.3
-        consumer = Consumer(q, 'testsecret', flush_at=10,
+        consumer = Consumer(q, TEST_API_KEY, flush_at=10,
                             flush_interval=flush_interval)
         with mock.patch('posthog.consumer.post') as mock_post:
             consumer.start()
@@ -77,7 +78,7 @@ class TestConsumer(unittest.TestCase):
         q = Queue()
         flush_interval = 0.5
         flush_at = 10
-        consumer = Consumer(q, 'testsecret', flush_at=flush_at,
+        consumer = Consumer(q, TEST_API_KEY, flush_at=flush_at,
                             flush_interval=flush_interval)
         with mock.patch('posthog.consumer.post') as mock_post:
             consumer.start()
@@ -92,7 +93,7 @@ class TestConsumer(unittest.TestCase):
             self.assertEqual(mock_post.call_count, 2)
 
     def test_request(self):
-        consumer = Consumer(None, 'testsecret')
+        consumer = Consumer(None, TEST_API_KEY)
         track = {
             'type': 'track',
             'event': 'python event',
@@ -135,21 +136,21 @@ class TestConsumer(unittest.TestCase):
 
     def test_request_retry(self):
         # we should retry on general errors
-        consumer = Consumer(None, 'testsecret')
+        consumer = Consumer(None, TEST_API_KEY)
         self._test_request_retry(consumer, Exception('generic exception'), 2)
 
         # we should retry on server errors
-        consumer = Consumer(None, 'testsecret')
+        consumer = Consumer(None, TEST_API_KEY)
         self._test_request_retry(consumer, APIError(
             500, 'code', 'Internal Server Error'), 2)
 
         # we should retry on HTTP 429 errors
-        consumer = Consumer(None, 'testsecret')
+        consumer = Consumer(None, TEST_API_KEY)
         self._test_request_retry(consumer, APIError(
             429, 'code', 'Too Many Requests'), 2)
 
         # we should NOT retry on other client errors
-        consumer = Consumer(None, 'testsecret')
+        consumer = Consumer(None, TEST_API_KEY)
         api_error = APIError(400, 'code', 'Client Errors')
         try:
             self._test_request_retry(consumer, api_error, 1)
@@ -159,19 +160,19 @@ class TestConsumer(unittest.TestCase):
             self.fail('request() should not retry on client errors')
 
         # test for number of exceptions raise > retries value
-        consumer = Consumer(None, 'testsecret', retries=3)
+        consumer = Consumer(None, TEST_API_KEY, retries=3)
         self._test_request_retry(consumer, APIError(
             500, 'code', 'Internal Server Error'), 3)
 
     def test_pause(self):
-        consumer = Consumer(None, 'testsecret')
+        consumer = Consumer(None, TEST_API_KEY)
         consumer.pause()
         self.assertFalse(consumer.running)
 
     def test_max_batch_size(self):
         q = Queue()
         consumer = Consumer(
-            q, 'testsecret', flush_at=100000, flush_interval=3)
+            q, TEST_API_KEY, flush_at=100000, flush_interval=3)
         track = {
             'type': 'track',
             'event': 'python event',

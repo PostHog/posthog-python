@@ -4,12 +4,13 @@ import json
 import requests
 
 from posthog.request import post, DatetimeSerializer
+from posthog.test.utils import TEST_API_KEY
 
 
 class TestRequests(unittest.TestCase):
 
     def test_valid_request(self):
-        res = post('key', batch=[{
+        res = post(TEST_API_KEY, batch=[{
             'distinct_id': 'distinct_id',
             'event': 'python event',
             'type': 'track'
@@ -37,7 +38,7 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(result, expected)
 
     def test_should_not_timeout(self):
-        res = post('key', batch=[{
+        res = post(TEST_API_KEY, batch=[{
             'distinct_id': 'distinct_id',
             'event': 'python event',
             'type': 'track'

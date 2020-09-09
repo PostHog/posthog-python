@@ -6,8 +6,7 @@ import time
 
 from posthog.version import VERSION
 from posthog.client import Client
-
-TEST_API_KEY = 'kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4'
+from posthog.test.utils import TEST_API_KEY
 
 class TestClient(unittest.TestCase):
 
