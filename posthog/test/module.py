@@ -1,6 +1,6 @@
 import unittest
 
-import analytics
+import posthog
 
 
 class TestModule(unittest.TestCase):
@@ -10,40 +10,32 @@ class TestModule(unittest.TestCase):
 
     def setUp(self):
         self.failed = False
-        analytics.api_key = 'testsecret'
-        analytics.on_error = self.failed
+        posthog.api_key = 'testsecret'
+        posthog.on_error = self.failed
 
     def test_no_api_key(self):
-        analytics.api_key = None
-        self.assertRaises(Exception, analytics.track)
+        posthog.api_key = None
+        self.assertRaises(Exception, posthog.capture)
 
     def test_no_host(self):
-        analytics.host = None
-        self.assertRaises(Exception, analytics.track)
+        posthog.host = None
+        self.assertRaises(Exception, posthog.capture)
 
     def test_track(self):
-        analytics.track('distinct_id', 'python module event')
-        analytics.flush()
+        posthog.capture('distinct_id', 'python module event')
+        posthog.flush()
 
     def test_identify(self):
-        analytics.identify('distinct_id', {'email': 'user@email.com'})
-        analytics.flush()
-
-    def test_group(self):
-        analytics.group('distinct_id', 'groupId')
-        analytics.flush()
+        posthog.identify('distinct_id', {'email': 'user@email.com'})
+        posthog.flush()
 
     def test_alias(self):
-        analytics.alias('previousId', 'distinct_id')
-        analytics.flush()
-
-    def test_page(self):
-        analytics.page('distinct_id')
-        analytics.flush()
+        posthog.alias('previousId', 'distinct_id')
+        posthog.flush()
 
     def test_screen(self):
-        analytics.screen('distinct_id')
-        analytics.flush()
+        posthog.screen('distinct_id')
+        posthog.flush()
 
     def test_flush(self):
-        analytics.flush()
+        posthog.flush()

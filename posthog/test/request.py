@@ -9,7 +9,7 @@ from posthog.request import post, DatetimeSerializer
 class TestRequests(unittest.TestCase):
 
     def test_valid_request(self):
-        res = post(batch=[{
+        res = post('key', batch=[{
             'distinct_id': 'distinct_id',
             'event': 'python event',
             'type': 'track'
@@ -37,7 +37,7 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(result, expected)
 
     def test_should_not_timeout(self):
-        res = post(batch=[{
+        res = post('key', batch=[{
             'distinct_id': 'distinct_id',
             'event': 'python event',
             'type': 'track'
@@ -46,7 +46,7 @@ class TestRequests(unittest.TestCase):
 
     def test_should_timeout(self):
         with self.assertRaises(requests.ReadTimeout):
-            post(batch=[{
+            post('key', batch=[{
                 'distinct_id': 'distinct_id',
                 'event': 'python event',
                 'type': 'track'

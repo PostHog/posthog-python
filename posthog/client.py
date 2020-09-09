@@ -78,7 +78,6 @@ class Client(object):
         msg = {
             'timestamp': timestamp,
             'context': context,
-            'type': 'identify',
             'distinct_id': distinct_id,
             '$set': properties,
             'event': '$identify',
@@ -100,7 +99,6 @@ class Client(object):
             'timestamp': timestamp,
             'context': context,
             'distinct_id': distinct_id,
-            'type': 'capture',
             'event': event,
             'messageId': message_id,
         }
@@ -121,34 +119,12 @@ class Client(object):
             },
             'timestamp': timestamp,
             'context': context,
-            'type': 'alias',
             'event': '$create_alias'
         }
 
         return self._enqueue(msg)
 
-    def group(self, distinct_id=None, group_id=None, traits=None, context=None,
-              timestamp=None, message_id=None):
-        traits = traits or {}
-        context = context or {}
-
-        require('distinct_id', distinct_id, ID_TYPES)
-        require('group_id', group_id, ID_TYPES)
-        require('traits', traits, dict)
-
-        msg = {
-            'timestamp': timestamp,
-            'groupId': group_id,
-            'context': context,
-            'distinct_id': distinct_id,
-            'traits': traits,
-            'type': 'group',
-            'messageId': message_id,
-        }
-
-        return self._enqueue(msg)
-
-    def page(self, distinct_id=None, category=None, name=None, properties=None,
+    def page(self, distinct_id=None, url=None, properties=None,
             context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
@@ -156,46 +132,15 @@ class Client(object):
         require('distinct_id', distinct_id, ID_TYPES)
         require('properties', properties, dict)
 
-        if name:
-            require('name', name, string_types)
-        if category:
-            require('category', category, string_types)
+        require('url', url, string_types)
+        properties['$current_url'] = url
 
         msg = {
+            'event': '$pageview',
             'properties': properties,
             'timestamp': timestamp,
-            'category': category,
             'context': context,
             'distinct_id': distinct_id,
-            'type': 'page',
-            'name': name,
-            'messageId': message_id,
-        }
-
-        return self._enqueue(msg)
-
-    def screen(self, distinct_id=None, category=None, name=None, properties=None,
-               context=None, timestamp=None, message_id=None):
-        properties = properties or {}
-        context = context or {}
-
-        require('distinct_id', distinct_id, ID_TYPES)
-        require('properties', properties, dict)
-
-        if name:
-            require('name', name, string_types)
-        if category:
-            require('category', category, string_types)
-
-        msg = {
-
-            'properties': properties,
-            'timestamp': timestamp,
-            'category': category,
-            'context': context,
-            'distinct_id': distinct_id,
-            'type': 'screen',
-            'name': name,
             'messageId': message_id,
         }
 
@@ -210,7 +155,6 @@ class Client(object):
         if message_id is None:
             message_id = uuid4()
 
-        require('type', msg['type'], string_types)
         require('timestamp', timestamp, datetime)
         require('context', msg['context'], dict)
 
@@ -233,7 +177,7 @@ class Client(object):
             return True, msg
 
         if self.sync_mode:
-            self.log.debug('enqueued with blocking %s.', msg['type'])
+            self.log.debug('enqueued with blocking %s.', msg['event'])
             post(self.api_key, self.host, gzip=self.gzip,
                  timeout=self.timeout, batch=[msg])
 
@@ -241,7 +185,7 @@ class Client(object):
 
         try:
             self.queue.put(msg, block=False)
-            self.log.debug('enqueued %s.', msg['type'])
+            self.log.debug('enqueued %s.', msg['event'])
             return True, msg
         except queue.Full:
             self.log.warning('analytics-python queue is full')

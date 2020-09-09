@@ -59,7 +59,7 @@ class TestConsumer(unittest.TestCase):
         flush_interval = 0.3
         consumer = Consumer(q, 'testsecret', flush_at=10,
                             flush_interval=flush_interval)
-        with mock.patch('analytics.consumer.post') as mock_post:
+        with mock.patch('posthog.consumer.post') as mock_post:
             consumer.start()
             for i in range(0, 3):
                 track = {
@@ -79,7 +79,7 @@ class TestConsumer(unittest.TestCase):
         flush_at = 10
         consumer = Consumer(q, 'testsecret', flush_at=flush_at,
                             flush_interval=flush_interval)
-        with mock.patch('analytics.consumer.post') as mock_post:
+        with mock.patch('posthog.consumer.post') as mock_post:
             consumer.start()
             for i in range(0, flush_at * 2):
                 track = {
@@ -109,7 +109,7 @@ class TestConsumer(unittest.TestCase):
                 raise expected_exception
         mock_post.call_count = 0
 
-        with mock.patch('analytics.consumer.post',
+        with mock.patch('posthog.consumer.post',
                         mock.Mock(side_effect=mock_post)):
             track = {
                 'type': 'track',
@@ -189,7 +189,7 @@ class TestConsumer(unittest.TestCase):
                             % len(data.encode()))
             return res
 
-        with mock.patch('analytics.request._session.post',
+        with mock.patch('posthog.request._session.post',
                         side_effect=mock_post_fn) as mock_post:
             consumer.start()
             for _ in range(0, n_msgs + 2):
