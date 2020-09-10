@@ -142,16 +142,16 @@ class TestConsumer(unittest.TestCase):
         # we should retry on server errors
         consumer = Consumer(None, TEST_API_KEY)
         self._test_request_retry(consumer, APIError(
-            500, 'code', 'Internal Server Error'), 2)
+            500, 'Internal Server Error'), 2)
 
         # we should retry on HTTP 429 errors
         consumer = Consumer(None, TEST_API_KEY)
         self._test_request_retry(consumer, APIError(
-            429, 'code', 'Too Many Requests'), 2)
+            429, 'Too Many Requests'), 2)
 
         # we should NOT retry on other client errors
         consumer = Consumer(None, TEST_API_KEY)
-        api_error = APIError(400, 'code', 'Client Errors')
+        api_error = APIError(400, 'Client Errors')
         try:
             self._test_request_retry(consumer, api_error, 1)
         except APIError:
@@ -162,7 +162,7 @@ class TestConsumer(unittest.TestCase):
         # test for number of exceptions raise > retries value
         consumer = Consumer(None, TEST_API_KEY, retries=3)
         self._test_request_retry(consumer, APIError(
-            500, 'code', 'Internal Server Error'), 3)
+            500, 'Internal Server Error'), 3)
 
     def test_pause(self):
         consumer = Consumer(None, TEST_API_KEY)
