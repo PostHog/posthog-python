@@ -1,16 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 import logging
 import numbers
 import atexit
+import hashlib
 
 from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.utils import guess_timezone, clean
 from posthog.consumer import Consumer
-from posthog.request import post
+from posthog.request import post, get, APIError
 from posthog.version import VERSION
+from posthog.poller import Poller
 
 try:
     import queue
@@ -19,6 +21,7 @@ except ImportError:
 
 
 ID_TYPES = (numbers.Number, string_types)
+__LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
 
 class Client(object):
@@ -28,7 +31,7 @@ class Client(object):
     def __init__(self, api_key=None, host=None, debug=False,
                  max_queue_size=10000, send=True, on_error=None, flush_at=100,
                  flush_interval=0.5, gzip=False, max_retries=3,
-                 sync_mode=False, timeout=15, thread=1):
+                 sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None):
         require('api_key', api_key, string_types)
 
         self.queue = queue.Queue(max_queue_size)
@@ -40,6 +43,9 @@ class Client(object):
         self.host = host
         self.gzip = gzip
         self.timeout = timeout
+        self.feature_flags = None
+        self.poll_interval = poll_interval
+        self.personal_api_key = personal_api_key
 
         if debug:
             self.log.setLevel(logging.DEBUG)
@@ -216,6 +222,52 @@ class Client(object):
         self.flush()
         self.join()
 
+    def _load_feature_flags(self):
+        if not self.personal_api_key:
+            raise ValueError('You have to specify a personal_api_key to use feature flags.')
+
+        try:
+            self.feature_flags = get(self.personal_api_key, '/api/feature_flag/', self.host)['results']
+        except APIError as e:
+            if e.status == 401:
+                raise APIError(status=401, message='You are using a write-only key with feature flags. To use feature flags, use a personal API key as api_key instead.')
+
+        self._last_feature_flag_poll = datetime.utcnow().replace(tzinfo=tzutc())
+
+    def load_feature_flags(self):
+        self._load_feature_flags()
+        poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
+        poller.start()
+
+    def feature_enabled(self, key, distinct_id, default=False):
+        require('key', key, string_types)
+        require('distinct_id', distinct_id, ID_TYPES)
+
+        if not self.feature_flags:
+            self.load_feature_flags()
+
+        try:
+            feature_flag = [flag for flag in self.feature_flags if flag['key'] == key][0]
+        except IndexError:
+            return default
+
+        if feature_flag.get('is_simple_flag'):
+            response = _hash(key, distinct_id) <= (feature_flag['rollout_percentage'] / 100)
+        else:
+            request = get(self.api_key, '/decide/', self.host)
+            response = key in request['featureFlags']
+
+        self.capture(distinct_id, '$feature_flag_called', {'$feature_flag': key, '$feature_flag_response': response})
+        return response
+
+# This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
+# Given the same distinct_id and key, it'll always return the same float. These floats are
+# uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
+# we can do _hash(key, distinct_id) < 0.2
+def _hash(key, distinct_id):
+    hash_key = "%s.%s" % (key, distinct_id)
+    hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
+    return hash_val / __LONG_SCALE__
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
