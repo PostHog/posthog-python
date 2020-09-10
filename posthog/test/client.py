@@ -233,7 +233,7 @@ class TestClient(unittest.TestCase):
                     'key': 'beta-feature'
                 }]
             }
-        client = Client(TEST_API_KEY, personal_api_token='test')
+        client = Client(TEST_API_KEY, personal_api_key='test')
         with freeze_time('2020-01-01T12:01:00.0000Z'):
             client.load_feature_flags()
         self.assertEqual(client.feature_flags[0]['key'], 'beta-feature')
@@ -269,7 +269,7 @@ class TestClient(unittest.TestCase):
 
     @mock.patch('posthog.client.get')
     def test_feature_enabled_doesnt_exist(self, patch_get):
-        client = Client(TEST_API_KEY, personal_api_token='test')
+        client = Client(TEST_API_KEY, personal_api_key='test')
         client.feature_flags = []
 
         self.assertFalse(client.feature_enabled('doesnt-exist', 'distinct_id'))
