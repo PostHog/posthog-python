@@ -12,7 +12,7 @@ class TestClient(unittest.TestCase):
 
     def fail(self, e, batch):
         """Mark the failure handler"""
-        print('FAILL', e, batch)
+        print('FAIL', e, batch)
         self.failed = True
 
     def setUp(self):
@@ -76,7 +76,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
         self.assertFalse(self.failed)
 
-        self.assertEqual(msg['$set'], {'trait': 'value'})
+        self.assertEqual(msg['$set']['trait'], 'value')
         self.assertTrue(isinstance(msg['timestamp'], str))
         self.assertTrue(isinstance(msg['messageId'], str))
         self.assertEqual(msg['distinct_id'], 'distinct_id')
@@ -91,7 +91,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg['timestamp'], '2014-09-03T00:00:00+00:00')
         self.assertEqual(msg['context']['ip'], '192.168.0.1')
-        self.assertEqual(msg['$set'], {'trait': 'value'})
+        self.assertEqual(msg['$set']['trait'], 'value')
         self.assertEqual(msg['properties']['$lib'], 'posthog-python')
         self.assertEqual(msg['properties']['$lib_version'], VERSION)
         self.assertTrue(isinstance(msg['timestamp'], str))
