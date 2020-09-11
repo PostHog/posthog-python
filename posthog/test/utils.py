@@ -7,6 +7,7 @@ import six
 
 from posthog import utils
 
+TEST_API_KEY = 'kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4'
 
 class TestUtils(unittest.TestCase):
 
