@@ -45,8 +45,8 @@ def failed(status, msg):
     raise Exception(msg)
 
 
-def track():
-    posthog.track(options.distinct_id, options.event, anonymous_id=options.anonymousId,
+def capture():
+    posthog.capture(options.distinct_id, options.event, anonymous_id=options.anonymousId,
                     properties=json_hash(options.properties), context=json_hash(options.context))
 
 
@@ -55,19 +55,9 @@ def page():
                    properties=json_hash(options.properties), context=json_hash(options.context))
 
 
-def screen():
-    posthog.screen(options.distinct_id, name=options.name, anonymous_id=options.anonymousId,
-                     properties=json_hash(options.properties), context=json_hash(options.context))
-
-
 def identify():
     posthog.identify(options.distinct_id, anonymous_id=options.anonymousId,
                        traits=json_hash(options.traits), context=json_hash(options.context))
-
-
-def group():
-    posthog.group(options.distinct_id, options.groupId, json_hash(options.traits),
-                    json_hash(options.context), anonymous_id=options.anonymousId)
 
 
 def unknown():
@@ -84,11 +74,9 @@ ch.setLevel(logging.DEBUG)
 log.addHandler(ch)
 
 switcher = {
-    "track": track,
+    "capture": capture,
     "page": page,
-    "screen": screen,
-    "identify": identify,
-    "group": group
+    "identify": identify
 }
 
 func = switcher.get(options.type)

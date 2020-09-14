@@ -35,6 +35,8 @@ class Client(object):
         require('api_key', api_key, string_types)
 
         self.queue = queue.Queue(max_queue_size)
+        
+        # api_key: This should be the Team API Key (token), public
         self.api_key = api_key
         self.on_error = on_error
         self.debug = debug
@@ -45,6 +47,8 @@ class Client(object):
         self.timeout = timeout
         self.feature_flags = None
         self.poll_interval = poll_interval
+        
+        # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
 
         if debug:
@@ -230,7 +234,12 @@ class Client(object):
             self.feature_flags = get(self.personal_api_key, '/api/feature_flag/', self.host)['results']
         except APIError as e:
             if e.status == 401:
-                raise APIError(status=401, message='You are using a write-only key with feature flags. To use feature flags, use a personal API key as api_key instead.')
+                raise APIError(
+                    status=401, 
+                    message='You are using a write-only key with feature flags. ' \
+                    'To use feature flags, please set a personal_api_key ' \
+                    'More information: https://posthog.com/docs/api/overview'
+                )
 
         self._last_feature_flag_poll = datetime.utcnow().replace(tzinfo=tzutc())
 

@@ -9,11 +9,13 @@ from posthog.version import VERSION
 from posthog.client import Client
 from posthog.test.utils import TEST_API_KEY
 
+from posthog.request import APIError
+
 class TestClient(unittest.TestCase):
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print('FAILL', e, batch)
+        print('FAIL', e, batch)
         self.failed = True
 
     def setUp(self):
@@ -77,7 +79,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
         self.assertFalse(self.failed)
 
-        self.assertEqual(msg['$set'], {'trait': 'value'})
+        self.assertEqual(msg['$set']['trait'], 'value')
         self.assertTrue(isinstance(msg['timestamp'], str))
         self.assertTrue(isinstance(msg['messageId'], str))
         self.assertEqual(msg['distinct_id'], 'distinct_id')
@@ -92,7 +94,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg['timestamp'], '2014-09-03T00:00:00+00:00')
         self.assertEqual(msg['context']['ip'], '192.168.0.1')
-        self.assertEqual(msg['$set'], {'trait': 'value'})
+        self.assertEqual(msg['$set']['trait'], 'value')
         self.assertEqual(msg['properties']['$lib'], 'posthog-python')
         self.assertEqual(msg['properties']['$lib_version'], VERSION)
         self.assertTrue(isinstance(msg['timestamp'], str))
@@ -239,6 +241,11 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.feature_flags[0]['key'], 'beta-feature')
         self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
         self.assertEqual(patch_poll.call_count, 1)
+        
+    def test_load_feature_flags_wrong_key(self):
+        client = Client(TEST_API_KEY, personal_api_key=TEST_API_KEY)
+        with freeze_time('2020-01-01T12:01:00.0000Z'):
+            self.assertRaises(APIError, client.load_feature_flags)
 
     @mock.patch('posthog.client.get')
     def test_feature_enabled_simple(self, patch_get):

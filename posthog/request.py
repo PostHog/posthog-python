@@ -54,22 +54,21 @@ def post(api_key, host=None, gzip=False, timeout=15, **kwargs):
 def get(api_key, url, host=None):
     log = logging.getLogger('posthog')
     url = remove_trailing_slash(host or DEFAULT_HOST) + url
-    request = requests.get(
+    response = requests.get(
         url,
         headers={
             'Authorization': 'Bearer %s' % api_key,
             'User-Agent': USER_AGENT
         },
     )
-    if request.status_code == 200:
-        return request.json()
+    if response.status_code == 200:
+        return response.json()
     try:
-        payload = request.json()
+        payload = response.json()
         log.debug('received response: %s', payload)
-        print(payload['detail'])
-        raise APIError(request.status_code, payload['detail'])
+        raise APIError(response.status_code, payload['detail'])
     except ValueError:
-        raise APIError(request.status_code, res.text)
+        raise APIError(response.status_code, response.text)
 
 
 class APIError(Exception):
