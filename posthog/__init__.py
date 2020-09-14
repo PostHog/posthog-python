@@ -112,9 +112,8 @@ def feature_enabled(
 
     For example:
     ```python
-    if(posthog.feature_enabled('beta feature', 'distinct id')) {
-        // do something
-    }
+    if posthog.feature_enabled('beta feature', 'distinct id'):
+        # do something
     ```
 
     You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
