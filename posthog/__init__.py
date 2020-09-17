@@ -13,6 +13,7 @@ debug = False # type: bool
 send = True # type: bool
 sync_mode = False # type: bool
 disabled = False # type: bool
+personal_api_key = None # type: str
 
 default_client = None
 
@@ -100,6 +101,25 @@ def alias(
     """
     _proxy('alias', previous_id=previous_id, distinct_id=distinct_id, context=context, timestamp=timestamp, message_id=message_id)
 
+def feature_enabled(
+    key, # type: str,
+    distinct_id, # type: str,
+    default=None, # type: Optional[Any]
+    ):
+    # type: (...) -> bool
+    """
+    Use feature flags to enable or disable features for users.
+
+    For example:
+    ```python
+    if posthog.feature_enabled('beta feature', 'distinct id'):
+        # do something
+    ```
+
+    You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
+    """
+    return _proxy('feature_enabled', key=key, distinct_id=distinct_id, default=default)
+
 
 def page(*args, **kwargs):
     """Send a page call."""
@@ -135,7 +155,7 @@ def _proxy(method, *args, **kwargs):
     if not default_client:
         default_client = Client(api_key, host=host, debug=debug,
                                 on_error=on_error, send=send,
-                                sync_mode=sync_mode)
+                                sync_mode=sync_mode, personal_api_key=personal_api_key)
 
     fn = getattr(default_client, method)
-    fn(*args, **kwargs)
+    return fn(*args, **kwargs)

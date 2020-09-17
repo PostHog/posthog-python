@@ -24,7 +24,8 @@ install_requires = [
 ]
 
 tests_require = [
-    "mock>=2.0.0"
+    "mock>=2.0.0",
+    "freezegun==0.3.15"
 ]
 
 setup(

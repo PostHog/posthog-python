@@ -4,27 +4,29 @@ import logging
 import json
 from gzip import GzipFile
 from requests.auth import HTTPBasicAuth
-from requests import sessions
+import requests
 from io import BytesIO
 
 from posthog.version import VERSION
 from posthog.utils import remove_trailing_slash
 
-_session = sessions.Session()
+_session = requests.sessions.Session()
 
+DEFAULT_HOST = 'https://app.posthog.com'
+USER_AGENT = 'posthog-python/' + VERSION
 
 def post(api_key, host=None, gzip=False, timeout=15, **kwargs):
     """Post the `kwargs` to the API"""
     log = logging.getLogger('posthog')
     body = kwargs
     body["sentAt"] = datetime.utcnow().replace(tzinfo=tzutc()).isoformat()
-    url = remove_trailing_slash(host or 'https://t.posthog.com') + '/batch/'
+    url = remove_trailing_slash(host or DEFAULT_HOST) + '/batch/'
     body['api_key'] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
     log.debug('making request: %s', data)
     headers = {
         'Content-Type': 'application/json',
-        'User-Agent': 'analytics-python/' + VERSION
+        'User-Agent': USER_AGENT
     }
     if gzip:
         headers['Content-Encoding'] = 'gzip'
@@ -45,21 +47,40 @@ def post(api_key, host=None, gzip=False, timeout=15, **kwargs):
     try:
         payload = res.json()
         log.debug('received response: %s', payload)
-        raise APIError(res.status_code, payload['code'], payload['message'])
+        raise APIError(res.status_code, payload['detail'])
     except ValueError:
-        raise APIError(res.status_code, 'unknown', res.text)
+        raise APIError(res.status_code, res.text)
+
+def get(api_key, url, host=None, timeout=None):
+    log = logging.getLogger('posthog')
+    url = remove_trailing_slash(host or DEFAULT_HOST) + url
+    response = requests.get(
+        url,
+        headers={
+            'Authorization': 'Bearer %s' % api_key,
+            'User-Agent': USER_AGENT
+        },
+        timeout=timeout
+    )
+    if response.status_code == 200:
+        return response.json()
+    try:
+        payload = response.json()
+        log.debug('received response: %s', payload)
+        raise APIError(response.status_code, payload['detail'])
+    except ValueError:
+        raise APIError(response.status_code, response.text)
 
 
 class APIError(Exception):
 
-    def __init__(self, status, code, message):
+    def __init__(self, status, message):
         self.message = message
         self.status = status
-        self.code = code
 
     def __str__(self):
-        msg = "[PostHog] {0}: {1} ({2})"
-        return msg.format(self.code, self.message, self.status)
+        msg = "[PostHog] {0} ({1})"
+        return msg.format(self.message, self.status)
 
 
 class DatetimeSerializer(json.JSONEncoder):

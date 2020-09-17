@@ -3,21 +3,24 @@ import unittest
 import six
 import mock
 import time
+from freezegun import freeze_time
 
 from posthog.version import VERSION
 from posthog.client import Client
 from posthog.test.utils import TEST_API_KEY
 
+from posthog.request import APIError
+
 class TestClient(unittest.TestCase):
 
-    def fail(self, e, batch):
+    def set_fail(self, e, batch):
         """Mark the failure handler"""
         print('FAIL', e, batch)
         self.failed = True
 
     def setUp(self):
         self.failed = False
-        self.client = Client(TEST_API_KEY, on_error=self.fail)
+        self.client = Client(TEST_API_KEY, on_error=self.set_fail)
 
     def test_requires_api_key(self):
         self.assertRaises(AssertionError, Client)
@@ -221,3 +224,82 @@ class TestClient(unittest.TestCase):
         client = Client(TEST_API_KEY)
         for consumer in client.consumers:
             self.assertEquals(consumer.timeout, 15)
+
+    @mock.patch('posthog.client.Poller')
+    @mock.patch('posthog.client.get')
+    def test_load_feature_flags(self, patch_get, patch_poll):
+        patch_get.return_value = {
+                'results': [{
+                    'id': 1,
+                    'name': 'Beta Feature',
+                    'key': 'beta-feature'
+                }]
+            }
+        client = Client(TEST_API_KEY, personal_api_key='test')
+        with freeze_time('2020-01-01T12:01:00.0000Z'):
+            client.load_feature_flags()
+        self.assertEqual(client.feature_flags[0]['key'], 'beta-feature')
+        self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
+        self.assertEqual(patch_poll.call_count, 1)
+        
+    def test_load_feature_flags_wrong_key(self):
+        client = Client(TEST_API_KEY, personal_api_key=TEST_API_KEY)
+        with freeze_time('2020-01-01T12:01:00.0000Z'):
+            self.assertRaises(APIError, client.load_feature_flags)
+
+    @mock.patch('posthog.client.get')
+    def test_feature_enabled_simple(self, patch_get):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [{
+            'id': 1,
+            'name': 'Beta Feature',
+            'key': 'beta-feature',
+            'is_simple_flag': True,
+            'rollout_percentage': 100
+        }]
+        self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
+
+    @mock.patch('posthog.client.get')
+    def test_feature_enabled_request(self, patch_get):
+        patch_get.return_value = {
+            'featureFlags': ['beta-feature']
+        }
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [{
+            'id': 1,
+            'name': 'Beta Feature',
+            'key': 'beta-feature',
+            'is_simple_flag': False,
+            'rollout_percentage': 100
+        }]
+        self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
+
+    @mock.patch('posthog.client.get')
+    def test_feature_enabled_doesnt_exist(self, patch_get):
+        client = Client(TEST_API_KEY, personal_api_key='test')
+        client.feature_flags = []
+
+        self.assertFalse(client.feature_enabled('doesnt-exist', 'distinct_id'))
+        self.assertTrue(client.feature_enabled('doesnt-exist', 'distinct_id', True))
+
+    @mock.patch('posthog.client.Poller')
+    @mock.patch('posthog.client.get')
+    def test_load_feature_flags_error(self, patch_get, patch_poll):
+        def raise_effect():
+            raise Exception('http exception')
+        patch_get.return_value.raiseError.side_effect = raise_effect
+        client = Client(TEST_API_KEY, personal_api_key='test')
+        client.feature_flags = []
+
+        self.assertFalse(client.feature_enabled('doesnt-exist', 'distinct_id'))
+
+    @mock.patch('posthog.client.Poller')
+    @mock.patch('posthog.client.get')
+    def test_call_identify_fails(self, patch_get, patch_poll):
+        def raise_effect():
+            raise Exception('http exception')
+        patch_get.return_value.raiseError.side_effect = raise_effect
+        client = Client(TEST_API_KEY, personal_api_key='test')
+        client.feature_flags = [{'key': 'example', 'is_simple_flag': False}]
+
+        self.assertFalse(client.feature_enabled('example', 'distinct_id'))
