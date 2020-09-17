@@ -240,6 +240,9 @@ class Client(object):
                     'To use feature flags, please set a personal_api_key ' \
                     'More information: https://posthog.com/docs/api/overview'
                 )
+        except Exception as e:
+            self.log.warning('[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds.' % self.poll_interval)
+            self.log.warning(e)
 
         self._last_feature_flag_poll = datetime.utcnow().replace(tzinfo=tzutc())
 
@@ -251,20 +254,32 @@ class Client(object):
     def feature_enabled(self, key, distinct_id, default=False):
         require('key', key, string_types)
         require('distinct_id', distinct_id, ID_TYPES)
+        error = False
 
         if not self.feature_flags:
             self.load_feature_flags()
 
-        try:
-            feature_flag = [flag for flag in self.feature_flags if flag['key'] == key][0]
-        except IndexError:
-            return default
-
-        if feature_flag.get('is_simple_flag'):
-            response = _hash(key, distinct_id) <= (feature_flag['rollout_percentage'] / 100)
+        # If loading in previous line failed
+        if not self.feature_flags:
+            response = default
+            error = True
         else:
-            request = get(self.api_key, '/decide/', self.host)
-            response = key in request['featureFlags']
+            try:
+                feature_flag = [flag for flag in self.feature_flags if flag['key'] == key][0]
+            except IndexError:
+                return default
+
+            if feature_flag.get('is_simple_flag'):
+                response = _hash(key, distinct_id) <= (feature_flag['rollout_percentage'] / 100)
+            else:
+                try:
+                    request = get(self.api_key, '/decide/', self.host, timeout=1)
+                    response = key in request['featureFlags']
+                except Exception as e:
+                    response = default
+                    self.log.warning('[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:' % key)
+                    self.log.warning(e)
+                    error = True
 
         self.capture(distinct_id, '$feature_flag_called', {'$feature_flag': key, '$feature_flag_response': response})
         return response

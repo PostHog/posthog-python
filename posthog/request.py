@@ -51,7 +51,7 @@ def post(api_key, host=None, gzip=False, timeout=15, **kwargs):
     except ValueError:
         raise APIError(res.status_code, res.text)
 
-def get(api_key, url, host=None):
+def get(api_key, url, host=None, timeout=None):
     log = logging.getLogger('posthog')
     url = remove_trailing_slash(host or DEFAULT_HOST) + url
     response = requests.get(
@@ -60,6 +60,7 @@ def get(api_key, url, host=None):
             'Authorization': 'Bearer %s' % api_key,
             'User-Agent': USER_AGENT
         },
+        timeout=timeout
     )
     if response.status_code == 200:
         return response.json()

@@ -281,3 +281,25 @@ class TestClient(unittest.TestCase):
 
         self.assertFalse(client.feature_enabled('doesnt-exist', 'distinct_id'))
         self.assertTrue(client.feature_enabled('doesnt-exist', 'distinct_id', True))
+
+    @mock.patch('posthog.client.Poller')
+    @mock.patch('posthog.client.get')
+    def test_load_feature_flags_error(self, patch_get, patch_poll):
+        def raise_effect():
+            raise Exception('http exception')
+        patch_get.return_value.raiseError.side_effect = raise_effect
+        client = Client(TEST_API_KEY, personal_api_key='test')
+        client.feature_flags = []
+
+        self.assertFalse(client.feature_enabled('doesnt-exist', 'distinct_id'))
+
+    @mock.patch('posthog.client.Poller')
+    @mock.patch('posthog.client.get')
+    def test_call_identify_fails(self, patch_get, patch_poll):
+        def raise_effect():
+            raise Exception('http exception')
+        patch_get.return_value.raiseError.side_effect = raise_effect
+        client = Client(TEST_API_KEY, personal_api_key='test')
+        client.feature_flags = [{'key': 'example', 'is_simple_flag': False}]
+
+        self.assertFalse(client.feature_enabled('example', 'distinct_id'))
