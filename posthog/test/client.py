@@ -274,16 +274,18 @@ class TestClient(unittest.TestCase):
         }]
         self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
 
+    @mock.patch('posthog.client.Poller')
     @mock.patch('posthog.client.get')
-    def test_feature_enabled_doesnt_exist(self, patch_get):
+    def test_feature_enabled_doesnt_exist(self, patch_get, patch_poll):
         client = Client(TEST_API_KEY, personal_api_key='test')
         client.feature_flags = []
 
         self.assertFalse(client.feature_enabled('doesnt-exist', 'distinct_id'))
         self.assertTrue(client.feature_enabled('doesnt-exist', 'distinct_id', True))
 
+    @mock.patch('posthog.client.Poller')
     @mock.patch('posthog.client.get')
-    def test_personal_api_key_doesnt_exist(self, patch_get):
+    def test_personal_api_key_doesnt_exist(self, patch_get, patch_poll):
         client = Client(TEST_API_KEY)
         client.feature_flags = []
 
