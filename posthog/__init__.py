@@ -104,7 +104,7 @@ def alias(
 def feature_enabled(
     key, # type: str,
     distinct_id, # type: str,
-    default=False, # type: Optional[Any]
+    default=False, # type: bool 
     ):
     # type: (...) -> bool
     """
