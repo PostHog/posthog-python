@@ -228,7 +228,9 @@ class Client(object):
 
     def _load_feature_flags(self):
         if not self.personal_api_key:
-            raise ValueError('You have to specify a personal_api_key to use feature flags.')
+            self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
+            self.feature_flags = []
+            return
 
         try:
             self.feature_flags = get(self.personal_api_key, '/api/feature_flag/', self.host)['results']
@@ -256,6 +258,8 @@ class Client(object):
         require('distinct_id', distinct_id, ID_TYPES)
         error = False
 
+        if not self.personal_api_key:
+            self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
         if not self.feature_flags:
             self.load_feature_flags()
 
