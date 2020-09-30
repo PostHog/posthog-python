@@ -18,11 +18,11 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
 
     def test_invalid_request_error(self):
-        self.assertRaises(Exception, post, 'testsecret',
+        self.assertRaises(Exception, batch_post, 'testsecret',
                           'https://t.posthog.com', False, '[{]')
 
     def test_invalid_host(self):
-        self.assertRaises(Exception, post, 'testsecret',
+        self.assertRaises(Exception, batch_post, 'testsecret',
                           't.posthog.com/', batch=[])
 
     def test_datetime_serialization(self):

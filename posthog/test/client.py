@@ -208,7 +208,7 @@ class TestClient(unittest.TestCase):
 
         # the post function should be called 2 times, with a batch size of 10
         # each time.
-        with mock.patch('posthog.consumer.post', side_effect=mock_post_fn) \
+        with mock.patch('posthog.consumer.batch_post', side_effect=mock_post_fn) \
                 as mock_post:
             for _ in range(20):
                 client.identify('distinct_id', {'trait': 'value'})
@@ -269,7 +269,7 @@ class TestClient(unittest.TestCase):
             'id': 1,
             'name': 'Beta Feature',
             'key': 'beta-feature',
-            'is_simple_flag': False,
+            'is_simple_flag': True,
             'rollout_percentage': 100
         }]
         self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
