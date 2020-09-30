@@ -5,12 +5,13 @@ import numbers
 import atexit
 import hashlib
 
+import requests
 from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.utils import guess_timezone, clean
 from posthog.consumer import Consumer
-from posthog.request import post, get, APIError
+from posthog.request import batch_post, decide, get, APIError
 from posthog.version import VERSION
 from posthog.poller import Poller
 
@@ -188,7 +189,7 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug('enqueued with blocking %s.', msg['event'])
-            post(self.api_key, self.host, gzip=self.gzip,
+            batch_post(self.api_key, self.host, gzip=self.gzip,
                  timeout=self.timeout, batch=[msg])
 
             return True, msg
@@ -256,7 +257,6 @@ class Client(object):
     def feature_enabled(self, key, distinct_id, default=False):
         require('key', key, string_types)
         require('distinct_id', distinct_id, ID_TYPES)
-        error = False
 
         if not self.personal_api_key:
             self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
@@ -266,7 +266,6 @@ class Client(object):
         # If loading in previous line failed
         if not self.feature_flags:
             response = default
-            error = True
         else:
             try:
                 feature_flag = [flag for flag in self.feature_flags if flag['key'] == key][0]
@@ -277,13 +276,16 @@ class Client(object):
                 response = _hash(key, distinct_id) <= (feature_flag['rollout_percentage'] / 100)
             else:
                 try:
-                    request = get(self.api_key, '/decide/', self.host, timeout=1)
-                    response = key in request['featureFlags']
+                    request_data = {
+                        "distinct_id": distinct_id,
+                        "personal_api_key": self.personal_api_key,
+                    }
+                    resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
+                    response = key in resp_data['featureFlags']
                 except Exception as e:
                     response = default
                     self.log.warning('[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:' % key)
                     self.log.warning(e)
-                    error = True
 
         self.capture(distinct_id, '$feature_flag_called', {'$feature_flag': key, '$feature_flag_response': response})
         return response

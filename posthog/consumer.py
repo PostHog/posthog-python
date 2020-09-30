@@ -4,7 +4,7 @@ import monotonic
 import backoff
 import json
 
-from posthog.request import post, APIError, DatetimeSerializer
+from posthog.request import batch_post, APIError, DatetimeSerializer
 
 try:
     from queue import Empty
@@ -128,7 +128,7 @@ class Consumer(Thread):
             max_tries=self.retries + 1,
             giveup=fatal_exception)
         def send_request():
-            post(self.api_key, self.host, gzip=self.gzip,
+            batch_post(self.api_key, self.host, gzip=self.gzip,
                  timeout=self.timeout, batch=batch)
 
         send_request()

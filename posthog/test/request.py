@@ -3,14 +3,14 @@ import unittest
 import json
 import requests
 
-from posthog.request import post, DatetimeSerializer
+from posthog.request import batch_post, DatetimeSerializer
 from posthog.test.utils import TEST_API_KEY
 
 
 class TestRequests(unittest.TestCase):
 
     def test_valid_request(self):
-        res = post(TEST_API_KEY, batch=[{
+        res = batch_post(TEST_API_KEY, batch=[{
             'distinct_id': 'distinct_id',
             'event': 'python event',
             'type': 'track'
@@ -18,11 +18,11 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
 
     def test_invalid_request_error(self):
-        self.assertRaises(Exception, post, 'testsecret',
+        self.assertRaises(Exception, batch_post, 'testsecret',
                           'https://t.posthog.com', False, '[{]')
 
     def test_invalid_host(self):
-        self.assertRaises(Exception, post, 'testsecret',
+        self.assertRaises(Exception, batch_post, 'testsecret',
                           't.posthog.com/', batch=[])
 
     def test_datetime_serialization(self):
@@ -38,7 +38,7 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(result, expected)
 
     def test_should_not_timeout(self):
-        res = post(TEST_API_KEY, batch=[{
+        res = batch_post(TEST_API_KEY, batch=[{
             'distinct_id': 'distinct_id',
             'event': 'python event',
             'type': 'track'
@@ -47,7 +47,7 @@ class TestRequests(unittest.TestCase):
 
     def test_should_timeout(self):
         with self.assertRaises(requests.ReadTimeout):
-            post('key', batch=[{
+            batch_post('key', batch=[{
                 'distinct_id': 'distinct_id',
                 'event': 'python event',
                 'type': 'track'

@@ -208,7 +208,7 @@ class TestClient(unittest.TestCase):
 
         # the post function should be called 2 times, with a batch size of 10
         # each time.
-        with mock.patch('posthog.consumer.post', side_effect=mock_post_fn) \
+        with mock.patch('posthog.consumer.batch_post', side_effect=mock_post_fn) \
                 as mock_post:
             for _ in range(20):
                 client.identify('distinct_id', {'trait': 'value'})
@@ -259,7 +259,7 @@ class TestClient(unittest.TestCase):
         }]
         self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
 
-    @mock.patch('posthog.client.get')
+    @mock.patch('posthog.client.decide')
     def test_feature_enabled_request(self, patch_get):
         patch_get.return_value = {
             'featureFlags': ['beta-feature']
