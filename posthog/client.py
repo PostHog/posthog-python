@@ -280,8 +280,7 @@ class Client(object):
                         "distinct_id": distinct_id,
                         "personal_api_key": self.personal_api_key,
                     }
-                    request = decide(self.api_key, self.host, timeout=10, **request_data)
-                    resp_data = request.json()
+                    resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
                     response = key in resp_data['featureFlags']
                 except Exception as e:
                     response = default

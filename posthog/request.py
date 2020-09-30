@@ -52,7 +52,7 @@ def decide(api_key, host=None, gzip=False, timeout=15, **kwargs):
     res = post(api_key, host, '/decide/', gzip, timeout, **kwargs)
     if res.status_code == 200:
         log.debug('Feature flags decided successfully')
-        return res
+        return res.json()
     try:
         payload = res.json()
         log.debug('received response: %s', payload)
