@@ -228,11 +228,6 @@ class Client(object):
         self.join()
 
     def _load_feature_flags(self):
-        if not self.personal_api_key:
-            self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
-            self.feature_flags = []
-            return
-
         try:
             self.feature_flags = get(self.personal_api_key, '/api/feature_flag/', self.host)['results']
         except APIError as e:
@@ -250,6 +245,11 @@ class Client(object):
         self._last_feature_flag_poll = datetime.utcnow().replace(tzinfo=tzutc())
 
     def load_feature_flags(self):
+        if not self.personal_api_key:
+            self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
+            self.feature_flags = []
+            return
+
         self._load_feature_flags()
         poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
         poller.start()
