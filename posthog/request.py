@@ -46,13 +46,13 @@ def post(api_key, host=None, path=None, gzip=False, timeout=15, **kwargs):
         return res
 
 
-def _process_response(res, success_message):
+def _process_response(res, success_message, return_json=True):
     log = logging.getLogger('posthog')
     if not res:
         raise APIError('N/A', 'Error when fetching PostHog API, please make sure you are using your public project token/key and not a private API key.')
     if res.status_code == 200:
         log.debug(success_message)
-        return res.json()
+        return res.json() if return_json else res
     try:
         payload = res.json()
         log.debug('received response: %s', payload)
@@ -69,7 +69,7 @@ def decide(api_key, host=None, gzip=False, timeout=15, **kwargs):
 def batch_post(api_key, host=None, gzip=False, timeout=15, **kwargs):
     """Post the `kwargs` to the batch API endpoint for events"""
     res = post(api_key, host, '/batch/', gzip, timeout, **kwargs)
-    return _process_response(res, success_message='data uploaded successfully')
+    return _process_response(res, success_message='data uploaded successfully', return_json=False)
 
 
 def get(api_key, url, host=None, timeout=None):
