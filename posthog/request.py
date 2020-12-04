@@ -46,12 +46,12 @@ def post(api_key, host=None, path=None, gzip=False, timeout=15, **kwargs):
         return res
 
 
-def decide(api_key, host=None, gzip=False, timeout=15, **kwargs):
-    """Post the `kwargs to the decide API endpoint"""
+def _process_response(res, success_message):
     log = logging.getLogger('posthog')
-    res = post(api_key, host, '/decide/', gzip, timeout, **kwargs)
+    if not res:
+        raise APIError('N/A', 'Error when fetching PostHog API, please make sure you are using your public project token/key and not a private API key.')
     if res.status_code == 200:
-        log.debug('Feature flags decided successfully')
+        log.debug(success_message)
         return res.json()
     try:
         payload = res.json()
@@ -60,27 +60,21 @@ def decide(api_key, host=None, gzip=False, timeout=15, **kwargs):
     except ValueError:
         raise APIError(res.status_code, res.text)
 
+def decide(api_key, host=None, gzip=False, timeout=15, **kwargs):
+    """Post the `kwargs to the decide API endpoint"""
+    res = post(api_key, host, '/decide/', gzip, timeout, **kwargs)
+    return _process_response(res, success_message='Feature flags decided successfully')
+
 
 def batch_post(api_key, host=None, gzip=False, timeout=15, **kwargs):
     """Post the `kwargs` to the batch API endpoint for events"""
-    log = logging.getLogger('posthog')
     res = post(api_key, host, '/batch/', gzip, timeout, **kwargs)
-
-    if res.status_code == 200:
-        log.debug('data uploaded successfully')
-        return res
-    try:
-        payload = res.json()
-        log.debug('received response: %s', payload)
-        raise APIError(res.status_code, payload['detail'])
-    except ValueError:
-        raise APIError(res.status_code, res.text)
+    return _process_response(res, success_message='data uploaded successfully')
 
 
 def get(api_key, url, host=None, timeout=None):
-    log = logging.getLogger('posthog')
     url = remove_trailing_slash(host or DEFAULT_HOST) + url
-    response = requests.get(
+    res = requests.get(
         url,
         headers={
             'Authorization': 'Bearer %s' % api_key,
@@ -88,15 +82,7 @@ def get(api_key, url, host=None, timeout=None):
         },
         timeout=timeout
     )
-    if response.status_code == 200:
-        return response.json()
-    try:
-        payload = response.json()
-        log.debug('received response: %s', payload)
-        raise APIError(response.status_code, payload['detail'])
-    except ValueError:
-        raise APIError(response.status_code, response.text)
-
+    return _process_response(res, success_message=f'GET {url} completed successfully')
 
 class APIError(Exception):
 
