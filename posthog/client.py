@@ -240,6 +240,11 @@ class Client(object):
                     'To use feature flags, please set a personal_api_key ' \
                     'More information: https://posthog.com/docs/api/overview'
                 )
+            else:
+                raise APIError(
+                    status=e.status, 
+                    message=e.message
+                )
         except Exception as e:
             self.log.warning('[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds.' % self.poll_interval)
             self.log.warning(e)
