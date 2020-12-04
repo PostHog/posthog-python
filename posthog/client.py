@@ -32,13 +32,13 @@ class Client(object):
     def __init__(self, api_key=None, host=None, debug=False,
                  max_queue_size=10000, send=True, on_error=None, flush_at=100,
                  flush_interval=0.5, gzip=False, max_retries=3,
-                 sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None):
+                 sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, project_api_key=None):
         require('api_key', api_key, string_types)
 
         self.queue = queue.Queue(max_queue_size)
         
         # api_key: This should be the Team API Key (token), public
-        self.api_key = api_key
+        self.api_key = api_key or project_api_key
         self.on_error = on_error
         self.debug = debug
         self.send = send
