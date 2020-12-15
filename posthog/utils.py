@@ -1,6 +1,7 @@
 from dateutil.tz import tzlocal, tzutc
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 import logging
 import numbers
 
@@ -47,6 +48,8 @@ def remove_trailing_slash(host):
 def clean(item):
     if isinstance(item, Decimal):
         return float(item)
+    if isinstance(item, UUID):
+        return str(item)
     elif isinstance(item, (six.string_types, bool, numbers.Number, datetime,
                            date, type(None))):
         return item

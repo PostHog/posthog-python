@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 import unittest
 
 from dateutil.tz import tzutc
@@ -49,6 +50,9 @@ class TestUtils(unittest.TestCase):
 
         utils.clean(combined)
         self.assertEqual(combined.keys(), pre_clean_keys)
+
+        # test UUID separately, as the UUID object doesn't equal its string representation according to Python
+        self.assertEqual(utils.clean(UUID('12345678123456781234567812345678')), '12345678-1234-5678-1234-567812345678')
 
     def test_clean_with_dates(self):
         dict_with_dates = {
