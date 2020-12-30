@@ -43,7 +43,8 @@ def post(api_key, host=None, path=None, gzip=False, timeout=15, **kwargs):
 
     if res.status_code == 200:
         log.debug('data uploaded successfully')
-        return res
+    
+    return res
 
 
 def _process_response(res, success_message, return_json=True):
