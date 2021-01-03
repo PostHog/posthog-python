@@ -1,7 +1,7 @@
-import unittest
-import pkgutil
 import logging
+import pkgutil
 import sys
+import unittest
 
 
 def all_names():

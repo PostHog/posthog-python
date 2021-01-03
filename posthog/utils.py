@@ -1,11 +1,11 @@
-from dateutil.tz import tzlocal, tzutc
+import logging
+import numbers
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
-import logging
-import numbers
 
 import six
+from dateutil.tz import tzlocal, tzutc
 
 log = logging.getLogger('posthog')
 
@@ -18,8 +18,7 @@ def is_naive(dt):
 def total_seconds(delta):
     """Determines total seconds with python < 2.7 compat."""
     # http://stackoverflow.com/questions/3694835/python-2-6-5-divide-timedelta-with-timedelta
-    return (delta.microseconds
-            + (delta.seconds + delta.days * 24 * 3600) * 1e6) / 1e6
+    return (delta.microseconds + (delta.seconds + delta.days * 24 * 3600) * 1e6) / 1e6
 
 
 def guess_timezone(dt):
@@ -50,8 +49,7 @@ def clean(item):
         return float(item)
     if isinstance(item, UUID):
         return str(item)
-    elif isinstance(item, (six.string_types, bool, numbers.Number, datetime,
-                           date, type(None))):
+    elif isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
         return item
     elif isinstance(item, (set, list, tuple)):
         return _clean_list(item)
@@ -72,9 +70,10 @@ def _clean_dict(dict_):
             data[k] = clean(v)
         except TypeError:
             log.warning(
-                'Dictionary values must be serializeable to '
-                'JSON "%s" value %s of type %s is unsupported.',
-                k, v, type(v),
+                'Dictionary values must be serializeable to ' 'JSON "%s" value %s of type %s is unsupported.',
+                k,
+                v,
+                type(v),
             )
     return data
 

@@ -1,19 +1,19 @@
-from datetime import datetime, timedelta
-from uuid import uuid4
-import logging
-import numbers
 import atexit
 import hashlib
+import logging
+import numbers
+from datetime import datetime, timedelta
+from uuid import uuid4
 
 import requests
 from dateutil.tz import tzutc
 from six import string_types
 
-from posthog.utils import guess_timezone, clean
 from posthog.consumer import Consumer
-from posthog.request import batch_post, decide, get, APIError
-from posthog.version import VERSION
 from posthog.poller import Poller
+from posthog.request import APIError, batch_post, decide, get
+from posthog.utils import clean, guess_timezone
+from posthog.version import VERSION
 
 try:
     import queue
@@ -27,15 +27,31 @@ __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
 class Client(object):
     """Create a new PostHog client."""
+
     log = logging.getLogger('posthog')
 
-    def __init__(self, api_key=None, host=None, debug=False,
-                 max_queue_size=10000, send=True, on_error=None, flush_at=100,
-                 flush_interval=0.5, gzip=False, max_retries=3,
-                 sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, project_api_key=None):
+    def __init__(
+        self,
+        api_key=None,
+        host=None,
+        debug=False,
+        max_queue_size=10000,
+        send=True,
+        on_error=None,
+        flush_at=100,
+        flush_interval=0.5,
+        gzip=False,
+        max_retries=3,
+        sync_mode=False,
+        timeout=15,
+        thread=1,
+        poll_interval=30,
+        personal_api_key=None,
+        project_api_key=None,
+    ):
 
         self.queue = queue.Queue(max_queue_size)
-        
+
         # api_key: This should be the Team API Key (token), public
         self.api_key = api_key or project_api_key
 
@@ -50,7 +66,7 @@ class Client(object):
         self.timeout = timeout
         self.feature_flags = None
         self.poll_interval = poll_interval
-        
+
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
 
@@ -71,9 +87,15 @@ class Client(object):
             for n in range(thread):
                 self.consumers = []
                 consumer = Consumer(
-                    self.queue, api_key, host=host, on_error=on_error,
-                    flush_at=flush_at, flush_interval=flush_interval,
-                    gzip=gzip, retries=max_retries, timeout=timeout,
+                    self.queue,
+                    api_key,
+                    host=host,
+                    on_error=on_error,
+                    flush_at=flush_at,
+                    flush_interval=flush_interval,
+                    gzip=gzip,
+                    retries=max_retries,
+                    timeout=timeout,
                 )
                 self.consumers.append(consumer)
 
@@ -81,8 +103,7 @@ class Client(object):
                 if send:
                     consumer.start()
 
-    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None,
-                message_id=None):
+    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
         require('distinct_id', distinct_id, ID_TYPES)
@@ -99,8 +120,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def capture(self, distinct_id=None, event=None, properties=None, context=None,
-              timestamp=None, message_id=None):
+    def capture(self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
         require('distinct_id', distinct_id, ID_TYPES)
@@ -118,8 +138,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def alias(self, previous_id=None, distinct_id=None, context=None,
-              timestamp=None, message_id=None):
+    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, message_id=None):
         context = context or {}
 
         require('previous_id', previous_id, ID_TYPES)
@@ -132,13 +151,12 @@ class Client(object):
             },
             'timestamp': timestamp,
             'context': context,
-            'event': '$create_alias'
+            'event': '$create_alias',
         }
 
         return self._enqueue(msg)
 
-    def page(self, distinct_id=None, url=None, properties=None,
-            context=None, timestamp=None, message_id=None):
+    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
 
@@ -191,8 +209,7 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug('enqueued with blocking %s.', msg['event'])
-            batch_post(self.api_key, self.host, gzip=self.gzip,
-                 timeout=self.timeout, batch=[msg])
+            batch_post(self.api_key, self.host, gzip=self.gzip, timeout=self.timeout, batch=[msg])
 
             return True, msg
 
@@ -235,18 +252,18 @@ class Client(object):
         except APIError as e:
             if e.status == 401:
                 raise APIError(
-                    status=401, 
-                    message='You are using a write-only key with feature flags. ' \
-                    'To use feature flags, please set a personal_api_key ' \
-                    'More information: https://posthog.com/docs/api/overview'
+                    status=401,
+                    message='You are using a write-only key with feature flags. '
+                    'To use feature flags, please set a personal_api_key '
+                    'More information: https://posthog.com/docs/api/overview',
                 )
             else:
-                raise APIError(
-                    status=e.status, 
-                    message=e.message
-                )
+                raise APIError(status=e.status, message=e.message)
         except Exception as e:
-            self.log.warning('[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds.' % self.poll_interval)
+            self.log.warning(
+                '[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds.'
+                % self.poll_interval
+            )
             self.log.warning(e)
 
         self._last_feature_flag_poll = datetime.utcnow().replace(tzinfo=tzutc())
@@ -291,11 +308,14 @@ class Client(object):
                     response = key in resp_data['featureFlags']
                 except Exception as e:
                     response = default
-                    self.log.warning('[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:' % key)
+                    self.log.warning(
+                        '[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:' % key
+                    )
                     self.log.warning(e)
 
         self.capture(distinct_id, '$feature_flag_called', {'$feature_flag': key, '$feature_flag_response': response})
         return response
+
 
 # This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
 # Given the same distinct_id and key, it'll always return the same float. These floats are
@@ -305,6 +325,7 @@ def _hash(key, distinct_id):
     hash_key = "%s.%s" % (key, distinct_id)
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
+
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""

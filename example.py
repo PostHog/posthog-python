@@ -1,8 +1,9 @@
 # PostHog Python library example
 
 # Import the library
-import posthog
 import time
+
+import posthog
 
 # You can find this key on the /setup page in PostHog
 posthog.api_key = ''

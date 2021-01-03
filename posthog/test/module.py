@@ -4,7 +4,6 @@ import posthog
 
 
 class TestModule(unittest.TestCase):
-
     def failed(self):
         self.failed = True
 

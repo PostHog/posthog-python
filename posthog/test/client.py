@@ -1,18 +1,18 @@
-from datetime import date, datetime
-import unittest
-import six
-import mock
 import time
+import unittest
+from datetime import date, datetime
+
+import mock
+import six
 from freezegun import freeze_time
 
-from posthog.version import VERSION
 from posthog.client import Client
-from posthog.test.utils import TEST_API_KEY
-
 from posthog.request import APIError
+from posthog.test.utils import TEST_API_KEY
+from posthog.version import VERSION
+
 
 class TestClient(unittest.TestCase):
-
     def set_fail(self, e, batch):
         """Mark the failure handler"""
         print('FAIL', e, batch)
@@ -46,8 +46,7 @@ class TestClient(unittest.TestCase):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800
         client = self.client
-        success, msg = client.capture(
-            distinct_id=157963456373623802, event='python test event')
+        success, msg = client.capture(distinct_id=157963456373623802, event='python test event')
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -57,9 +56,13 @@ class TestClient(unittest.TestCase):
     def test_advanced_capture(self):
         client = self.client
         success, msg = client.capture(
-            'distinct_id', 'python test event', {'property': 'value'},
-            {'ip': '192.168.0.1'}, datetime(2014, 9, 3),
-            'messageId')
+            'distinct_id',
+            'python test event',
+            {'property': 'value'},
+            {'ip': '192.168.0.1'},
+            datetime(2014, 9, 3),
+            'messageId',
+        )
 
         self.assertTrue(success)
 
@@ -87,8 +90,8 @@ class TestClient(unittest.TestCase):
     def test_advanced_identify(self):
         client = self.client
         success, msg = client.identify(
-            'distinct_id', {'trait': 'value'}, {'ip': '192.168.0.1'},
-            datetime(2014, 9, 3), 'messageId')
+            'distinct_id', {'trait': 'value'}, {'ip': '192.168.0.1'}, datetime(2014, 9, 3), 'messageId'
+        )
 
         self.assertTrue(success)
 
@@ -122,8 +125,13 @@ class TestClient(unittest.TestCase):
     def test_advanced_page(self):
         client = self.client
         success, msg = client.page(
-            'distinct_id', 'https://posthog.com/contact', {'property': 'value'},
-            {'ip': '192.168.0.1'}, datetime(2014, 9, 3), 'messageId')
+            'distinct_id',
+            'https://posthog.com/contact',
+            {'property': 'value'},
+            {'ip': '192.168.0.1'},
+            datetime(2014, 9, 3),
+            'messageId',
+        )
 
         self.assertTrue(success)
 
@@ -200,16 +208,14 @@ class TestClient(unittest.TestCase):
         self.assertFalse(self.failed)
 
     def test_user_defined_flush_at(self):
-        client = Client(TEST_API_KEY, on_error=self.fail,
-                        flush_at=10, flush_interval=3)
+        client = Client(TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3)
 
         def mock_post_fn(*args, **kwargs):
             self.assertEquals(len(kwargs['batch']), 10)
 
         # the post function should be called 2 times, with a batch size of 10
         # each time.
-        with mock.patch('posthog.consumer.batch_post', side_effect=mock_post_fn) \
-                as mock_post:
+        with mock.patch('posthog.consumer.batch_post', side_effect=mock_post_fn) as mock_post:
             for _ in range(20):
                 client.identify('distinct_id', {'trait': 'value'})
             time.sleep(1)
@@ -228,20 +234,14 @@ class TestClient(unittest.TestCase):
     @mock.patch('posthog.client.Poller')
     @mock.patch('posthog.client.get')
     def test_load_feature_flags(self, patch_get, patch_poll):
-        patch_get.return_value = {
-                'results': [{
-                    'id': 1,
-                    'name': 'Beta Feature',
-                    'key': 'beta-feature'
-                }]
-            }
+        patch_get.return_value = {'results': [{'id': 1, 'name': 'Beta Feature', 'key': 'beta-feature'}]}
         client = Client(TEST_API_KEY, personal_api_key='test')
         with freeze_time('2020-01-01T12:01:00.0000Z'):
             client.load_feature_flags()
         self.assertEqual(client.feature_flags[0]['key'], 'beta-feature')
         self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
         self.assertEqual(patch_poll.call_count, 1)
-        
+
     def test_load_feature_flags_wrong_key(self):
         client = Client(TEST_API_KEY, personal_api_key=TEST_API_KEY)
         with freeze_time('2020-01-01T12:01:00.0000Z'):
@@ -250,28 +250,18 @@ class TestClient(unittest.TestCase):
     @mock.patch('posthog.client.get')
     def test_feature_enabled_simple(self, patch_get):
         client = Client(TEST_API_KEY)
-        client.feature_flags = [{
-            'id': 1,
-            'name': 'Beta Feature',
-            'key': 'beta-feature',
-            'is_simple_flag': True,
-            'rollout_percentage': 100
-        }]
+        client.feature_flags = [
+            {'id': 1, 'name': 'Beta Feature', 'key': 'beta-feature', 'is_simple_flag': True, 'rollout_percentage': 100}
+        ]
         self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
 
     @mock.patch('posthog.client.decide')
     def test_feature_enabled_request(self, patch_get):
-        patch_get.return_value = {
-            'featureFlags': ['beta-feature']
-        }
+        patch_get.return_value = {'featureFlags': ['beta-feature']}
         client = Client(TEST_API_KEY)
-        client.feature_flags = [{
-            'id': 1,
-            'name': 'Beta Feature',
-            'key': 'beta-feature',
-            'is_simple_flag': False,
-            'rollout_percentage': 100
-        }]
+        client.feature_flags = [
+            {'id': 1, 'name': 'Beta Feature', 'key': 'beta-feature', 'is_simple_flag': False, 'rollout_percentage': 100}
+        ]
         self.assertTrue(client.feature_enabled('beta-feature', 'distinct_id'))
 
     @mock.patch('posthog.client.Poller')
@@ -297,6 +287,7 @@ class TestClient(unittest.TestCase):
     def test_load_feature_flags_error(self, patch_get, patch_poll):
         def raise_effect():
             raise Exception('http exception')
+
         patch_get.return_value.raiseError.side_effect = raise_effect
         client = Client(TEST_API_KEY, personal_api_key='test')
         client.feature_flags = []
@@ -308,6 +299,7 @@ class TestClient(unittest.TestCase):
     def test_call_identify_fails(self, patch_get, patch_poll):
         def raise_effect():
             raise Exception('http exception')
+
         patch_get.return_value.raiseError.side_effect = raise_effect
         client = Client(TEST_API_KEY, personal_api_key='test')
         client.feature_flags = [{'key': 'example', 'is_simple_flag': False}]

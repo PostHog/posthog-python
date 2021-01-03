@@ -1,5 +1,6 @@
 import threading
 
+
 class Poller(threading.Thread):
     def __init__(self, interval, execute, *args, **kwargs):
         threading.Thread.__init__(self)
@@ -9,7 +10,7 @@ class Poller(threading.Thread):
         self.execute = execute
         self.args = args
         self.kwargs = kwargs
-        
+
     def stop(self):
         self.stopped.set()
         self.join()
