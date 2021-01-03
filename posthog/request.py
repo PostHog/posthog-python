@@ -1,9 +1,9 @@
 from datetime import date, datetime
 from dateutil.tz import tzutc
+from typing import Any, Optional, Union
 import logging
 import json
 from gzip import GzipFile
-from requests.auth import HTTPBasicAuth
 import requests
 from io import BytesIO
 
@@ -16,7 +16,7 @@ DEFAULT_HOST = 'https://app.posthog.com'
 USER_AGENT = 'posthog-python/' + VERSION
 
 
-def post(api_key, host=None, path=None, gzip=False, timeout=15, **kwargs):
+def post(api_key: str, host: Optional[str] = None, path = None, gzip: bool = False, timeout: int = 15, **kwargs) -> requests.Response:
     """Post the `kwargs` to the API"""
     log = logging.getLogger('posthog')
     body = kwargs
@@ -43,10 +43,11 @@ def post(api_key, host=None, path=None, gzip=False, timeout=15, **kwargs):
 
     if res.status_code == 200:
         log.debug('data uploaded successfully')
-        return res
+    
+    return res
 
 
-def _process_response(res, success_message, return_json=True):
+def _process_response(res: requests.Response, success_message: str, *, return_json: bool = True) -> Union[requests.Response, Any]:
     log = logging.getLogger('posthog')
     if not res:
         raise APIError('N/A', 'Error when fetching PostHog API, please make sure you are using your public project token/key and not a private API key.')
@@ -60,19 +61,19 @@ def _process_response(res, success_message, return_json=True):
     except ValueError:
         raise APIError(res.status_code, res.text)
 
-def decide(api_key, host=None, gzip=False, timeout=15, **kwargs):
+def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int =15, **kwargs) -> Any:
     """Post the `kwargs to the decide API endpoint"""
     res = post(api_key, host, '/decide/', gzip, timeout, **kwargs)
     return _process_response(res, success_message='Feature flags decided successfully')
 
 
-def batch_post(api_key, host=None, gzip=False, timeout=15, **kwargs):
+def batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int =15, **kwargs) -> requests.Response:
     """Post the `kwargs` to the batch API endpoint for events"""
     res = post(api_key, host, '/batch/', gzip, timeout, **kwargs)
     return _process_response(res, success_message='data uploaded successfully', return_json=False)
 
 
-def get(api_key, url, host=None, timeout=None):
+def get(api_key: str, url: str, host: Optional[str] =None, timeout: Optional[int] =None) -> requests.Response:
     url = remove_trailing_slash(host or DEFAULT_HOST) + url
     res = requests.get(
         url,
@@ -86,7 +87,7 @@ def get(api_key, url, host=None, timeout=None):
 
 class APIError(Exception):
 
-    def __init__(self, status, message):
+    def __init__(self, status: Union[int, str], message: str):
         self.message = message
         self.status = status
 
@@ -96,7 +97,7 @@ class APIError(Exception):
 
 
 class DatetimeSerializer(json.JSONEncoder):
-    def default(self, obj):
+    def default(self, obj: Any):
         if isinstance(obj, (date, datetime)):
             return obj.isoformat()
 
