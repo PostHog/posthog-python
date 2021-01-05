@@ -107,7 +107,7 @@ class TestConsumer(unittest.TestCase):
                     self.assertEqual(exc, expected_exception)
                 else:
                     self.fail(
-                        "request() should raise an exception if still failing " "after %d retries" % consumer.retries
+                        "request() should raise an exception if still failing after %d retries" % consumer.retries
                     )
 
     def test_request_retry(self):
