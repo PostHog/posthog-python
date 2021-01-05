@@ -22,7 +22,7 @@ BATCH_SIZE_LIMIT = 475000
 class Consumer(Thread):
     """Consumes the messages from the client's queue."""
 
-    log = logging.getLogger('posthog')
+    log = logging.getLogger("posthog")
 
     def __init__(
         self,
@@ -57,11 +57,11 @@ class Consumer(Thread):
 
     def run(self):
         """Runs the consumer."""
-        self.log.debug('consumer is running...')
+        self.log.debug("consumer is running...")
         while self.running:
             self.upload()
 
-        self.log.debug('consumer exited.')
+        self.log.debug("consumer exited.")
 
     def pause(self):
         """Pause the consumer."""
@@ -78,7 +78,7 @@ class Consumer(Thread):
             self.request(batch)
             success = True
         except Exception as e:
-            self.log.error('error uploading: %s', e)
+            self.log.error("error uploading: %s", e)
             success = False
             if self.on_error:
                 self.on_error(e, batch)
@@ -104,12 +104,12 @@ class Consumer(Thread):
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > MAX_MSG_SIZE:
-                    self.log.error('Item exceeds 32kb limit, dropping. (%s)', str(item))
+                    self.log.error("Item exceeds 32kb limit, dropping. (%s)", str(item))
                     continue
                 items.append(item)
                 total_size += item_size
                 if total_size >= BATCH_SIZE_LIMIT:
-                    self.log.debug('hit batch size limit (size: %d)', total_size)
+                    self.log.debug("hit batch size limit (size: %d)", total_size)
                     break
             except Empty:
                 break

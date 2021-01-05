@@ -44,7 +44,7 @@ def capture(
     ```
     """
     _proxy(
-        'capture',
+        "capture",
         distinct_id=distinct_id,
         event=event,
         properties=properties,
@@ -78,7 +78,7 @@ def identify(
     ```
     """
     _proxy(
-        'identify',
+        "identify",
         distinct_id=distinct_id,
         properties=properties,
         context=context,
@@ -89,7 +89,7 @@ def identify(
 
 def group(*args, **kwargs):
     """Send a group call."""
-    _proxy('group', *args, **kwargs)
+    _proxy("group", *args, **kwargs)
 
 
 def alias(
@@ -117,7 +117,7 @@ def alias(
     ```
     """
     _proxy(
-        'alias',
+        "alias",
         previous_id=previous_id,
         distinct_id=distinct_id,
         context=context,
@@ -143,33 +143,33 @@ def feature_enabled(
 
     You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
     """
-    return _proxy('feature_enabled', key=key, distinct_id=distinct_id, default=default)
+    return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default)
 
 
 def page(*args, **kwargs):
     """Send a page call."""
-    _proxy('page', *args, **kwargs)
+    _proxy("page", *args, **kwargs)
 
 
 def screen(*args, **kwargs):
     """Send a screen call."""
-    _proxy('screen', *args, **kwargs)
+    _proxy("screen", *args, **kwargs)
 
 
 def flush():
     """Tell the client to flush."""
-    _proxy('flush')
+    _proxy("flush")
 
 
 def join():
     """Block program until the client clears the queue"""
-    _proxy('join')
+    _proxy("join")
 
 
 def shutdown():
     """Flush all messages and cleanly shutdown the client"""
-    _proxy('flush')
-    _proxy('join')
+    _proxy("flush")
+    _proxy("join")
 
 
 def _proxy(method, *args, **kwargs):

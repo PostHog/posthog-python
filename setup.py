@@ -7,40 +7,40 @@ except ImportError:
     from distutils.core import setup
 
 # Don't import analytics-python module here, since deps may not be installed
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'posthog'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "posthog"))
 from version import VERSION
 
-long_description = '''
+long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
-'''
+"""
 
 install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff==1.6.0", "python-dateutil>2.1"]
 
 extras_require = {
-    'dev': [
-        'black',
-        'isort',
-        'pre-commit',
+    "dev": [
+        "black",
+        "isort",
+        "pre-commit",
     ]
 }
 
 tests_require = ["mock>=2.0.0", "freezegun==0.3.15"]
 
 setup(
-    name='posthog',
+    name="posthog",
     version=VERSION,
-    url='https://github.com/posthog/posthog-python',
-    author='Posthog',
-    author_email='hey@posthog.com',
-    maintainer='PostHog',
-    maintainer_email='hey@posthog.com',
-    test_suite='posthog.test.all',
-    packages=['posthog', 'posthog.test'],
-    license='MIT License',
+    url="https://github.com/posthog/posthog-python",
+    author="Posthog",
+    author_email="hey@posthog.com",
+    maintainer="PostHog",
+    maintainer_email="hey@posthog.com",
+    test_suite="posthog.test.all",
+    packages=["posthog", "posthog.test"],
+    license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,
     tests_require=tests_require,
-    description='Integrate PostHog into any python application.',
+    description="Integrate PostHog into any python application.",
     long_description=long_description,
     classifiers=[
         "Development Status :: 5 - Production/Stable",

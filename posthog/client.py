@@ -28,7 +28,7 @@ __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 class Client(object):
     """Create a new PostHog client."""
 
-    log = logging.getLogger('posthog')
+    log = logging.getLogger("posthog")
 
     def __init__(
         self,
@@ -55,7 +55,7 @@ class Client(object):
         # api_key: This should be the Team API Key (token), public
         self.api_key = api_key or project_api_key
 
-        require('api_key', self.api_key, string_types)
+        require("api_key", self.api_key, string_types)
 
         self.on_error = on_error
         self.debug = debug
@@ -106,16 +106,16 @@ class Client(object):
     def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
-        require('distinct_id', distinct_id, ID_TYPES)
-        require('properties', properties, dict)
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("properties", properties, dict)
 
         msg = {
-            'timestamp': timestamp,
-            'context': context,
-            'distinct_id': distinct_id,
-            '$set': properties,
-            'event': '$identify',
-            'messageId': message_id,
+            "timestamp": timestamp,
+            "context": context,
+            "distinct_id": distinct_id,
+            "$set": properties,
+            "event": "$identify",
+            "messageId": message_id,
         }
 
         return self._enqueue(msg)
@@ -123,17 +123,17 @@ class Client(object):
     def capture(self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
-        require('distinct_id', distinct_id, ID_TYPES)
-        require('properties', properties, dict)
-        require('event', event, string_types)
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("properties", properties, dict)
+        require("event", event, string_types)
 
         msg = {
-            'properties': properties,
-            'timestamp': timestamp,
-            'context': context,
-            'distinct_id': distinct_id,
-            'event': event,
-            'messageId': message_id,
+            "properties": properties,
+            "timestamp": timestamp,
+            "context": context,
+            "distinct_id": distinct_id,
+            "event": event,
+            "messageId": message_id,
         }
 
         return self._enqueue(msg)
@@ -141,17 +141,17 @@ class Client(object):
     def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, message_id=None):
         context = context or {}
 
-        require('previous_id', previous_id, ID_TYPES)
-        require('distinct_id', distinct_id, ID_TYPES)
+        require("previous_id", previous_id, ID_TYPES)
+        require("distinct_id", distinct_id, ID_TYPES)
 
         msg = {
-            'properties': {
-                'distinct_id': previous_id,
-                'alias': distinct_id,
+            "properties": {
+                "distinct_id": previous_id,
+                "alias": distinct_id,
             },
-            'timestamp': timestamp,
-            'context': context,
-            'event': '$create_alias',
+            "timestamp": timestamp,
+            "context": context,
+            "event": "$create_alias",
         }
 
         return self._enqueue(msg)
@@ -160,65 +160,65 @@ class Client(object):
         properties = properties or {}
         context = context or {}
 
-        require('distinct_id', distinct_id, ID_TYPES)
-        require('properties', properties, dict)
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("properties", properties, dict)
 
-        require('url', url, string_types)
-        properties['$current_url'] = url
+        require("url", url, string_types)
+        properties["$current_url"] = url
 
         msg = {
-            'event': '$pageview',
-            'properties': properties,
-            'timestamp': timestamp,
-            'context': context,
-            'distinct_id': distinct_id,
-            'messageId': message_id,
+            "event": "$pageview",
+            "properties": properties,
+            "timestamp": timestamp,
+            "context": context,
+            "distinct_id": distinct_id,
+            "messageId": message_id,
         }
 
         return self._enqueue(msg)
 
     def _enqueue(self, msg):
         """Push a new `msg` onto the queue, return `(success, msg)`"""
-        timestamp = msg['timestamp']
+        timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.utcnow().replace(tzinfo=tzutc())
-        message_id = msg.get('messageId')
+        message_id = msg.get("messageId")
         if message_id is None:
             message_id = uuid4()
 
-        require('timestamp', timestamp, datetime)
-        require('context', msg['context'], dict)
+        require("timestamp", timestamp, datetime)
+        require("context", msg["context"], dict)
 
         # add common
         timestamp = guess_timezone(timestamp)
-        msg['timestamp'] = timestamp.isoformat()
-        msg['messageId'] = stringify_id(message_id)
-        if not msg.get('properties'):
-            msg['properties'] = {}
-        msg['properties']['$lib'] = 'posthog-python'
-        msg['properties']['$lib_version'] = VERSION
+        msg["timestamp"] = timestamp.isoformat()
+        msg["messageId"] = stringify_id(message_id)
+        if not msg.get("properties"):
+            msg["properties"] = {}
+        msg["properties"]["$lib"] = "posthog-python"
+        msg["properties"]["$lib_version"] = VERSION
 
-        msg['distinct_id'] = stringify_id(msg.get('distinct_id', None))
+        msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
         msg = clean(msg)
-        self.log.debug('queueing: %s', msg)
+        self.log.debug("queueing: %s", msg)
 
         # if send is False, return msg as if it was successfully queued
         if not self.send:
             return True, msg
 
         if self.sync_mode:
-            self.log.debug('enqueued with blocking %s.', msg['event'])
+            self.log.debug("enqueued with blocking %s.", msg["event"])
             batch_post(self.api_key, self.host, gzip=self.gzip, timeout=self.timeout, batch=[msg])
 
             return True, msg
 
         try:
             self.queue.put(msg, block=False)
-            self.log.debug('enqueued %s.', msg['event'])
+            self.log.debug("enqueued %s.", msg["event"])
             return True, msg
         except queue.Full:
-            self.log.warning('analytics-python queue is full')
+            self.log.warning("analytics-python queue is full")
             return False, msg
 
     def flush(self):
@@ -227,7 +227,7 @@ class Client(object):
         size = queue.qsize()
         queue.join()
         # Note that this message may not be precise, because of threading.
-        self.log.debug('successfully flushed about %s items.', size)
+        self.log.debug("successfully flushed about %s items.", size)
 
     def join(self):
         """Ends the consumer thread once the queue is empty.
@@ -248,20 +248,20 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-            self.feature_flags = get(self.personal_api_key, '/api/feature_flag/', self.host)['results']
+            self.feature_flags = get(self.personal_api_key, "/api/feature_flag/", self.host)["results"]
         except APIError as e:
             if e.status == 401:
                 raise APIError(
                     status=401,
-                    message='You are using a write-only key with feature flags. '
-                    'To use feature flags, please set a personal_api_key '
-                    'More information: https://posthog.com/docs/api/overview',
+                    message="You are using a write-only key with feature flags. "
+                    "To use feature flags, please set a personal_api_key "
+                    "More information: https://posthog.com/docs/api/overview",
                 )
             else:
                 raise APIError(status=e.status, message=e.message)
         except Exception as e:
             self.log.warning(
-                '[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds.'
+                "[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds."
                 % self.poll_interval
             )
             self.log.warning(e)
@@ -270,7 +270,7 @@ class Client(object):
 
     def load_feature_flags(self):
         if not self.personal_api_key:
-            self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
+            self.log.warning("[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.")
             self.feature_flags = []
             return
 
@@ -279,11 +279,11 @@ class Client(object):
         poller.start()
 
     def feature_enabled(self, key, distinct_id, default=False):
-        require('key', key, string_types)
-        require('distinct_id', distinct_id, ID_TYPES)
+        require("key", key, string_types)
+        require("distinct_id", distinct_id, ID_TYPES)
 
         if not self.personal_api_key:
-            self.log.warning('[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.')
+            self.log.warning("[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.")
         if not self.feature_flags:
             self.load_feature_flags()
 
@@ -292,12 +292,12 @@ class Client(object):
             response = default
         else:
             try:
-                feature_flag = [flag for flag in self.feature_flags if flag['key'] == key][0]
+                feature_flag = [flag for flag in self.feature_flags if flag["key"] == key][0]
             except IndexError:
                 return default
 
-            if feature_flag.get('is_simple_flag'):
-                response = _hash(key, distinct_id) <= (feature_flag['rollout_percentage'] / 100)
+            if feature_flag.get("is_simple_flag"):
+                response = _hash(key, distinct_id) <= (feature_flag["rollout_percentage"] / 100)
             else:
                 try:
                     request_data = {
@@ -305,15 +305,15 @@ class Client(object):
                         "personal_api_key": self.personal_api_key,
                     }
                     resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
-                    response = key in resp_data['featureFlags']
+                    response = key in resp_data["featureFlags"]
                 except Exception as e:
                     response = default
                     self.log.warning(
-                        '[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:' % key
+                        "[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:" % key
                     )
                     self.log.warning(e)
 
-        self.capture(distinct_id, '$feature_flag_called', {'$feature_flag': key, '$feature_flag_response': response})
+        self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
 
 
@@ -330,7 +330,7 @@ def _hash(key, distinct_id):
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
     if not isinstance(field, data_type):
-        msg = '{0} must have {1}, got: {2}'.format(name, data_type, field)
+        msg = "{0} must have {1}, got: {2}".format(name, data_type, field)
         raise AssertionError(msg)
 
 

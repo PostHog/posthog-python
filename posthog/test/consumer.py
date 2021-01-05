@@ -17,7 +17,7 @@ from posthog.test.utils import TEST_API_KEY
 class TestConsumer(unittest.TestCase):
     def test_next(self):
         q = Queue()
-        consumer = Consumer(q, '')
+        consumer = Consumer(q, "")
         q.put(1)
         next = consumer.next()
         self.assertEqual(next, [1])
@@ -25,7 +25,7 @@ class TestConsumer(unittest.TestCase):
     def test_next_limit(self):
         q = Queue()
         flush_at = 50
-        consumer = Consumer(q, '', flush_at)
+        consumer = Consumer(q, "", flush_at)
         for i in range(10000):
             q.put(i)
         next = consumer.next()
@@ -33,8 +33,8 @@ class TestConsumer(unittest.TestCase):
 
     def test_dropping_oversize_msg(self):
         q = Queue()
-        consumer = Consumer(q, '')
-        oversize_msg = {'m': 'x' * MAX_MSG_SIZE}
+        consumer = Consumer(q, "")
+        oversize_msg = {"m": "x" * MAX_MSG_SIZE}
         q.put(oversize_msg)
         next = consumer.next()
         self.assertEqual(next, [])
@@ -43,7 +43,7 @@ class TestConsumer(unittest.TestCase):
     def test_upload(self):
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY)
-        track = {'type': 'track', 'event': 'python event', 'distinct_id': 'distinct_id'}
+        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
         q.put(track)
         success = consumer.upload()
         self.assertTrue(success)
@@ -55,10 +55,10 @@ class TestConsumer(unittest.TestCase):
         q = Queue()
         flush_interval = 0.3
         consumer = Consumer(q, TEST_API_KEY, flush_at=10, flush_interval=flush_interval)
-        with mock.patch('posthog.consumer.batch_post') as mock_post:
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.start()
             for i in range(0, 3):
-                track = {'type': 'track', 'event': 'python event %d' % i, 'distinct_id': 'distinct_id'}
+                track = {"type": "track", "event": "python event %d" % i, "distinct_id": "distinct_id"}
                 q.put(track)
                 time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 3)
@@ -70,17 +70,17 @@ class TestConsumer(unittest.TestCase):
         flush_interval = 0.5
         flush_at = 10
         consumer = Consumer(q, TEST_API_KEY, flush_at=flush_at, flush_interval=flush_interval)
-        with mock.patch('posthog.consumer.batch_post') as mock_post:
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.start()
             for i in range(0, flush_at * 2):
-                track = {'type': 'track', 'event': 'python event %d' % i, 'distinct_id': 'distinct_id'}
+                track = {"type": "track", "event": "python event %d" % i, "distinct_id": "distinct_id"}
                 q.put(track)
             time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 2)
 
     def test_request(self):
         consumer = Consumer(None, TEST_API_KEY)
-        track = {'type': 'track', 'event': 'python event', 'distinct_id': 'distinct_id'}
+        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
         consumer.request([track])
 
     def _test_request_retry(self, consumer, expected_exception, exception_count):
@@ -91,8 +91,8 @@ class TestConsumer(unittest.TestCase):
 
         mock_post.call_count = 0
 
-        with mock.patch('posthog.consumer.batch_post', mock.Mock(side_effect=mock_post)):
-            track = {'type': 'track', 'event': 'python event', 'distinct_id': 'distinct_id'}
+        with mock.patch("posthog.consumer.batch_post", mock.Mock(side_effect=mock_post)):
+            track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
             # request() should succeed if the number of exceptions raised is
             # less than the retries paramater.
             if exception_count <= consumer.retries:
@@ -113,29 +113,29 @@ class TestConsumer(unittest.TestCase):
     def test_request_retry(self):
         # we should retry on general errors
         consumer = Consumer(None, TEST_API_KEY)
-        self._test_request_retry(consumer, Exception('generic exception'), 2)
+        self._test_request_retry(consumer, Exception("generic exception"), 2)
 
         # we should retry on server errors
         consumer = Consumer(None, TEST_API_KEY)
-        self._test_request_retry(consumer, APIError(500, 'Internal Server Error'), 2)
+        self._test_request_retry(consumer, APIError(500, "Internal Server Error"), 2)
 
         # we should retry on HTTP 429 errors
         consumer = Consumer(None, TEST_API_KEY)
-        self._test_request_retry(consumer, APIError(429, 'Too Many Requests'), 2)
+        self._test_request_retry(consumer, APIError(429, "Too Many Requests"), 2)
 
         # we should NOT retry on other client errors
         consumer = Consumer(None, TEST_API_KEY)
-        api_error = APIError(400, 'Client Errors')
+        api_error = APIError(400, "Client Errors")
         try:
             self._test_request_retry(consumer, api_error, 1)
         except APIError:
             pass
         else:
-            self.fail('request() should not retry on client errors')
+            self.fail("request() should not retry on client errors")
 
         # test for number of exceptions raise > retries value
         consumer = Consumer(None, TEST_API_KEY, retries=3)
-        self._test_request_retry(consumer, APIError(500, 'Internal Server Error'), 3)
+        self._test_request_retry(consumer, APIError(500, "Internal Server Error"), 3)
 
     def test_pause(self):
         consumer = Consumer(None, TEST_API_KEY)
@@ -145,7 +145,7 @@ class TestConsumer(unittest.TestCase):
     def test_max_batch_size(self):
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY, flush_at=100000, flush_interval=3)
-        track = {'type': 'track', 'event': 'python event', 'distinct_id': 'distinct_id'}
+        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
         msg_size = len(json.dumps(track).encode())
         # number of messages in a maximum-size batch
         n_msgs = int(475000 / msg_size)
@@ -153,10 +153,10 @@ class TestConsumer(unittest.TestCase):
         def mock_post_fn(_, data, **kwargs):
             res = mock.Mock()
             res.status_code = 200
-            self.assertTrue(len(data.encode()) < 500000, 'batch size (%d) exceeds 500KB limit' % len(data.encode()))
+            self.assertTrue(len(data.encode()) < 500000, "batch size (%d) exceeds 500KB limit" % len(data.encode()))
             return res
 
-        with mock.patch('posthog.request._session.post', side_effect=mock_post_fn) as mock_post:
+        with mock.patch("posthog.request._session.post", side_effect=mock_post_fn) as mock_post:
             consumer.start()
             for _ in range(0, n_msgs + 2):
                 q.put(track)

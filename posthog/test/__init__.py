@@ -6,7 +6,7 @@ import unittest
 
 def all_names():
     for _, modname, _ in pkgutil.iter_modules(__path__):
-        yield 'posthog.test.' + modname
+        yield "posthog.test." + modname
 
 
 def all():

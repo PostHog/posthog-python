@@ -7,7 +7,7 @@ from uuid import UUID
 import six
 from dateutil.tz import tzlocal, tzutc
 
-log = logging.getLogger('posthog')
+log = logging.getLogger("posthog")
 
 
 def is_naive(dt):
@@ -39,7 +39,7 @@ def guess_timezone(dt):
 
 
 def remove_trailing_slash(host):
-    if host.endswith('/'):
+    if host.endswith("/"):
         return host[:-1]
     return host
 
@@ -84,6 +84,6 @@ def _coerce_unicode(cmplx):
     except AttributeError as exception:
         item = ":".join(exception)
         item.decode("utf-8", "strict")
-        log.warning('Error decoding: %s', item)
+        log.warning("Error decoding: %s", item)
         return None
     return item

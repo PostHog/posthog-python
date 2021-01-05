@@ -8,7 +8,7 @@ from dateutil.tz import tzutc
 
 from posthog import utils
 
-TEST_API_KEY = 'kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4'
+TEST_API_KEY = "kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4"
 
 
 class TestUtils(unittest.TestCase):
@@ -26,21 +26,21 @@ class TestUtils(unittest.TestCase):
 
     def test_clean(self):
         simple = {
-            'decimal': Decimal('0.142857'),
-            'unicode': six.u('woo'),
-            'date': datetime.now(),
-            'long': 200000000,
-            'integer': 1,
-            'float': 2.0,
-            'bool': True,
-            'str': 'woo',
-            'none': None,
+            "decimal": Decimal("0.142857"),
+            "unicode": six.u("woo"),
+            "date": datetime.now(),
+            "long": 200000000,
+            "integer": 1,
+            "float": 2.0,
+            "bool": True,
+            "str": "woo",
+            "none": None,
         }
 
         complicated = {
-            'exception': Exception('This should show up'),
-            'timedelta': timedelta(microseconds=20),
-            'list': [1, 2, 3],
+            "exception": Exception("This should show up"),
+            "timedelta": timedelta(microseconds=20),
+            "list": [1, 2, 3],
         }
 
         combined = dict(simple.items())
@@ -52,12 +52,12 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(combined.keys(), pre_clean_keys)
 
         # test UUID separately, as the UUID object doesn't equal its string representation according to Python
-        self.assertEqual(utils.clean(UUID('12345678123456781234567812345678')), '12345678-1234-5678-1234-567812345678')
+        self.assertEqual(utils.clean(UUID("12345678123456781234567812345678")), "12345678-1234-5678-1234-567812345678")
 
     def test_clean_with_dates(self):
         dict_with_dates = {
-            'birthdate': date(1980, 1, 1),
-            'registration': datetime.utcnow(),
+            "birthdate": date(1980, 1, 1),
+            "registration": datetime.utcnow(),
         }
         self.assertEqual(dict_with_dates, utils.clean(dict_with_dates))
 
@@ -70,12 +70,12 @@ class TestUtils(unittest.TestCase):
         utils.clean(item)
 
     def test_clean_fn(self):
-        cleaned = utils.clean({'fn': lambda x: x, 'number': 4})
-        self.assertEqual(cleaned['number'], 4)
+        cleaned = utils.clean({"fn": lambda x: x, "number": 4})
+        self.assertEqual(cleaned["number"], 4)
         # TODO: fixme, different behavior on python 2 and 3
-        if 'fn' in cleaned:
-            self.assertEqual(cleaned['fn'], None)
+        if "fn" in cleaned:
+            self.assertEqual(cleaned["fn"], None)
 
     def test_remove_slash(self):
-        self.assertEqual('http://posthog.io', utils.remove_trailing_slash('http://posthog.io/'))
-        self.assertEqual('http://posthog.io', utils.remove_trailing_slash('http://posthog.io'))
+        self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io/"))
+        self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io"))
