@@ -71,6 +71,14 @@ def identify():
     )
 
 
+def set_once():
+    posthog.set_once(
+        options.distinct_id,
+        properties=json_hash(options.traits),
+        context=json_hash(options.context),
+    )
+
+
 def unknown():
     print()
 

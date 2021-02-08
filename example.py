@@ -28,3 +28,8 @@ posthog.alias("distinct_id", "new_distinct_id")
 
 # # Add properties to the person
 posthog.identify("distinct_id", {"email": "something@something.com"})
+
+
+# properties only once to the person
+posthog.set_once("distinct_id", {"self_serve_signup": True})
+posthog.set_once("distinct_id", {"self_serve_signup": False}) # this will not change the property (because it was already set)
