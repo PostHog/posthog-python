@@ -3,9 +3,8 @@ import hashlib
 import logging
 import numbers
 from datetime import datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-import requests
 from dateutil.tz import tzutc
 from six import string_types
 
@@ -21,7 +20,7 @@ except ImportError:
     import Queue as queue
 
 
-ID_TYPES = (numbers.Number, string_types)
+ID_TYPES = (numbers.Number, string_types, UUID)
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
 
