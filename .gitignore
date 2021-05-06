@@ -5,7 +5,7 @@ dist/
 MANIFEST
 build/
 .eggs/
-.coverage/
+.coverage
 .vscode/
 env/
 venv/
