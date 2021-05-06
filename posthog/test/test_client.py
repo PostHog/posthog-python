@@ -1,6 +1,7 @@
 import time
 import unittest
 from datetime import date, datetime
+from uuid import uuid4
 
 import mock
 import six
@@ -8,7 +9,7 @@ from freezegun import freeze_time
 
 from posthog.client import Client
 from posthog.request import APIError
-from posthog.test.utils import TEST_API_KEY
+from posthog.test.test_utils import TEST_API_KEY
 from posthog.version import VERSION
 
 
@@ -120,6 +121,16 @@ class TestClient(unittest.TestCase):
         client.flush()
         self.assertTrue(success)
         self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$current_url"], "https://posthog.com/contact")
+
+    def test_basic_page_distinct_uuid(self):
+        client = self.client
+        distinct_id = uuid4()
+        success, msg = client.page(distinct_id, url="https://posthog.com/contact")
+        self.assertFalse(self.failed)
+        client.flush()
+        self.assertTrue(success)
+        self.assertEqual(msg["distinct_id"], str(distinct_id))
         self.assertEqual(msg["properties"]["$current_url"], "https://posthog.com/contact")
 
     def test_advanced_page(self):

@@ -11,7 +11,7 @@ except ImportError:
 
 from posthog.consumer import MAX_MSG_SIZE, Consumer
 from posthog.request import APIError
-from posthog.test.utils import TEST_API_KEY
+from posthog.test.test_utils import TEST_API_KEY
 
 
 class TestConsumer(unittest.TestCase):

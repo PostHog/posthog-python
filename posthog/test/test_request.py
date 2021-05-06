@@ -5,7 +5,7 @@ from datetime import date, datetime
 import requests
 
 from posthog.request import DatetimeSerializer, batch_post
-from posthog.test.utils import TEST_API_KEY
+from posthog.test.test_utils import TEST_API_KEY
 
 
 class TestRequests(unittest.TestCase):

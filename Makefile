@@ -1,7 +1,10 @@
-test:
+lint:
 	pylint --rcfile=.pylintrc --reports=y --exit-zero analytics | tee pylint.out
 	flake8 --max-complexity=10 --statistics analytics > flake8.out || true
-	coverage run --branch --include=analytics/\* --omit=*/test* setup.py test
+
+test:
+	coverage run -m pytest
+	coverage report
 
 release:
 	rm -rf dist/*
@@ -26,4 +29,4 @@ release_analytics:
 e2e_test:
 	.buildscripts/e2e.sh
 
-.PHONY: test release e2e_test
+.PHONY: test lint release e2e_test

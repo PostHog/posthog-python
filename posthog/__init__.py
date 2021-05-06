@@ -32,7 +32,7 @@ def capture(
 
     A `capture` call requires
     - `distinct id` which uniquely identifies your user
-    - `event name` to make sure
+    - `event name` to specify the event
     - We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on.
 
     Optionally you can submit

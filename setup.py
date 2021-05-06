@@ -21,10 +21,11 @@ extras_require = {
         "black",
         "isort",
         "pre-commit",
+    ],
+    "test": [
+        "mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage"
     ]
 }
-
-tests_require = ["mock>=2.0.0", "freezegun==0.3.15"]
 
 setup(
     name="posthog",
@@ -39,7 +40,6 @@ setup(
     license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,
-    tests_require=tests_require,
     description="Integrate PostHog into any python application.",
     long_description=long_description,
     classifiers=[
