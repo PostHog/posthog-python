@@ -138,7 +138,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
+    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -149,6 +149,23 @@ class Client(object):
             "context": context,
             "distinct_id": distinct_id,
             "$set": properties,
+            "event": "$set",
+            "messageId": message_id,
+        }
+
+        return self._enqueue(msg)
+
+    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
+        properties = properties or {}
+        context = context or {}
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("properties", properties, dict)
+
+        msg = {
+            "timestamp": timestamp,
+            "context": context,
+            "distinct_id": distinct_id,
+            "$set_once": properties,
             "event": "$set_once",
             "messageId": message_id,
         }

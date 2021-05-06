@@ -14,5 +14,3 @@ Specifically, the [Python integration](https://posthog.com/docs/integrations/pyt
 2. Run `source env/bin/activate` (activates the virtual environment)
 3. Run `python3 -m pip install -e ".[test]"` (installs the package in develop mode, along with test dependencies)
 4. Run `make test`
-
-To run tests specific to a file, use 

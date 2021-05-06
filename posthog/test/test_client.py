@@ -105,6 +105,66 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["messageId"], "messageId")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
+
+    def test_basic_set(self):
+        client = self.client
+        success, msg = client.set("distinct_id", {"trait": "value"})
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["$set"]["trait"], "value")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+
+    def test_advanced_set(self):
+        client = self.client
+        success, msg = client.set(
+            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+        )
+
+        self.assertTrue(success)
+
+        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
+        self.assertEqual(msg["$set"]["trait"], "value")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+
+
+    def test_basic_set_once(self):
+        client = self.client
+        success, msg = client.set_once("distinct_id", {"trait": "value"})
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["$set_once"]["trait"], "value")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+
+    def test_advanced_set_once(self):
+        client = self.client
+        success, msg = client.set_once(
+            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+        )
+
+        self.assertTrue(success)
+
+        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
+        self.assertEqual(msg["$set_once"]["trait"], "value")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+
     def test_basic_alias(self):
         client = self.client
         success, msg = client.alias("previousId", "distinct_id")
@@ -125,7 +185,7 @@ class TestClient(unittest.TestCase):
 
     def test_basic_page_distinct_uuid(self):
         client = self.client
-        distinct_id = uuid4()
+        distinct_id = str(uuid4())
         success, msg = client.page(distinct_id, url="https://posthog.com/contact")
         self.assertFalse(self.failed)
         client.flush()

@@ -87,6 +87,38 @@ def identify(
     )
 
 
+def set(
+    distinct_id,  # type: str,
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    message_id=None,  # type: Optional[str]
+):
+    # type: (...) -> None
+    """
+    Set properties on a user record.
+    This will overwrite previous people property values, just like `identify`.
+
+     A `set` call requires
+     - `distinct id` which uniquely identifies your user
+     - `properties` with a dict with any key: value pairs
+
+     For example:
+     ```python
+     posthog.set('distinct id', {
+         'current_browser': 'Chrome',
+     })
+     ```
+    """
+    _proxy(
+        "set",
+        distinct_id=distinct_id,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        message_id=message_id,
+    )
+
 def set_once(
     distinct_id,  # type: str,
     properties=None,  # type: Optional[Dict]
