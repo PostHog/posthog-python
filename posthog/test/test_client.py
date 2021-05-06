@@ -105,7 +105,6 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["messageId"], "messageId")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
-
     def test_basic_set(self):
         client = self.client
         success, msg = client.set("distinct_id", {"trait": "value"})
@@ -134,7 +133,6 @@ class TestClient(unittest.TestCase):
         self.assertTrue(isinstance(msg["timestamp"], str))
         self.assertEqual(msg["messageId"], "messageId")
         self.assertEqual(msg["distinct_id"], "distinct_id")
-
 
     def test_basic_set_once(self):
         client = self.client

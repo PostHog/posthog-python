@@ -54,7 +54,7 @@ jobs:
 
             - name: Install requirements.txt dependencies with pip
               run: |
-                  python -m pip install -e .
+                  python -m pip install -e .[test]
 
             - name: Run posthog tests
               run: |

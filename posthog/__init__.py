@@ -119,6 +119,7 @@ def set(
         message_id=message_id,
     )
 
+
 def set_once(
     distinct_id,  # type: str,
     properties=None,  # type: Optional[Dict]

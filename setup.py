@@ -22,9 +22,7 @@ extras_require = {
         "isort",
         "pre-commit",
     ],
-    "test": [
-        "mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage"
-    ]
+    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage"],
 }
 
 setup(

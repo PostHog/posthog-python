@@ -117,7 +117,7 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Attempt to upload the batch and retry before raising an error """
+        """Attempt to upload the batch and retry before raising an error"""
 
         def fatal_exception(exc):
             if isinstance(exc, APIError):
