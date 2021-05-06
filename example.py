@@ -6,7 +6,7 @@ import time
 import posthog
 
 # You can find this key on the /setup page in PostHog
-posthog.api_key = "LXP6nQXvo-2TCqGVrWvPah8uJIyVykoMmhnEkEBi5PA"
+posthog.api_key = ""
 posthog.personal_api_key = ""
 
 # Where you host PostHog, with no trailing /.
