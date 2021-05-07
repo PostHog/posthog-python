@@ -151,6 +151,7 @@ class Client(object):
             "timestamp": timestamp,
             "context": context,
             "event": "$create_alias",
+            "distinct_id": previous_id,
         }
 
         return self._enqueue(msg)
