@@ -71,6 +71,22 @@ def identify():
     )
 
 
+def set_once():
+    posthog.set_once(
+        options.distinct_id,
+        properties=json_hash(options.traits),
+        context=json_hash(options.context),
+    )
+
+
+def set():
+    posthog.set(
+        options.distinct_id,
+        properties=json_hash(options.traits),
+        context=json_hash(options.context),
+    )
+
+
 def unknown():
     print()
 
@@ -84,7 +100,7 @@ ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 log.addHandler(ch)
 
-switcher = {"capture": capture, "page": page, "identify": identify}
+switcher = {"capture": capture, "page": page, "identify": identify, "set_once": set_once, "set": set}
 
 func = switcher.get(options.type)
 if func:

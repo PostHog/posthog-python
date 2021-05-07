@@ -13,3 +13,5 @@ flake8.out
 pylint.out
 posthog-analytics
 .idea
+.python-version
+.coverage

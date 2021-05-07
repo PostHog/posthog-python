@@ -32,7 +32,7 @@ def capture(
 
     A `capture` call requires
     - `distinct id` which uniquely identifies your user
-    - `event name` to make sure
+    - `event name` to specify the event
     - We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on.
 
     Optionally you can submit
@@ -79,6 +79,72 @@ def identify(
     """
     _proxy(
         "identify",
+        distinct_id=distinct_id,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        message_id=message_id,
+    )
+
+
+def set(
+    distinct_id,  # type: str,
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    message_id=None,  # type: Optional[str]
+):
+    # type: (...) -> None
+    """
+    Set properties on a user record.
+    This will overwrite previous people property values, just like `identify`.
+
+     A `set` call requires
+     - `distinct id` which uniquely identifies your user
+     - `properties` with a dict with any key: value pairs
+
+     For example:
+     ```python
+     posthog.set('distinct id', {
+         'current_browser': 'Chrome',
+     })
+     ```
+    """
+    _proxy(
+        "set",
+        distinct_id=distinct_id,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        message_id=message_id,
+    )
+
+
+def set_once(
+    distinct_id,  # type: str,
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    message_id=None,  # type: Optional[str]
+):
+    # type: (...) -> None
+    """
+    Set properties on a user record, only if they do not yet exist.
+    This will not overwrite previous people property values, unlike `identify`.
+
+     A `set_once` call requires
+     - `distinct id` which uniquely identifies your user
+     - `properties` with a dict with any key: value pairs
+
+     For example:
+     ```python
+     posthog.set_once('distinct id', {
+         'referred_by': 'friend',
+     })
+     ```
+    """
+    _proxy(
+        "set_once",
         distinct_id=distinct_id,
         properties=properties,
         context=context,
