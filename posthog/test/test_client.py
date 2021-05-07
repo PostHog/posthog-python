@@ -183,7 +183,7 @@ class TestClient(unittest.TestCase):
 
     def test_basic_page_distinct_uuid(self):
         client = self.client
-        distinct_id = str(uuid4())
+        distinct_id = uuid4()
         success, msg = client.page(distinct_id, url="https://posthog.com/contact")
         self.assertFalse(self.failed)
         client.flush()
