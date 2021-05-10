@@ -1,4 +1,3 @@
-
 import os
 import sys
 
@@ -8,41 +7,32 @@ except ImportError:
     from distutils.core import setup
 
 # Don't import module here, since deps may not be installed
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'posthoganalytics'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "posthoganalytics"))
 from version import VERSION
 
-long_description = '''
+long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
-'''
+"""
 
-install_requires = [
-    "requests>=2.7,<3.0",
-    "six>=1.5",
-    "monotonic>=1.5",
-    "backoff==1.6.0",
-    "python-dateutil>2.1"
-]
+install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff==1.6.0", "python-dateutil>2.1"]
 
-tests_require = [
-    "mock>=2.0.0"
-]
+tests_require = ["mock>=2.0.0"]
 
 setup(
-    name='posthoganalytics',
+    name="posthoganalytics",
     version=VERSION,
-    url='https://github.com/posthog/posthog-python',
-    author='Posthog',
-    author_email='hey@posthog.com',
-    maintainer='PostHog',
-    maintainer_email='hey@posthog.com',
-    test_suite='posthoganalytics.test.all',
-    packages=['posthoganalytics', 'posthoganalytics.test'],
-    license='MIT License',
+    url="https://github.com/posthog/posthog-python",
+    author="Posthog",
+    author_email="hey@posthog.com",
+    maintainer="PostHog",
+    maintainer_email="hey@posthog.com",
+    test_suite="posthoganalytics.test.all",
+    packages=["posthoganalytics", "posthoganalytics.test"],
+    license="MIT License",
     install_requires=install_requires,
     tests_require=tests_require,
     extras_require={
-        'sentry': 'sentry',
-        'django': 'django',
+        'sentry': ['sentry', 'django'],
     },
     description='Integrate PostHog into any python application.',
     long_description=long_description,

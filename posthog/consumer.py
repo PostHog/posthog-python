@@ -1,10 +1,11 @@
+import json
 import logging
 from threading import Thread
-import monotonic
-import backoff
-import json
 
-from posthog.request import batch_post, APIError, DatetimeSerializer
+import backoff
+import monotonic
+
+from posthog.request import APIError, DatetimeSerializer, batch_post
 
 try:
     from queue import Empty
@@ -20,11 +21,21 @@ BATCH_SIZE_LIMIT = 475000
 
 class Consumer(Thread):
     """Consumes the messages from the client's queue."""
-    log = logging.getLogger('posthog')
 
-    def __init__(self, queue, api_key, flush_at=100, host=None,
-                 on_error=None, flush_interval=0.5, gzip=False, retries=10,
-                 timeout=15):
+    log = logging.getLogger("posthog")
+
+    def __init__(
+        self,
+        queue,
+        api_key,
+        flush_at=100,
+        host=None,
+        on_error=None,
+        flush_interval=0.5,
+        gzip=False,
+        retries=10,
+        timeout=15,
+    ):
         """Create a consumer thread."""
         Thread.__init__(self)
         # Make consumer a daemon thread so that it doesn't block program exit
@@ -46,11 +57,11 @@ class Consumer(Thread):
 
     def run(self):
         """Runs the consumer."""
-        self.log.debug('consumer is running...')
+        self.log.debug("consumer is running...")
         while self.running:
             self.upload()
 
-        self.log.debug('consumer exited.')
+        self.log.debug("consumer exited.")
 
     def pause(self):
         """Pause the consumer."""
@@ -67,7 +78,7 @@ class Consumer(Thread):
             self.request(batch)
             success = True
         except Exception as e:
-            self.log.error('error uploading: %s', e)
+            self.log.error("error uploading: %s", e)
             success = False
             if self.on_error:
                 self.on_error(e, batch)
@@ -90,19 +101,15 @@ class Consumer(Thread):
             if elapsed >= self.flush_interval:
                 break
             try:
-                item = queue.get(
-                    block=True, timeout=self.flush_interval - elapsed)
-                item_size = len(json.dumps(
-                    item, cls=DatetimeSerializer).encode())
+                item = queue.get(block=True, timeout=self.flush_interval - elapsed)
+                item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > MAX_MSG_SIZE:
-                    self.log.error(
-                        'Item exceeds 32kb limit, dropping. (%s)', str(item))
+                    self.log.error("Item exceeds 32kb limit, dropping. (%s)", str(item))
                     continue
                 items.append(item)
                 total_size += item_size
                 if total_size >= BATCH_SIZE_LIMIT:
-                    self.log.debug(
-                        'hit batch size limit (size: %d)', total_size)
+                    self.log.debug("hit batch size limit (size: %d)", total_size)
                     break
             except Empty:
                 break
@@ -110,7 +117,7 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Attempt to upload the batch and retry before raising an error """
+        """Attempt to upload the batch and retry before raising an error"""
 
         def fatal_exception(exc):
             if isinstance(exc, APIError):
@@ -122,13 +129,8 @@ class Consumer(Thread):
                 # retry on all other errors (eg. network)
                 return False
 
-        @backoff.on_exception(
-            backoff.expo,
-            Exception,
-            max_tries=self.retries + 1,
-            giveup=fatal_exception)
+        @backoff.on_exception(backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception)
         def send_request():
-            batch_post(self.api_key, self.host, gzip=self.gzip,
-                 timeout=self.timeout, batch=batch)
+            batch_post(self.api_key, self.host, gzip=self.gzip, timeout=self.timeout, batch=batch)
 
         send_request()
