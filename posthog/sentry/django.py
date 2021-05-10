@@ -1,5 +1,6 @@
 from sentry_sdk import configure_scope
 from django.conf import settings
+from posthog.sentry import POSTHOG_ID_TAG
 
 GET_DISTINCT_ID = getattr(settings, 'POSTHOG_DJANGO', {}).get('distinct_id')
 
@@ -19,6 +20,6 @@ class PosthogDistinctIdMiddleware:
         with configure_scope() as scope:
             distinct_id = get_distinct_id(request)
             if distinct_id:
-                scope.set_tag('posthog_distinct_id', distinct_id)
+                scope.set_tag(POSTHOG_ID_TAG, distinct_id)
             response = self.get_response(request)
         return response
