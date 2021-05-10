@@ -32,9 +32,9 @@ setup(
     install_requires=install_requires,
     tests_require=tests_require,
     extras_require={
-        'sentry': ['sentry-sdk', 'django'],
+        "sentry": ["sentry-sdk", "django"],
     },
-    description='Integrate PostHog into any python application.',
+    description="Integrate PostHog into any python application.",
     long_description=long_description,
     classifiers=[
         "Development Status :: 5 - Production/Stable",

@@ -2,7 +2,8 @@ from sentry_sdk import configure_scope
 from django.conf import settings
 from posthog.sentry import POSTHOG_ID_TAG
 
-GET_DISTINCT_ID = getattr(settings, 'POSTHOG_DJANGO', {}).get('distinct_id')
+GET_DISTINCT_ID = getattr(settings, "POSTHOG_DJANGO", {}).get("distinct_id")
+
 
 def get_distinct_id(request):
     if not GET_DISTINCT_ID:
@@ -11,6 +12,7 @@ def get_distinct_id(request):
         return GET_DISTINCT_ID(request)
     except:
         return None
+
 
 class PosthogDistinctIdMiddleware:
     def __init__(self, get_response):

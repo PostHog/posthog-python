@@ -1,1 +1,1 @@
-POSTHOG_ID_TAG = 'posthog_distinct_id'
+POSTHOG_ID_TAG = "posthog_distinct_id"
