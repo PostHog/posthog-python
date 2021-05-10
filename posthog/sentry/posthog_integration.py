@@ -1,3 +1,4 @@
+from sentry_sdk._types import MYPY
 from sentry_sdk.hub import Hub
 from sentry_sdk.integrations import Integration
 from sentry_sdk.scope import add_global_event_processor
@@ -6,12 +7,8 @@ import posthog
 from posthog.request import DEFAULT_HOST
 from posthog.sentry import POSTHOG_ID_TAG
 
-from sentry_sdk._types import MYPY
-
 if MYPY:
-    from typing import Any
-    from typing import Dict
-    from typing import Optional
+    from typing import Any, Dict, Optional
 
     from sentry_sdk._types import Event, Hint
 
