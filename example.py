@@ -44,4 +44,4 @@ posthog.set_once(
 posthog.set("new_distinct_id", {"current_browser": "Chrome"})
 posthog.set("new_distinct_id", {"current_browser": "Firefox"})
 
-posthog.shutdown()
+# posthog.shutdown()

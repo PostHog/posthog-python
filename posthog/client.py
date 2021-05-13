@@ -65,6 +65,7 @@ class Client(object):
         self.timeout = timeout
         self.feature_flags = None
         self.poll_interval = poll_interval
+        self.poller = None
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -274,6 +275,9 @@ class Client(object):
             except RuntimeError:
                 # consumer thread has not started
                 pass
+        
+        if self.poller:
+            self.poller.stop()
 
     def shutdown(self):
         """Flush all messages and cleanly shutdown the client"""
@@ -309,8 +313,9 @@ class Client(object):
             return
 
         self._load_feature_flags()
-        poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
-        poller.start()
+        if not (self.poller and self.poller.is_alive()):
+            self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
+            self.poller.start()
 
     def feature_enabled(self, key, distinct_id, default=False):
         require("key", key, string_types)
