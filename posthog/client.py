@@ -275,7 +275,7 @@ class Client(object):
             except RuntimeError:
                 # consumer thread has not started
                 pass
-        
+
         if self.poller:
             self.poller.stop()
 
