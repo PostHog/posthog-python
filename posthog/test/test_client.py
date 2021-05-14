@@ -325,11 +325,27 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
 
     @mock.patch("posthog.client.decide")
-    def test_feature_enabled_request(self, patch_get):
-        patch_get.return_value = {"featureFlags": ["beta-feature"]}
+    def test_feature_enabled_request(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": ["beta-feature"]}
         client = Client(TEST_API_KEY)
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
+        ]
+        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+
+    @mock.patch("posthog.client.get")
+    def test_feature_enabled_simple_without_rollout_percentage(self, patch_get):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True}
+        ]
+        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+
+    @mock.patch("posthog.client.get")
+    def test_feature_enabled_simple_with_none_rollout_percentage(self, patch_get):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percantage": None}
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
 
