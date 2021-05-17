@@ -330,8 +330,8 @@ class Client(object):
             except IndexError:
                 return default
 
-            if feature_flag.get("is_simple_flag") and feature_flag.get("rollout_percentage"):
-                response = _hash(key, distinct_id) <= (feature_flag["rollout_percentage"] / 100)
+            if feature_flag.get("is_simple_flag"):
+                response = _hash(key, distinct_id) <= ((feature_flag.get("rollout_percentage", 100) or 100) / 100)
             else:
                 try:
                     request_data = {
