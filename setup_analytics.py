@@ -31,6 +31,9 @@ setup(
     license="MIT License",
     install_requires=install_requires,
     tests_require=tests_require,
+    extras_require={
+        "sentry": ["sentry-sdk", "django"],
+    },
     description="Integrate PostHog into any python application.",
     long_description=long_description,
     classifiers=[
