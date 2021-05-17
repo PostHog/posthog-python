@@ -15,7 +15,7 @@ if MYPY:
 
 class PostHogIntegration(Integration):
     identifier = "posthog-python"
-    organisation = None  # The Sentry organization, used to send a direct link from PostHog to Sentry
+    organization = None  # The Sentry organization, used to send a direct link from PostHog to Sentry
     project_id = None  # The Sentry project id, used to send a direct link from PostHog to Sentry
     prefix = "https://sentry.io/organizations/"  # Url of a self-hosted sentry instance (default: https://sentry.io/organizations/)
 
@@ -37,10 +37,10 @@ class PostHogIntegration(Integration):
                         "$sentry_exception": event["exception"],
                     }
 
-                    if PostHogIntegration.organisation and PostHogIntegration.project_id:
+                    if PostHogIntegration.organization and PostHogIntegration.project_id:
                         properties[
                             "$sentry_url"
-                        ] = f"{PostHogIntegration.prefix}{PostHogIntegration.organisation}/issues/?project={PostHogIntegration.project_id}&query={event['event_id']}"
+                        ] = f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={PostHogIntegration.project_id}&query={event['event_id']}"
 
                     posthog.capture(posthog_distinct_id, "$exception", properties)
 

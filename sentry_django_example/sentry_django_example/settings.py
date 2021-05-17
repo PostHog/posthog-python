@@ -43,7 +43,7 @@ posthog.host = "http://127.0.0.1:8000"
 
 from posthog.sentry.posthog_integration import PostHogIntegration
 
-PostHogIntegration.organisation = "posthog"  # TODO: your sentry organisation
+PostHogIntegration.organization = "posthog"  # TODO: your sentry organization
 PostHogIntegration.project_id = "5624115"  # TODO: your sentry projectID
 # PostHogIntegration.prefix = # TODO: your self hosted Sentry url. (default: https://sentry.io/organizations/)
 

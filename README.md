@@ -36,4 +36,5 @@ There's 2 places of importance (Changes required are all marked with TODO in the
     1. This includes the `sentry-debug/` endpoint, which generates an exception
 
 To run things: `make django_example`. This installs the posthog-python library with the sentry-sdk add-on, and then runs the django app.
+Also start the PostHog app locally.
 Then navigate to `http://127.0.0.1:8080/sentry-debug/` and you should get an event in both Sentry and PostHog, with links to each other.
