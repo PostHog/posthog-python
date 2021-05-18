@@ -43,6 +43,22 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
+    def test_basic_capture_with_project_api_key(self):
+
+        client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
+
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800
@@ -319,6 +335,14 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple(self, patch_get):
         client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
+        ]
+        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+
+    @mock.patch("posthog.client.get")
+    def test_feature_enabled_simple_with_project_api_key(self, patch_get):
+        client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
         ]
