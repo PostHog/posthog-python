@@ -52,7 +52,7 @@ class Client(object):
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
-        self.api_key = api_key or project_api_key
+        self.api_key = project_api_key or api_key
 
         require("api_key", self.api_key, string_types)
 
@@ -88,7 +88,7 @@ class Client(object):
                 self.consumers = []
                 consumer = Consumer(
                     self.queue,
-                    api_key,
+                    self.api_key,
                     host=host,
                     on_error=on_error,
                     flush_at=flush_at,

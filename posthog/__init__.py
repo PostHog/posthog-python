@@ -14,13 +14,14 @@ send = True  # type: bool
 sync_mode = False  # type: bool
 disabled = False  # type: bool
 personal_api_key = None  # type: str
+project_api_key = None  # type: str
 
 default_client = None
 
 
 def capture(
-    distinct_id,  # type: str,
-    event,  # type: str,
+    distinct_id,  # type: str
+    event,  # type: str
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
@@ -252,6 +253,7 @@ def _proxy(method, *args, **kwargs):
             send=send,
             sync_mode=sync_mode,
             personal_api_key=personal_api_key,
+            project_api_key=project_api_key,
         )
 
     fn = getattr(default_client, method)
