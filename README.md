@@ -1,5 +1,7 @@
 # PostHog Python
 
+[![PyPI](https://img.shields.io/pypi/v/posthog)](https://pypi.org/project/posthog/)
+
 Please see the main [PostHog docs](https://posthog.com/docs).
 
 Specifically, the [Python integration](https://posthog.com/docs/integrations/python-integration) details.
