@@ -14,7 +14,7 @@ send = True  # type: bool
 sync_mode = False  # type: bool
 disabled = False  # type: bool
 personal_api_key = None  # type: str
-project_api_key = None # type: str
+project_api_key = None  # type: str
 
 default_client = None
 
