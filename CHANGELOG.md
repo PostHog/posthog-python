@@ -1,4 +1,4 @@
-## 1.4.0 - 2021-05-07
+## 1.4.0 - 2021-05-18
 
 - Improve support for `project_api_key` (#32)
 - Resolve polling issues with feature flags (#29)
