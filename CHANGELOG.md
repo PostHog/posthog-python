@@ -1,3 +1,6 @@
+## 1.4.1 - 2021-05-28
+- Fix packaging issues with Sentry integrations
+
 ## 1.4.0 - 2021-05-18
 
 - Improve support for `project_api_key` (#32)

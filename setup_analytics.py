@@ -27,7 +27,7 @@ setup(
     maintainer="PostHog",
     maintainer_email="hey@posthog.com",
     test_suite="posthoganalytics.test.all",
-    packages=["posthoganalytics", "posthoganalytics.test"],
+    packages=["posthoganalytics", "posthoganalytics.test", "posthoganalytics.sentry"],
     license="MIT License",
     install_requires=install_requires,
     tests_require=tests_require,
