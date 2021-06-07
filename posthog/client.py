@@ -330,9 +330,11 @@ class Client(object):
         if not self.feature_flags:
             response = default
         else:
-            try:
-                feature_flag = [flag for flag in self.feature_flags if flag["key"] == key][0]
-            except IndexError:
+            for flag in self.feature_flags:
+                if flag["key"] == key:
+                    feature_flag = flag
+                    break
+            else:
                 return default
 
             if feature_flag.get("is_simple_flag"):
