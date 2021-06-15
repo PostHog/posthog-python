@@ -286,7 +286,8 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-            self.feature_flags = get(self.personal_api_key, "/api/feature_flag/", self.host)["results"]
+            flags = get(self.personal_api_key, f"/api/feature_flag/?token={self.api_key}", self.host)["results"]
+            self.feature_flags = [flag for flag in flags if flag['active']]
         except APIError as e:
             if e.status == 401:
                 raise APIError(
