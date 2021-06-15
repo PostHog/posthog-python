@@ -319,10 +319,11 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
-        patch_get.return_value = {"results": [{"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True}]}
+        patch_get.return_value = {"results": [{"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True}, {"id": 2, "name": "Alpha Feature", "key": "alpha-feature", "active": False}]}
         client = Client(TEST_API_KEY, personal_api_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             client.load_feature_flags()
+        self.assertEqual(len(client.feature_flags), 1)
         self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
         self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
         self.assertEqual(patch_poll.call_count, 1)
