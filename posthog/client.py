@@ -179,7 +179,10 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
 
         msg = {
-            "properties": {"distinct_id": previous_id, "alias": distinct_id,},
+            "properties": {
+                "distinct_id": previous_id,
+                "alias": distinct_id,
+            },
             "timestamp": timestamp,
             "context": context,
             "event": "$create_alias",
