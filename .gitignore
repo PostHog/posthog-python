@@ -15,4 +15,3 @@ posthog-analytics
 .idea
 .python-version
 .coverage
-pip-wheel
