@@ -179,10 +179,7 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
 
         msg = {
-            "properties": {
-                "distinct_id": previous_id,
-                "alias": distinct_id,
-            },
+            "properties": {"distinct_id": previous_id, "alias": distinct_id,},
             "timestamp": timestamp,
             "context": context,
             "event": "$create_alias",
@@ -287,7 +284,7 @@ class Client(object):
     def _load_feature_flags(self):
         try:
             flags = get(self.personal_api_key, f"/api/feature_flag/?token={self.api_key}", self.host)["results"]
-            self.feature_flags = [flag for flag in flags if flag['active']]
+            self.feature_flags = [flag for flag in flags if flag["active"]]
         except APIError as e:
             if e.status == 401:
                 raise APIError(
