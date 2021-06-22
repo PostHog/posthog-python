@@ -39,7 +39,7 @@ Then navigate to `http://127.0.0.1:8080/sentry-debug/` and you should get an eve
 
 ### Releasing Versions
 
-Updated are released using GitHub Actions: after bumping `version.py` in `master`, go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yml) and dispatch it manually, using workflow from `master`.
+Updated are released using GitHub Actions: after bumping `version.py` in `master`, go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yaml) and dispatch it manually, using workflow from `master`.
 
 ## Questions?
 
