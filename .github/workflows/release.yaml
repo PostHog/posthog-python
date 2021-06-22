@@ -8,8 +8,8 @@ jobs:
         name: Publish release
         runs-on: ubuntu-20.04
         env:
-            TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-            TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+            TWINE_USERNAME: __token__
+            TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         steps:
             - name: Checkout the repository
               uses: actions/checkout@v2
