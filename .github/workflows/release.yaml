@@ -24,7 +24,7 @@ jobs:
               run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
 
             - name: Prepare for building release
-              run: pip install wheel
+              run: pip install -U pip setuptools wheel twine
 
             - name: Push release to PyPI
               run: make release && make release_analytics
