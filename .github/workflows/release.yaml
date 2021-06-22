@@ -23,6 +23,9 @@ jobs:
             - name: Detect version
               run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
 
+            - name: Prepare for building release
+              run: pip install wheel
+
             - name: Push release to PyPI
               run: make release && make release_analytics
 
