@@ -24,7 +24,7 @@ jobs:
               run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
 
             - name: Push release to PyPI
-              run: make analytics && make release_analytics
+              run: make release && make release_analytics
 
             - name: Create GitHub release
               uses: actions/create-release@v1
