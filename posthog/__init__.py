@@ -26,6 +26,7 @@ def capture(
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     message_id=None,  # type: Optional[str]
+    groups=None,  # type: Optional[Dict]
 ):
     # type: (...) -> None
     """
@@ -38,10 +39,14 @@ def capture(
 
     Optionally you can submit
     - `properties`, which can be a dict with any information you'd like to add
+    - `groups`, which is a dict of group type -> group key mappings
 
     For example:
     ```python
+    posthog.capture('distinct id', 'opened app')
     posthog.capture('distinct id', 'movie played', {'movie_id': '123', 'category': 'romcom'})
+
+    posthog.capture('distinct id', 'purchase', groups={'company': 'id:5'})
     ```
     """
     _proxy(
@@ -52,11 +57,12 @@ def capture(
         context=context,
         timestamp=timestamp,
         message_id=message_id,
+        groups=groups,
     )
 
 
 def identify(
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
@@ -154,9 +160,39 @@ def set_once(
     )
 
 
-def group(*args, **kwargs):
-    """Send a group call."""
-    _proxy("group", *args, **kwargs)
+def group_identify(
+    group_type,  # type: str
+    group_key,  # type: str
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    message_id=None,  # type: Optional[str]
+):
+    # type: (...) -> None
+    """
+    Set properties on a group
+
+     A `set_once` call requires
+     - `group_type` type of your group
+     - `group_key` unique identifier of the group
+     - `properties` with a dict with any key: value pairs
+
+     For example:
+     ```python
+     posthog.group_identify('company', 5, {
+         'employees': 11,
+     })
+     ```
+    """
+    _proxy(
+        "group_identify",
+        group_type=group_type,
+        group_key=group_key,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        message_id=message_id,
+    )
 
 
 def alias(
