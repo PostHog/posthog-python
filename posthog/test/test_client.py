@@ -196,29 +196,37 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(msg["event"], "$groupidentify")
         self.assertEqual(msg["distinct_id"], "$organization_id:5")
-        self.assertEqual(msg["properties"], {
-            "$group_type": "organization",
-            "$group_key": "id:5",
-            "$group_set": {},
-            "$lib": "posthog-python",
-            "$lib_version": VERSION
-        })
+        self.assertEqual(
+            msg["properties"],
+            {
+                "$group_type": "organization",
+                "$group_key": "id:5",
+                "$group_set": {},
+                "$lib": "posthog-python",
+                "$lib_version": VERSION,
+            },
+        )
         self.assertTrue(isinstance(msg["timestamp"], str))
         self.assertTrue(isinstance(msg["messageId"], str))
 
     def test_advanced_group_identify(self):
-        success, msg = self.client.group_identify("organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId")
+        success, msg = self.client.group_identify(
+            "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+        )
 
         self.assertTrue(success)
         self.assertEqual(msg["event"], "$groupidentify")
         self.assertEqual(msg["distinct_id"], "$organization_id:5")
-        self.assertEqual(msg["properties"], {
-            "$group_type": "organization",
-            "$group_key": "id:5",
-            "$group_set": {"trait": "value"},
-            "$lib": "posthog-python",
-            "$lib_version": VERSION
-        })
+        self.assertEqual(
+            msg["properties"],
+            {
+                "$group_type": "organization",
+                "$group_key": "id:5",
+                "$group_set": {"trait": "value"},
+                "$lib": "posthog-python",
+                "$lib_version": VERSION,
+            },
+        )
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
         self.assertEqual(msg["context"]["ip"], "192.168.0.1")
 
