@@ -120,7 +120,9 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def capture(self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, message_id=None):
+    def capture(
+        self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, message_id=None, groups=None
+    ):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -135,6 +137,10 @@ class Client(object):
             "event": event,
             "messageId": message_id,
         }
+
+        if groups:
+            require("groups", groups, dict)
+            msg["properties"]["$groups"] = groups
 
         return self._enqueue(msg)
 
@@ -167,6 +173,30 @@ class Client(object):
             "distinct_id": distinct_id,
             "$set_once": properties,
             "event": "$set_once",
+            "messageId": message_id,
+        }
+
+        return self._enqueue(msg)
+
+    def group_identify(
+        self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, message_id=None
+    ):
+        properties = properties or {}
+        context = context or {}
+        require("group_type", group_type, ID_TYPES)
+        require("group_key", group_key, ID_TYPES)
+        require("properties", properties, dict)
+
+        msg = {
+            "event": "$groupidentify",
+            "properties": {
+                "$group_type": group_type,
+                "$group_key": group_key,
+                "$group_set": properties,
+            },
+            "distinct_id": "${}_{}".format(group_type, group_key),
+            "timestamp": timestamp,
+            "context": context,
             "messageId": message_id,
         }
 
