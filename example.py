@@ -17,6 +17,7 @@ posthog.host = "http://127.0.0.1:8000"
 posthog.capture("distinct_id", "event", {"property1": "value", "property2": "value"})
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))
+print(posthog.feature_enabled("beta-feature", "distinct_id", groups={"company": "id:5"}))
 
 print("sleeping")
 time.sleep(5)
@@ -28,9 +29,15 @@ print(posthog.feature_enabled("beta-feature", "distinct_id"))
 posthog.alias("distinct_id", "new_distinct_id")
 
 posthog.capture("new_distinct_id", "event2", {"property1": "value", "property2": "value"})
+posthog.capture(
+    "new_distinct_id", "event-with-groups", {"property1": "value", "property2": "value"}, groups={"company": "id:5"}
+)
 
 # # Add properties to the person
 posthog.identify("new_distinct_id", {"email": "something@something.com"})
+
+# Add properties to a group
+posthog.group_identify("company", "id:5", {"employees": 11})
 
 # properties set only once to the person
 posthog.set_once("new_distinct_id", {"self_serve_signup": True})

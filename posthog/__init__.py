@@ -233,7 +233,7 @@ def feature_enabled(
     key,  # type: str,
     distinct_id,  # type: str,
     default=False,  # type: bool
-    groups={}, # type: dict
+    groups={},  # type: dict
 ):
     # type: (...) -> bool
     """
