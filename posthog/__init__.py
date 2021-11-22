@@ -172,7 +172,7 @@ def group_identify(
     """
     Set properties on a group
 
-     A `set_once` call requires
+     A `group_identify` call requires
      - `group_type` type of your group
      - `group_key` unique identifier of the group
      - `properties` with a dict with any key: value pairs
