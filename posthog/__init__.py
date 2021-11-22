@@ -233,6 +233,7 @@ def feature_enabled(
     key,  # type: str,
     distinct_id,  # type: str,
     default=False,  # type: bool
+    groups={}, # type: dict
 ):
     # type: (...) -> bool
     """
@@ -242,11 +243,13 @@ def feature_enabled(
     ```python
     if posthog.feature_enabled('beta feature', 'distinct id'):
         # do something
+    if posthog.feature_enabled('groups feature', 'distinct id', groups={"organization": "id:5"}):
+        # do something
     ```
 
     You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
     """
-    return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default)
+    return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default, groups=groups)
 
 
 def page(*args, **kwargs):

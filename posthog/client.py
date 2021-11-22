@@ -348,9 +348,10 @@ class Client(object):
             self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
             self.poller.start()
 
-    def feature_enabled(self, key, distinct_id, default=False):
+    def feature_enabled(self, key, distinct_id, default=False, *, groups={}):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
+        require("groups", groups, dict)
 
         if not self.personal_api_key:
             self.log.warning("[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.")
@@ -375,6 +376,7 @@ class Client(object):
                     request_data = {
                         "distinct_id": distinct_id,
                         "personal_api_key": self.personal_api_key,
+                        "groups": groups,
                     }
                     resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
                     response = key in resp_data["featureFlags"]
