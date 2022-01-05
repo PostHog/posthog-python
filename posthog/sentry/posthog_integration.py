@@ -1,8 +1,8 @@
 from sentry_sdk._types import MYPY
+from sentry_sdk.client import Client
 from sentry_sdk.hub import Hub
 from sentry_sdk.integrations import Integration
 from sentry_sdk.scope import add_global_event_processor
-from sentry_sdk.client import Client
 from sentry_sdk.utils import Dsn
 
 import posthog
