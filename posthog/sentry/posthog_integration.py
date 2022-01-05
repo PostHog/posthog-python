@@ -2,6 +2,8 @@ from sentry_sdk._types import MYPY
 from sentry_sdk.hub import Hub
 from sentry_sdk.integrations import Integration
 from sentry_sdk.scope import add_global_event_processor
+from sentry_sdk.client import Client
+from sentry_sdk.utils import Dsn
 
 import posthog
 from posthog.request import DEFAULT_HOST
@@ -17,7 +19,7 @@ class PostHogIntegration(Integration):
     identifier = "posthog-python"
     organization = None  # The Sentry organization, used to send a direct link from PostHog to Sentry
     project_id = None  # The Sentry project id, used to send a direct link from PostHog to Sentry
-    prefix = "https://sentry.io/organizations/"  # Url of a self-hosted sentry instance (default: https://sentry.io/organizations/)
+    prefix = "https://sentry.io/organizations/"  # URL of a hosted sentry instance (default: https://sentry.io/organizations/)
 
     @staticmethod
     def setup_once():
@@ -37,10 +39,12 @@ class PostHogIntegration(Integration):
                         "$sentry_exception": event["exception"],
                     }
 
-                    if PostHogIntegration.organization and PostHogIntegration.project_id:
-                        properties[
-                            "$sentry_url"
-                        ] = f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={PostHogIntegration.project_id}&query={event['event_id']}"
+                    if PostHogIntegration.organization:
+                        project_id = PostHogIntegration.project_id or Dsn(Client.dsn).project_id
+                        if project_id:
+                            properties[
+                                "$sentry_url"
+                            ] = f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
 
                     posthog.capture(posthog_distinct_id, "$exception", properties)
 
