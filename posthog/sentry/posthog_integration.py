@@ -40,7 +40,9 @@ class PostHogIntegration(Integration):
                     }
 
                     if PostHogIntegration.organization:
-                        project_id = PostHogIntegration.project_id or (not not Hub.current.client.dsn and Dsn(Hub.current.client.dsn).project_id)
+                        project_id = PostHogIntegration.project_id or (
+                            not not Hub.current.client.dsn and Dsn(Hub.current.client.dsn).project_id
+                        )
                         if project_id:
                             properties[
                                 "$sentry_url"
