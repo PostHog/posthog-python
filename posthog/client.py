@@ -10,7 +10,7 @@ from six import string_types
 
 from posthog.consumer import Consumer
 from posthog.poller import Poller
-from posthog.request import APIError, batch_post, decide, get
+from posthog.request import APIError, batch_post, decide, get, shutdown as request_close
 from posthog.utils import clean, guess_timezone
 from posthog.version import VERSION
 
@@ -308,6 +308,9 @@ class Client(object):
 
         if self.poller:
             self.poller.stop()
+
+        # Close request sessions before leaving
+        request_close()
 
     def shutdown(self):
         """Flush all messages and cleanly shutdown the client"""
