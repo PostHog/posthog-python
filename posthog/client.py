@@ -178,9 +178,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def group_identify(
-        self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None
-    ):
+    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None):
         properties = properties or {}
         context = context or {}
         require("group_type", group_type, ID_TYPES)
