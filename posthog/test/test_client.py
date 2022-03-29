@@ -38,7 +38,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["event"], "python test event")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertFalse(isinstance(msg["uuid"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -69,7 +69,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["event"], "python test event")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertFalse(isinstance(msg["uuid"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -127,7 +127,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["$set"]["trait"], "value")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertFalse(isinstance(msg["uuid"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_identify(self):
@@ -156,7 +156,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["$set"]["trait"], "value")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertFalse(isinstance(msg["uuid"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set(self):
@@ -185,7 +185,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["$set_once"]["trait"], "value")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertFalse(isinstance(msg["uuid"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set_once(self):
@@ -222,7 +222,7 @@ class TestClient(unittest.TestCase):
             },
         )
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertFalse(isinstance(msg["uuid"], str))
+        self.assertIsNone(msg.get("uuid"))
 
     def test_advanced_group_identify(self):
         success, msg = self.client.group_identify(

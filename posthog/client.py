@@ -254,7 +254,13 @@ class Client(object):
         # add common
         timestamp = guess_timezone(timestamp)
         msg["timestamp"] = timestamp.isoformat()
-        msg["uuid"] = stringify_id(msg.get("uuid"))
+
+        # only send if "uuid" is truthy
+        if "uuid" in msg:
+            uuid = msg.pop("uuid")
+            if uuid:
+                msg["uuid"] = stringify_id(uuid)
+
         if not msg.get("properties"):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
