@@ -103,7 +103,7 @@ class Client(object):
                 if send:
                     consumer.start()
 
-    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
+    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -115,13 +115,13 @@ class Client(object):
             "distinct_id": distinct_id,
             "$set": properties,
             "event": "$identify",
-            "messageId": message_id,
+            "uuid": uuid,
         }
 
         return self._enqueue(msg)
 
     def capture(
-        self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, message_id=None, groups=None
+        self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, uuid=None, groups=None
     ):
         properties = properties or {}
         context = context or {}
@@ -135,7 +135,7 @@ class Client(object):
             "context": context,
             "distinct_id": distinct_id,
             "event": event,
-            "messageId": message_id,
+            "uuid": uuid,
         }
 
         if groups:
@@ -144,7 +144,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
+    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -156,12 +156,12 @@ class Client(object):
             "distinct_id": distinct_id,
             "$set": properties,
             "event": "$set",
-            "messageId": message_id,
+            "uuid": uuid,
         }
 
         return self._enqueue(msg)
 
-    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, message_id=None):
+    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -173,14 +173,12 @@ class Client(object):
             "distinct_id": distinct_id,
             "$set_once": properties,
             "event": "$set_once",
-            "messageId": message_id,
+            "uuid": uuid,
         }
 
         return self._enqueue(msg)
 
-    def group_identify(
-        self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, message_id=None
-    ):
+    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None):
         properties = properties or {}
         context = context or {}
         require("group_type", group_type, ID_TYPES)
@@ -197,12 +195,12 @@ class Client(object):
             "distinct_id": "${}_{}".format(group_type, group_key),
             "timestamp": timestamp,
             "context": context,
-            "messageId": message_id,
+            "uuid": uuid,
         }
 
         return self._enqueue(msg)
 
-    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, message_id=None):
+    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None):
         context = context or {}
 
         require("previous_id", previous_id, ID_TYPES)
@@ -221,7 +219,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, message_id=None):
+    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None):
         properties = properties or {}
         context = context or {}
 
@@ -237,7 +235,7 @@ class Client(object):
             "timestamp": timestamp,
             "context": context,
             "distinct_id": distinct_id,
-            "messageId": message_id,
+            "uuid": uuid,
         }
 
         return self._enqueue(msg)
@@ -247,9 +245,6 @@ class Client(object):
         timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.utcnow().replace(tzinfo=tzutc())
-        message_id = msg.get("messageId")
-        if message_id is None:
-            message_id = uuid4()
 
         require("timestamp", timestamp, datetime)
         require("context", msg["context"], dict)
@@ -257,7 +252,13 @@ class Client(object):
         # add common
         timestamp = guess_timezone(timestamp)
         msg["timestamp"] = timestamp.isoformat()
-        msg["messageId"] = stringify_id(message_id)
+
+        # only send if "uuid" is truthy
+        if "uuid" in msg:
+            uuid = msg.pop("uuid")
+            if uuid:
+                msg["uuid"] = stringify_id(uuid)
+
         if not msg.get("properties"):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"

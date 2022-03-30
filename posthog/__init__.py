@@ -25,7 +25,7 @@ def capture(
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
-    message_id=None,  # type: Optional[str]
+    uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
 ):
     # type: (...) -> None
@@ -56,7 +56,7 @@ def capture(
         properties=properties,
         context=context,
         timestamp=timestamp,
-        message_id=message_id,
+        uuid=uuid,
         groups=groups,
     )
 
@@ -66,7 +66,7 @@ def identify(
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
-    message_id=None,  # type: Optional[str]
+    uuid=None,  # type: Optional[str]
 ):
     # type: (...) -> None
     """
@@ -90,7 +90,7 @@ def identify(
         properties=properties,
         context=context,
         timestamp=timestamp,
-        message_id=message_id,
+        uuid=uuid,
     )
 
 
@@ -99,7 +99,7 @@ def set(
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
-    message_id=None,  # type: Optional[str]
+    uuid=None,  # type: Optional[str]
 ):
     # type: (...) -> None
     """
@@ -123,7 +123,7 @@ def set(
         properties=properties,
         context=context,
         timestamp=timestamp,
-        message_id=message_id,
+        uuid=uuid,
     )
 
 
@@ -132,7 +132,7 @@ def set_once(
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
-    message_id=None,  # type: Optional[str]
+    uuid=None,  # type: Optional[str]
 ):
     # type: (...) -> None
     """
@@ -156,7 +156,7 @@ def set_once(
         properties=properties,
         context=context,
         timestamp=timestamp,
-        message_id=message_id,
+        uuid=uuid,
     )
 
 
@@ -166,7 +166,7 @@ def group_identify(
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
-    message_id=None,  # type: Optional[str]
+    uuid=None,  # type: Optional[str]
 ):
     # type: (...) -> None
     """
@@ -191,7 +191,7 @@ def group_identify(
         properties=properties,
         context=context,
         timestamp=timestamp,
-        message_id=message_id,
+        uuid=uuid,
     )
 
 
@@ -200,7 +200,7 @@ def alias(
     distinct_id,  # type: str,
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
-    message_id=None,  # type: Optional[str]
+    uuid=None,  # type: Optional[str]
 ):
     # type: (...) -> None
     """
@@ -225,7 +225,7 @@ def alias(
         distinct_id=distinct_id,
         context=context,
         timestamp=timestamp,
-        message_id=message_id,
+        uuid=uuid,
     )
 
 

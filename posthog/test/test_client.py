@@ -38,7 +38,22 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["event"], "python test event")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+    def test_basic_capture_with_uuid(self):
+        client = self.client
+        uuid = str(uuid4())
+        success, msg = client.capture("distinct_id", "python test event", uuid=uuid)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertEqual(msg["uuid"], uuid)
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -54,7 +69,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["event"], "python test event")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -78,7 +93,7 @@ class TestClient(unittest.TestCase):
             {"property": "value"},
             {"ip": "192.168.0.1"},
             datetime(2014, 9, 3),
-            "messageId",
+            "new-uuid",
         )
 
         self.assertTrue(success)
@@ -89,7 +104,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["event"], "python test event")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["uuid"], "new-uuid")
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertTrue("$groups" not in msg["properties"])
 
@@ -112,13 +127,13 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["$set"]["trait"], "value")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_identify(self):
         client = self.client
         success, msg = client.identify(
-            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
@@ -129,7 +144,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["uuid"], "new-uuid")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_set(self):
@@ -141,13 +156,13 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["$set"]["trait"], "value")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set(self):
         client = self.client
         success, msg = client.set(
-            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
@@ -158,7 +173,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["uuid"], "new-uuid")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_set_once(self):
@@ -170,13 +185,13 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["$set_once"]["trait"], "value")
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set_once(self):
         client = self.client
         success, msg = client.set_once(
-            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
@@ -187,7 +202,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["uuid"], "new-uuid")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_group_identify(self):
@@ -207,11 +222,11 @@ class TestClient(unittest.TestCase):
             },
         )
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertTrue(isinstance(msg["messageId"], str))
+        self.assertIsNone(msg.get("uuid"))
 
     def test_advanced_group_identify(self):
         success, msg = self.client.group_identify(
-            "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "messageId"
+            "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
@@ -266,7 +281,7 @@ class TestClient(unittest.TestCase):
             {"property": "value"},
             {"ip": "192.168.0.1"},
             datetime(2014, 9, 3),
-            "messageId",
+            "new-uuid",
         )
 
         self.assertTrue(success)
@@ -278,7 +293,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["messageId"], "messageId")
+        self.assertEqual(msg["uuid"], "new-uuid")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_flush(self):
@@ -347,7 +362,7 @@ class TestClient(unittest.TestCase):
         client = Client(TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3)
 
         def mock_post_fn(*args, **kwargs):
-            self.assertEquals(len(kwargs["batch"]), 10)
+            self.assertEqual(len(kwargs["batch"]), 10)
 
         # the post function should be called 2 times, with a batch size of 10
         # each time.
@@ -355,17 +370,17 @@ class TestClient(unittest.TestCase):
             for _ in range(20):
                 client.identify("distinct_id", {"trait": "value"})
             time.sleep(1)
-            self.assertEquals(mock_post.call_count, 2)
+            self.assertEqual(mock_post.call_count, 2)
 
     def test_user_defined_timeout(self):
         client = Client(TEST_API_KEY, timeout=10)
         for consumer in client.consumers:
-            self.assertEquals(consumer.timeout, 10)
+            self.assertEqual(consumer.timeout, 10)
 
     def test_default_timeout_15(self):
         client = Client(TEST_API_KEY)
         for consumer in client.consumers:
-            self.assertEquals(consumer.timeout, 15)
+            self.assertEqual(consumer.timeout, 15)
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
