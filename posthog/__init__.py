@@ -23,7 +23,6 @@ def capture(
     distinct_id,  # type: str
     event,  # type: str
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
@@ -54,7 +53,6 @@ def capture(
         distinct_id=distinct_id,
         event=event,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
@@ -64,7 +62,6 @@ def capture(
 def identify(
     distinct_id,  # type: str
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
 ):
@@ -88,7 +85,6 @@ def identify(
         "identify",
         distinct_id=distinct_id,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
     )
@@ -97,7 +93,6 @@ def identify(
 def set(
     distinct_id,  # type: str,
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
 ):
@@ -121,7 +116,6 @@ def set(
         "set",
         distinct_id=distinct_id,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
     )
@@ -130,7 +124,6 @@ def set(
 def set_once(
     distinct_id,  # type: str,
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
 ):
@@ -154,7 +147,6 @@ def set_once(
         "set_once",
         distinct_id=distinct_id,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
     )
@@ -164,7 +156,6 @@ def group_identify(
     group_type,  # type: str
     group_key,  # type: str
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
 ):
@@ -189,7 +180,6 @@ def group_identify(
         group_type=group_type,
         group_key=group_key,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
     )
@@ -198,7 +188,6 @@ def group_identify(
 def alias(
     previous_id,  # type: str,
     distinct_id,  # type: str,
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
 ):
@@ -223,7 +212,6 @@ def alias(
         "alias",
         previous_id=previous_id,
         distinct_id=distinct_id,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
     )
