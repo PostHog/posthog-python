@@ -91,7 +91,6 @@ class TestClient(unittest.TestCase):
             "distinct_id",
             "python test event",
             {"property": "value"},
-            {"ip": "192.168.0.1"},
             datetime(2014, 9, 3),
             "new-uuid",
         )
@@ -100,7 +99,6 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
         self.assertEqual(msg["properties"]["property"], "value")
-        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
         self.assertEqual(msg["event"], "python test event")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -133,13 +131,12 @@ class TestClient(unittest.TestCase):
     def test_advanced_identify(self):
         client = self.client
         success, msg = client.identify(
-            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
+            "distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
 
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
         self.assertEqual(msg["$set"]["trait"], "value")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -162,13 +159,12 @@ class TestClient(unittest.TestCase):
     def test_advanced_set(self):
         client = self.client
         success, msg = client.set(
-            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
+            "distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
 
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
         self.assertEqual(msg["$set"]["trait"], "value")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -191,13 +187,12 @@ class TestClient(unittest.TestCase):
     def test_advanced_set_once(self):
         client = self.client
         success, msg = client.set_once(
-            "distinct_id", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
+            "distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
 
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
         self.assertEqual(msg["$set_once"]["trait"], "value")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -226,7 +221,7 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_group_identify(self):
         success, msg = self.client.group_identify(
-            "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
+            "organization", "id:5", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
         )
 
         self.assertTrue(success)
@@ -243,7 +238,6 @@ class TestClient(unittest.TestCase):
             },
         )
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
 
     def test_basic_alias(self):
         client = self.client
@@ -279,7 +273,6 @@ class TestClient(unittest.TestCase):
             "distinct_id",
             "https://posthog.com/contact",
             {"property": "value"},
-            {"ip": "192.168.0.1"},
             datetime(2014, 9, 3),
             "new-uuid",
         )
@@ -287,7 +280,6 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
 
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
         self.assertEqual(msg["properties"]["$current_url"], "https://posthog.com/contact")
         self.assertEqual(msg["properties"]["property"], "value")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")

@@ -103,15 +103,13 @@ class Client(object):
                 if send:
                     consumer.start()
 
-    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def identify(self, distinct_id=None, properties=None, timestamp=None, uuid=None):
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
         msg = {
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "$set": properties,
             "event": "$identify",
@@ -121,10 +119,9 @@ class Client(object):
         return self._enqueue(msg)
 
     def capture(
-        self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, uuid=None, groups=None
+        self, distinct_id=None, event=None, properties=None, timestamp=None, uuid=None, groups=None
     ):
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
         require("event", event, string_types)
@@ -132,7 +129,6 @@ class Client(object):
         msg = {
             "properties": properties,
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "event": event,
             "uuid": uuid,
@@ -144,15 +140,13 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def set(self, distinct_id=None, properties=None, timestamp=None, uuid=None):
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
         msg = {
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "$set": properties,
             "event": "$set",
@@ -161,15 +155,13 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def set_once(self, distinct_id=None, properties=None, timestamp=None, uuid=None):
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
         msg = {
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "$set_once": properties,
             "event": "$set_once",
@@ -178,9 +170,8 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None):
+    def group_identify(self, group_type=None, group_key=None, properties=None, timestamp=None, uuid=None):
         properties = properties or {}
-        context = context or {}
         require("group_type", group_type, ID_TYPES)
         require("group_key", group_key, ID_TYPES)
         require("properties", properties, dict)
@@ -194,15 +185,12 @@ class Client(object):
             },
             "distinct_id": "${}_{}".format(group_type, group_key),
             "timestamp": timestamp,
-            "context": context,
             "uuid": uuid,
         }
 
         return self._enqueue(msg)
 
-    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None):
-        context = context or {}
-
+    def alias(self, previous_id=None, distinct_id=None, timestamp=None, uuid=None):
         require("previous_id", previous_id, ID_TYPES)
         require("distinct_id", distinct_id, ID_TYPES)
 
@@ -212,16 +200,14 @@ class Client(object):
                 "alias": distinct_id,
             },
             "timestamp": timestamp,
-            "context": context,
             "event": "$create_alias",
             "distinct_id": previous_id,
         }
 
         return self._enqueue(msg)
 
-    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None):
+    def page(self, distinct_id=None, url=None, properties=None, timestamp=None, uuid=None):
         properties = properties or {}
-        context = context or {}
 
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
@@ -233,7 +219,6 @@ class Client(object):
             "event": "$pageview",
             "properties": properties,
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "uuid": uuid,
         }
@@ -247,7 +232,6 @@ class Client(object):
             timestamp = datetime.utcnow().replace(tzinfo=tzutc())
 
         require("timestamp", timestamp, datetime)
-        require("context", msg["context"], dict)
 
         # add common
         timestamp = guess_timezone(timestamp)
