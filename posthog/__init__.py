@@ -243,7 +243,7 @@ def feature_enabled(
     ```python
     if posthog.feature_enabled('beta feature', 'distinct id'):
         # do something
-    if posthog.feature_enabled('groups feature', 'distinct id', groups={"organization": "id:5"}):
+    if posthog.feature_enabled('groups feature', 'distinct id', groups={"organization": "5"}):
         # do something
     ```
 
