@@ -354,39 +354,36 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
-        if not self.personal_api_key:
-            self.log.warning("[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags.")
-        if not self.feature_flags:
+        if self.feature_flags == None and self.personal_api_key:
             self.load_feature_flags()
+        response = None
 
         # If loading in previous line failed
-        if not self.feature_flags:
-            response = default
-        else:
+        if self.feature_flags:
             for flag in self.feature_flags:
                 if flag["key"] == key:
                     feature_flag = flag
-                    break
+                    if feature_flag.get("is_simple_flag"):
+                        response = _hash(key, distinct_id) <= ((feature_flag.get("rollout_percentage", 100) or 100) / 100)
+        if not response:
+            try:
+                request_data = {
+                    "distinct_id": distinct_id,
+                    "personal_api_key": self.personal_api_key,
+                    "groups": groups,
+                }
+                resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
+            except Exception as e:
+                response = default
+                self.log.warning(
+                    "[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:" % key
+                )
+                self.log.warning(e)
             else:
-                return default
-
-            if feature_flag.get("is_simple_flag"):
-                response = _hash(key, distinct_id) <= ((feature_flag.get("rollout_percentage", 100) or 100) / 100)
-            else:
-                try:
-                    request_data = {
-                        "distinct_id": distinct_id,
-                        "personal_api_key": self.personal_api_key,
-                        "groups": groups,
-                    }
-                    resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
-                    response = key in resp_data["featureFlags"]
-                except Exception as e:
-                    response = default
-                    self.log.warning(
-                        "[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:" % key
-                    )
-                    self.log.warning(e)
+                if key in resp_data["featureFlags"]:
+                    return True
+                else:
+                    return default
 
         self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
