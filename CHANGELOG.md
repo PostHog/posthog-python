@@ -1,3 +1,6 @@
+## 1.4.7 - 2022-04-25
+- Allow feature flags usage without project_api_key
+
 ## 1.4.1 - 2021-05-28
 - Fix packaging issues with Sentry integrations
 
