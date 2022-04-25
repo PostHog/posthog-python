@@ -446,7 +446,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_doesnt_exist(self, patch_decide, patch_poll):
-        patch_decide.return_value = {'featureFlags': []}
+        patch_decide.return_value = {"featureFlags": []}
         client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = []
 
@@ -459,7 +459,7 @@ class TestClient(unittest.TestCase):
         client = Client(TEST_API_KEY)
         client.feature_flags = []
 
-        patch_decide.return_value = {"featureFlags": ["feature-flag"] }
+        patch_decide.return_value = {"featureFlags": ["feature-flag"]}
 
         self.assertTrue(client.feature_enabled("feature-flag", "distinct_id"))
 
