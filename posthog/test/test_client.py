@@ -404,13 +404,25 @@ class TestClient(unittest.TestCase):
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             self.assertRaises(APIError, client.load_feature_flags)
 
+    @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
-    def test_feature_enabled_simple(self, patch_get):
+    def test_feature_enabled_simple(self, patch_get, patch_decide):
         client = Client(TEST_API_KEY)
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        self.assertEqual(patch_decide.call_count, 0)
+
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_enabled_simple_is_false(self, patch_get, patch_decide):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 0}
+        ]
+        self.assertFalse(client.feature_enabled("beta-feature", "distinct_id"))
+        self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_with_project_api_key(self, patch_get):

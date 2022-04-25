@@ -364,10 +364,8 @@ class Client(object):
                 if flag["key"] == key:
                     feature_flag = flag
                     if feature_flag.get("is_simple_flag"):
-                        response = _hash(key, distinct_id) <= (
-                            (feature_flag.get("rollout_percentage", 100) or 100) / 100
-                        )
-        if not response:
+                        response = _hash(key, distinct_id) <= (feature_flag.get("rollout_percentage", 100) / 100)
+        if response == None:
             try:
                 request_data = {
                     "distinct_id": distinct_id,
