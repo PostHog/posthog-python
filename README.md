@@ -2,9 +2,8 @@
 
 [![PyPI](https://img.shields.io/pypi/v/posthog)](https://pypi.org/project/posthog/)
 
-Please see the main [PostHog docs](https://posthog.com/docs).
 
-Specifically, the [Python integration](https://posthog.com/docs/integrations/python-integration) details.
+Please see the [Python integration docs](https://posthog.com/docs/integrations/python-integration) for details.
 
 ## Development
 
@@ -14,6 +13,7 @@ Specifically, the [Python integration](https://posthog.com/docs/integrations/pyt
 2. Run `source env/bin/activate` (activates the virtual environment)
 3. Run `python3 -m pip install -e ".[test]"` (installs the package in develop mode, along with test dependencies)
 4. Run `make test`
+  1. To run a specific test do `pytest -k test_no_api_key`
 
 ### Running Locally
 
