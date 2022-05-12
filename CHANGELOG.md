@@ -1,3 +1,6 @@
+## 1.4.8 - 2022-05-12
+- Support multi variate feature flags
+
 ## 1.4.7 - 2022-04-25
 - Allow feature flags usage without project_api_key
 
