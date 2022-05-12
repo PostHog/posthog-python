@@ -380,8 +380,7 @@ class Client(object):
                 )
                 self.log.warning(e)
             else:
-                response = True if key in resp_data["featureFlags"] else default
-
+                response = resp_data["featureFlags"].get(key, default)
         self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
 
