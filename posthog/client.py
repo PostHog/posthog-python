@@ -381,7 +381,15 @@ class Client(object):
                 self.log.warning(e)
             else:
                 response = resp_data["featureFlags"].get(key, default)
-        self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
+
+        feature_flag_data={
+            "$feature_flag": key,
+            "$feature_flag_response": response,
+            "$set_once": {
+                "$feature/{}".format(key): response
+            }
+        }
+        self.capture(distinct_id, "$feature_flag_called", feature_flag_data)
         return response
 
 
