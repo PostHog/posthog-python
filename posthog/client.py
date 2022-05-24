@@ -120,8 +120,33 @@ class Client(object):
 
         return self._enqueue(msg)
 
+    def get_feature_variants(self, distinct_id, groups=None):
+        assert self.personal_api_key, "You have to specify a personal_api_key to use feature flags."
+        require("distinct_id", distinct_id, ID_TYPES)
+
+        if groups:
+            require("groups", groups, dict)
+        else:
+            groups = {}
+
+        request_data = {
+            "distinct_id": distinct_id,
+            "personal_api_key": self.personal_api_key,
+            "groups": groups,
+        }
+        resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
+        return resp_data["featureFlags"]
+
     def capture(
-        self, distinct_id=None, event=None, properties=None, context=None, timestamp=None, uuid=None, groups=None
+        self,
+        distinct_id=None,
+        event=None,
+        properties=None,
+        context=None,
+        timestamp=None,
+        uuid=None,
+        groups=None,
+        send_feature_flags=False,
     ):
         properties = properties or {}
         context = context or {}
@@ -141,6 +166,16 @@ class Client(object):
         if groups:
             require("groups", groups, dict)
             msg["properties"]["$groups"] = groups
+
+        if send_feature_flags:
+            try:
+                feature_variants = self.get_feature_variants(distinct_id, groups)
+            except Exception:
+                self.log.exception("[FEATURE FLAGS] Unable to get feature variants")
+            else:
+                for feature, variant in feature_variants.items():
+                    msg["properties"]["$feature/{}".format(feature)] = variant
+                msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
 
         return self._enqueue(msg)
 
@@ -367,20 +402,12 @@ class Client(object):
                         response = _hash(key, distinct_id) <= (feature_flag.get("rollout_percentage", 100) / 100)
         if response == None:
             try:
-                request_data = {
-                    "distinct_id": distinct_id,
-                    "personal_api_key": self.personal_api_key,
-                    "groups": groups,
-                }
-                resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
+                feature_flags = self.get_feature_variants(distinct_id, groups=groups)
             except Exception as e:
+                self.log.exception("[FEATURE FLAGS] Unable to get feature variants")
                 response = default
-                self.log.warning(
-                    "[FEATURE FLAGS] Unable to get data for flag %s, because of the following error:" % key
-                )
-                self.log.warning(e)
             else:
-                response = resp_data["featureFlags"].get(key, default)
+                response = feature_flags.get(key, default)
         self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
 

@@ -407,7 +407,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple(self, patch_get, patch_decide):
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
         ]
@@ -417,7 +417,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_is_false(self, patch_get, patch_decide):
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 0}
         ]
@@ -435,7 +435,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_request(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": True}}
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
         ]
@@ -444,7 +444,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_request_multi_variate(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
         ]
@@ -477,7 +477,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")
     def test_personal_api_key_doesnt_exist(self, patch_decide, patch_poll):
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = []
 
         patch_decide.return_value = {"featureFlags": {"feature-flag": True}}
