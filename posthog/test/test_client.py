@@ -417,7 +417,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_is_false(self, patch_get, patch_decide):
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(TEST_API_KEY)
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 0}
         ]
