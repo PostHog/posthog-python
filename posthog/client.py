@@ -170,8 +170,8 @@ class Client(object):
         if send_feature_flags:
             try:
                 feature_variants = self.get_feature_variants(distinct_id, groups)
-            except Exception:
-                self.log.exception("[FEATURE FLAGS] Unable to get feature variants")
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
                 for feature, variant in feature_variants.items():
                     msg["properties"]["$feature/{}".format(feature)] = variant
@@ -399,12 +399,12 @@ class Client(object):
                 if flag["key"] == key:
                     feature_flag = flag
                     if feature_flag.get("is_simple_flag"):
-                        response = _hash(key, distinct_id) <= (feature_flag.get("rollout_percentage", 100) / 100)
+                        response = _hash(key, distinct_id) <= ((feature_flag.get("rollout_percentage") or 100) / 100)
         if response == None:
             try:
                 feature_flags = self.get_feature_variants(distinct_id, groups=groups)
             except Exception as e:
-                self.log.exception("[FEATURE FLAGS] Unable to get feature variants")
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
                 response = default
             else:
                 response = feature_flags.get(key, default)
