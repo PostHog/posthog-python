@@ -490,6 +490,16 @@ class TestClient(unittest.TestCase):
         self.assertFalse(client.feature_enabled("beta-feature", "distinct_id"))
         self.assertEqual(patch_decide.call_count, 0)
 
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_enabled_simple_is_true_when_rollout_is_undefined(self, patch_get, patch_decide):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": None}
+        ]
+        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        self.assertEqual(patch_decide.call_count, 0)
+
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_with_project_api_key(self, patch_get):
         client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)

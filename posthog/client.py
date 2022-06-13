@@ -399,7 +399,12 @@ class Client(object):
                 if flag["key"] == key:
                     feature_flag = flag
                     if feature_flag.get("is_simple_flag"):
-                        response = _hash(key, distinct_id) <= ((feature_flag.get("rollout_percentage") or 100) / 100)
+                        rollout_percentage = (
+                            feature_flag.get("rollout_percentage")
+                            if feature_flag.get("rollout_percentage") is not None
+                            else 100
+                        )
+                        response = _hash(key, distinct_id) <= (rollout_percentage / 100)
         if response == None:
             try:
                 feature_flags = self.get_feature_variants(distinct_id, groups=groups)
