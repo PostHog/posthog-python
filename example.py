@@ -11,10 +11,10 @@ posthog.personal_api_key = ""
 
 # Where you host PostHog, with no trailing /.
 # You can remove this line if you're using posthog.com
-posthog.host = "http://127.0.0.1:8000"
+posthog.host = "http://localhost:8000"
 
 # Capture an event
-posthog.capture("distinct_id", "event", {"property1": "value", "property2": "value"})
+posthog.capture("distinct_id", "event", {"property1": "value", "property2": "value"}, send_feature_flags=True)
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))
 print(posthog.feature_enabled("beta-feature", "distinct_id", groups={"company": "id:5"}))

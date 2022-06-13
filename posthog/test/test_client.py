@@ -1,6 +1,7 @@
 import time
 import unittest
 from datetime import date, datetime
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import mock
@@ -73,6 +74,71 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+
+        client = Client(TEST_API_KEY, on_error=self.set_fail, personal_api_key=TEST_API_KEY)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+
+        self.assertEqual(patch_decide.call_count, 1)
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+
+        client = Client(TEST_API_KEY, on_error=self.set_fail, personal_api_key=TEST_API_KEY)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=False)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertTrue("$feature/beta-feature" not in msg["properties"])
+        self.assertTrue("$active_feature_flags" not in msg["properties"])
+
+        self.assertEqual(patch_decide.call_count, 0)
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags_without_api_key(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+
+        client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
+        client.log = MagicMock()
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+        self.assertEqual(client.log.exception.call_count, 1)
+        client.log.exception.assert_called_with(
+            "[FEATURE FLAGS] Unable to get feature variants: You have to specify a personal_api_key to use feature flags."
+        )
 
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
@@ -424,6 +490,16 @@ class TestClient(unittest.TestCase):
         self.assertFalse(client.feature_enabled("beta-feature", "distinct_id"))
         self.assertEqual(patch_decide.call_count, 0)
 
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_enabled_simple_is_true_when_rollout_is_undefined(self, patch_get, patch_decide):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": None}
+        ]
+        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        self.assertEqual(patch_decide.call_count, 0)
+
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_with_project_api_key(self, patch_get):
         client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
@@ -435,7 +511,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_request(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": True}}
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
         ]
@@ -444,7 +520,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_request_multi_variate(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
         ]
@@ -468,7 +544,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_doesnt_exist(self, patch_decide, patch_poll):
         patch_decide.return_value = {"featureFlags": {}}
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(TEST_API_KEY)
         client.feature_flags = []
 
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
@@ -477,7 +553,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")
     def test_personal_api_key_doesnt_exist(self, patch_decide, patch_poll):
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = []
 
         patch_decide.return_value = {"featureFlags": {"feature-flag": True}}

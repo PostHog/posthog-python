@@ -27,6 +27,7 @@ def capture(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
+    send_feature_flags=False,
 ):
     # type: (...) -> None
     """
@@ -58,6 +59,7 @@ def capture(
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
+        send_feature_flags=send_feature_flags,
     )
 
 
