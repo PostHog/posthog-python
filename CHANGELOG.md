@@ -1,3 +1,6 @@
+## 1.4.9 - 2022-06-13
+- Support for sending feature flags with capture calls
+
 ## 1.4.8 - 2022-05-12
 - Support multi variate feature flags
 
