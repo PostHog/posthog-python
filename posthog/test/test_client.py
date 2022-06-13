@@ -96,7 +96,6 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(patch_decide.call_count, 1)
 
-
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
@@ -137,7 +136,9 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
         self.assertEqual(client.log.exception.call_count, 1)
-        client.log.exception.assert_called_with('[FEATURE FLAGS] Unable to get feature variants: You have to specify a personal_api_key to use feature flags.')
+        client.log.exception.assert_called_with(
+            "[FEATURE FLAGS] Unable to get feature variants: You have to specify a personal_api_key to use feature flags."
+        )
 
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
