@@ -130,9 +130,7 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_identify(self):
         client = self.client
-        success, msg = client.identify(
-            "distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
-        )
+        success, msg = client.identify("distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid")
 
         self.assertTrue(success)
 
@@ -158,9 +156,7 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_set(self):
         client = self.client
-        success, msg = client.set(
-            "distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
-        )
+        success, msg = client.set("distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid")
 
         self.assertTrue(success)
 
@@ -186,9 +182,7 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_set_once(self):
         client = self.client
-        success, msg = client.set_once(
-            "distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid"
-        )
+        success, msg = client.set_once("distinct_id", {"trait": "value"}, datetime(2014, 9, 3), "new-uuid")
 
         self.assertTrue(success)
 

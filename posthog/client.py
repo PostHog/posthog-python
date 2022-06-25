@@ -118,9 +118,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def capture(
-        self, distinct_id=None, event=None, properties=None, timestamp=None, uuid=None, groups=None
-    ):
+    def capture(self, distinct_id=None, event=None, properties=None, timestamp=None, uuid=None, groups=None):
         properties = properties or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
