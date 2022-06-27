@@ -412,9 +412,18 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
                 response = default
             else:
-                response = feature_flags.get(key, default)
+                if feature_flags.get(key):
+                    response = True
+                else:
+                    response = default
         self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
+
+    def get_feature_flag(self, key, distinct_id, groups):
+        require("key", key, string_types)
+        require("distinct_id", distinct_id, ID_TYPES)
+        variants = self.get_feature_variants(distinct_id, groups)
+        return variants.get(key, False)
 
 
 # This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
