@@ -419,10 +419,10 @@ class Client(object):
         self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
 
-    def get_feature_flag(self, key, distinct_id, groups):
+    def get_feature_flag(self, key, distinct_id):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
-        variants = self.get_feature_variants(distinct_id, groups)
+        variants = self.get_feature_variants(distinct_id)
         return variants.get(key, False)
 
 
