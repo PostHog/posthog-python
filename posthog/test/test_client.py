@@ -543,7 +543,7 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_get_feature_flag(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(TEST_API_KEY)
+        client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
         ]
