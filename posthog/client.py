@@ -425,7 +425,8 @@ class Client(object):
         require("groups", groups, dict)
 
         variants = self.get_feature_variants(distinct_id, groups=groups)
-        return variants.get(key, False)
+        self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": variants.get(key)})
+        return variants.get(key)
 
 
 # This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
