@@ -222,7 +222,11 @@ class Client(object):
 
         msg = {
             "event": "$groupidentify",
-            "properties": {"$group_type": group_type, "$group_key": group_key, "$group_set": properties,},
+            "properties": {
+                "$group_type": group_type,
+                "$group_key": group_key,
+                "$group_set": properties,
+            },
             "distinct_id": "${}_{}".format(group_type, group_key),
             "timestamp": timestamp,
             "context": context,
@@ -238,7 +242,10 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
 
         msg = {
-            "properties": {"distinct_id": previous_id, "alias": distinct_id,},
+            "properties": {
+                "distinct_id": previous_id,
+                "alias": distinct_id,
+            },
             "timestamp": timestamp,
             "context": context,
             "event": "$create_alias",
