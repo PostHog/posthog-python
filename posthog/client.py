@@ -222,11 +222,7 @@ class Client(object):
 
         msg = {
             "event": "$groupidentify",
-            "properties": {
-                "$group_type": group_type,
-                "$group_key": group_key,
-                "$group_set": properties,
-            },
+            "properties": {"$group_type": group_type, "$group_key": group_key, "$group_set": properties,},
             "distinct_id": "${}_{}".format(group_type, group_key),
             "timestamp": timestamp,
             "context": context,
@@ -242,10 +238,7 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
 
         msg = {
-            "properties": {
-                "distinct_id": previous_id,
-                "alias": distinct_id,
-            },
+            "properties": {"distinct_id": previous_id, "alias": distinct_id,},
             "timestamp": timestamp,
             "context": context,
             "event": "$create_alias",
@@ -425,7 +418,9 @@ class Client(object):
         require("groups", groups, dict)
 
         variants = self.get_feature_variants(distinct_id, groups=groups)
-        self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": variants.get(key)})
+        self.capture(
+            distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": variants.get(key)}
+        )
         return variants.get(key)
 
 
