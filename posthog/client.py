@@ -412,7 +412,7 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
                 response = default
             else:
-                if feature_flags.get(key):
+                response = True if feature_flags.get(key) else default
                     response = True
                 else:
                     response = default
