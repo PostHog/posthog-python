@@ -253,6 +253,7 @@ def feature_enabled(
     """
     return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default, groups=groups)
 
+
 def get_feature_flag(key, distinct_id, groups):
     """
     Get feature flag variant for users. Used with experiments.
@@ -265,6 +266,7 @@ def get_feature_flag(key, distinct_id, groups):
     ```
     """
     return _proxy("get_feature_flag", key=key, distinct_id=distinct_id, groups=groups)
+
 
 def page(*args, **kwargs):
     """Send a page call."""
