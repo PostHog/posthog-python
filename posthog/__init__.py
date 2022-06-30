@@ -253,6 +253,18 @@ def feature_enabled(
     """
     return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default, groups=groups)
 
+def get_feature_flag(key, distinct_id, groups):
+    """
+    Get feature flag variant for users. Used with experiments.
+    Example:
+    ```python
+    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'test-variant':
+        # do test variant code
+    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
+        # do control code
+    ```
+    """
+    return _proxy("get_feature_flag", key=key, distinct_id=distinct_id, groups=groups)
 
 def page(*args, **kwargs):
     """Send a page call."""

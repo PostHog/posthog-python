@@ -413,9 +413,6 @@ class Client(object):
                 response = default
             else:
                 response = True if feature_flags.get(key) else default
-                    response = True
-                else:
-                    response = default
         self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
         return response
 
