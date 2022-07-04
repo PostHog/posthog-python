@@ -85,6 +85,13 @@ def get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[in
     res = requests.get(url, headers={"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}, timeout=timeout)
     return _process_response(res, success_message=f"GET {url} completed successfully")
 
+def shutdown():
+    # Avoid logs with
+    #     sys:1: ResourceWarning: unclosed
+    #      <ssl.SSLSocket fd=10, family=AddressFamily.AF_INET, type=SocketKind.SOCK_STREAM, proto=0,
+    #       laddr=('x.x.x.x', y), raddr=('x.x.x.x', 443)>
+    # Should only be called when once, renders `_session` unusable
+    _session.close()
 
 class APIError(Exception):
     def __init__(self, status: Union[int, str], message: str):
