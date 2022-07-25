@@ -43,7 +43,6 @@ def variant_lookup_table(feature_flag):
 
 
 def match_feature_flag_properties(flag, distinct_id, properties):
-
     # TODO: convert to `or {}`
     flag_conditions = flag.get("filters", {}).get("groups") or []
     is_match = any(is_condition_match(flag, distinct_id, condition, properties) for condition in flag_conditions)
@@ -62,6 +61,13 @@ def can_locally_evaluate(flags):
 
     return True
 
+def is_deprecated_simple_flag(flag):
+    is_simple = flag.get("is_simple_flag")
+    has_rollout_percentage = flag.get("rollout_percentage")
+    has_filters = flag.get("filters")
+
+    return is_simple and has_rollout_percentage and not has_filters
+
 
 def match_simple_flag(feature_flag, distinct_id):
     key = feature_flag["key"]
@@ -74,7 +80,7 @@ def match_simple_flag(feature_flag, distinct_id):
 def is_condition_match(feature_flag, distinct_id, condition, properties):
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
-        if not match_property(condition, properties):
+        if not any(match_property(prop, properties) for prop in condition.get("properties")):
             return False
         elif rollout_percentage is None:
             return True
