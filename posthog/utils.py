@@ -1,10 +1,9 @@
 import logging
 import numbers
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
-import re
-
 
 import six
 from dateutil.tz import tzlocal, tzutc

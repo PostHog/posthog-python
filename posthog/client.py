@@ -1,7 +1,7 @@
 import atexit
-from collections import defaultdict
 import logging
 import numbers
+from collections import defaultdict
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -9,11 +9,11 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
+from posthog.feature_flags import can_locally_evaluate, match_feature_flag_properties, match_simple_flag
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
 from posthog.utils import clean, guess_timezone
 from posthog.version import VERSION
-from posthog.feature_flags import can_locally_evaluate, match_feature_flag_properties, match_simple_flag
 
 try:
     import queue
