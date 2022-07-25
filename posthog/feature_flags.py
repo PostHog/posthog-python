@@ -50,6 +50,24 @@ def match_feature_flag_properties(flag, distinct_id, properties):
     else:
         return False
 
+def can_locally_evaluate(flags):
+    for flag in flags:
+        _filters = flag.get("filters")
+        _is_simple = flag.get("is_simple_flag")
+        if not _filters and not _is_simple:
+            return False
+
+    return True
+
+def match_simple_flag(feature_flag, distinct_id):
+    key = feature_flag['key']
+    rollout_percentage = (
+        feature_flag.get("rollout_percentage")
+        if feature_flag.get("rollout_percentage") is not None
+        else 100
+    )
+    return _hash(key, distinct_id) <= (rollout_percentage / 100)
+
 def is_condition_match(feature_flag, distinct_id, condition, properties):
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:

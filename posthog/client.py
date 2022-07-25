@@ -13,7 +13,7 @@ from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
 from posthog.utils import clean, guess_timezone
 from posthog.version import VERSION
-from posthog.feature_flags import match_feature_flag_properties
+from posthog.feature_flags import can_locally_evaluate, match_feature_flag_properties, match_simple_flag
 
 try:
     import queue
@@ -397,15 +397,18 @@ class Client(object):
         response = None
 
         # If loading in previous line failed
-        if self.feature_flags:
+        if self.feature_flags and can_locally_evaluate(self.feature_flags):
             for flag in self.feature_flags:
                 if flag["key"] == key:
                     feature_flag = flag
-                    try:
-                        response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
-                    except Exception as e:
-                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
-                        continue
+                    if feature_flag.get("is_simple_flag"):
+                        response = match_simple_flag(feature_flag, distinct_id)
+                    else:
+                        try:
+                            response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+                        except Exception as e:
+                            self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                            continue
 
         if response is None:
             try:
@@ -414,7 +417,8 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
                 response = default
             else:
-                response = True if feature_flags.get(key) else default
+                flag_response = feature_flags.get(key)
+                response = flag_response if flag_response else default
         if key not in self.distinct_ids_feature_flags_reported.get(distinct_id, {}):
             self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
             self.distinct_ids_feature_flags_reported[distinct_id].add(key)
