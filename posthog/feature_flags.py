@@ -5,6 +5,7 @@ from posthog.utils import is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
+
 class InconclusiveMatchError(Exception):
     pass
 
@@ -18,6 +19,7 @@ def _hash(key, distinct_id, salt=""):
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
 
+
 def get_matching_variant(flag, distinct_id):
     for variant in variant_lookup_table(flag):
         if (
@@ -26,6 +28,7 @@ def get_matching_variant(flag, distinct_id):
         ):
             return variant["key"]
     return None
+
 
 def variant_lookup_table(feature_flag):
     lookup_table = []
@@ -38,17 +41,17 @@ def variant_lookup_table(feature_flag):
         value_min = value_max
     return lookup_table
 
+
 def match_feature_flag_properties(flag, distinct_id, properties):
 
     # TODO: convert to `or {}`
     flag_conditions = flag.get("filters", {}).get("groups") or []
-    is_match = any(
-        is_condition_match(flag, distinct_id, condition, properties) for condition in flag_conditions
-    )
+    is_match = any(is_condition_match(flag, distinct_id, condition, properties) for condition in flag_conditions)
     if is_match:
         return get_matching_variant(flag, distinct_id) or True
     else:
         return False
+
 
 def can_locally_evaluate(flags):
     for flag in flags:
@@ -59,14 +62,14 @@ def can_locally_evaluate(flags):
 
     return True
 
+
 def match_simple_flag(feature_flag, distinct_id):
-    key = feature_flag['key']
+    key = feature_flag["key"]
     rollout_percentage = (
-        feature_flag.get("rollout_percentage")
-        if feature_flag.get("rollout_percentage") is not None
-        else 100
+        feature_flag.get("rollout_percentage") if feature_flag.get("rollout_percentage") is not None else 100
     )
     return _hash(key, distinct_id) <= (rollout_percentage / 100)
+
 
 def is_condition_match(feature_flag, distinct_id, condition, properties):
     rollout_percentage = condition.get("rollout_percentage")
@@ -81,12 +84,13 @@ def is_condition_match(feature_flag, distinct_id, condition, properties):
 
     return True
 
+
 def match_property(property, property_values) -> bool:
     # only looks for matches where key exists in override_property_values
     # doesn't support operator is_not_set
-    key = property.get('key')
-    operator = property.get('operator') or "exact"
-    value = property.get('value')
+    key = property.get("key")
+    operator = property.get("operator") or "exact"
+    value = property.get("value")
     override_value = property_values[key]
 
     if key not in property_values:
@@ -133,4 +137,3 @@ def match_property(property, property_values) -> bool:
         return type(override_value) == type(value) and override_value <= value
 
     return False
-

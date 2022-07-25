@@ -23,6 +23,7 @@ except ImportError:
 
 ID_TYPES = (numbers.Number, string_types, UUID)
 
+
 class Client(object):
     """Create a new PostHog client."""
 
@@ -385,9 +386,20 @@ class Client(object):
             self.poller.start()
 
     def feature_enabled(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
-        return bool(self.get_feature_flag(key, distinct_id, default, groups=groups, person_properties=person_properties, group_properties=group_properties))
+        return bool(
+            self.get_feature_flag(
+                key,
+                distinct_id,
+                default,
+                groups=groups,
+                person_properties=person_properties,
+                group_properties=group_properties,
+            )
+        )
 
-    def get_feature_flag(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
+    def get_feature_flag(
+        self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}
+    ):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
@@ -401,7 +413,7 @@ class Client(object):
             for flag in self.feature_flags:
                 if flag["key"] == key:
                     feature_flag = flag
-                    if feature_flag.get("is_simple_flag"):
+                    if feature_flag.get("is_simple_flag") and feature_flag.get("rollout_percentage"):  # deprecated path
                         response = match_simple_flag(feature_flag, distinct_id)
                     else:
                         try:
@@ -420,9 +432,12 @@ class Client(object):
                 flag_response = feature_flags.get(key)
                 response = flag_response if flag_response else default
         if key not in self.distinct_ids_feature_flags_reported.get(distinct_id, {}):
-            self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
+            self.capture(
+                distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response}
+            )
             self.distinct_ids_feature_flags_reported[distinct_id].add(key)
         return response
+
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
