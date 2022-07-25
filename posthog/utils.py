@@ -3,6 +3,8 @@ import numbers
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
+import re
+
 
 import six
 from dateutil.tz import tzlocal, tzutc
@@ -87,3 +89,11 @@ def _coerce_unicode(cmplx):
         log.warning("Error decoding: %s", item)
         return None
     return item
+
+
+def is_valid_regex(value) -> bool:
+    try:
+        re.compile(value)
+        return True
+    except re.error:
+        return False

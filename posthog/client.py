@@ -1,5 +1,5 @@
 import atexit
-import hashlib
+from collections import defaultdict
 import logging
 import numbers
 from datetime import datetime, timedelta
@@ -13,6 +13,7 @@ from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
 from posthog.utils import clean, guess_timezone
 from posthog.version import VERSION
+from posthog.feature_flags import match_feature_flag_properties
 
 try:
     import queue
@@ -21,8 +22,6 @@ except ImportError:
 
 
 ID_TYPES = (numbers.Number, string_types, UUID)
-__LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
-
 
 class Client(object):
     """Create a new PostHog client."""
@@ -66,6 +65,7 @@ class Client(object):
         self.feature_flags = None
         self.poll_interval = poll_interval
         self.poller = None
+        self.distinct_ids_feature_flags_reported = defaultdict(set)
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -384,7 +384,10 @@ class Client(object):
             self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
             self.poller.start()
 
-    def feature_enabled(self, key, distinct_id, default=False, *, groups={}):
+    def feature_enabled(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
+        return bool(self.get_feature_flag(key, distinct_id, default, groups=groups, person_properties=person_properties, group_properties=group_properties))
+
+    def get_feature_flag(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
@@ -398,14 +401,13 @@ class Client(object):
             for flag in self.feature_flags:
                 if flag["key"] == key:
                     feature_flag = flag
-                    if feature_flag.get("is_simple_flag"):
-                        rollout_percentage = (
-                            feature_flag.get("rollout_percentage")
-                            if feature_flag.get("rollout_percentage") is not None
-                            else 100
-                        )
-                        response = _hash(key, distinct_id) <= (rollout_percentage / 100)
-        if response == None:
+                    try:
+                        response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+                    except Exception as e:
+                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                        continue
+
+        if response is None:
             try:
                 feature_flags = self.get_feature_variants(distinct_id, groups=groups)
             except Exception as e:
@@ -413,30 +415,10 @@ class Client(object):
                 response = default
             else:
                 response = True if feature_flags.get(key) else default
-        self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
+        if key not in self.distinct_ids_feature_flags_reported.get(distinct_id, {}):
+            self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
+            self.distinct_ids_feature_flags_reported[distinct_id].add(key)
         return response
-
-    def get_feature_flag(self, key, distinct_id, groups={}):
-        require("key", key, string_types)
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
-        variants = self.get_feature_variants(distinct_id, groups=groups)
-        self.capture(
-            distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": variants.get(key)}
-        )
-        return variants.get(key)
-
-
-# This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
-# Given the same distinct_id and key, it'll always return the same float. These floats are
-# uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
-# we can do _hash(key, distinct_id) < 0.2
-def _hash(key, distinct_id):
-    hash_key = "%s.%s" % (key, distinct_id)
-    hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
-    return hash_val / __LONG_SCALE__
-
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
