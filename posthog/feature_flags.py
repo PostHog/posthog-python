@@ -58,8 +58,8 @@ def can_locally_evaluate(flags):
         _is_simple = flag.get("is_simple_flag")
         if not _filters and not _is_simple:
             return False
-
     return True
+
 
 def is_deprecated_simple_flag(flag):
     is_simple = flag.get("is_simple_flag")

@@ -9,7 +9,12 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
-from posthog.feature_flags import can_locally_evaluate, is_deprecated_simple_flag, match_feature_flag_properties, match_simple_flag
+from posthog.feature_flags import (
+    can_locally_evaluate,
+    is_deprecated_simple_flag,
+    match_feature_flag_properties,
+    match_simple_flag,
+)
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
 from posthog.utils import clean, guess_timezone
@@ -418,11 +423,15 @@ class Client(object):
                         response = match_simple_flag(feature_flag, distinct_id)
                     else:
                         try:
-                            flag_filters = feature_flag.get('filters', {})
+                            flag_filters = feature_flag.get("filters", {})
                             aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
                             if aggregation_group_type_index is not None:
-                                focused_group_properties = group_properties[self.group_type_mapping[aggregation_group_type_index]]
-                                response = match_feature_flag_properties(feature_flag, distinct_id, focused_group_properties)
+                                focused_group_properties = group_properties[
+                                    self.group_type_mapping[aggregation_group_type_index]
+                                ]
+                                response = match_feature_flag_properties(
+                                    feature_flag, distinct_id, focused_group_properties
+                                )
                             else:
                                 response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
                         except Exception as e:

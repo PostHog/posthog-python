@@ -2080,6 +2080,43 @@ class TestConsistency(unittest.TestCase):
             else:
                 self.assertFalse(feature_flag_match)
 
+    @mock.patch("posthog.client.get")
+    def test_flag_person_properties(self, patch_get):
+        client = Client(TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "person-flag",
+                "is_simple_flag": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        feature_flag_match = client.get_feature_flag(
+            "person-flag", "some-distinct-id", person_properties={"region": "USA"}
+        )
+
+        not_feature_flag_match = client.get_feature_flag(
+            "person-flag", "some-distinct-2", person_properties={"region": "Canada"}
+        )
+
+        self.assertTrue(feature_flag_match)
+        self.assertFalse(not_feature_flag_match)
 
     @mock.patch("posthog.client.get")
     def test_flag_group_properties(self, patch_get):
@@ -2092,33 +2129,33 @@ class TestConsistency(unittest.TestCase):
                 "is_simple_flag": True,
                 "filters": {
                     "aggregation_group_type_index": 0,
-                    "groups": [{"properties": [{
-                        "group_type_index": 0,
-                        "key": "name",
-                        "operator": "exact",
-                        "value": ["Project Name 1"],
-                        "type": "group"
-                    }], "rollout_percentage": 100}],
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "group_type_index": 0,
+                                    "key": "name",
+                                    "operator": "exact",
+                                    "value": ["Project Name 1"],
+                                    "type": "group",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
                 },
             }
         ]
 
-        client.group_type_mapping = {
-            0: 'company',
-            1: 'project'
-        }
+        client.group_type_mapping = {0: "company", 1: "project"}
 
-        feature_flag_match = client.get_feature_flag("group-flag", "some-distinct-id", group_properties={
-            'company': {
-                "name": "Project Name 1"
-            }
-        })
+        feature_flag_match = client.get_feature_flag(
+            "group-flag", "some-distinct-id", group_properties={"company": {"name": "Project Name 1"}}
+        )
 
-        not_feature_flag_match = client.get_feature_flag("group-flag", "some-distinct-2", group_properties={
-            'company': {
-                "name": "Project Name 2"
-            }
-        })
+        not_feature_flag_match = client.get_feature_flag(
+            "group-flag", "some-distinct-2", group_properties={"company": {"name": "Project Name 2"}}
+        )
 
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
