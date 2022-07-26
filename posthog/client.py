@@ -9,12 +9,7 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
-from posthog.feature_flags import (
-    can_locally_evaluate,
-    is_deprecated_simple_flag,
-    match_feature_flag_properties,
-    match_simple_flag,
-)
+from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
 from posthog.utils import clean, guess_timezone
@@ -415,28 +410,28 @@ class Client(object):
         response = None
 
         # If loading in previous line failed
-        if self.feature_flags and can_locally_evaluate(self.feature_flags):
+        if self.feature_flags:
             for flag in self.feature_flags:
                 if flag["key"] == key:
                     feature_flag = flag
-                    if is_deprecated_simple_flag(feature_flag):  # deprecated path
-                        response = match_simple_flag(feature_flag, distinct_id)
-                    else:
-                        try:
-                            flag_filters = feature_flag.get("filters", {})
-                            aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
-                            if aggregation_group_type_index is not None:
-                                focused_group_properties = group_properties[
-                                    self.group_type_mapping[aggregation_group_type_index]
-                                ]
-                                response = match_feature_flag_properties(
-                                    feature_flag, distinct_id, focused_group_properties
-                                )
-                            else:
-                                response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
-                        except Exception as e:
-                            self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
-                            continue
+                    try:
+                        flag_filters = feature_flag.get("filters") or {}
+                        aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+                        if aggregation_group_type_index is not None:
+                            focused_group_properties = group_properties[
+                                self.group_type_mapping[aggregation_group_type_index]
+                            ]
+                            response = match_feature_flag_properties(
+                                feature_flag, distinct_id, focused_group_properties
+                            )
+                        else:
+                            response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+                    except InconclusiveMatchError as e:
+                        # No need to log this, since it's just telling us to fall back to `/decide`
+                        continue
+                    except Exception as e:
+                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                        continue
 
         if response is None:
             try:
@@ -446,8 +441,8 @@ class Client(object):
                 response = default
             else:
                 flag_response = feature_flags.get(key)
-                response = flag_response if flag_response else default
-        if key not in self.distinct_ids_feature_flags_reported.get(distinct_id, {}):
+                response = flag_response if key in feature_flags else default
+        if key not in self.distinct_ids_feature_flags_reported[distinct_id]:
             self.capture(
                 distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response}
             )

@@ -475,7 +475,21 @@ class TestClient(unittest.TestCase):
     def test_feature_enabled_simple(self, patch_get, patch_decide):
         client = Client(TEST_API_KEY)
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            }
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
         self.assertEqual(patch_decide.call_count, 0)
@@ -485,7 +499,21 @@ class TestClient(unittest.TestCase):
     def test_feature_enabled_simple_is_false(self, patch_get, patch_decide):
         client = Client(TEST_API_KEY)
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 0}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "rollout_percentage": 0,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            }
         ]
         self.assertFalse(client.feature_enabled("beta-feature", "distinct_id"))
         self.assertEqual(patch_decide.call_count, 0)
@@ -495,7 +523,21 @@ class TestClient(unittest.TestCase):
     def test_feature_enabled_simple_is_true_when_rollout_is_undefined(self, patch_get, patch_decide):
         client = Client(TEST_API_KEY)
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": None}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "rollout_percentage": None,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": None,
+                        }
+                    ]
+                },
+            }
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
         self.assertEqual(patch_decide.call_count, 0)
@@ -504,7 +546,21 @@ class TestClient(unittest.TestCase):
     def test_feature_enabled_simple_with_project_api_key(self, patch_get):
         client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            }
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
 
@@ -513,30 +569,67 @@ class TestClient(unittest.TestCase):
         patch_decide.return_value = {"featureFlags": {"beta-feature": True}}
         client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            }
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_request_multi_variate(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
         client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            }
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_without_rollout_percentage(self, patch_get):
         client = Client(TEST_API_KEY)
-        client.feature_flags = [{"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True}]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
-
-    @mock.patch("posthog.client.get")
-    def test_feature_enabled_simple_with_none_rollout_percentage(self, patch_get):
-        client = Client(TEST_API_KEY)
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": None}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                        }
+                    ]
+                },
+            }
         ]
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
 
@@ -545,9 +638,31 @@ class TestClient(unittest.TestCase):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
         client = Client(TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "variant-1", "rollout_percentage": 50},
+                            {"key": "variant-2", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            }
         ]
         self.assertEqual(client.get_feature_flag("beta-feature", "distinct_id"), "variant-1")
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")
