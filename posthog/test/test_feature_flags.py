@@ -1,12 +1,12 @@
 import unittest
-from freezegun import freeze_time
 
 import mock
+from freezegun import freeze_time
 
 from posthog.client import Client
+from posthog.feature_flags import InconclusiveMatchError, match_property
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
-from posthog.feature_flags import match_property, InconclusiveMatchError
 
 
 class TestLocalEvaluation(unittest.TestCase):
