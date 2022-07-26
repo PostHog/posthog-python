@@ -54,9 +54,9 @@ def match_feature_flag_properties(flag, distinct_id, properties):
                 return get_matching_variant(flag, distinct_id) or True
         except InconclusiveMatchError:
             is_inconclusive = True
-        
+
     if is_inconclusive:
-        raise InconclusiveMatchError("Can't determine if feature flag is enabled or not with given properties")    
+        raise InconclusiveMatchError("Can't determine if feature flag is enabled or not with given properties")
 
     # We can only return False when either all conditions are False, or
     # no condition was inconclusive.
@@ -71,7 +71,6 @@ def is_condition_match(feature_flag, distinct_id, condition, properties):
         elif rollout_percentage is None:
             return True
 
-    print("hash for distinct_id:", distinct_id, "and flag key:", feature_flag["key"], "is:", _hash(feature_flag["key"], distinct_id))
     if rollout_percentage is not None and _hash(feature_flag["key"], distinct_id) > (rollout_percentage / 100):
         return False
 
@@ -90,7 +89,7 @@ def match_property(property, property_values) -> bool:
 
     if operator == "is_not_set":
         raise InconclusiveMatchError("can't match properties with operator is_not_set")
-    
+
     override_value = property_values[key]
 
     if operator == "exact":

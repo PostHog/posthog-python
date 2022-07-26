@@ -10,7 +10,6 @@ from posthog.feature_flags import match_property, InconclusiveMatchError
 
 
 class TestLocalEvaluation(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
@@ -114,7 +113,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_flag_with_complex_definition(self, patch_get, patch_decide):
-        patch_decide.return_value = { "featureFlags": {"complex-flag": "decide-fallback-value"} }
+        patch_decide.return_value = {"featureFlags": {"complex-flag": "decide-fallback-value"}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -137,7 +136,7 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "operator": "exact",
                                     "value": ["Aloha"],
                                     "type": "person",
-                                }
+                                },
                             ],
                             "rollout_percentage": 100,
                         },
@@ -162,7 +161,7 @@ class TestLocalEvaluation(unittest.TestCase):
                                 },
                             ],
                             "rollout_percentage": 0,
-                        }
+                        },
                     ],
                 },
             }
@@ -171,40 +170,47 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(
             client.get_feature_flag(
                 "complex-flag", "some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
-        ))
+            )
+        )
         self.assertEqual(patch_decide.call_count, 0)
 
         # this distinctIDs hash is < rollout %
         self.assertTrue(
             client.get_feature_flag(
-                "complex-flag", "some-distinct-id_within_rollout?", person_properties={"region": "USA", "email": "a@b.com"}
-        ))
+                "complex-flag",
+                "some-distinct-id_within_rollout?",
+                person_properties={"region": "USA", "email": "a@b.com"},
+            )
+        )
         self.assertEqual(patch_decide.call_count, 0)
-
 
         # will fall back on `/decide`, as all properties present for second group, but that group resolves to false
         self.assertEqual(
             client.get_feature_flag(
-                "complex-flag", "some-distinct-id_outside_rollout?", person_properties={"region": "USA", "email": "a@b.com"}),
-                "decide-fallback-value")
+                "complex-flag",
+                "some-distinct-id_outside_rollout?",
+                person_properties={"region": "USA", "email": "a@b.com"},
+            ),
+            "decide-fallback-value",
+        )
         self.assertEqual(patch_decide.call_count, 1)
 
         patch_decide.reset_mock()
 
         # same as above
         self.assertEqual(
-            client.get_feature_flag(
-                "complex-flag", "some-distinct-id", person_properties={"doesnt_matter": "1"}
-        ), "decide-fallback-value")
+            client.get_feature_flag("complex-flag", "some-distinct-id", person_properties={"doesnt_matter": "1"}),
+            "decide-fallback-value",
+        )
         self.assertEqual(patch_decide.call_count, 1)
 
         patch_decide.reset_mock()
 
         # this one will need to fall back
         self.assertEqual(
-            client.get_feature_flag(
-                "complex-flag", "some-distinct-id", person_properties={"region": "USA"}
-        ), "decide-fallback-value")
+            client.get_feature_flag("complex-flag", "some-distinct-id", person_properties={"region": "USA"}),
+            "decide-fallback-value",
+        )
         self.assertEqual(patch_decide.call_count, 1)
 
         patch_decide.reset_mock()
@@ -212,14 +218,17 @@ class TestLocalEvaluation(unittest.TestCase):
         # won't need to fall back when all values are present
         self.assertFalse(
             client.get_feature_flag(
-                "complex-flag", "some-distinct-id_outside_rollout?", person_properties={"region": "USA", "email": "a@b.com", "name": "X", "doesnt_matter": "1"}))
+                "complex-flag",
+                "some-distinct-id_outside_rollout?",
+                person_properties={"region": "USA", "email": "a@b.com", "name": "X", "doesnt_matter": "1"},
+            )
+        )
         self.assertEqual(patch_decide.call_count, 0)
-
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_flags_fallback_to_decide(self, patch_get, patch_decide):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": 'alakazam', "beta-feature2": 'alakazam2'}}
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "alakazam", "beta-feature2": "alakazam2"}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -250,7 +259,8 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "operator": "exact",
                                     "value": ["USA"],
                                     "type": "person",
-                                }],
+                                }
+                            ],
                             "rollout_percentage": 100,
                         }
                     ],
@@ -259,17 +269,13 @@ class TestLocalEvaluation(unittest.TestCase):
         ]
 
         # beta-feature fallbacks to decide because property type is unknown
-        feature_flag_match = client.get_feature_flag(
-            "beta-feature", "some-distinct-id"
-        )
+        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id")
 
         self.assertEqual(feature_flag_match, "alakazam")
         self.assertEqual(patch_decide.call_count, 1)
 
         # beta-feature2 fallbacks to decide because region property not given with call
-        feature_flag_match = client.get_feature_flag(
-            "beta-feature2", "some-distinct-id"
-        )
+        feature_flag_match = client.get_feature_flag("beta-feature2", "some-distinct-id")
 
         self.assertEqual(feature_flag_match, "alakazam2")
         self.assertEqual(patch_decide.call_count, 2)
@@ -314,14 +320,13 @@ class TestLocalEvaluation(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = []
 
-
         # beta-feature2 falls back to decide, which on error falls back to default
         self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=False))
         self.assertEqual(patch_decide.call_count, 1)
 
         self.assertTrue(client.get_feature_flag("beta-feature2", "some-distinct-id", default=True))
         self.assertEqual(patch_decide.call_count, 2)
-    
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
@@ -548,12 +553,11 @@ class TestLocalEvaluation(unittest.TestCase):
 
 
 class TestMatchProperties(unittest.TestCase):
-
     def property(self, key, value, operator=None):
-        result = {"key": key, "value": value }
+        result = {"key": key, "value": value}
         if operator is not None:
             result.update({"operator": operator})
-        
+
         return result
 
     def test_match_properties_exact(self):

@@ -8,12 +8,11 @@ import mock
 import six
 
 from posthog.client import Client
-from posthog.test.test_utils import FAKE_FAKE_TEST_API_KEY
+from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.version import VERSION
 
 
 class TestClient(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
@@ -459,7 +458,6 @@ class TestClient(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY)
         for consumer in client.consumers:
             self.assertEqual(consumer.timeout, 15)
-
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
