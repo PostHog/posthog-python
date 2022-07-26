@@ -72,13 +72,14 @@ def match_property(property, property_values) -> bool:
     key = property.get("key")
     operator = property.get("operator") or "exact"
     value = property.get("value")
-    override_value = property_values[key]
 
     if key not in property_values:
         raise InconclusiveMatchError("can't match properties without a given property value")
 
     if operator == "is_not_set":
         raise InconclusiveMatchError("can't match properties with operator is_not_set")
+    
+    override_value = property_values[key]
 
     if operator == "exact":
         if isinstance(value, list):

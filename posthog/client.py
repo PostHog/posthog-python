@@ -440,8 +440,7 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
                 response = default
             else:
-                flag_response = feature_flags.get(key)
-                response = flag_response if key in feature_flags else default
+                response = feature_flags.get(key)
         if key not in self.distinct_ids_feature_flags_reported[distinct_id]:
             self.capture(
                 distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response}

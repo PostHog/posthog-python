@@ -9,6 +9,7 @@ from dateutil.tz import tzutc
 from posthog import utils
 
 TEST_API_KEY = "kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4"
+FAKE_TEST_API_KEY = "random_key"
 
 
 class TestUtils(unittest.TestCase):

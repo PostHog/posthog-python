@@ -5,10 +5,24 @@ import mock
 
 from posthog.client import Client
 from posthog.request import APIError
-from posthog.test.test_utils import TEST_API_KEY
+from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 
 class TestLocalEvaluation(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        # This ensures no real HTTP POST requests are made
+        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
+        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
+        cls.client_post_patcher.start()
+        cls.consumer_post_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client_post_patcher.stop()
+        cls.consumer_post_patcher.stop()
+
     def set_fail(self, e, batch):
         """Mark the failure handler"""
         print("FAIL", e, batch)
@@ -16,12 +30,11 @@ class TestLocalEvaluation(unittest.TestCase):
 
     def setUp(self):
         self.failed = False
-        self.client = Client(TEST_API_KEY, on_error=self.set_fail)
+        self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     @mock.patch("posthog.client.get")
     def test_flag_person_properties(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
+        self.client.feature_flags = [
             {
                 "id": 1,
                 "name": "Beta Feature",
@@ -45,11 +58,11 @@ class TestLocalEvaluation(unittest.TestCase):
             }
         ]
 
-        feature_flag_match = client.get_feature_flag(
+        feature_flag_match = self.client.get_feature_flag(
             "person-flag", "some-distinct-id", person_properties={"region": "USA"}
         )
 
-        not_feature_flag_match = client.get_feature_flag(
+        not_feature_flag_match = self.client.get_feature_flag(
             "person-flag", "some-distinct-2", person_properties={"region": "Canada"}
         )
 
@@ -58,8 +71,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.get")
     def test_flag_group_properties(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
+        self.client.feature_flags = [
             {
                 "id": 1,
                 "name": "Beta Feature",
@@ -85,18 +97,124 @@ class TestLocalEvaluation(unittest.TestCase):
             }
         ]
 
-        client.group_type_mapping = {0: "company", 1: "project"}
+        self.client.group_type_mapping = {0: "company", 1: "project"}
 
-        feature_flag_match = client.get_feature_flag(
+        feature_flag_match = self.client.get_feature_flag(
             "group-flag", "some-distinct-id", group_properties={"company": {"name": "Project Name 1"}}
         )
 
-        not_feature_flag_match = client.get_feature_flag(
+        not_feature_flag_match = self.client.get_feature_flag(
             "group-flag", "some-distinct-2", group_properties={"company": {"name": "Project Name 2"}}
         )
 
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
+
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_flags_fallback_to_decide(self, patch_get, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": 'alakazam', "beta-feature2": 'alakazam2'}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "id", "value": 98, "operator": None, "type": "cohort"}],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "beta-feature2",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                }],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # beta-feature fallbacks to decide because property type is unknown
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id"
+        )
+
+        self.assertEqual(feature_flag_match, "alakazam")
+        self.assertEqual(patch_decide.call_count, 1)
+
+        # beta-feature2 fallbacks to decide because region property not given with call
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature2", "some-distinct-id"
+        )
+
+        self.assertEqual(feature_flag_match, "alakazam2")
+        self.assertEqual(patch_decide.call_count, 2)
+
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_flag_defaults_dont_hinder_regular_evaluation(self, patch_get, patch_decide):
+        patch_decide.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # beta-feature resolves to False, so no matter the default, stays False
+        self.assertFalse(client.get_feature_flag("beta-feature", "some-distinct-id", default=True))
+        self.assertFalse(client.get_feature_flag("beta-feature", "some-distinct-id", default=False))
+
+        # beta-feature2 falls back to decide, and whatever decide returns is the value
+        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=False))
+        self.assertEqual(patch_decide.call_count, 1)
+
+        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=True))
+        self.assertEqual(patch_decide.call_count, 2)
+
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_flag_defaults_come_into_play_only_when_decide_errors_out(self, patch_get, patch_decide):
+        patch_decide.side_effect = APIError(400, "Decide error")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = []
+
+
+        # beta-feature2 falls back to decide, which on error falls back to default
+        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=False))
+        self.assertEqual(patch_decide.call_count, 1)
+
+        self.assertTrue(client.get_feature_flag("beta-feature2", "some-distinct-id", default=True))
+        self.assertEqual(patch_decide.call_count, 2)
     
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
@@ -107,7 +225,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 {"id": 2, "name": "Alpha Feature", "key": "alpha-feature", "active": False},
             ]
         }
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             client.load_feature_flags()
         self.assertEqual(len(client.feature_flags), 1)
@@ -116,14 +234,14 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_poll.call_count, 1)
 
     def test_load_feature_flags_wrong_key(self):
-        client = Client(TEST_API_KEY, personal_api_key=TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             self.assertRaises(APIError, client.load_feature_flags)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple(self, patch_get, patch_decide):
-        client = Client(TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -147,7 +265,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_is_false(self, patch_get, patch_decide):
-        client = Client(TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -171,7 +289,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_is_true_when_rollout_is_undefined(self, patch_get, patch_decide):
-        client = Client(TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -194,7 +312,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_with_project_api_key(self, patch_get):
-        client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
+        client = Client(project_api_key=FAKE_TEST_API_KEY, on_error=self.set_fail)
         client.feature_flags = [
             {
                 "id": 1,
@@ -215,33 +333,9 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
 
     @mock.patch("posthog.client.decide")
-    def test_feature_enabled_request(self, patch_decide):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": True}}
-        client = Client(TEST_API_KEY, personal_api_key="test")
-        client.feature_flags = [
-            {
-                "id": 1,
-                "name": "Beta Feature",
-                "key": "beta-feature",
-                "is_simple_flag": False,
-                "rollout_percentage": 100,
-                "filters": {
-                    "groups": [
-                        {
-                            "properties": [],
-                            "rollout_percentage": 100,
-                        }
-                    ]
-                },
-            }
-        ]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
-        self.assertEqual(patch_decide.call_count, 0)
-
-    @mock.patch("posthog.client.decide")
     def test_feature_enabled_request_multi_variate(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -265,7 +359,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.get")
     def test_feature_enabled_simple_without_rollout_percentage(self, patch_get):
-        client = Client(TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -286,7 +380,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_get_feature_flag(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -318,7 +412,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_doesnt_exist(self, patch_decide, patch_poll):
         patch_decide.return_value = {"featureFlags": {}}
-        client = Client(TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = []
 
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
@@ -327,7 +421,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")
     def test_personal_api_key_doesnt_exist(self, patch_decide, patch_poll):
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = []
 
         patch_decide.return_value = {"featureFlags": {"feature-flag": True}}
@@ -341,13 +435,29 @@ class TestLocalEvaluation(unittest.TestCase):
             raise Exception("http exception")
 
         patch_get.return_value.raiseError.side_effect = raise_effect
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = []
 
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
 
+class TestMatchProperties(unittest.TestCase):
+
+    pass
 
 class TestConsistency(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # This ensures no real HTTP POST requests are made
+        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
+        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
+        cls.client_post_patcher.start()
+        cls.consumer_post_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client_post_patcher.stop()
+        cls.consumer_post_patcher.stop()
+
     def set_fail(self, e, batch):
         """Mark the failure handler"""
         print("FAIL", e, batch)
@@ -355,12 +465,11 @@ class TestConsistency(unittest.TestCase):
 
     def setUp(self):
         self.failed = False
-        self.client = Client(TEST_API_KEY, on_error=self.set_fail)
+        self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     @mock.patch("posthog.client.get")
     def test_simple_flag_consistency(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
+        self.client.feature_flags = [
             {
                 "id": 1,
                 "name": "Beta Feature",
@@ -1378,7 +1487,7 @@ class TestConsistency(unittest.TestCase):
         for i in range(1000):
             distinctID = f"distinct_id_{i}"
 
-            feature_flag_match = client.feature_enabled("simple-flag", distinctID)
+            feature_flag_match = self.client.feature_enabled("simple-flag", distinctID)
 
             if results[i]:
                 self.assertTrue(feature_flag_match)
@@ -1387,8 +1496,7 @@ class TestConsistency(unittest.TestCase):
 
     @mock.patch("posthog.client.get")
     def test_multivariate_flag_consistency(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
+        self.client.feature_flags = [
             {
                 "id": 1,
                 "name": "Beta Feature",
@@ -2414,7 +2522,7 @@ class TestConsistency(unittest.TestCase):
 
         for i in range(1000):
             distinctID = f"distinct_id_{i}"
-            feature_flag_match = client.get_feature_flag("multivariate-flag", distinctID)
+            feature_flag_match = self.client.get_feature_flag("multivariate-flag", distinctID)
 
             if results[i]:
                 self.assertEqual(feature_flag_match, results[i])
