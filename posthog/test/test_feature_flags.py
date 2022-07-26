@@ -6,6 +6,7 @@ import mock
 from posthog.client import Client
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.feature_flags import match_property, InconclusiveMatchError
 
 
 class TestLocalEvaluation(unittest.TestCase):
@@ -109,6 +110,111 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
+
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_flag_with_complex_definition(self, patch_get, patch_decide):
+        patch_decide.return_value = { "featureFlags": {"complex-flag": "decide-fallback-value"} }
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                },
+                                {
+                                    "key": "name",
+                                    "operator": "exact",
+                                    "value": ["Aloha"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "operator": "exact",
+                                    "value": ["a@b.com", "b@c.com"],
+                                    "type": "person",
+                                },
+                            ],
+                            "rollout_percentage": 30,
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "doesnt_matter",
+                                    "operator": "exact",
+                                    "value": ["1", "2"],
+                                    "type": "person",
+                                },
+                            ],
+                            "rollout_percentage": 0,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        self.assertTrue(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
+        ))
+        self.assertEqual(patch_decide.call_count, 0)
+
+        # this distinctIDs hash is < rollout %
+        self.assertTrue(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id_within_rollout?", person_properties={"region": "USA", "email": "a@b.com"}
+        ))
+        self.assertEqual(patch_decide.call_count, 0)
+
+
+        # will fall back on `/decide`, as all properties present for second group, but that group resolves to false
+        self.assertEqual(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id_outside_rollout?", person_properties={"region": "USA", "email": "a@b.com"}),
+                "decide-fallback-value")
+        self.assertEqual(patch_decide.call_count, 1)
+
+        patch_decide.reset_mock()
+
+        # same as above
+        self.assertEqual(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id", person_properties={"doesnt_matter": "1"}
+        ), "decide-fallback-value")
+        self.assertEqual(patch_decide.call_count, 1)
+
+        patch_decide.reset_mock()
+
+        # this one will need to fall back
+        self.assertEqual(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id", person_properties={"region": "USA"}
+        ), "decide-fallback-value")
+        self.assertEqual(patch_decide.call_count, 1)
+
+        patch_decide.reset_mock()
+
+        # won't need to fall back when all values are present
+        self.assertFalse(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id_outside_rollout?", person_properties={"region": "USA", "email": "a@b.com", "name": "X", "doesnt_matter": "1"}))
+        self.assertEqual(patch_decide.call_count, 0)
+
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
@@ -440,9 +546,156 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
 
+
 class TestMatchProperties(unittest.TestCase):
 
-    pass
+    def property(self, key, value, operator=None):
+        result = {"key": key, "value": value }
+        if operator is not None:
+            result.update({"operator": operator})
+        
+        return result
+
+    def test_match_properties_exact(self):
+        property_a = self.property(key="key", value="value")
+
+        self.assertTrue(match_property(property_a, {"key": "value"}))
+
+        self.assertFalse(match_property(property_a, {"key": "value2"}))
+        self.assertFalse(match_property(property_a, {"key": ""}))
+        self.assertFalse(match_property(property_a, {"key": None}))
+
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_a, {"key2": "value"})
+            match_property(property_a, {})
+
+        property_b = self.property(key="key", value="value", operator="exact")
+        self.assertTrue(match_property(property_b, {"key": "value"}))
+
+        self.assertFalse(match_property(property_b, {"key": "value2"}))
+
+        property_c = self.property(key="key", value=["value1", "value2", "value3"], operator="exact")
+        self.assertTrue(match_property(property_c, {"key": "value1"}))
+        self.assertTrue(match_property(property_c, {"key": "value2"}))
+        self.assertTrue(match_property(property_c, {"key": "value3"}))
+
+        self.assertFalse(match_property(property_c, {"key": "value4"}))
+
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_c, {"key2": "value"})
+
+    def test_match_properties_not_in(self):
+        property_a = self.property(key="key", value="value", operator="is_not")
+        self.assertTrue(match_property(property_a, {"key": "value2"}))
+        self.assertTrue(match_property(property_a, {"key": ""}))
+        self.assertTrue(match_property(property_a, {"key": None}))
+
+        property_c = self.property(key="key", value=["value1", "value2", "value3"], operator="is_not")
+        self.assertTrue(match_property(property_c, {"key": "value4"}))
+        self.assertTrue(match_property(property_c, {"key": "value5"}))
+        self.assertTrue(match_property(property_c, {"key": "value6"}))
+        self.assertTrue(match_property(property_c, {"key": ""}))
+        self.assertTrue(match_property(property_c, {"key": None}))
+
+        self.assertFalse(match_property(property_c, {"key": "value2"}))
+        self.assertFalse(match_property(property_c, {"key": "value3"}))
+        self.assertFalse(match_property(property_c, {"key": "value1"}))
+
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_a, {"key2": "value"})
+            match_property(property_c, {"key2": "value1"})  # overrides don't have 'key'
+
+    def test_match_properties_is_set(self):
+        property_a = self.property(key="key", value="is_set", operator="is_set")
+        self.assertTrue(match_property(property_a, {"key": "value"}))
+        self.assertTrue(match_property(property_a, {"key": "value2"}))
+        self.assertTrue(match_property(property_a, {"key": ""}))
+        self.assertTrue(match_property(property_a, {"key": None}))
+
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_a, {"key2": "value"})
+            match_property(property_a, {})
+
+    def test_match_properties_icontains(self):
+        property_a = self.property(key="key", value="valUe", operator="icontains")
+        self.assertTrue(match_property(property_a, {"key": "value"}))
+        self.assertTrue(match_property(property_a, {"key": "value2"}))
+        self.assertTrue(match_property(property_a, {"key": "value3"}))
+        self.assertTrue(match_property(property_a, {"key": "vaLue4"}))
+        self.assertTrue(match_property(property_a, {"key": "343tfvalue5"}))
+
+        self.assertFalse(match_property(property_a, {"key": "Alakazam"}))
+        self.assertFalse(match_property(property_a, {"key": 123}))
+
+        property_b = self.property(key="key", value="3", operator="icontains")
+        self.assertTrue(match_property(property_b, {"key": "3"}))
+        self.assertTrue(match_property(property_b, {"key": 323}))
+        self.assertTrue(match_property(property_b, {"key": "val3"}))
+
+        self.assertFalse(match_property(property_b, {"key": "three"}))
+
+    def test_match_properties_regex(self):
+        property_a = self.property(key="key", value=r"\.com$", operator="regex")
+        self.assertTrue(match_property(property_a, {"key": "value.com"}))
+        self.assertTrue(match_property(property_a, {"key": "value2.com"}))
+
+        self.assertFalse(match_property(property_a, {"key": ".com343tfvalue5"}))
+        self.assertFalse(match_property(property_a, {"key": "Alakazam"}))
+        self.assertFalse(match_property(property_a, {"key": 123}))
+
+        property_b = self.property(key="key", value="3", operator="regex")
+        self.assertTrue(match_property(property_b, {"key": "3"}))
+        self.assertTrue(match_property(property_b, {"key": 323}))
+        self.assertTrue(match_property(property_b, {"key": "val3"}))
+
+        self.assertFalse(match_property(property_b, {"key": "three"}))
+
+        # invalid regex
+        property_c = self.property(key="key", value=r"?*", operator="regex")
+        self.assertFalse(match_property(property_c, {"key": "value"}))
+        self.assertFalse(match_property(property_c, {"key": "value2"}))
+
+        # non string value
+        property_d = self.property(key="key", value=4, operator="regex")
+        self.assertTrue(match_property(property_d, {"key": "4"}))
+        self.assertTrue(match_property(property_d, {"key": 4}))
+
+        self.assertFalse(match_property(property_d, {"key": "value"}))
+
+    def test_match_properties_math_operators(self):
+        property_a = self.property(key="key", value=1, operator="gt")
+        self.assertTrue(match_property(property_a, {"key": 2}))
+        self.assertTrue(match_property(property_a, {"key": 3}))
+
+        self.assertFalse(match_property(property_a, {"key": 0}))
+        self.assertFalse(match_property(property_a, {"key": -1}))
+        self.assertFalse(match_property(property_a, {"key": "23"}))
+
+        property_b = self.property(key="key", value=1, operator="lt")
+        self.assertTrue(match_property(property_b, {"key": 0}))
+        self.assertTrue(match_property(property_b, {"key": -1}))
+        self.assertTrue(match_property(property_b, {"key": -3}))
+
+        self.assertFalse(match_property(property_b, {"key": 1}))
+        self.assertFalse(match_property(property_b, {"key": "1"}))
+        self.assertFalse(match_property(property_b, {"key": "3"}))
+
+        property_c = self.property(key="key", value=1, operator="gte")
+        self.assertTrue(match_property(property_c, {"key": 1}))
+        self.assertTrue(match_property(property_c, {"key": 2}))
+
+        self.assertFalse(match_property(property_c, {"key": 0}))
+        self.assertFalse(match_property(property_c, {"key": -1}))
+        self.assertFalse(match_property(property_c, {"key": "3"}))
+
+        property_d = self.property(key="key", value="43", operator="lt")
+        self.assertTrue(match_property(property_d, {"key": "41"}))
+        self.assertTrue(match_property(property_d, {"key": "42"}))
+
+        self.assertFalse(match_property(property_d, {"key": "43"}))
+        self.assertFalse(match_property(property_d, {"key": "44"}))
+        self.assertFalse(match_property(property_d, {"key": 44}))
+
 
 class TestConsistency(unittest.TestCase):
     @classmethod

@@ -33,8 +33,7 @@ def get_matching_variant(flag, distinct_id):
 def variant_lookup_table(feature_flag):
     lookup_table = []
     value_min = 0
-    # TODO: convert to `or {}`
-    multivariates = (feature_flag.get("filters", {}).get("multivariate") or {}).get("variants") or []
+    multivariates = ((feature_flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
     for variant in multivariates:
         value_max = value_min + variant["rollout_percentage"] / 100
         lookup_table.append({"value_min": value_min, "value_max": value_max, "key": variant["key"]})
@@ -43,13 +42,25 @@ def variant_lookup_table(feature_flag):
 
 
 def match_feature_flag_properties(flag, distinct_id, properties):
-    # TODO: convert to `or {}`
-    flag_conditions = flag.get("filters", {}).get("groups") or []
-    is_match = any(is_condition_match(flag, distinct_id, condition, properties) for condition in flag_conditions)
-    if is_match:
-        return get_matching_variant(flag, distinct_id) or True
-    else:
-        return False
+    flag_conditions = (flag.get("filters") or {}).get("groups") or []
+    is_inconclusive = False
+    is_match = False
+
+    for condition in flag_conditions:
+        try:
+            # if any one condition resolves to True, we can shortcircuit and return
+            # the matching variant
+            if is_condition_match(flag, distinct_id, condition, properties):
+                return get_matching_variant(flag, distinct_id) or True
+        except InconclusiveMatchError:
+            is_inconclusive = True
+        
+    if is_inconclusive:
+        raise InconclusiveMatchError("Can't determine if feature flag is enabled or not with given properties")    
+
+    # We can only return False when either all conditions are False, or
+    # no condition was inconclusive.
+    return False
 
 
 def is_condition_match(feature_flag, distinct_id, condition, properties):
@@ -60,6 +71,7 @@ def is_condition_match(feature_flag, distinct_id, condition, properties):
         elif rollout_percentage is None:
             return True
 
+    print("hash for distinct_id:", distinct_id, "and flag key:", feature_flag["key"], "is:", _hash(feature_flag["key"], distinct_id))
     if rollout_percentage is not None and _hash(feature_flag["key"], distinct_id) > (rollout_percentage / 100):
         return False
 
