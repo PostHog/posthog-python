@@ -135,7 +135,7 @@ class Client(object):
             "distinct_id": distinct_id,
             "groups": groups,
             "person_properties": person_properties,
-            "group_properties": group_properties, 
+            "group_properties": group_properties,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
         return resp_data["featureFlags"]
@@ -456,7 +456,9 @@ class Client(object):
 
         if response is None:
             try:
-                feature_flags = self.get_feature_variants(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
+                feature_flags = self.get_feature_variants(
+                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                )
                 response = feature_flags.get(key)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
