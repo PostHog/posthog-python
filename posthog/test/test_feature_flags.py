@@ -376,6 +376,32 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(client.get_feature_flag("beta-feature2", "some-distinct-id", default=True))
         self.assertEqual(patch_decide.call_count, 2)
 
+    @mock.patch("posthog.client.decide")
+    def test_experience_continuity_flag_not_evaluated_locally(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "decide-fallback-value"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+                "ensure_experience_continuity": True,
+            }
+        ]
+        # decide called always because experience_continuity is set
+        self.assertTrue(client.get_feature_flag("beta-feature", "distinct_id"), "decide-fallback-value")
+        self.assertEqual(patch_decide.call_count, 1)
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):

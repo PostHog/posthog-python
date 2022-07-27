@@ -417,7 +417,7 @@ class Client(object):
         # If loading in previous line failed
         if self.feature_flags:
             for flag in self.feature_flags:
-                if flag["key"] == key:
+                if flag["key"] == key and not flag.get("ensure_experience_continuity", False):
                     feature_flag = flag
                     try:
                         flag_filters = feature_flag.get("filters") or {}
