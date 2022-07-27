@@ -123,7 +123,6 @@ class Client(object):
         return self._enqueue(msg)
 
     def get_feature_variants(self, distinct_id, groups=None):
-        assert self.personal_api_key, "You have to specify a personal_api_key to use feature flags."
         require("distinct_id", distinct_id, ID_TYPES)
 
         if groups:
@@ -133,7 +132,6 @@ class Client(object):
 
         request_data = {
             "distinct_id": distinct_id,
-            "personal_api_key": self.personal_api_key,
             "groups": groups,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
@@ -354,8 +352,10 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-            flags = get(self.personal_api_key, f"/api/feature_flag/?token={self.api_key}", self.host)["results"]
-            self.feature_flags = [flag for flag in flags if flag["active"]]
+            response = get(self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host)
+            self.feature_flags = [flag for flag in response["flags"] if flag["active"]]
+            self.group_type_mapping = response["group_type_mapping"]
+
         except APIError as e:
             if e.status == 401:
                 raise APIError(
@@ -418,11 +418,27 @@ class Client(object):
                         flag_filters = feature_flag.get("filters") or {}
                         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
                         if aggregation_group_type_index is not None:
-                            focused_group_properties = group_properties[
-                                self.group_type_mapping[aggregation_group_type_index]
-                            ]
+                            group_name = self.group_type_mapping.get(str(aggregation_group_type_index))
+
+                            if not group_name:
+                                self.log.warning(
+                                    f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {key}"
+                                )
+                                # failover to `/decide/`
+                                break
+
+                            if group_name not in groups:
+                                # Group flags are never enabled in `groups` aren't passed in
+                                # don't failover to `/decide/`, since response will be the same
+                                self.log.warning(
+                                    f"[FEATURE FLAGS] Can't compute group feature flag: {key} without group names passed in"
+                                )
+                                response = False
+                                break
+
+                            focused_group_properties = group_properties[group_name]
                             response = match_feature_flag_properties(
-                                feature_flag, distinct_id, focused_group_properties
+                                feature_flag, groups[group_name], focused_group_properties
                             )
                         else:
                             response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)

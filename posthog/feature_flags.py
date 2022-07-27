@@ -44,7 +44,6 @@ def variant_lookup_table(feature_flag):
 def match_feature_flag_properties(flag, distinct_id, properties):
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
-    is_match = False
 
     for condition in flag_conditions:
         try:

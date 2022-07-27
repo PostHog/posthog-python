@@ -52,3 +52,11 @@ posthog.set("new_distinct_id", {"current_browser": "Chrome"})
 posthog.set("new_distinct_id", {"current_browser": "Firefox"})
 
 # posthog.shutdown()
+
+# #############################################################################
+# Make sure you have a personal API key for the examples below
+
+# Local Evaluation
+
+# If flag has City=Sydney, this call doesn't go to `/decide`
+print(posthog.feature_enabled("test-flag", "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}))

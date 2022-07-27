@@ -69,8 +69,9 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
 
+    @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
-    def test_flag_group_properties(self, patch_get):
+    def test_flag_group_properties(self, patch_get, patch_decide):
         self.client.feature_flags = [
             {
                 "id": 1,
@@ -90,25 +91,49 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "type": "group",
                                 }
                             ],
-                            "rollout_percentage": 100,
+                            "rollout_percentage": 35,
                         }
                     ],
                 },
             }
         ]
 
-        self.client.group_type_mapping = {0: "company", 1: "project"}
+        self.client.group_type_mapping = {"0": "company", "1": "project"}
 
-        feature_flag_match = self.client.get_feature_flag(
+        # Group names not passed in
+        self.assertFalse(self.client.get_feature_flag(
             "group-flag", "some-distinct-id", group_properties={"company": {"name": "Project Name 1"}}
-        )
+        ))
 
-        not_feature_flag_match = self.client.get_feature_flag(
+        self.assertFalse(self.client.get_feature_flag(
             "group-flag", "some-distinct-2", group_properties={"company": {"name": "Project Name 2"}}
-        )
+        ))
+        
+        # this is good
+        self.assertTrue(self.client.get_feature_flag(
+            "group-flag", "some-distinct-id", groups={"company": "amazon_without_rollout"}, group_properties={"company": {"name": "Project Name 1"}}
+        ))
+        # rollout %
+        self.assertFalse(self.client.get_feature_flag(
+            "group-flag", "some-distinct-id", groups={"company": "amazon"}, group_properties={"company": {"name": "Project Name 1"}}
+        ))
 
-        self.assertTrue(feature_flag_match)
-        self.assertFalse(not_feature_flag_match)
+        # property mismatch
+        self.assertFalse(self.client.get_feature_flag(
+            "group-flag", "some-distinct-2", groups={"company": "amazon"}, group_properties={"company": {"name": "Project Name 2"}}
+        ))
+        self.assertEqual(patch_decide.call_count, 0)
+
+        # Now group type mappings are gone, so fall back to /decide/
+        patch_decide.return_value = {"featureFlags": {"group-flag": "decide-fallback-value"}}
+
+        self.client.group_type_mapping = {0: "company"}
+        self.assertEqual(self.client.get_feature_flag(
+            "group-flag", "some-distinct-id", groups={"company": "amazon"}, group_properties={"company": {"name": "Project Name 1"}}
+        ), "decide-fallback-value")
+
+        self.assertEqual(patch_decide.call_count, 1)
+
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
