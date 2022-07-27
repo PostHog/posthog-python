@@ -3,6 +3,7 @@ import logging
 import numbers
 from collections import defaultdict
 from datetime import datetime, timedelta
+from tokenize import group
 from uuid import UUID, uuid4
 
 from dateutil.tz import tzutc
@@ -122,7 +123,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def get_feature_variants(self, distinct_id, groups=None):
+    def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
         require("distinct_id", distinct_id, ID_TYPES)
 
         if groups:
@@ -133,6 +134,8 @@ class Client(object):
         request_data = {
             "distinct_id": distinct_id,
             "groups": groups,
+            "person_properties": person_properties,
+            "group_properties": group_properties, 
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
         return resp_data["featureFlags"]
@@ -453,7 +456,7 @@ class Client(object):
 
         if response is None:
             try:
-                feature_flags = self.get_feature_variants(distinct_id, groups=groups)
+                feature_flags = self.get_feature_variants(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
                 response = feature_flags.get(key)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
