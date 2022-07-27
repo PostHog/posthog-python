@@ -128,29 +128,6 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(patch_decide.call_count, 0)
 
-    @mock.patch("posthog.client.decide")
-    def test_basic_capture_with_feature_flags_without_api_key(self, patch_decide):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
-
-        client = Client(project_api_key=FAKE_TEST_API_KEY, on_error=self.set_fail)
-        client.log = MagicMock()
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-
-        self.assertEqual(client.log.exception.call_count, 1)
-        client.log.exception.assert_called_with(
-            "[FEATURE FLAGS] Unable to get feature variants: You have to specify a personal_api_key to use feature flags."
-        )
-
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800

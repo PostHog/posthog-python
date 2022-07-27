@@ -356,10 +356,11 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
         patch_get.return_value = {
-            "results": [
+            "flags": [
                 {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True},
                 {"id": 2, "name": "Alpha Feature", "key": "alpha-feature", "active": False},
-            ]
+            ],
+            "group_type_mapping": {"0": "company"}
         }
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
@@ -547,11 +548,13 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")
     def test_feature_enabled_doesnt_exist(self, patch_decide, patch_poll):
-        patch_decide.return_value = {"featureFlags": {}}
         client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = []
 
+        patch_decide.return_value = {"featureFlags": {}}
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
+
+        patch_decide.side_effect = APIError(401, 'decide error')
         self.assertTrue(client.feature_enabled("doesnt-exist", "distinct_id", True))
 
     @mock.patch("posthog.client.Poller")
