@@ -352,7 +352,9 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-            response = get(self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host)
+            response = get(
+                self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host
+            )
             self.feature_flags = [flag for flag in response["flags"] if flag["active"]]
             self.group_type_mapping = response["group_type_mapping"]
 

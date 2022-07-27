@@ -101,39 +101,63 @@ class TestLocalEvaluation(unittest.TestCase):
         self.client.group_type_mapping = {"0": "company", "1": "project"}
 
         # Group names not passed in
-        self.assertFalse(self.client.get_feature_flag(
-            "group-flag", "some-distinct-id", group_properties={"company": {"name": "Project Name 1"}}
-        ))
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "group-flag", "some-distinct-id", group_properties={"company": {"name": "Project Name 1"}}
+            )
+        )
 
-        self.assertFalse(self.client.get_feature_flag(
-            "group-flag", "some-distinct-2", group_properties={"company": {"name": "Project Name 2"}}
-        ))
-        
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "group-flag", "some-distinct-2", group_properties={"company": {"name": "Project Name 2"}}
+            )
+        )
+
         # this is good
-        self.assertTrue(self.client.get_feature_flag(
-            "group-flag", "some-distinct-id", groups={"company": "amazon_without_rollout"}, group_properties={"company": {"name": "Project Name 1"}}
-        ))
+        self.assertTrue(
+            self.client.get_feature_flag(
+                "group-flag",
+                "some-distinct-id",
+                groups={"company": "amazon_without_rollout"},
+                group_properties={"company": {"name": "Project Name 1"}},
+            )
+        )
         # rollout %
-        self.assertFalse(self.client.get_feature_flag(
-            "group-flag", "some-distinct-id", groups={"company": "amazon"}, group_properties={"company": {"name": "Project Name 1"}}
-        ))
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "group-flag",
+                "some-distinct-id",
+                groups={"company": "amazon"},
+                group_properties={"company": {"name": "Project Name 1"}},
+            )
+        )
 
         # property mismatch
-        self.assertFalse(self.client.get_feature_flag(
-            "group-flag", "some-distinct-2", groups={"company": "amazon"}, group_properties={"company": {"name": "Project Name 2"}}
-        ))
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "group-flag",
+                "some-distinct-2",
+                groups={"company": "amazon"},
+                group_properties={"company": {"name": "Project Name 2"}},
+            )
+        )
         self.assertEqual(patch_decide.call_count, 0)
 
         # Now group type mappings are gone, so fall back to /decide/
         patch_decide.return_value = {"featureFlags": {"group-flag": "decide-fallback-value"}}
 
         self.client.group_type_mapping = {0: "company"}
-        self.assertEqual(self.client.get_feature_flag(
-            "group-flag", "some-distinct-id", groups={"company": "amazon"}, group_properties={"company": {"name": "Project Name 1"}}
-        ), "decide-fallback-value")
+        self.assertEqual(
+            self.client.get_feature_flag(
+                "group-flag",
+                "some-distinct-id",
+                groups={"company": "amazon"},
+                group_properties={"company": {"name": "Project Name 1"}},
+            ),
+            "decide-fallback-value",
+        )
 
         self.assertEqual(patch_decide.call_count, 1)
-
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
@@ -360,7 +384,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True},
                 {"id": 2, "name": "Alpha Feature", "key": "alpha-feature", "active": False},
             ],
-            "group_type_mapping": {"0": "company"}
+            "group_type_mapping": {"0": "company"},
         }
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
@@ -554,7 +578,7 @@ class TestLocalEvaluation(unittest.TestCase):
         patch_decide.return_value = {"featureFlags": {}}
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
 
-        patch_decide.side_effect = APIError(401, 'decide error')
+        patch_decide.side_effect = APIError(401, "decide error")
         self.assertTrue(client.feature_enabled("doesnt-exist", "distinct_id", True))
 
     @mock.patch("posthog.client.Poller")
