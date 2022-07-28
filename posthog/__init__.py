@@ -281,6 +281,18 @@ def get_feature_flag(
     if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
         # do control code
     ```
+
+    `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5", 
+    you would pass groups={"organization": "5"}.
+
+    `group_properties` take the format: { group_type_name: { group_properties } }
+
+    So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count,
+    you'll send these as:
+
+    ```python
+        group_properties={"organization": {"name": "PostHog", "employees": 11}}
+    ```
     """
     return _proxy(
         "get_feature_flag",
@@ -300,14 +312,13 @@ def get_all_flags(
     group_properties={},  # type: dict
 ):
     """
-    Get feature flag variant for users. Used with experiments.
+    Get all flags for a given user.
     Example:
     ```python
-    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'test-variant':
-        # do test variant code
-    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
-        # do control code
+    flags = posthog.get_all_flags('distinct_id')
     ```
+
+    flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
     """
     return _proxy(
         "get_all_flags",
