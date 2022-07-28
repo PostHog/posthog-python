@@ -13,7 +13,7 @@ from posthog.consumer import Consumer
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
-from posthog.utils import clean, guess_timezone
+from posthog.utils import clean, guess_timezone, SizeLimitedDict
 from posthog.version import VERSION
 
 try:
@@ -23,6 +23,7 @@ except ImportError:
 
 
 ID_TYPES = (numbers.Number, string_types, UUID)
+MAX_DICT_SIZE = 100_000
 
 
 class Client(object):
@@ -68,7 +69,7 @@ class Client(object):
         self.group_type_mapping = None
         self.poll_interval = poll_interval
         self.poller = None
-        self.distinct_ids_feature_flags_reported = defaultdict(set)
+        self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -391,6 +392,38 @@ class Client(object):
             self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
             self.poller.start()
 
+    def _compute_flag_locally(self, feature_flag, distinct_id, *, groups={}, person_properties={}, group_properties={}):
+
+        if feature_flag.get("ensure_experience_continuity", False):
+            raise InconclusiveMatchError("Flag has experience continuity enabled")
+    
+        flag_filters = feature_flag.get("filters") or {}
+        aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+        if aggregation_group_type_index is not None:
+            group_name = self.group_type_mapping.get(str(aggregation_group_type_index))
+
+            if not group_name:
+                self.log.warning(
+                    f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
+                )
+                # failover to `/decide/`
+                raise InconclusiveMatchError("Flag has unknown group type index")
+
+            if group_name not in groups:
+                # Group flags are never enabled in `groups` aren't passed in
+                # don't failover to `/decide/`, since response will be the same
+                self.log.warning(
+                    f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                )
+                return False
+
+            focused_group_properties = group_properties[group_name]
+            return match_feature_flag_properties(
+                feature_flag, groups[group_name], focused_group_properties
+            )
+        else:
+            return match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+
     def feature_enabled(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
         return bool(
             self.get_feature_flag(
@@ -417,36 +450,9 @@ class Client(object):
         # If loading in previous line failed
         if self.feature_flags:
             for flag in self.feature_flags:
-                if flag["key"] == key and not flag.get("ensure_experience_continuity", False):
-                    feature_flag = flag
+                if flag["key"] == key:
                     try:
-                        flag_filters = feature_flag.get("filters") or {}
-                        aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
-                        if aggregation_group_type_index is not None:
-                            group_name = self.group_type_mapping.get(str(aggregation_group_type_index))
-
-                            if not group_name:
-                                self.log.warning(
-                                    f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {key}"
-                                )
-                                # failover to `/decide/`
-                                break
-
-                            if group_name not in groups:
-                                # Group flags are never enabled in `groups` aren't passed in
-                                # don't failover to `/decide/`, since response will be the same
-                                self.log.warning(
-                                    f"[FEATURE FLAGS] Can't compute group feature flag: {key} without group names passed in"
-                                )
-                                response = False
-                                break
-
-                            focused_group_properties = group_properties[group_name]
-                            response = match_feature_flag_properties(
-                                feature_flag, groups[group_name], focused_group_properties
-                            )
-                        else:
-                            response = match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+                        response = self._compute_flag_locally(flag, distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
                     except InconclusiveMatchError as e:
                         # No need to log this, since it's just telling us to fall back to `/decide`
                         continue
@@ -469,6 +475,43 @@ class Client(object):
                 distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response}
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(key)
+        return response
+    
+    def get_all_flags(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}
+    ):
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("groups", groups, dict)
+
+        if self.feature_flags == None and self.personal_api_key:
+            self.load_feature_flags()
+
+        response = {}
+        fallback_to_decide = False
+
+        # If loading in previous line failed
+        if self.feature_flags:
+            for flag in self.feature_flags:
+                    try:
+                        response[flag['key']] = self._compute_flag_locally(flag, distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
+                    except InconclusiveMatchError as e:
+                        # No need to log this, since it's just telling us to fall back to `/decide`
+                        fallback_to_decide = True
+                    except Exception as e:
+                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                        fallback_to_decide = True
+        else:
+            fallback_to_decide = True
+
+        if fallback_to_decide:
+            try:
+                feature_flags = self.get_feature_variants(
+                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                )
+                response = {**response, **feature_flags}
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
+
         return response
 
 

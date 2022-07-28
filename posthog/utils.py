@@ -1,3 +1,4 @@
+from collections import defaultdict
 import logging
 import numbers
 import re
@@ -96,3 +97,16 @@ def is_valid_regex(value) -> bool:
         return True
     except re.error:
         return False
+
+
+class SizeLimitedDict(defaultdict):
+
+    def __init__(self, max_size, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_size = max_size
+    
+    def __setitem__(self, key, value):
+        if len(self) >= self.max_size:
+            self.clear()
+        
+        super().__setitem__(key, value)

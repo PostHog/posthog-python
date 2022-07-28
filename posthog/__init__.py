@@ -293,6 +293,31 @@ def get_feature_flag(
     )
 
 
+def get_all_flags(
+    distinct_id,  # type: str,
+    groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
+):
+    """
+    Get feature flag variant for users. Used with experiments.
+    Example:
+    ```python
+    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'test-variant':
+        # do test variant code
+    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
+        # do control code
+    ```
+    """
+    return _proxy(
+        "get_all_flags",
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+    )
+
+
 def page(*args, **kwargs):
     """Send a page call."""
     _proxy("page", *args, **kwargs)

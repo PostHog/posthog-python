@@ -13,15 +13,12 @@ class TestLocalEvaluation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
-        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
-        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
-        cls.client_post_patcher.start()
-        cls.consumer_post_patcher.start()
+        cls.capture_patch = mock.patch.object(Client, 'capture')
+        cls.capture_patch.start()
 
     @classmethod
     def tearDownClass(cls):
-        cls.client_post_patcher.stop()
-        cls.consumer_post_patcher.stop()
+        cls.capture_patch.stop()
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
@@ -402,6 +399,113 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(client.get_feature_flag("beta-feature", "distinct_id"), "decide-fallback-value")
         self.assertEqual(patch_decide.call_count, 1)
 
+    @mock.patch.object(Client, 'capture')
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_with_fallback(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 3,
+                "name": "Beta Feature",
+                "key": "beta-feature2",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "country", "value": "US"}],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            },
+        ]
+        # beta-feature value overridden by /decide
+        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": "variant-1", "beta-feature2": "variant-2", "disabled-feature": False})
+        self.assertEqual(patch_decide.call_count, 1)
+        self.assertEqual(patch_capture.call_count, 0)
+    
+    @mock.patch.object(Client, 'capture')
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_with_fallback_empty_local_flags(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
+        client = self.client
+        client.feature_flags = []
+        # beta-feature value overridden by /decide
+        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": "variant-1", "beta-feature2": "variant-2"})
+        self.assertEqual(patch_decide.call_count, 1)
+        self.assertEqual(patch_capture.call_count, 0)
+    
+    @mock.patch.object(Client, 'capture')
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_with_no_fallback(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            },
+        ]
+        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": True, "disabled-feature": False})
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 0)
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
@@ -417,6 +521,7 @@ class TestLocalEvaluation(unittest.TestCase):
             client.load_feature_flags()
         self.assertEqual(len(client.feature_flags), 1)
         self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
+        self.assertEqual(client.group_type_mapping, {"0": "company"})
         self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
         self.assertEqual(patch_poll.call_count, 1)
 
@@ -779,19 +884,111 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_d, {"key": 44}))
 
 
+class TestCaptureCalls(unittest.TestCase):
+
+    @mock.patch.object(Client, 'capture')
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called(self, patch_decide, patch_capture):
+        patch_decide.return_value = { "featureFlags": { "decide-flag": "decide-value" } }
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        self.assertTrue(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
+            )
+        )
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with('some-distinct-id', '$feature_flag_called', {'$feature_flag': 'complex-flag', '$feature_flag_response': True})
+        patch_capture.reset_mock()
+
+        # called again for same user, shouldn't call capture again
+        self.assertTrue(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
+            )
+        )
+        self.assertEqual(patch_capture.call_count, 0)
+        patch_capture.reset_mock()
+        
+        # called for different user, should call capture again
+        self.assertTrue(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
+            )
+        )
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with('some-distinct-id2', '$feature_flag_called', {'$feature_flag': 'complex-flag', '$feature_flag_response': True})
+        patch_capture.reset_mock()
+        
+        # called for different flag, falls back to decide, should call capture again
+        self.assertEqual(
+            client.get_feature_flag(
+                "decide-flag", "some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
+            ),
+            "decide-value"
+        )
+        self.assertEqual(patch_decide.call_count, 1)
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with('some-distinct-id2', '$feature_flag_called', {'$feature_flag': 'decide-flag', '$feature_flag_response': "decide-value"})
+
+    @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
+    @mock.patch.object(Client, 'capture')
+    @mock.patch("posthog.client.decide")
+    def test_capture_multiple_users_doesnt_out_of_memory(self, patch_decide, patch_capture):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "is_simple_flag": False,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        for i in range(1000):
+            distinct_id = f"some-distinct-id{i}"
+            client.get_feature_flag(
+                "complex-flag", distinct_id, person_properties={"region": "USA", "name": "Aloha"}
+            )
+            patch_capture.assert_called_with(distinct_id, '$feature_flag_called', {'$feature_flag': 'complex-flag', '$feature_flag_response': True})
+
+            self.assertEqual(len(client.distinct_ids_feature_flags_reported), i % 100 + 1)
+
 class TestConsistency(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
-        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
-        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
-        cls.client_post_patcher.start()
-        cls.consumer_post_patcher.start()
+        cls.capture_patch = mock.patch.object(Client, 'capture')
+        cls.capture_patch.start()
+
 
     @classmethod
     def tearDownClass(cls):
-        cls.client_post_patcher.stop()
-        cls.consumer_post_patcher.stop()
+        cls.capture_patch.stop()
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
