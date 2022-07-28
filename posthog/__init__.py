@@ -282,7 +282,7 @@ def get_feature_flag(
         # do control code
     ```
 
-    `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5", 
+    `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5",
     you would pass groups={"organization": "5"}.
 
     `group_properties` take the format: { group_type_name: { group_properties } }
