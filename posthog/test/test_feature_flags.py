@@ -13,7 +13,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
-        cls.capture_patch = mock.patch.object(Client, 'capture')
+        cls.capture_patch = mock.patch.object(Client, "capture")
         cls.capture_patch.start()
 
     @classmethod
@@ -399,7 +399,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(client.get_feature_flag("beta-feature", "distinct_id"), "decide-fallback-value")
         self.assertEqual(patch_decide.call_count, 1)
 
-    @mock.patch.object(Client, 'capture')
+    @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_get_all_flags_with_fallback(self, patch_decide, patch_capture):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
@@ -450,22 +450,27 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         ]
         # beta-feature value overridden by /decide
-        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": "variant-1", "beta-feature2": "variant-2", "disabled-feature": False})
+        self.assertEqual(
+            client.get_all_flags("distinct_id"),
+            {"beta-feature": "variant-1", "beta-feature2": "variant-2", "disabled-feature": False},
+        )
         self.assertEqual(patch_decide.call_count, 1)
         self.assertEqual(patch_capture.call_count, 0)
-    
-    @mock.patch.object(Client, 'capture')
+
+    @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_get_all_flags_with_fallback_empty_local_flags(self, patch_decide, patch_capture):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
         client = self.client
         client.feature_flags = []
         # beta-feature value overridden by /decide
-        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": "variant-1", "beta-feature2": "variant-2"})
+        self.assertEqual(
+            client.get_all_flags("distinct_id"), {"beta-feature": "variant-1", "beta-feature2": "variant-2"}
+        )
         self.assertEqual(patch_decide.call_count, 1)
         self.assertEqual(patch_capture.call_count, 0)
-    
-    @mock.patch.object(Client, 'capture')
+
+    @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_get_all_flags_with_no_fallback(self, patch_decide, patch_capture):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
@@ -885,11 +890,10 @@ class TestMatchProperties(unittest.TestCase):
 
 
 class TestCaptureCalls(unittest.TestCase):
-
-    @mock.patch.object(Client, 'capture')
+    @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_capture_is_called(self, patch_decide, patch_capture):
-        patch_decide.return_value = { "featureFlags": { "decide-flag": "decide-value" } }
+        patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -914,7 +918,11 @@ class TestCaptureCalls(unittest.TestCase):
             )
         )
         self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with('some-distinct-id', '$feature_flag_called', {'$feature_flag': 'complex-flag', '$feature_flag_response': True})
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True},
+        )
         patch_capture.reset_mock()
 
         # called again for same user, shouldn't call capture again
@@ -925,7 +933,7 @@ class TestCaptureCalls(unittest.TestCase):
         )
         self.assertEqual(patch_capture.call_count, 0)
         patch_capture.reset_mock()
-        
+
         # called for different user, should call capture again
         self.assertTrue(
             client.get_feature_flag(
@@ -933,22 +941,30 @@ class TestCaptureCalls(unittest.TestCase):
             )
         )
         self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with('some-distinct-id2', '$feature_flag_called', {'$feature_flag': 'complex-flag', '$feature_flag_response': True})
+        patch_capture.assert_called_with(
+            "some-distinct-id2",
+            "$feature_flag_called",
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True},
+        )
         patch_capture.reset_mock()
-        
+
         # called for different flag, falls back to decide, should call capture again
         self.assertEqual(
             client.get_feature_flag(
                 "decide-flag", "some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
             ),
-            "decide-value"
+            "decide-value",
         )
         self.assertEqual(patch_decide.call_count, 1)
         self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with('some-distinct-id2', '$feature_flag_called', {'$feature_flag': 'decide-flag', '$feature_flag_response': "decide-value"})
+        patch_capture.assert_called_with(
+            "some-distinct-id2",
+            "$feature_flag_called",
+            {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value"},
+        )
 
     @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
-    @mock.patch.object(Client, 'capture')
+    @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_capture_multiple_users_doesnt_out_of_memory(self, patch_decide, patch_capture):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -971,20 +987,20 @@ class TestCaptureCalls(unittest.TestCase):
 
         for i in range(1000):
             distinct_id = f"some-distinct-id{i}"
-            client.get_feature_flag(
-                "complex-flag", distinct_id, person_properties={"region": "USA", "name": "Aloha"}
+            client.get_feature_flag("complex-flag", distinct_id, person_properties={"region": "USA", "name": "Aloha"})
+            patch_capture.assert_called_with(
+                distinct_id, "$feature_flag_called", {"$feature_flag": "complex-flag", "$feature_flag_response": True}
             )
-            patch_capture.assert_called_with(distinct_id, '$feature_flag_called', {'$feature_flag': 'complex-flag', '$feature_flag_response': True})
 
             self.assertEqual(len(client.distinct_ids_feature_flags_reported), i % 100 + 1)
+
 
 class TestConsistency(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
-        cls.capture_patch = mock.patch.object(Client, 'capture')
+        cls.capture_patch = mock.patch.object(Client, "capture")
         cls.capture_patch.start()
-
 
     @classmethod
     def tearDownClass(cls):

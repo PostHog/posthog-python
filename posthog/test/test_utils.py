@@ -91,11 +91,11 @@ class TestSizeLimitedDict(unittest.TestCase):
             values[i] = i
 
             self.assertEqual(values[i], i)
-            self.assertEqual(len(values), i%size + 1)
+            self.assertEqual(len(values), i % size + 1)
 
-            if i%size == 0:
+            if i % size == 0:
                 # old numbers should've been removed
-                self.assertIsNone(values.get(i-1))
-                self.assertIsNone(values.get(i-3))
-                self.assertIsNone(values.get(i-5))
-                self.assertIsNone(values.get(i-9))
+                self.assertIsNone(values.get(i - 1))
+                self.assertIsNone(values.get(i - 3))
+                self.assertIsNone(values.get(i - 5))
+                self.assertIsNone(values.get(i - 9))

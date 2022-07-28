@@ -13,7 +13,7 @@ from posthog.consumer import Consumer
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
-from posthog.utils import clean, guess_timezone, SizeLimitedDict
+from posthog.utils import SizeLimitedDict, clean, guess_timezone
 from posthog.version import VERSION
 
 try:
@@ -396,7 +396,7 @@ class Client(object):
 
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
-    
+
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
         if aggregation_group_type_index is not None:
@@ -418,9 +418,7 @@ class Client(object):
                 return False
 
             focused_group_properties = group_properties[group_name]
-            return match_feature_flag_properties(
-                feature_flag, groups[group_name], focused_group_properties
-            )
+            return match_feature_flag_properties(feature_flag, groups[group_name], focused_group_properties)
         else:
             return match_feature_flag_properties(feature_flag, distinct_id, person_properties)
 
@@ -452,7 +450,13 @@ class Client(object):
             for flag in self.feature_flags:
                 if flag["key"] == key:
                     try:
-                        response = self._compute_flag_locally(flag, distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
+                        response = self._compute_flag_locally(
+                            flag,
+                            distinct_id,
+                            groups=groups,
+                            person_properties=person_properties,
+                            group_properties=group_properties,
+                        )
                     except InconclusiveMatchError as e:
                         # No need to log this, since it's just telling us to fall back to `/decide`
                         continue
@@ -476,10 +480,8 @@ class Client(object):
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(key)
         return response
-    
-    def get_all_flags(
-        self, distinct_id, *, groups={}, person_properties={}, group_properties={}
-    ):
+
+    def get_all_flags(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
@@ -492,14 +494,20 @@ class Client(object):
         # If loading in previous line failed
         if self.feature_flags:
             for flag in self.feature_flags:
-                    try:
-                        response[flag['key']] = self._compute_flag_locally(flag, distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
-                    except InconclusiveMatchError as e:
-                        # No need to log this, since it's just telling us to fall back to `/decide`
-                        fallback_to_decide = True
-                    except Exception as e:
-                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
-                        fallback_to_decide = True
+                try:
+                    response[flag["key"]] = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                except InconclusiveMatchError as e:
+                    # No need to log this, since it's just telling us to fall back to `/decide`
+                    fallback_to_decide = True
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                    fallback_to_decide = True
         else:
             fallback_to_decide = True
 
