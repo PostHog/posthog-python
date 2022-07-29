@@ -1,3 +1,13 @@
+## 2.0.0 - 2022-07-??
+
+Breaking changes:
+
+1. The minimum version requirement for PostHog servers is now 1.38. If you're using PostHog Cloud, you satisfy this requirement automatically.
+1. Defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this.
+
+This change introduces local evaluation of feature flags, which allows you to compute flags much quicker locally, with no requests going to your PostHog instance server, as long as you know the user properties on which the feature flag depends.
+
+
 ## 1.4.9 - 2022-06-13
 - Support for sending feature flags with capture calls
 
