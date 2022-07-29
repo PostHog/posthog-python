@@ -1,17 +1,19 @@
 import atexit
-import hashlib
 import logging
 import numbers
+from collections import defaultdict
 from datetime import datetime, timedelta
+from tokenize import group
 from uuid import UUID, uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
+from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, get
-from posthog.utils import clean, guess_timezone
+from posthog.utils import SizeLimitedDict, clean, guess_timezone
 from posthog.version import VERSION
 
 try:
@@ -21,7 +23,7 @@ except ImportError:
 
 
 ID_TYPES = (numbers.Number, string_types, UUID)
-__LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
+MAX_DICT_SIZE = 100_000
 
 
 class Client(object):
@@ -64,8 +66,10 @@ class Client(object):
         self.gzip = gzip
         self.timeout = timeout
         self.feature_flags = None
+        self.group_type_mapping = None
         self.poll_interval = poll_interval
         self.poller = None
+        self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -120,8 +124,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def get_feature_variants(self, distinct_id, groups=None):
-        assert self.personal_api_key, "You have to specify a personal_api_key to use feature flags."
+    def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
         require("distinct_id", distinct_id, ID_TYPES)
 
         if groups:
@@ -131,8 +134,9 @@ class Client(object):
 
         request_data = {
             "distinct_id": distinct_id,
-            "personal_api_key": self.personal_api_key,
             "groups": groups,
+            "person_properties": person_properties,
+            "group_properties": group_properties,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
         return resp_data["featureFlags"]
@@ -352,8 +356,12 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-            flags = get(self.personal_api_key, f"/api/feature_flag/?token={self.api_key}", self.host)["results"]
-            self.feature_flags = [flag for flag in flags if flag["active"]]
+            response = get(
+                self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host
+            )
+            self.feature_flags = [flag for flag in response["flags"] if flag["active"]]
+            self.group_type_mapping = response["group_type_mapping"]
+
         except APIError as e:
             if e.status == 401:
                 raise APIError(
@@ -384,7 +392,51 @@ class Client(object):
             self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
             self.poller.start()
 
-    def feature_enabled(self, key, distinct_id, default=False, *, groups={}):
+    def _compute_flag_locally(self, feature_flag, distinct_id, *, groups={}, person_properties={}, group_properties={}):
+
+        if feature_flag.get("ensure_experience_continuity", False):
+            raise InconclusiveMatchError("Flag has experience continuity enabled")
+
+        flag_filters = feature_flag.get("filters") or {}
+        aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+        if aggregation_group_type_index is not None:
+            group_name = self.group_type_mapping.get(str(aggregation_group_type_index))
+
+            if not group_name:
+                self.log.warning(
+                    f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
+                )
+                # failover to `/decide/`
+                raise InconclusiveMatchError("Flag has unknown group type index")
+
+            if group_name not in groups:
+                # Group flags are never enabled in `groups` aren't passed in
+                # don't failover to `/decide/`, since response will be the same
+                self.log.warning(
+                    f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                )
+                return False
+
+            focused_group_properties = group_properties[group_name]
+            return match_feature_flag_properties(feature_flag, groups[group_name], focused_group_properties)
+        else:
+            return match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+
+    def feature_enabled(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
+        return bool(
+            self.get_feature_flag(
+                key,
+                distinct_id,
+                default,
+                groups=groups,
+                person_properties=person_properties,
+                group_properties=group_properties,
+            )
+        )
+
+    def get_feature_flag(
+        self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}
+    ):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
@@ -397,45 +449,78 @@ class Client(object):
         if self.feature_flags:
             for flag in self.feature_flags:
                 if flag["key"] == key:
-                    feature_flag = flag
-                    if feature_flag.get("is_simple_flag"):
-                        rollout_percentage = (
-                            feature_flag.get("rollout_percentage")
-                            if feature_flag.get("rollout_percentage") is not None
-                            else 100
+                    try:
+                        response = self._compute_flag_locally(
+                            flag,
+                            distinct_id,
+                            groups=groups,
+                            person_properties=person_properties,
+                            group_properties=group_properties,
                         )
-                        response = _hash(key, distinct_id) <= (rollout_percentage / 100)
-        if response == None:
+                    except InconclusiveMatchError as e:
+                        # No need to log this, since it's just telling us to fall back to `/decide`
+                        continue
+                    except Exception as e:
+                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                        continue
+
+        if response is None:
             try:
-                feature_flags = self.get_feature_variants(distinct_id, groups=groups)
+                feature_flags = self.get_feature_variants(
+                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                )
+                response = feature_flags.get(key)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
                 response = default
-            else:
-                response = True if feature_flags.get(key) else default
-        self.capture(distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response})
+
+        if key not in self.distinct_ids_feature_flags_reported[distinct_id]:
+            self.capture(
+                distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response}
+            )
+            self.distinct_ids_feature_flags_reported[distinct_id].add(key)
         return response
 
-    def get_feature_flag(self, key, distinct_id, groups={}):
-        require("key", key, string_types)
+    def get_all_flags(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
-        variants = self.get_feature_variants(distinct_id, groups=groups)
-        self.capture(
-            distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": variants.get(key)}
-        )
-        return variants.get(key)
+        if self.feature_flags == None and self.personal_api_key:
+            self.load_feature_flags()
 
+        response = {}
+        fallback_to_decide = False
 
-# This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
-# Given the same distinct_id and key, it'll always return the same float. These floats are
-# uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
-# we can do _hash(key, distinct_id) < 0.2
-def _hash(key, distinct_id):
-    hash_key = "%s.%s" % (key, distinct_id)
-    hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
-    return hash_val / __LONG_SCALE__
+        # If loading in previous line failed
+        if self.feature_flags:
+            for flag in self.feature_flags:
+                try:
+                    response[flag["key"]] = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                except InconclusiveMatchError as e:
+                    # No need to log this, since it's just telling us to fall back to `/decide`
+                    fallback_to_decide = True
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                    fallback_to_decide = True
+        else:
+            fallback_to_decide = True
+
+        if fallback_to_decide:
+            try:
+                feature_flags = self.get_feature_variants(
+                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                )
+                response = {**response, **feature_flags}
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
+
+        return response
 
 
 def require(name, field, data_type):

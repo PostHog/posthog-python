@@ -9,6 +9,7 @@ from dateutil.tz import tzutc
 from posthog import utils
 
 TEST_API_KEY = "kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4"
+FAKE_TEST_API_KEY = "random_key"
 
 
 class TestUtils(unittest.TestCase):
@@ -79,3 +80,22 @@ class TestUtils(unittest.TestCase):
     def test_remove_slash(self):
         self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io/"))
         self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io"))
+
+
+class TestSizeLimitedDict(unittest.TestCase):
+    def test_size_limited_dict(self):
+        size = 10
+        values = utils.SizeLimitedDict(size, lambda _: -1)
+
+        for i in range(100):
+            values[i] = i
+
+            self.assertEqual(values[i], i)
+            self.assertEqual(len(values), i % size + 1)
+
+            if i % size == 0:
+                # old numbers should've been removed
+                self.assertIsNone(values.get(i - 1))
+                self.assertIsNone(values.get(i - 3))
+                self.assertIsNone(values.get(i - 5))
+                self.assertIsNone(values.get(i - 9))

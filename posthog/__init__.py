@@ -236,6 +236,8 @@ def feature_enabled(
     distinct_id,  # type: str,
     default=False,  # type: bool
     groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
 ):
     # type: (...) -> bool
     """
@@ -251,10 +253,25 @@ def feature_enabled(
 
     You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
     """
-    return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default, groups=groups)
+    return _proxy(
+        "feature_enabled",
+        key=key,
+        distinct_id=distinct_id,
+        default=default,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+    )
 
 
-def get_feature_flag(key, distinct_id, groups):
+def get_feature_flag(
+    key,  # type: str,
+    distinct_id,  # type: str,
+    default=False,  # type: bool
+    groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
+):
     """
     Get feature flag variant for users. Used with experiments.
     Example:
@@ -264,8 +281,52 @@ def get_feature_flag(key, distinct_id, groups):
     if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
         # do control code
     ```
+
+    `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5",
+    you would pass groups={"organization": "5"}.
+
+    `group_properties` take the format: { group_type_name: { group_properties } }
+
+    So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count,
+    you'll send these as:
+
+    ```python
+        group_properties={"organization": {"name": "PostHog", "employees": 11}}
+    ```
     """
-    return _proxy("get_feature_flag", key=key, distinct_id=distinct_id, groups=groups)
+    return _proxy(
+        "get_feature_flag",
+        key=key,
+        distinct_id=distinct_id,
+        default=default,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+    )
+
+
+def get_all_flags(
+    distinct_id,  # type: str,
+    groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
+):
+    """
+    Get all flags for a given user.
+    Example:
+    ```python
+    flags = posthog.get_all_flags('distinct_id')
+    ```
+
+    flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
+    """
+    return _proxy(
+        "get_all_flags",
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+    )
 
 
 def page(*args, **kwargs):

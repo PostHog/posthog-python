@@ -1,5 +1,7 @@
 import logging
 import numbers
+import re
+from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -87,3 +89,23 @@ def _coerce_unicode(cmplx):
         log.warning("Error decoding: %s", item)
         return None
     return item
+
+
+def is_valid_regex(value) -> bool:
+    try:
+        re.compile(value)
+        return True
+    except re.error:
+        return False
+
+
+class SizeLimitedDict(defaultdict):
+    def __init__(self, max_size, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if len(self) >= self.max_size:
+            self.clear()
+
+        super().__setitem__(key, value)
