@@ -396,7 +396,7 @@ class Client(object):
 
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
-        
+
         if not feature_flag.get("active"):
             return False
 

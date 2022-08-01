@@ -522,7 +522,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
-    
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_compute_inactive_flags_locally(self, patch_decide, patch_capture):
@@ -603,7 +603,6 @@ class TestLocalEvaluation(unittest.TestCase):
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
-        
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
@@ -935,8 +934,8 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_a, {"key": ".com343tfvalue5"}))
         self.assertFalse(match_property(property_a, {"key": "Alakazam"}))
         self.assertFalse(match_property(property_a, {"key": 123}))
-        self.assertFalse(match_property(property_a, {"key": 'valuecom'}))
-        self.assertFalse(match_property(property_a, {"key": 'value\com'}))
+        self.assertFalse(match_property(property_a, {"key": "valuecom"}))
+        self.assertFalse(match_property(property_a, {"key": "value\com"}))
 
         property_b = self.property(key="key", value="3", operator="regex")
         self.assertTrue(match_property(property_b, {"key": "3"}))
