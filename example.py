@@ -5,6 +5,8 @@ import time
 
 import posthog
 
+# posthog.debug = True
+
 # You can find this key on the /setup page in PostHog
 posthog.project_api_key = ""
 posthog.personal_api_key = ""
@@ -20,7 +22,7 @@ print(posthog.feature_enabled("beta-feature", "distinct_id"))
 print(posthog.feature_enabled("beta-feature", "distinct_id", groups={"company": "id:5"}))
 
 print("sleeping")
-time.sleep(5)
+# time.sleep(5)
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))
 
@@ -42,7 +44,7 @@ posthog.group_identify("company", "id:5", {"employees": 11})
 # properties set only once to the person
 posthog.set_once("new_distinct_id", {"self_serve_signup": True})
 
-time.sleep(3)
+# time.sleep(3)
 
 posthog.set_once(
     "new_distinct_id", {"self_serve_signup": False}

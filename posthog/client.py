@@ -75,7 +75,11 @@ class Client(object):
         self.personal_api_key = personal_api_key
 
         if debug:
-            self.log.setLevel(logging.DEBUG)
+            # Ensures that debug level messages are logged when debug mode is on.
+            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
+            logging.basicConfig(level=logging.DEBUG)
+        else:
+            logging.basicConfig(level=logging.WARNING)
 
         if sync_mode:
             self.consumers = None
@@ -460,6 +464,7 @@ class Client(object):
                             person_properties=person_properties,
                             group_properties=group_properties,
                         )
+                        self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
                     except InconclusiveMatchError as e:
                         self.log.debug(f"Failed to compute flag {key} locally: {e}")
                         continue
