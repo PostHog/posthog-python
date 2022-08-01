@@ -23,7 +23,7 @@ except ImportError:
 
 
 ID_TYPES = (numbers.Number, string_types, UUID)
-MAX_DICT_SIZE = 100_000
+MAX_DICT_SIZE = 50_000
 
 
 class Client(object):
@@ -359,8 +359,8 @@ class Client(object):
             response = get(
                 self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host
             )
-            self.feature_flags = [flag for flag in response["flags"] if flag["active"]]
-            self.group_type_mapping = response["group_type_mapping"]
+            self.feature_flags = response["flags"] or []
+            self.group_type_mapping = response["group_type_mapping"] or {}
 
         except APIError as e:
             if e.status == 401:
@@ -396,6 +396,9 @@ class Client(object):
 
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
+        
+        if not feature_flag.get("active"):
+            return False
 
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
@@ -458,10 +461,10 @@ class Client(object):
                             group_properties=group_properties,
                         )
                     except InconclusiveMatchError as e:
-                        # No need to log this, since it's just telling us to fall back to `/decide`
+                        self.log.debug(f"Failed to compute flag {key} locally: {e}")
                         continue
                     except Exception as e:
-                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
                         continue
 
         if response is None:
@@ -470,8 +473,9 @@ class Client(object):
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
                 )
                 response = feature_flags.get(key)
+                self.log.debug(f"Successfully computed flag remotely: #{key} -> #{response}")
             except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
+                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
                 response = default
 
         if key not in self.distinct_ids_feature_flags_reported[distinct_id]:

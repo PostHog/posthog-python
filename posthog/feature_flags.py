@@ -21,10 +21,11 @@ def _hash(key, distinct_id, salt=""):
 
 
 def get_matching_variant(flag, distinct_id):
+    hash_value = _hash(flag["key"], distinct_id, salt="variant")
     for variant in variant_lookup_table(flag):
         if (
-            _hash(flag["key"], distinct_id, salt="variant") >= variant["value_min"]
-            and _hash(flag["key"], distinct_id, salt="variant") < variant["value_max"]
+            hash_value >= variant["value_min"]
+            and hash_value < variant["value_max"]
         ):
             return variant["key"]
     return None

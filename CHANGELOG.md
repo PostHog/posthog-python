@@ -3,9 +3,14 @@
 Breaking changes:
 
 1. The minimum version requirement for PostHog servers is now 1.38. If you're using PostHog Cloud, you satisfy this requirement automatically.
-1. Defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this.
+2. Feature flag defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this.
+3. Feature flag remote evaluation doesn't require a personal API key.
 
-This change introduces local evaluation of feature flags, which allows you to compute flags much quicker locally, with no requests going to your PostHog instance server, as long as you know the user properties on which the feature flag depends.
+New Changes:
+
+1. You can now evaluate feature flags locally (i.e. without sending a request to your PostHog servers) by setting a personal API key, and passing in groups and person properties to `is_feature_enabled` and `get_feature_flag` calls.
+2. Introduces a `get_all_flags` method that returns all feature flags. This is useful for when you want to seed your frontend with some initial flags, given a user ID.
+
 
 
 ## 1.4.9 - 2022-06-13
