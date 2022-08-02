@@ -37,6 +37,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "person-flag",
                 "is_simple_flag": True,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -75,6 +76,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "group-flag",
                 "is_simple_flag": True,
+                "active": True,
                 "filters": {
                     "aggregation_group_type_index": 0,
                     "groups": [
@@ -134,7 +136,7 @@ class TestLocalEvaluation(unittest.TestCase):
             self.client.get_feature_flag(
                 "group-flag",
                 "some-distinct-2",
-                groups={"company": "amazon"},
+                groups={"company": "amazon_without_rollout"},
                 group_properties={"company": {"name": "Project Name 2"}},
             )
         )
@@ -143,7 +145,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # Now group type mappings are gone, so fall back to /decide/
         patch_decide.return_value = {"featureFlags": {"group-flag": "decide-fallback-value"}}
 
-        self.client.group_type_mapping = {0: "company"}
+        self.client.group_type_mapping = {}
         self.assertEqual(
             self.client.get_feature_flag(
                 "group-flag",
@@ -167,6 +169,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "complex-flag",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -282,6 +285,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -296,6 +300,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature2",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -337,6 +342,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -383,6 +389,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -410,6 +417,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -425,6 +433,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "disabled-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -439,6 +448,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature2",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -481,6 +491,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -496,6 +507,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "disabled-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -507,6 +519,87 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         ]
         self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": True, "disabled-feature": False})
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_compute_inactive_flags_locally(self, patch_decide, patch_capture):
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            },
+        ]
+        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": True, "disabled-feature": False})
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 0)
+
+        # Now, after a poll interval, flag 1 is inactive, and flag 2 rollout is set to 100%.
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": False,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+        ]
+        self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": False, "disabled-feature": True})
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
@@ -524,7 +617,7 @@ class TestLocalEvaluation(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             client.load_feature_flags()
-        self.assertEqual(len(client.feature_flags), 1)
+        self.assertEqual(len(client.feature_flags), 2)
         self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
         self.assertEqual(client.group_type_mapping, {"0": "company"})
         self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
@@ -545,6 +638,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -569,6 +663,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "rollout_percentage": 0,
                 "filters": {
                     "groups": [
@@ -593,6 +688,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "rollout_percentage": None,
                 "filters": {
                     "groups": [
@@ -616,6 +712,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -639,6 +736,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -663,6 +761,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": True,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -684,6 +783,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "beta-feature",
                 "is_simple_flag": False,
+                "active": True,
                 "rollout_percentage": 100,
                 "filters": {
                     "groups": [
@@ -827,13 +927,15 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_b, {"key": "three"}))
 
     def test_match_properties_regex(self):
-        property_a = self.property(key="key", value=r"\.com$", operator="regex")
+        property_a = self.property(key="key", value="\.com$", operator="regex")
         self.assertTrue(match_property(property_a, {"key": "value.com"}))
         self.assertTrue(match_property(property_a, {"key": "value2.com"}))
 
         self.assertFalse(match_property(property_a, {"key": ".com343tfvalue5"}))
         self.assertFalse(match_property(property_a, {"key": "Alakazam"}))
         self.assertFalse(match_property(property_a, {"key": 123}))
+        self.assertFalse(match_property(property_a, {"key": "valuecom"}))
+        self.assertFalse(match_property(property_a, {"key": "value\com"}))
 
         property_b = self.property(key="key", value="3", operator="regex")
         self.assertTrue(match_property(property_b, {"key": "3"}))
@@ -843,7 +945,7 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_b, {"key": "three"}))
 
         # invalid regex
-        property_c = self.property(key="key", value=r"?*", operator="regex")
+        property_c = self.property(key="key", value="?*", operator="regex")
         self.assertFalse(match_property(property_c, {"key": "value"}))
         self.assertFalse(match_property(property_c, {"key": "value2"}))
 
@@ -880,11 +982,11 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_c, {"key": -1}))
         self.assertFalse(match_property(property_c, {"key": "3"}))
 
-        property_d = self.property(key="key", value="43", operator="lt")
+        property_d = self.property(key="key", value="43", operator="lte")
         self.assertTrue(match_property(property_d, {"key": "41"}))
         self.assertTrue(match_property(property_d, {"key": "42"}))
+        self.assertTrue(match_property(property_d, {"key": "43"}))
 
-        self.assertFalse(match_property(property_d, {"key": "43"}))
         self.assertFalse(match_property(property_d, {"key": "44"}))
         self.assertFalse(match_property(property_d, {"key": 44}))
 
@@ -901,6 +1003,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "complex-flag",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -974,6 +1077,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "complex-flag",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [
                         {
@@ -1023,6 +1127,7 @@ class TestConsistency(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "simple-flag",
                 "is_simple_flag": True,
+                "active": True,
                 "filters": {
                     "groups": [{"properties": [], "rollout_percentage": 45}],
                 },
@@ -2050,6 +2155,7 @@ class TestConsistency(unittest.TestCase):
                 "name": "Beta Feature",
                 "key": "multivariate-flag",
                 "is_simple_flag": False,
+                "active": True,
                 "filters": {
                     "groups": [{"properties": [], "rollout_percentage": 55}],
                     "multivariate": {
