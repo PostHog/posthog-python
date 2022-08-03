@@ -330,6 +330,73 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, "alakazam2")
         self.assertEqual(patch_decide.call_count, 2)
+    
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
+    def test_feature_flags_dont_fallback_to_decide_when_only_local_evaluation_is_true(self, patch_get, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "alakazam", "beta-feature2": "alakazam2"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "id", "value": 98, "operator": None, "type": "cohort"}],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "beta-feature2",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # beta-feature should fallback to decide because property type is unknown,
+        # but doesn't because only_evaluate_locally is true
+        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", only_evaluate_locally=True)
+
+        self.assertEqual(feature_flag_match, None)
+        self.assertEqual(patch_decide.call_count, 0)
+
+        feature_flag_match = client.feature_enabled("beta-feature", "some-distinct-id", only_evaluate_locally=True)
+
+        self.assertEqual(feature_flag_match, False)
+        self.assertEqual(patch_decide.call_count, 0)
+
+        # beta-feature2 should fallback to decide because region property not given with call
+        # but doesn't because only_evaluate_locally is true
+        feature_flag_match = client.get_feature_flag("beta-feature2", "some-distinct-id", only_evaluate_locally=True)
+        self.assertEqual(feature_flag_match, None)
+
+        feature_flag_match = client.feature_enabled("beta-feature2", "some-distinct-id", only_evaluate_locally=True)
+        self.assertEqual(feature_flag_match, False)
+
+        self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
@@ -520,6 +587,67 @@ class TestLocalEvaluation(unittest.TestCase):
         ]
         self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": True, "disabled-feature": False})
         # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_with_fallback_but_only_local_evaluation_set(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            },
+            {
+                "id": 3,
+                "name": "Beta Feature",
+                "key": "beta-feature2",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "country", "value": "US"}],
+                            "rollout_percentage": 0,
+                        }
+                    ]
+                },
+            },
+        ]
+        # beta-feature2 has no value
+        self.assertEqual(
+            client.get_all_flags("distinct_id", only_evaluate_locally=True),
+            {"beta-feature": True, "disabled-feature": False},
+        )
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
 
@@ -1007,7 +1135,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "filters": {
                     "groups": [
                         {
-                            "properties": [],
+                            "properties": [{"key": "region", "value": "USA"}],
                             "rollout_percentage": 100,
                         }
                     ],
@@ -1024,7 +1152,8 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id",
             "$feature_flag_called",
-            {"$feature_flag": "complex-flag", "$feature_flag_response": True},
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+            groups={},
         )
         patch_capture.reset_mock()
 
@@ -1047,14 +1176,24 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id2",
             "$feature_flag_called",
-            {"$feature_flag": "complex-flag", "$feature_flag_response": True},
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+            groups={},
         )
+        patch_capture.reset_mock()
+
+        # called for different user, but send configuration is false, so should NOT call capture again
+        self.assertTrue(
+            client.get_feature_flag(
+                "complex-flag", "some-distinct-id345", person_properties={"region": "USA", "name": "Aloha"}, send_feature_flag_events=False
+            )
+        )
+        self.assertEqual(patch_capture.call_count, 0)
         patch_capture.reset_mock()
 
         # called for different flag, falls back to decide, should call capture again
         self.assertEqual(
             client.get_feature_flag(
-                "decide-flag", "some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
+                "decide-flag", "some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}, groups={'organization': 'org1'}
             ),
             "decide-value",
         )
@@ -1063,7 +1202,8 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id2",
             "$feature_flag_called",
-            {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value"},
+            {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value", "locally_evaluated": False},
+            groups={'organization': 'org1'},
         )
 
     @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
@@ -1093,7 +1233,7 @@ class TestCaptureCalls(unittest.TestCase):
             distinct_id = f"some-distinct-id{i}"
             client.get_feature_flag("complex-flag", distinct_id, person_properties={"region": "USA", "name": "Aloha"})
             patch_capture.assert_called_with(
-                distinct_id, "$feature_flag_called", {"$feature_flag": "complex-flag", "$feature_flag_response": True}
+                distinct_id, "$feature_flag_called", {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True}, groups={}
             )
 
             self.assertEqual(len(client.distinct_ids_feature_flags_reported), i % 100 + 1)

@@ -50,11 +50,6 @@ def _process_response(
     res: requests.Response, success_message: str, *, return_json: bool = True
 ) -> Union[requests.Response, Any]:
     log = logging.getLogger("posthog")
-    if not res:
-        raise APIError(
-            "N/A",
-            "Error when fetching PostHog API, please make sure you are using your public project token/key and not a private API key.",
-        )
     if res.status_code == 200:
         log.debug(success_message)
         return res.json() if return_json else res
@@ -62,7 +57,7 @@ def _process_response(
         payload = res.json()
         log.debug("received response: %s", payload)
         raise APIError(res.status_code, payload["detail"])
-    except ValueError:
+    except (KeyError, ValueError):
         raise APIError(res.status_code, res.text)
 
 
