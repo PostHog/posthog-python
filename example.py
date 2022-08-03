@@ -60,12 +60,23 @@ posthog.set("new_distinct_id", {"current_browser": "Firefox"})
 # If flag has City=Sydney, this call doesn't go to `/decide`
 print(posthog.feature_enabled("test-flag", "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}))
 
-print(posthog.feature_enabled("test-flag", "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}, only_evaluate_locally=True))
+print(
+    posthog.feature_enabled(
+        "test-flag",
+        "distinct_id_random_22",
+        person_properties={"$geoip_city_name": "Sydney"},
+        only_evaluate_locally=True,
+    )
+)
 
 
 print(posthog.get_all_flags("distinct_id_random_22"))
 print(posthog.get_all_flags("distinct_id_random_22", only_evaluate_locally=True))
-print(posthog.get_all_flags("distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}, only_evaluate_locally=True))
+print(
+    posthog.get_all_flags(
+        "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}, only_evaluate_locally=True
+    )
+)
 
 
 posthog.shutdown()
