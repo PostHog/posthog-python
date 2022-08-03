@@ -330,7 +330,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, "alakazam2")
         self.assertEqual(patch_decide.call_count, 2)
-    
+
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_feature_flags_dont_fallback_to_decide_when_only_local_evaluation_is_true(self, patch_get, patch_decide):
@@ -1184,7 +1184,10 @@ class TestCaptureCalls(unittest.TestCase):
         # called for different user, but send configuration is false, so should NOT call capture again
         self.assertTrue(
             client.get_feature_flag(
-                "complex-flag", "some-distinct-id345", person_properties={"region": "USA", "name": "Aloha"}, send_feature_flag_events=False
+                "complex-flag",
+                "some-distinct-id345",
+                person_properties={"region": "USA", "name": "Aloha"},
+                send_feature_flag_events=False,
             )
         )
         self.assertEqual(patch_capture.call_count, 0)
@@ -1193,7 +1196,10 @@ class TestCaptureCalls(unittest.TestCase):
         # called for different flag, falls back to decide, should call capture again
         self.assertEqual(
             client.get_feature_flag(
-                "decide-flag", "some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}, groups={'organization': 'org1'}
+                "decide-flag",
+                "some-distinct-id2",
+                person_properties={"region": "USA", "name": "Aloha"},
+                groups={"organization": "org1"},
             ),
             "decide-value",
         )
@@ -1203,7 +1209,7 @@ class TestCaptureCalls(unittest.TestCase):
             "some-distinct-id2",
             "$feature_flag_called",
             {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value", "locally_evaluated": False},
-            groups={'organization': 'org1'},
+            groups={"organization": "org1"},
         )
 
     @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
@@ -1233,7 +1239,10 @@ class TestCaptureCalls(unittest.TestCase):
             distinct_id = f"some-distinct-id{i}"
             client.get_feature_flag("complex-flag", distinct_id, person_properties={"region": "USA", "name": "Aloha"})
             patch_capture.assert_called_with(
-                distinct_id, "$feature_flag_called", {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True}, groups={}
+                distinct_id,
+                "$feature_flag_called",
+                {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+                groups={},
             )
 
             self.assertEqual(len(client.distinct_ids_feature_flags_reported), i % 100 + 1)

@@ -24,7 +24,7 @@ ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
 
 # Ensures that debug level messages are logged when debug mode is on.
-# Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided            
+# Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
 logging.basicConfig()
 
 
@@ -428,7 +428,18 @@ class Client(object):
         else:
             return match_feature_flag_properties(feature_flag, distinct_id, person_properties)
 
-    def feature_enabled(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally = False, send_feature_flag_events=True):
+    def feature_enabled(
+        self,
+        key,
+        distinct_id,
+        default=False,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+    ):
         return bool(
             self.get_feature_flag(
                 key,
@@ -443,7 +454,16 @@ class Client(object):
         )
 
     def get_feature_flag(
-        self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally = False, send_feature_flag_events=True
+        self,
+        key,
+        distinct_id,
+        default=False,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
     ):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
@@ -486,9 +506,14 @@ class Client(object):
                 response = default
 
         feature_flag_reported_key = f"{key}_{str(response)}"
-        if feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id] and send_feature_flag_events:
+        if (
+            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
+            and send_feature_flag_events
+        ):
             self.capture(
-                distinct_id, "$feature_flag_called", {
+                distinct_id,
+                "$feature_flag_called",
+                {
                     "$feature_flag": key,
                     "$feature_flag_response": response,
                     "locally_evaluated": flag_was_locally_evaluated,
@@ -498,7 +523,9 @@ class Client(object):
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
 
-    def get_all_flags(self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally = False):
+    def get_all_flags(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
+    ):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
