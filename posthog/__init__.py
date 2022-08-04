@@ -15,6 +15,7 @@ sync_mode = False  # type: bool
 disabled = False  # type: bool
 personal_api_key = None  # type: str
 project_api_key = None  # type: str
+poll_interval = 30  # type: int
 
 default_client = None
 
@@ -238,6 +239,8 @@ def feature_enabled(
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
+    only_evaluate_locally=False,  # type: bool
+    send_feature_flag_events=True,  # type: bool
 ):
     # type: (...) -> bool
     """
@@ -261,6 +264,8 @@ def feature_enabled(
         groups=groups,
         person_properties=person_properties,
         group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
     )
 
 
@@ -271,6 +276,8 @@ def get_feature_flag(
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
+    only_evaluate_locally=False,  # type: bool
+    send_feature_flag_events=True,  # type: bool
 ):
     """
     Get feature flag variant for users. Used with experiments.
@@ -302,6 +309,8 @@ def get_feature_flag(
         groups=groups,
         person_properties=person_properties,
         group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
     )
 
 
@@ -310,6 +319,7 @@ def get_all_flags(
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
+    only_evaluate_locally=False,  # type: bool
 ):
     """
     Get all flags for a given user.
@@ -326,6 +336,7 @@ def get_all_flags(
         groups=groups,
         person_properties=person_properties,
         group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
     )
 
 
@@ -370,6 +381,7 @@ def _proxy(method, *args, **kwargs):
             sync_mode=sync_mode,
             personal_api_key=personal_api_key,
             project_api_key=project_api_key,
+            poll_interval=poll_interval,
         )
 
     fn = getattr(default_client, method)

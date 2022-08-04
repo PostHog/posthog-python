@@ -1,10 +1,8 @@
 import atexit
 import logging
 import numbers
-from collections import defaultdict
 from datetime import datetime, timedelta
-from tokenize import group
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from dateutil.tz import tzutc
 from six import string_types
@@ -24,6 +22,10 @@ except ImportError:
 
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
+
+# Ensures that debug level messages are logged when debug mode is on.
+# Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
+logging.basicConfig()
 
 
 class Client(object):
@@ -73,13 +75,10 @@ class Client(object):
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
-
         if debug:
-            # Ensures that debug level messages are logged when debug mode is on.
-            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
-            logging.basicConfig(level=logging.DEBUG)
+            self.log.setLevel(logging.DEBUG)
         else:
-            logging.basicConfig(level=logging.WARNING)
+            self.log.setLevel(logging.WARNING)
 
         if sync_mode:
             self.consumers = None
@@ -375,7 +374,7 @@ class Client(object):
                     "More information: https://posthog.com/docs/api/overview",
                 )
             else:
-                raise APIError(status=e.status, message=e.message)
+                self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
             self.log.warning(
                 "[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds."
@@ -429,7 +428,18 @@ class Client(object):
         else:
             return match_feature_flag_properties(feature_flag, distinct_id, person_properties)
 
-    def feature_enabled(self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}):
+    def feature_enabled(
+        self,
+        key,
+        distinct_id,
+        default=False,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+    ):
         return bool(
             self.get_feature_flag(
                 key,
@@ -438,11 +448,22 @@ class Client(object):
                 groups=groups,
                 person_properties=person_properties,
                 group_properties=group_properties,
+                only_evaluate_locally=only_evaluate_locally,
+                send_feature_flag_events=send_feature_flag_events,
             )
         )
 
     def get_feature_flag(
-        self, key, distinct_id, default=False, *, groups={}, person_properties={}, group_properties={}
+        self,
+        key,
+        distinct_id,
+        default=False,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
     ):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
@@ -472,7 +493,8 @@ class Client(object):
                         self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
                         continue
 
-        if response is None:
+        flag_was_locally_evaluated = response is not None
+        if not flag_was_locally_evaluated and not only_evaluate_locally:
             try:
                 feature_flags = self.get_feature_variants(
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
@@ -483,14 +505,27 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
                 response = default
 
-        if key not in self.distinct_ids_feature_flags_reported[distinct_id]:
+        feature_flag_reported_key = f"{key}_{str(response)}"
+        if (
+            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
+            and send_feature_flag_events
+        ):
             self.capture(
-                distinct_id, "$feature_flag_called", {"$feature_flag": key, "$feature_flag_response": response}
+                distinct_id,
+                "$feature_flag_called",
+                {
+                    "$feature_flag": key,
+                    "$feature_flag_response": response,
+                    "locally_evaluated": flag_was_locally_evaluated,
+                },
+                groups=groups,
             )
-            self.distinct_ids_feature_flags_reported[distinct_id].add(key)
+            self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
 
-    def get_all_flags(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
+    def get_all_flags(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
+    ):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
@@ -520,7 +555,7 @@ class Client(object):
         else:
             fallback_to_decide = True
 
-        if fallback_to_decide:
+        if fallback_to_decide and not only_evaluate_locally:
             try:
                 feature_flags = self.get_feature_variants(
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties

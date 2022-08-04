@@ -1,3 +1,9 @@
+## 2.0.1 - 2022-08-04
+
+- Make poll_interval configurable
+- Add `send_feature_flag_events` parameter to feature flag calls, which determine whether the `$feature_flag_called` event should be sent or not.
+- Add `only_evaluate_locally` parameter to feature flag calls, which determines whether the feature flag should only be evaluated locally or not.
+
 ## 2.0.0 - 2022-08-02
 
 Breaking changes:
