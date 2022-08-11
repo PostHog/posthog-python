@@ -235,7 +235,6 @@ def alias(
 def feature_enabled(
     key,  # type: str,
     distinct_id,  # type: str,
-    default=False,  # type: bool
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
@@ -260,7 +259,6 @@ def feature_enabled(
         "feature_enabled",
         key=key,
         distinct_id=distinct_id,
-        default=default,
         groups=groups,
         person_properties=person_properties,
         group_properties=group_properties,
@@ -272,7 +270,6 @@ def feature_enabled(
 def get_feature_flag(
     key,  # type: str,
     distinct_id,  # type: str,
-    default=False,  # type: bool
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
@@ -305,7 +302,6 @@ def get_feature_flag(
         "get_feature_flag",
         key=key,
         distinct_id=distinct_id,
-        default=default,
         groups=groups,
         person_properties=person_properties,
         group_properties=group_properties,

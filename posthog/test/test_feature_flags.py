@@ -385,7 +385,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         feature_flag_match = client.feature_enabled("beta-feature", "some-distinct-id", only_evaluate_locally=True)
 
-        self.assertEqual(feature_flag_match, False)
+        self.assertEqual(feature_flag_match, None)
         self.assertEqual(patch_decide.call_count, 0)
 
         # beta-feature2 should fallback to decide because region property not given with call
@@ -394,13 +394,13 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(feature_flag_match, None)
 
         feature_flag_match = client.feature_enabled("beta-feature2", "some-distinct-id", only_evaluate_locally=True)
-        self.assertEqual(feature_flag_match, False)
+        self.assertEqual(feature_flag_match, None)
 
         self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
-    def test_feature_flag_defaults_dont_hinder_regular_evaluation(self, patch_get, patch_decide):
+    def test_feature_flag_never_returns_undefined_during_regular_evaluation(self, patch_get, patch_decide):
         patch_decide.return_value = {"featureFlags": {}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
@@ -422,28 +422,28 @@ class TestLocalEvaluation(unittest.TestCase):
         ]
 
         # beta-feature resolves to False, so no matter the default, stays False
-        self.assertFalse(client.get_feature_flag("beta-feature", "some-distinct-id", default=True))
-        self.assertFalse(client.get_feature_flag("beta-feature", "some-distinct-id", default=False))
+        self.assertFalse(client.get_feature_flag("beta-feature", "some-distinct-id"))
+        self.assertFalse(client.feature_enabled("beta-feature", "some-distinct-id"))
 
         # beta-feature2 falls back to decide, and whatever decide returns is the value
-        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=False))
+        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id"))
         self.assertEqual(patch_decide.call_count, 1)
 
-        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=True))
+        self.assertFalse(client.feature_enabled("beta-feature2", "some-distinct-id"))
         self.assertEqual(patch_decide.call_count, 2)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
-    def test_feature_flag_defaults_come_into_play_only_when_decide_errors_out(self, patch_get, patch_decide):
+    def test_feature_flag_return_none_when_decide_errors_out(self, patch_get, patch_decide):
         patch_decide.side_effect = APIError(400, "Decide error")
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = []
 
-        # beta-feature2 falls back to decide, which on error falls back to default
-        self.assertFalse(client.get_feature_flag("beta-feature2", "some-distinct-id", default=False))
+        # beta-feature2 falls back to decide, which on error returns None
+        self.assertIsNone(client.get_feature_flag("beta-feature2", "some-distinct-id"))
         self.assertEqual(patch_decide.call_count, 1)
 
-        self.assertTrue(client.get_feature_flag("beta-feature2", "some-distinct-id", default=True))
+        self.assertIsNone(client.feature_enabled("beta-feature2", "some-distinct-id"))
         self.assertEqual(patch_decide.call_count, 2)
 
     @mock.patch("posthog.client.decide")
@@ -943,7 +943,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
 
         patch_decide.side_effect = APIError(401, "decide error")
-        self.assertTrue(client.feature_enabled("doesnt-exist", "distinct_id", True))
+        self.assertIsNone(client.feature_enabled("doesnt-exist", "distinct_id"))
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.decide")

@@ -1,3 +1,9 @@
+## 2.1.0 - 2022-08-11
+
+Changes:
+
+1. Feature flag defaults have been removed
+2. Setup logging only when debug mode is enabled.
 ## 2.0.1 - 2022-08-04
 
 - Make poll_interval configurable
@@ -9,7 +15,8 @@
 Breaking changes:
 
 1. The minimum version requirement for PostHog servers is now 1.38. If you're using PostHog Cloud, you satisfy this requirement automatically.
-2. Feature flag defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this.
+2. Feature flag defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this. 
+**Note: These are removed in 2.0.2**
 3. Feature flag remote evaluation doesn't require a personal API key.
 
 New Changes:
