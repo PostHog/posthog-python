@@ -23,10 +23,6 @@ except ImportError:
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
 
-# Ensures that debug level messages are logged when debug mode is on.
-# Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
-logging.basicConfig()
-
 
 class Client(object):
     """Create a new PostHog client."""
@@ -76,6 +72,9 @@ class Client(object):
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
         if debug:
+            # Ensures that debug level messages are logged when debug mode is on.
+            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
+            logging.basicConfig()
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
@@ -432,7 +431,6 @@ class Client(object):
         self,
         key,
         distinct_id,
-        default=False,
         *,
         groups={},
         person_properties={},
@@ -440,24 +438,24 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
     ):
-        return bool(
-            self.get_feature_flag(
-                key,
-                distinct_id,
-                default,
-                groups=groups,
-                person_properties=person_properties,
-                group_properties=group_properties,
-                only_evaluate_locally=only_evaluate_locally,
-                send_feature_flag_events=send_feature_flag_events,
-            )
+        response = self.get_feature_flag(
+            key,
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
         )
+
+        if response is None:
+            return None
+        return bool(response)
 
     def get_feature_flag(
         self,
         key,
         distinct_id,
-        default=False,
         *,
         groups={},
         person_properties={},
@@ -500,10 +498,11 @@ class Client(object):
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
                 )
                 response = feature_flags.get(key)
+                if response is None:
+                    response = False
                 self.log.debug(f"Successfully computed flag remotely: #{key} -> #{response}")
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
-                response = default
 
         feature_flag_reported_key = f"{key}_{str(response)}"
         if (
