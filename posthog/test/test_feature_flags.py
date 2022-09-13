@@ -3,6 +3,7 @@ import unittest
 import mock
 from freezegun import freeze_time
 
+from dateutil import parser
 from posthog.client import Client
 from posthog.feature_flags import InconclusiveMatchError, match_property
 from posthog.request import APIError
@@ -1118,6 +1119,28 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_d, {"key": "44"}))
         self.assertFalse(match_property(property_d, {"key": 44}))
 
+    def test_match_property_date_operators(self):
+        property_a = self.property(key="key", value="2022-05-01", operator="is_date_before")
+        self.assertTrue(match_property(property_a, {"key": "2022-03-01"}))
+        self.assertTrue(match_property(property_a, {"key": "2022-04-30"}))
+        self.assertTrue(match_property(property_a, {"key": parser.parse("2022-04-30")}))
+        self.assertFalse(match_property(property_a, {"key": "2022-05-30"}))
+
+        # Can't be a number
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_a, {"key": 1})
+
+        property_b = self.property(key="key", value="2022-05-01", operator="is_date_after")
+        self.assertTrue(match_property(property_b, {"key": "2022-05-02"}))
+        self.assertTrue(match_property(property_b, {"key": "2022-05-30"}))
+        self.assertTrue(match_property(property_b, {"key": parser.parse("2022-05-30")}))
+        self.assertFalse(match_property(property_b, {"key": "2022-04-30"}))
+
+        # Invalid flag proeprty
+        property_c = self.property(key="key", value=1234, operator="is_date_before")
+
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_c, {"key": 1})
 
 class TestCaptureCalls(unittest.TestCase):
     @mock.patch.object(Client, "capture")

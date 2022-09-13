@@ -149,7 +149,7 @@ def match_property(property, property_values) -> bool:
             raise InconclusiveMatchError("The date set on the flag is not a valid format")
 
         if isinstance(override_value, datetime.date):
-            return override_value < parsed_date
+            return override_value > parsed_date
         elif isinstance(override_value, str):
             return parser.parse(override_value) > parsed_date
         else:
