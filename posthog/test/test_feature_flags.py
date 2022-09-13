@@ -1142,6 +1142,7 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_c, {"key": 1})
 
+
 class TestCaptureCalls(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")

@@ -155,5 +155,4 @@ def match_property(property, property_values) -> bool:
         else:
             raise InconclusiveMatchError("The date provided to override must be a string or date object")
 
-
     return False
