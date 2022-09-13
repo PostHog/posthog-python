@@ -1,6 +1,9 @@
 import hashlib
 import re
 
+import datetime
+from dateutil import parser
+
 from posthog.utils import is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
@@ -125,5 +128,32 @@ def match_property(property, property_values) -> bool:
 
     if operator == "lte":
         return type(override_value) == type(value) and override_value <= value
+
+    if operator == "is_date_before":
+        try:
+            parsed_date = parser.parse(value)
+        except:
+            raise InconclusiveMatchError("The date set on the flag is not a valid format")
+
+        if isinstance(override_value, datetime.date):
+            return override_value < parsed_date
+        elif isinstance(override_value, str):
+            return parser.parse(override_value) < parsed_date
+        else:
+            raise InconclusiveMatchError("The date provided to override must be a string or date object")
+
+    if operator == "is_date_after":
+        try:
+            parsed_date = parser.parse(value)
+        except:
+            raise InconclusiveMatchError("The date set on the flag is not a valid format")
+
+        if isinstance(override_value, datetime.date):
+            return override_value < parsed_date
+        elif isinstance(override_value, str):
+            return parser.parse(override_value) > parsed_date
+        else:
+            raise InconclusiveMatchError("The date provided to override must be a string or date object")
+
 
     return False
