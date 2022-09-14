@@ -2,7 +2,8 @@
 
 Changes:
 
-1. Feature flags local evaluation now supports date property filters as well.
+1. Feature flags local evaluation now supports date property filters as well. Note that this only supports passing in timezone-unaware datetime objects, or strings.
+
 ## 2.1.0 - 2022-08-11
 
 Changes:
