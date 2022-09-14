@@ -1,8 +1,8 @@
-import unittest
 import datetime
-import pytz
+import unittest
 
 import mock
+import pytz
 from dateutil import parser
 from freezegun import freeze_time
 
@@ -1155,18 +1155,16 @@ class TestMatchProperties(unittest.TestCase):
 
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_c, {"key": 1})
-        
 
         # Timezone aware property
         property_d = self.property(key="key", value="2022-04-05 12:34:12 BST", operator="is_date_before")
         self.assertFalse(match_property(property_d, {"key": "2022-05-30"}))
-        
+
         self.assertTrue(match_property(property_d, {"key": "2022-03-30"}))
         self.assertTrue(match_property(property_d, {"key": "2022-04-05 12:34:11 BST"}))
         self.assertTrue(match_property(property_d, {"key": "2022-04-05 12:34:11 CET"}))
 
         self.assertFalse(match_property(property_d, {"key": "2022-04-05 12:34:13 CET"}))
-
 
 
 class TestCaptureCalls(unittest.TestCase):
