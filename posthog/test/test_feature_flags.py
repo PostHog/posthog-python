@@ -1131,7 +1131,7 @@ class TestMatchProperties(unittest.TestCase):
         # Can't be a number
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_a, {"key": 1})
-        
+
         # can't be invalid string
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_a, {"key": "abcdef"})
