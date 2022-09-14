@@ -110,7 +110,8 @@ class SizeLimitedDict(defaultdict):
 
         super().__setitem__(key, value)
 
+
 def convert_to_datetime_aware(date_obj):
     if date_obj.tzinfo is None:
-       date_obj = date_obj.replace(tzinfo=timezone.utc)
+        date_obj = date_obj.replace(tzinfo=timezone.utc)
     return date_obj
