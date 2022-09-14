@@ -1,3 +1,8 @@
+## 2.1.1 - 2022-09-14
+
+Changes:
+
+1. Feature flags local evaluation now supports date property filters as well.
 ## 2.1.0 - 2022-08-11
 
 Changes:
