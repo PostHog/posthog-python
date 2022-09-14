@@ -1,7 +1,7 @@
+import datetime
 import hashlib
 import re
 
-import datetime
 from dateutil import parser
 
 from posthog.utils import is_valid_regex

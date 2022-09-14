@@ -1,9 +1,9 @@
 import unittest
 
 import mock
+from dateutil import parser
 from freezegun import freeze_time
 
-from dateutil import parser
 from posthog.client import Client
 from posthog.feature_flags import InconclusiveMatchError, match_property
 from posthog.request import APIError
