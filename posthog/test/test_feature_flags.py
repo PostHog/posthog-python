@@ -1,3 +1,4 @@
+from datetime import datetime
 import unittest
 
 import mock
@@ -1123,20 +1124,30 @@ class TestMatchProperties(unittest.TestCase):
         property_a = self.property(key="key", value="2022-05-01", operator="is_date_before")
         self.assertTrue(match_property(property_a, {"key": "2022-03-01"}))
         self.assertTrue(match_property(property_a, {"key": "2022-04-30"}))
+        self.assertTrue(match_property(property_a, {"key": datetime(2022, 4, 30)}))
         self.assertTrue(match_property(property_a, {"key": parser.parse("2022-04-30")}))
         self.assertFalse(match_property(property_a, {"key": "2022-05-30"}))
 
         # Can't be a number
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_a, {"key": 1})
+        
+        # can't be invalid string
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_a, {"key": "abcdef"})
 
         property_b = self.property(key="key", value="2022-05-01", operator="is_date_after")
         self.assertTrue(match_property(property_b, {"key": "2022-05-02"}))
         self.assertTrue(match_property(property_b, {"key": "2022-05-30"}))
+        self.assertTrue(match_property(property_b, {"key": datetime(2022, 5, 30)}))
         self.assertTrue(match_property(property_b, {"key": parser.parse("2022-05-30")}))
         self.assertFalse(match_property(property_b, {"key": "2022-04-30"}))
 
-        # Invalid flag proeprty
+        # can't be invalid string
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_b, {"key": "abcdef"})
+
+        # Invalid flag property
         property_c = self.property(key="key", value=1234, operator="is_date_before")
 
         with self.assertRaises(InconclusiveMatchError):
