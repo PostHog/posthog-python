@@ -131,18 +131,24 @@ def match_property(property, property_values) -> bool:
 
     if operator in ["is_date_before", "is_date_after"]:
         try:
-            parsed_date = parser.parse(value)
+            parsed_date = parser.parse(value, ignoretz=True)
         except Exception:
             raise InconclusiveMatchError("The date set on the flag is not a valid format")
 
-        if isinstance(override_value, datetime.date):
+        if isinstance(override_value, datetime.datetime):
+            override_date = override_value.replace(tzinfo=None)
             if operator == "is_date_before":
-                return override_value < parsed_date
+                return override_date < parsed_date
             else:
-                return override_value > parsed_date
+                return override_date > parsed_date
+        elif isinstance(override_value, datetime.date):
+            if operator == "is_date_before":
+                return override_value < parsed_date.date()
+            else:
+                return override_value > parsed_date.date()
         elif isinstance(override_value, str):
             try:
-                override_date = parser.parse(override_value)
+                override_date = parser.parse(override_value).replace(tzinfo=None)
                 if operator == "is_date_before":
                     return override_date < parsed_date
                 else:
