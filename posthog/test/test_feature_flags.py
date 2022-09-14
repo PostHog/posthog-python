@@ -2,8 +2,7 @@ import datetime
 import unittest
 
 import mock
-import pytz
-from dateutil import parser
+from dateutil import parser, tz
 from freezegun import freeze_time
 
 from posthog.client import Client
@@ -1127,7 +1126,7 @@ class TestMatchProperties(unittest.TestCase):
         self.assertTrue(match_property(property_a, {"key": "2022-04-30"}))
         self.assertTrue(match_property(property_a, {"key": datetime.date(2022, 4, 30)}))
         self.assertTrue(match_property(property_a, {"key": datetime.datetime(2022, 4, 30, 1, 2, 3)}))
-        self.assertTrue(match_property(property_a, {"key": datetime.datetime(2022, 4, 30, 1, 2, 3, tzinfo=pytz.UTC)}))
+        self.assertTrue(match_property(property_a, {"key": datetime.datetime(2022, 4, 30, 1, 2, 3, tzinfo=tz.gettz('Europe/Madrid'))}))
         self.assertTrue(match_property(property_a, {"key": parser.parse("2022-04-30")}))
         self.assertFalse(match_property(property_a, {"key": "2022-05-30"}))
 
