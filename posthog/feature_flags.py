@@ -129,35 +129,24 @@ def match_property(property, property_values) -> bool:
     if operator == "lte":
         return type(override_value) == type(value) and override_value <= value
 
-    if operator == "is_date_before":
+    if operator in ["is_date_before", "is_date_after"]:
         try:
             parsed_date = parser.parse(value)
         except Exception:
             raise InconclusiveMatchError("The date set on the flag is not a valid format")
 
         if isinstance(override_value, datetime.date):
-            return override_value < parsed_date
+            if operator == "is_date_before":
+                return override_value < parsed_date
+            else:
+                return override_value > parsed_date
         elif isinstance(override_value, str):
             try:
                 override_date = parser.parse(override_value)
-                return override_date < parsed_date
-            except Exception:
-                raise InconclusiveMatchError("The date provided is not a valid format")
-        else:
-            raise InconclusiveMatchError("The date provided must be a string or date object")
-
-    if operator == "is_date_after":
-        try:
-            parsed_date = parser.parse(value)
-        except Exception:
-            raise InconclusiveMatchError("The date set on the flag is not a valid format")
-
-        if isinstance(override_value, datetime.date):
-            return override_value > parsed_date
-        elif isinstance(override_value, str):
-            try:
-                override_date = parser.parse(override_value)
-                return override_date > parsed_date
+                if operator == "is_date_before":
+                    return override_date < parsed_date
+                else:
+                    return override_date > parsed_date
             except Exception:
                 raise InconclusiveMatchError("The date provided is not a valid format")
         else:
