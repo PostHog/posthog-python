@@ -4,7 +4,7 @@ import re
 
 from dateutil import parser
 
-from posthog.utils import is_valid_regex
+from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
@@ -132,17 +132,25 @@ def match_property(property, property_values) -> bool:
     if operator in ["is_date_before", "is_date_after"]:
         try:
             parsed_date = parser.parse(value)
+            parsed_date = convert_to_datetime_aware(parsed_date)
         except Exception:
             raise InconclusiveMatchError("The date set on the flag is not a valid format")
 
-        if isinstance(override_value, datetime.date):
+        if isinstance(override_value, datetime.datetime):
+            override_date = convert_to_datetime_aware(override_value)
             if operator == "is_date_before":
-                return override_value < parsed_date
+                return override_date < parsed_date
             else:
-                return override_value > parsed_date
+                return override_date > parsed_date
+        elif isinstance(override_value, datetime.date):
+            if operator == "is_date_before":
+                return override_value < parsed_date.date()
+            else:
+                return override_value > parsed_date.date()
         elif isinstance(override_value, str):
             try:
                 override_date = parser.parse(override_value)
+                override_date = convert_to_datetime_aware(override_date)
                 if operator == "is_date_before":
                     return override_date < parsed_date
                 else:

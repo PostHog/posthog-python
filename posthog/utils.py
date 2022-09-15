@@ -2,7 +2,7 @@ import logging
 import numbers
 import re
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -109,3 +109,9 @@ class SizeLimitedDict(defaultdict):
             self.clear()
 
         super().__setitem__(key, value)
+
+
+def convert_to_datetime_aware(date_obj):
+    if date_obj.tzinfo is None:
+        date_obj = date_obj.replace(tzinfo=timezone.utc)
+    return date_obj
