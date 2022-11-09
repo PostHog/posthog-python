@@ -46,12 +46,26 @@ def match_feature_flag_properties(flag, distinct_id, properties):
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
 
-    for condition in flag_conditions:
+    # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
+    # evaluated first, and the variant override is applied to the first matching condition.
+    sorted_flag_conditions = sorted(
+        flag_conditions,
+        key=lambda condition: 0 if condition.get("variant") else 1,
+    )
+
+    for condition in sorted_flag_conditions:
         try:
             # if any one condition resolves to True, we can shortcircuit and return
             # the matching variant
             if is_condition_match(flag, distinct_id, condition, properties):
-                return get_matching_variant(flag, distinct_id) or True
+                variant_override = condition.get("variant")
+                # Some filters can be explicitly set to null, which require accessing variants like so
+                flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
+                if variant_override and variant_override in [variant["key"] for variant in flag_variants]:
+                    variant = variant_override
+                else:
+                    variant = get_matching_variant(flag, distinct_id)
+                return variant or True
         except InconclusiveMatchError:
             is_inconclusive = True
 

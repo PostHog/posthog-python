@@ -969,6 +969,170 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
 
+    @mock.patch("posthog.client.decide")
+    def test_get_feature_flag_with_variant_overrides(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "second-variant",
+                        },
+                        {"rollout_percentage": 50, "variant": "first-variant"},
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                            {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                            {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                        ]
+                    },
+                }
+            }
+        ]
+        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        self.assertEqual(client.get_feature_flag("beta-feature", "example_id"), "first-variant")
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+    
+    @mock.patch("posthog.client.decide")
+    def test_flag_with_clashing_variant_overrides(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "second-variant",
+                        },
+                        # since second-variant comes first in the list, it will be the one that gets picked
+                        {
+                            "properties": [
+                                {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "first-variant",
+                        },
+                        {"rollout_percentage": 50, "variant": "first-variant"},
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                            {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                            {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                        ]
+                    },
+                }
+            }
+        ]
+        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        self.assertEqual(client.get_feature_flag("beta-feature", "example_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+    
+    @mock.patch("posthog.client.decide")
+    def test_flag_with_invalid_variant_overrides(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "second???",
+                        },
+                        {"rollout_percentage": 50, "variant": "first??"},
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                            {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                            {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                        ]
+                    },
+                }
+            }
+        ]
+        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "third-variant")
+        self.assertEqual(client.get_feature_flag("beta-feature", "example_id"), "second-variant")
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+    
+    @mock.patch("posthog.client.decide")
+    def test_flag_with_multiple_variant_overrides(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "rollout_percentage": 100,
+                            # The override applies even if the first condition matches all and gives everyone their default group
+                        },
+                        {
+                            "properties": [
+                                {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "second-variant",
+                        },
+                        {"rollout_percentage": 50, "variant": "third-variant"},
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                            {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                            {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                        ]
+                    },
+                }
+            }
+        ]
+        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        self.assertEqual(client.get_feature_flag("beta-feature", "example_id"), "third-variant")
+        self.assertEqual(client.get_feature_flag("beta-feature", "another_id"), "second-variant")
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
 
 class TestMatchProperties(unittest.TestCase):
     def property(self, key, value, operator=None):
