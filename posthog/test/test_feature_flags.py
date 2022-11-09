@@ -999,14 +999,17 @@ class TestLocalEvaluation(unittest.TestCase):
                             {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
                         ]
                     },
-                }
+                },
             }
         ]
-        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        self.assertEqual(
+            client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}),
+            "second-variant",
+        )
         self.assertEqual(client.get_feature_flag("beta-feature", "example_id"), "first-variant")
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
-    
+
     @mock.patch("posthog.client.decide")
     def test_flag_with_clashing_variant_overrides(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
@@ -1045,14 +1048,20 @@ class TestLocalEvaluation(unittest.TestCase):
                             {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
                         ]
                     },
-                }
+                },
             }
         ]
-        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "second-variant")
-        self.assertEqual(client.get_feature_flag("beta-feature", "example_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        self.assertEqual(
+            client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}),
+            "second-variant",
+        )
+        self.assertEqual(
+            client.get_feature_flag("beta-feature", "example_id", person_properties={"email": "test@posthog.com"}),
+            "second-variant",
+        )
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
-    
+
     @mock.patch("posthog.client.decide")
     def test_flag_with_invalid_variant_overrides(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
@@ -1083,14 +1092,17 @@ class TestLocalEvaluation(unittest.TestCase):
                             {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
                         ]
                     },
-                }
+                },
             }
         ]
-        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "third-variant")
+        self.assertEqual(
+            client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}),
+            "third-variant",
+        )
         self.assertEqual(client.get_feature_flag("beta-feature", "example_id"), "second-variant")
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
-    
+
     @mock.patch("posthog.client.decide")
     def test_flag_with_multiple_variant_overrides(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
@@ -1125,14 +1137,18 @@ class TestLocalEvaluation(unittest.TestCase):
                             {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
                         ]
                     },
-                }
+                },
             }
         ]
-        self.assertEqual(client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}), "second-variant")
+        self.assertEqual(
+            client.get_feature_flag("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}),
+            "second-variant",
+        )
         self.assertEqual(client.get_feature_flag("beta-feature", "example_id"), "third-variant")
         self.assertEqual(client.get_feature_flag("beta-feature", "another_id"), "second-variant")
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
+
 
 class TestMatchProperties(unittest.TestCase):
     def property(self, key, value, operator=None):
