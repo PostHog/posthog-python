@@ -1,3 +1,9 @@
+## 2.2.0 - 2022-11-14
+
+Changes:
+
+1. Add support for feature flag variant overrides with local evaluation
+
 ## 2.1.2 - 2022-09-15
 
 Changes:

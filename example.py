@@ -8,14 +8,30 @@ import posthog
 posthog.debug = True
 
 # You can find this key on the /setup page in PostHog
-posthog.project_api_key = ""
-posthog.personal_api_key = ""
+posthog.project_api_key = "phc_gtWmTq3Pgl06u4sZY3TRcoQfp42yfuXHKoe8ZVSR6Kh"
+posthog.personal_api_key = "phx_fiRCOQkTA3o2ePSdLrFDAILLHjMu2Mv52vUi8MNruIm"
 
 # Where you host PostHog, with no trailing /.
 # You can remove this line if you're using posthog.com
 posthog.host = "http://localhost:8000"
 posthog.poll_interval = 10
 
+print(
+    posthog.feature_enabled(
+        "person-on-events-enabled",
+        "12345",
+        groups={"organization": str("0182ee91-8ef7-0000-4cb9-fedc5f00926a")},
+        group_properties={
+            "organization": {
+                "id": "0182ee91-8ef7-0000-4cb9-fedc5f00926a",
+                "created_at": "2022-06-30 11:44:52.984121+00:00",
+            }
+        },
+        only_evaluate_locally=True,
+    )
+)
+
+exit()
 
 # Capture an event
 posthog.capture("distinct_id", "event", {"property1": "value", "property2": "value"}, send_feature_flags=True)
