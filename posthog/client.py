@@ -560,7 +560,7 @@ class Client(object):
 
         response = None
 
-        if match_value is not None and self.feature_flags_by_key:
+        if match_value is not None:
             response = self._get_feature_flag_payload(key, match_value)
 
         if response is None and not only_evaluate_locally:
@@ -570,6 +570,11 @@ class Client(object):
         return response
 
     def _get_feature_flag_payload(self, key, match_value):
+        payload = None
+
+        if self.feature_flags_by_key is None:
+            return payload 
+
         flag_definition = self.feature_flags_by_key.get(key) or {}
         flag_filters = flag_definition.get("filters") or {}
         flag_payloads = flag_filters.get("payloads") or {}
