@@ -573,7 +573,7 @@ class Client(object):
         payload = None
 
         if self.feature_flags_by_key is None:
-            return payload 
+            return payload
 
         flag_definition = self.feature_flags_by_key.get(key) or {}
         flag_filters = flag_definition.get("filters") or {}
