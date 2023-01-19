@@ -64,6 +64,8 @@ class Client(object):
         self.gzip = gzip
         self.timeout = timeout
         self.feature_flags = None
+        self.feature_flags_by_key = None
+        self.feature_flag_payloads = None
         self.group_type_mapping = None
         self.poll_interval = poll_interval
         self.poller = None
@@ -127,6 +129,24 @@ class Client(object):
         return self._enqueue(msg)
 
     def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+        resp_data = self.get_feature(
+            distinct_id,
+            groups,
+            person_properties,
+            group_properties
+        )
+        return resp_data["featureFlags"]
+
+    def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+        resp_data = self.get_feature(
+            distinct_id,
+            groups,
+            person_properties,
+            group_properties
+        )
+        return resp_data["featureFlagPayloads"]
+
+    def get_feature(self, distinct_id, groups=None, person_properties=None, group_properties=None):
         require("distinct_id", distinct_id, ID_TYPES)
 
         if groups:
@@ -141,7 +161,7 @@ class Client(object):
             "group_properties": group_properties,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
-        return resp_data["featureFlags"]
+        return resp_data
 
     def capture(
         self,
@@ -362,6 +382,9 @@ class Client(object):
                 self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host
             )
             self.feature_flags = response["flags"] or []
+            self.feature_flags_by_key = {
+                flag['key']: flag for flag in self.feature_flags if flag.get('key') is not None
+            }
             self.group_type_mapping = response["group_type_mapping"] or {}
 
         except APIError as e:
@@ -520,6 +543,48 @@ class Client(object):
                 groups=groups,
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
+        return response
+
+    def get_feature_flag_payload(
+        self,
+        key,
+        distinct_id,
+        *,
+        match_value=None,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+    ):
+        if match_value is None:
+            match_value = self.get_feature_flag(
+                key,
+                distinct_id,
+                groups=groups,
+                person_properties=person_properties,
+                group_properties=group_properties,
+                send_feature_flag_events=send_feature_flag_events,
+                only_evaluate_locally=True,
+            )
+
+        response = None
+
+        if match_value is not None and self.feature_flags_by_key:
+            flag_definition = self.feature_flags_by_key.get(key) or {}
+            flag_filters = flag_definition.get('filters') or {}
+            flag_payloads = flag_filters.get('payloads') or {}
+            response = flag_payloads.get(str(match_value).lower(), None)
+        
+        if response is None and not only_evaluate_locally:
+            decide_payloads = self.get_feature_payloads(
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties
+            )
+            response = decide_payloads.get(str(key).lower(), None)
+        
         return response
 
     def get_all_flags(
