@@ -568,7 +568,7 @@ class Client(object):
             response = decide_payloads.get(str(key).lower(), None)
 
         return response
-    
+
     def _get_feature_flag_payload(self, key, match_value):
         flag_definition = self.feature_flags_by_key.get(key) or {}
         flag_filters = flag_definition.get("filters") or {}
@@ -579,7 +579,9 @@ class Client(object):
     def get_all_flags(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        response, _, fallback_to_decide = self._get_all_flags_and_payloads_locally(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
+        response, _, fallback_to_decide = self._get_all_flags_and_payloads_locally(
+            distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+        )
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
@@ -595,7 +597,9 @@ class Client(object):
     def get_all_payloads(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        _, response, fallback_to_decide = self._get_all_flags_and_payloads_locally(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
+        _, response, fallback_to_decide = self._get_all_flags_and_payloads_locally(
+            distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+        )
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
