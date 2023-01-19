@@ -1171,37 +1171,43 @@ class TestLocalEvaluation(unittest.TestCase):
                         "rollout_percentage": 100,
                     }
                 ],
-                "payloads": {
-                    "true": 300
-                }
+                "payloads": {"true": 300},
             },
         }
-        self.client.feature_flags = [
-            basic_flag
-        ]
-        self.client.feature_flags_by_key = {
-            "person-flag": basic_flag
-        }
+        self.client.feature_flags = [basic_flag]
+        self.client.feature_flags_by_key = {"person-flag": basic_flag}
 
-        self.assertEqual(self.client.get_feature_flag_payload(
-            "person-flag", "some-distinct-id", person_properties={"region": "USA"}
-        ), 300)
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag", "some-distinct-id", person_properties={"region": "USA"}
+            ),
+            300,
+        )
 
-        self.assertEqual(self.client.get_feature_flag_payload(
-            "person-flag", "some-distinct-id", match_value=True, person_properties={"region": "USA"}
-        ), 300)
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag", "some-distinct-id", match_value=True, person_properties={"region": "USA"}
+            ),
+            300,
+        )
         self.assertEqual(patch_decide.call_count, 0)
 
     @mock.patch("posthog.client.decide")
     def test_boolean_feature_flag_payload_decide(self, patch_decide):
         patch_decide.return_value = {"featureFlagPayloads": {"person-flag": 300}}
-        self.assertEqual(self.client.get_feature_flag_payload(
-            "person-flag", "some-distinct-id", person_properties={"region": "USA"}
-        ), 300)
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag", "some-distinct-id", person_properties={"region": "USA"}
+            ),
+            300,
+        )
 
-        self.assertEqual(self.client.get_feature_flag_payload(
-            "person-flag", "some-distinct-id", match_value=True, person_properties={"region": "USA"}
-        ), 300)
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag", "some-distinct-id", match_value=True, person_properties={"region": "USA"}
+            ),
+            300,
+        )
         self.assertEqual(patch_decide.call_count, 2)
 
     @mock.patch("posthog.client.decide")
@@ -1231,42 +1237,33 @@ class TestLocalEvaluation(unittest.TestCase):
                         {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
                     ]
                 },
-                "payloads": {
-                    "first-variant": "some-payload",
-                    "third-variant": {
-                        "a": "json"
-                    }
-                }
+                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
             },
         }
-        self.client.feature_flags = [
-            multivariate_flag
-        ]
-        self.client.feature_flags_by_key = {
-            "beta-feature": multivariate_flag
-        }
-
+        self.client.feature_flags = [multivariate_flag]
+        self.client.feature_flags_by_key = {"beta-feature": multivariate_flag}
 
         self.assertEqual(
-            self.client.get_feature_flag_payload("beta-feature", "test_id", person_properties={"email": "test@posthog.com"}),
-            {
-                "a": "json"
-            },
+            self.client.get_feature_flag_payload(
+                "beta-feature", "test_id", person_properties={"email": "test@posthog.com"}
+            ),
+            {"a": "json"},
         )
         self.assertEqual(
-            self.client.get_feature_flag_payload("beta-feature", "test_id", match_value="third-variant", person_properties={"email": "test@posthog.com"}),
-            {
-                "a": "json"
-            },
+            self.client.get_feature_flag_payload(
+                "beta-feature", "test_id", match_value="third-variant", person_properties={"email": "test@posthog.com"}
+            ),
+            {"a": "json"},
         )
 
         # Force different match value
         self.assertEqual(
-            self.client.get_feature_flag_payload("beta-feature", "test_id", match_value="first-variant", person_properties={"email": "test@posthog.com"}),
-            "some-payload"
+            self.client.get_feature_flag_payload(
+                "beta-feature", "test_id", match_value="first-variant", person_properties={"email": "test@posthog.com"}
+            ),
+            "some-payload",
         )
         self.assertEqual(patch_decide.call_count, 0)
-
 
 
 class TestMatchProperties(unittest.TestCase):

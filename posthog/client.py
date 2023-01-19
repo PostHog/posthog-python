@@ -129,21 +129,11 @@ class Client(object):
         return self._enqueue(msg)
 
     def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        resp_data = self.get_feature(
-            distinct_id,
-            groups,
-            person_properties,
-            group_properties
-        )
+        resp_data = self.get_feature(distinct_id, groups, person_properties, group_properties)
         return resp_data["featureFlags"]
 
     def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        resp_data = self.get_feature(
-            distinct_id,
-            groups,
-            person_properties,
-            group_properties
-        )
+        resp_data = self.get_feature(distinct_id, groups, person_properties, group_properties)
         return resp_data["featureFlagPayloads"]
 
     def get_feature(self, distinct_id, groups=None, person_properties=None, group_properties=None):
@@ -383,7 +373,7 @@ class Client(object):
             )
             self.feature_flags = response["flags"] or []
             self.feature_flags_by_key = {
-                flag['key']: flag for flag in self.feature_flags if flag.get('key') is not None
+                flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
             }
             self.group_type_mapping = response["group_type_mapping"] or {}
 
@@ -572,19 +562,14 @@ class Client(object):
 
         if match_value is not None and self.feature_flags_by_key:
             flag_definition = self.feature_flags_by_key.get(key) or {}
-            flag_filters = flag_definition.get('filters') or {}
-            flag_payloads = flag_filters.get('payloads') or {}
+            flag_filters = flag_definition.get("filters") or {}
+            flag_payloads = flag_filters.get("payloads") or {}
             response = flag_payloads.get(str(match_value).lower(), None)
-        
+
         if response is None and not only_evaluate_locally:
-            decide_payloads = self.get_feature_payloads(
-                distinct_id,
-                groups,
-                person_properties,
-                group_properties
-            )
+            decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties)
             response = decide_payloads.get(str(key).lower(), None)
-        
+
         return response
 
     def get_all_flags(
