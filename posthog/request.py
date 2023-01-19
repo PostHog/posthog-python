@@ -63,7 +63,7 @@ def _process_response(
 
 def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
     """Post the `kwargs to the decide API endpoint"""
-    res = post(api_key, host, "/decide/?v=2", gzip, timeout, **kwargs)
+    res = post(api_key, host, "/decide/?v=3", gzip, timeout, **kwargs)
     return _process_response(res, success_message="Feature flags decided successfully")
 
 

@@ -561,48 +561,25 @@ class Client(object):
         response = None
 
         if match_value is not None and self.feature_flags_by_key:
-            flag_definition = self.feature_flags_by_key.get(key) or {}
-            flag_filters = flag_definition.get("filters") or {}
-            flag_payloads = flag_filters.get("payloads") or {}
-            response = flag_payloads.get(str(match_value).lower(), None)
+            response = self._get_feature_flag_payload(key, match_value)
 
         if response is None and not only_evaluate_locally:
             decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties)
             response = decide_payloads.get(str(key).lower(), None)
 
         return response
+    
+    def _get_feature_flag_payload(self, key, match_value):
+        flag_definition = self.feature_flags_by_key.get(key) or {}
+        flag_filters = flag_definition.get("filters") or {}
+        flag_payloads = flag_filters.get("payloads") or {}
+        payload = flag_payloads.get(str(match_value).lower(), None)
+        return payload
 
     def get_all_flags(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
-        if self.feature_flags == None and self.personal_api_key:
-            self.load_feature_flags()
-
-        response = {}
-        fallback_to_decide = False
-
-        # If loading in previous line failed
-        if self.feature_flags:
-            for flag in self.feature_flags:
-                try:
-                    response[flag["key"]] = self._compute_flag_locally(
-                        flag,
-                        distinct_id,
-                        groups=groups,
-                        person_properties=person_properties,
-                        group_properties=group_properties,
-                    )
-                except InconclusiveMatchError as e:
-                    # No need to log this, since it's just telling us to fall back to `/decide`
-                    fallback_to_decide = True
-                except Exception as e:
-                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
-                    fallback_to_decide = True
-        else:
-            fallback_to_decide = True
+        response, _, fallback_to_decide = self._get_all_flags_and_payloads_locally(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
@@ -614,6 +591,56 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
 
         return response
+
+    def get_all_payloads(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
+    ):
+        _, response, fallback_to_decide = self._get_all_flags_and_payloads_locally(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties)
+
+        if fallback_to_decide and not only_evaluate_locally:
+            try:
+                feature_flag_payloads = self.get_feature_payloads(
+                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                )
+                response = {**response, **feature_flag_payloads}
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature payloads: {e}")
+
+        return response
+
+    def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("groups", groups, dict)
+
+        if self.feature_flags == None and self.personal_api_key:
+            self.load_feature_flags()
+
+        flags = {}
+        payloads = {}
+        fallback_to_decide = False
+
+        # If loading in previous line failed
+        if self.feature_flags:
+            for flag in self.feature_flags:
+                try:
+                    flags[flag["key"]] = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                    payloads[flag["key"]] = self._get_feature_flag_payload(flag["key"], flags[flag["key"]])
+                except InconclusiveMatchError as e:
+                    # No need to log this, since it's just telling us to fall back to `/decide`
+                    fallback_to_decide = True
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant and payload: {e}")
+                    fallback_to_decide = True
+        else:
+            fallback_to_decide = True
+
+        return flags, payloads, fallback_to_decide
 
 
 def require(name, field, data_type):
