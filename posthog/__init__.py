@@ -223,7 +223,7 @@ def alias(
     posthog.alias('distinct id', 'anonymous session id')
     ```
 
-    or 
+    or
 
     ```python
     posthog.alias('distinct id', 'users-email@posthog.com')
