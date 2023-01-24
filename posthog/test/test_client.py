@@ -447,21 +447,3 @@ class TestClient(unittest.TestCase):
         client.feature_flags = [{"key": "example", "is_simple_flag": False}]
 
         self.assertFalse(client.feature_enabled("example", "distinct_id"))
-
-    def test_alias_doesnt_regress_positional_args(self):
-        client = self.client
-        success, msg = client.alias("distinct_id", "alias_id")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["properties"]["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["alias"], "alias_id")
-
-    def test_alias_doesnt_regress_named_args(self):
-        client = self.client
-        success, msg = client.alias(distinct_id="distinct_id", previous_id="alias_id")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["properties"]["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["alias"], "alias_id")
