@@ -199,8 +199,8 @@ def group_identify(
 
 
 def alias(
-    previous_id,  # type: str,
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
+    previous_id,  # type: str
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
@@ -214,18 +214,25 @@ def alias(
     The same concept applies for when a user logs in.
 
     An `alias` call requires
-    - `previous distinct id` the unique ID of the user before
-    - `distinct id` the current unique id
+    - `distinct id` the current unique id of the user (normally the id in your database)
+    - `alias distinct id` the alias id you want to attach to the user, such as the anonymous session id or another ID like their email
+
 
     For example:
     ```python
-    posthog.alias('anonymous session id', 'distinct id')
+    posthog.alias('distinct id', 'anonymous session id')
+    ```
+
+    or 
+
+    ```python
+    posthog.alias('distinct id', 'users-email@posthog.com')
     ```
     """
     _proxy(
         "alias",
-        previous_id=previous_id,
         distinct_id=distinct_id,
+        previous_id=previous_id,
         context=context,
         timestamp=timestamp,
         uuid=uuid,

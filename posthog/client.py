@@ -241,7 +241,7 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None):
+    def alias(self, distinct_id=None, previous_id=None, context=None, timestamp=None, uuid=None):
         context = context or {}
 
         require("previous_id", previous_id, ID_TYPES)
@@ -249,13 +249,13 @@ class Client(object):
 
         msg = {
             "properties": {
-                "distinct_id": previous_id,
-                "alias": distinct_id,
+                "distinct_id": distinct_id,
+                "alias": previous_id,
             },
             "timestamp": timestamp,
             "context": context,
             "event": "$create_alias",
-            "distinct_id": previous_id,
+            "distinct_id": distinct_id,
         }
 
         return self._enqueue(msg)
