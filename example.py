@@ -41,9 +41,9 @@ print(posthog.feature_enabled("beta-feature-groups", "distinct_id", groups={"com
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))
 
-# # Alias a previous distinct id with a new one
+# Add an alias_id to a distinct_id
 
-posthog.alias("distinct_id", "new_distinct_id")
+posthog.alias("distinct_id", "alias_id")
 
 posthog.capture("new_distinct_id", "event2", {"property1": "value", "property2": "value"})
 posthog.capture(
