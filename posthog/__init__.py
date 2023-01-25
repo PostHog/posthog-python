@@ -335,6 +335,43 @@ def get_all_flags(
         only_evaluate_locally=only_evaluate_locally,
     )
 
+def get_feature_flag_payload(
+    key,
+    distinct_id,
+    match_value=None,
+    groups={},
+    person_properties={},
+    group_properties={},
+    only_evaluate_locally=False,
+    send_feature_flag_events=True,
+):
+    return _proxy(
+        "get_feature_flag_payload",
+        key=key,
+        distinct_id=distinct_id,
+        match_value=match_value,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
+    )
+
+def get_all_flags_and_payloads(
+    distinct_id,
+    groups={},
+    person_properties={},
+    group_properties={},
+    only_evaluate_locally=False,
+):
+    return _proxy(
+        "get_all_flags_and_payloads",
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+    )
 
 def page(*args, **kwargs):
     """Send a page call."""

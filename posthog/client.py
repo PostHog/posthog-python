@@ -129,14 +129,14 @@ class Client(object):
         return self._enqueue(msg)
 
     def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        resp_data = self.get_feature(distinct_id, groups, person_properties, group_properties)
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
         return resp_data["featureFlags"]
 
     def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        resp_data = self.get_feature(distinct_id, groups, person_properties, group_properties)
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
         return resp_data["featureFlagPayloads"]
 
-    def get_feature(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None):
         require("distinct_id", distinct_id, ID_TYPES)
 
         if groups:
@@ -561,7 +561,7 @@ class Client(object):
         response = None
 
         if match_value is not None:
-            response = self._get_feature_flag_payload(key, match_value)
+            response = self._compute_payload_locally(key, match_value)
 
         if response is None and not only_evaluate_locally:
             decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties)
@@ -569,7 +569,7 @@ class Client(object):
 
         return response
 
-    def _get_feature_flag_payload(self, key, match_value):
+    def _compute_payload_locally(self, key, match_value):
         payload = None
 
         if self.feature_flags_by_key is None:
@@ -584,38 +584,27 @@ class Client(object):
     def get_all_flags(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        response, _, fallback_to_decide = self._get_all_flags_and_payloads_locally(
-            distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
-        )
+        flags, _ = self.get_all_flags_and_payloads(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties, only_evaluate_locally=only_evaluate_locally)
+        return flags
 
-        if fallback_to_decide and not only_evaluate_locally:
-            try:
-                feature_flags = self.get_feature_variants(
-                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
-                )
-                response = {**response, **feature_flags}
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
-
-        return response
-
-    def get_all_payloads(
+    def get_all_flags_and_payloads(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        _, response, fallback_to_decide = self._get_all_flags_and_payloads_locally(
+        flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
-                feature_flag_payloads = self.get_feature_payloads(
+                flags_and_payloads = self.get_decide(
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
                 )
-                response = {**response, **feature_flag_payloads}
+                flags = {**flags, **flags_and_payloads["featureFlags"]}
+                payloads = {**payloads, **flags_and_payloads["featureFlagaPayloads"]}
             except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get feature payloads: {e}")
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
-        return response
+        return flags, payloads
 
     def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
@@ -639,7 +628,7 @@ class Client(object):
                         person_properties=person_properties,
                         group_properties=group_properties,
                     )
-                    payloads[flag["key"]] = self._get_feature_flag_payload(flag["key"], flags[flag["key"]])
+                    payloads[flag["key"]] = self._compute_payload_locally(flag["key"], flags[flag["key"]])
                 except InconclusiveMatchError as e:
                     # No need to log this, since it's just telling us to fall back to `/decide`
                     fallback_to_decide = True
