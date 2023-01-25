@@ -606,11 +606,14 @@ class Client(object):
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
                 )
                 flags = {**flags, **flags_and_payloads["featureFlags"]}
-                payloads = {**payloads, **flags_and_payloads["featureFlagaPayloads"]}
+                payloads = {**payloads, **flags_and_payloads["featureFlagPayloads"]}
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
-        return flags, payloads
+        return {
+            "featureFlags": flags,
+            "featureFlagPayloads": payloads
+        }
 
     def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
@@ -622,7 +625,6 @@ class Client(object):
         flags = {}
         payloads = {}
         fallback_to_decide = False
-
         # If loading in previous line failed
         if self.feature_flags:
             for flag in self.feature_flags:
@@ -634,7 +636,9 @@ class Client(object):
                         person_properties=person_properties,
                         group_properties=group_properties,
                     )
-                    payloads[flag["key"]] = self._compute_payload_locally(flag["key"], flags[flag["key"]])
+                    matched_payload = self._compute_payload_locally(flag["key"], flags[flag["key"]])
+                    if matched_payload:
+                        payloads[flag["key"]] = matched_payload
                 except InconclusiveMatchError as e:
                     # No need to log this, since it's just telling us to fall back to `/decide`
                     fallback_to_decide = True

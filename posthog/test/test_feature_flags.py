@@ -538,6 +538,79 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
+    def test_get_all_flags_and_payloads_with_fallback(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}, "featureFlagPayloads": { 'beta-feature': 100, 'beta-feature2': 300 }}
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                    "payloads": {
+                        "true": 'some-payload',
+                    },
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ],
+                    "payloads": {
+                        "true": 'another-payload',
+                    },
+                },
+            },
+            {
+                "id": 3,
+                "name": "Beta Feature",
+                "key": "beta-feature2",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "country", "value": "US"}],
+                            "rollout_percentage": 0,
+                        }
+                    ],
+                    "payloads": {
+                        "true": 'payload-3',
+                    },
+                },
+            },
+        ]
+        # beta-feature value overridden by /decide
+        self.assertEqual(
+            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
+            {
+                'beta-feature': 100,
+                'beta-feature2': 300,
+            },
+        )
+        self.assertEqual(patch_decide.call_count, 1)
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
     def test_get_all_flags_with_fallback_empty_local_flags(self, patch_decide, patch_capture):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
         client = self.client
@@ -545,6 +618,19 @@ class TestLocalEvaluation(unittest.TestCase):
         # beta-feature value overridden by /decide
         self.assertEqual(
             client.get_all_flags("distinct_id"), {"beta-feature": "variant-1", "beta-feature2": "variant-2"}
+        )
+        self.assertEqual(patch_decide.call_count, 1)
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_and_payloads_with_fallback_empty_local_flags(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}, "featureFlagPayloads": { 'beta-feature': 100, 'beta-feature2': 300 }}
+        client = self.client
+        client.feature_flags = []
+        # beta-feature value overridden by /decide
+        self.assertEqual(
+            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"], {"beta-feature": 100, "beta-feature2": 300}
         )
         self.assertEqual(patch_decide.call_count, 1)
         self.assertEqual(patch_capture.call_count, 0)
@@ -588,6 +674,61 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         ]
         self.assertEqual(client.get_all_flags("distinct_id"), {"beta-feature": True, "disabled-feature": False})
+        # decide not called because this can be evaluated locally
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_and_payloads_with_no_fallback(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
+        client = self.client
+        basic_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature",
+            "is_simple_flag": False,
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 100,
+                    }
+                ],
+                "payloads": {
+                    "true": 'new',
+                },
+            },
+        }
+        disabled_flag = {
+            "id": 2,
+            "name": "Beta Feature",
+            "key": "disabled-feature",
+            "is_simple_flag": False,
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 0,
+                    }
+                ],
+                "payloads": {
+                    "true": 'some-payload',
+                },
+            },
+        }
+        client.feature_flags = [
+            basic_flag,
+            disabled_flag,
+        ]
+        client.feature_flags_by_key = {
+            "beta-feature": basic_flag,
+            "disabled-feature": disabled_flag
+        }
+        self.assertEqual(client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"], {"beta-feature": "new"})
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
@@ -649,6 +790,84 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(
             client.get_all_flags("distinct_id", only_evaluate_locally=True),
             {"beta-feature": True, "disabled-feature": False},
+        )
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_get_all_flags_and_payloads_with_fallback_but_only_local_evaluation_set(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}, "featureFlagPayloads": { 'beta-feature': 100, 'beta-feature2': 300 }}
+        client = self.client
+        flag_1 = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature",
+            "is_simple_flag": False,
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 100,
+                    }
+                ],
+                "payloads": {
+                    "true": 'some-payload',
+                },
+            },
+        }
+        flag_2 = {
+                "id": 2,
+                "name": "Beta Feature",
+                "key": "disabled-feature",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        }
+                    ],
+                    "payloads": {
+                        "true": 'another-payload',
+                    },
+                },
+            }
+        flag_3 = {
+                "id": 3,
+                "name": "Beta Feature",
+                "key": "beta-feature2",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "country", "value": "US"}],
+                            "rollout_percentage": 0,
+                        }
+                    ],
+                    "payloads": {
+                        "true": 'payload-3',
+                    },
+                },
+            }
+        client.feature_flags = [
+            flag_1,
+            flag_2,
+            flag_3,
+        ]
+        client.feature_flags_by_key = {
+            "beta-feature": flag_1,
+            "disabled-feature": flag_2,
+            "beta-feature2": flag_3
+        }
+        # beta-feature2 has no value
+        self.assertEqual(
+            client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)["featureFlagPayloads"],
+            {"beta-feature": 'some-payload'},
         )
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
