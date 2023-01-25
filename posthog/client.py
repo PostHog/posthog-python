@@ -373,8 +373,10 @@ class Client(object):
                 raise APIError(status=401)
 
             response = get(
-                self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host,
-                timeout=10
+                self.personal_api_key,
+                f"/api/feature_flag/local_evaluation/?token={self.api_key}",
+                self.host,
+                timeout=10,
             )
             if response.status_code == 200:
                 self.feature_flags = response["flags"] or []
@@ -590,14 +592,14 @@ class Client(object):
     def get_all_flags(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        flags, _ = self.get_all_flags_and_payloads(
+        flags = self.get_all_flags_and_payloads(
             distinct_id,
             groups=groups,
             person_properties=person_properties,
             group_properties=group_properties,
             only_evaluate_locally=only_evaluate_locally,
         )
-        return flags
+        return flags["featureFlags"]
 
     def get_all_flags_and_payloads(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
