@@ -610,10 +610,7 @@ class Client(object):
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
-        return {
-            "featureFlags": flags,
-            "featureFlagPayloads": payloads
-        }
+        return {"featureFlags": flags, "featureFlagPayloads": payloads}
 
     def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
