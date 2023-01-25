@@ -368,14 +368,20 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
+            # Don't try endpoint at all if personal_api_key is None
+            if self.personal_api_key is None:
+                raise APIError(status=401)
+
             response = get(
-                self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host
+                self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host,
+                timeout=10
             )
-            self.feature_flags = response["flags"] or []
-            self.feature_flags_by_key = {
-                flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
-            }
-            self.group_type_mapping = response["group_type_mapping"] or {}
+            if response.status_code == 200:
+                self.feature_flags = response["flags"] or []
+                self.feature_flags_by_key = {
+                    flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
+                }
+                self.group_type_mapping = response["group_type_mapping"] or {}
 
         except APIError as e:
             if e.status == 401:
