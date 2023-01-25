@@ -584,7 +584,13 @@ class Client(object):
     def get_all_flags(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
-        flags, _ = self.get_all_flags_and_payloads(distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties, only_evaluate_locally=only_evaluate_locally)
+        flags, _ = self.get_all_flags_and_payloads(
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+        )
         return flags
 
     def get_all_flags_and_payloads(

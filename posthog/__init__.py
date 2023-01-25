@@ -335,6 +335,7 @@ def get_all_flags(
         only_evaluate_locally=only_evaluate_locally,
     )
 
+
 def get_feature_flag_payload(
     key,
     distinct_id,
@@ -357,6 +358,7 @@ def get_feature_flag_payload(
         send_feature_flag_events=send_feature_flag_events,
     )
 
+
 def get_all_flags_and_payloads(
     distinct_id,
     groups={},
@@ -372,6 +374,7 @@ def get_all_flags_and_payloads(
         group_properties=group_properties,
         only_evaluate_locally=only_evaluate_locally,
     )
+
 
 def page(*args, **kwargs):
     """Send a page call."""
