@@ -366,7 +366,9 @@ class Client(object):
 
         except APIError as e:
             if e.status == 401:
-                self.log.error(f"[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview")
+                self.log.error(
+                    f"[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
+                )
             else:
                 self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
