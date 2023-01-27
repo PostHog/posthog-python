@@ -1,7 +1,8 @@
 import datetime
 import unittest
-
+import logging
 import mock
+from pytest import fixture
 from dateutil import parser, tz
 from freezegun import freeze_time
 
@@ -12,6 +13,11 @@ from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 
 class TestLocalEvaluation(unittest.TestCase):
+
+    @fixture(autouse=True)
+    def inject_fixtures(self, caplog):
+        self._caplog = caplog
+
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
@@ -754,9 +760,10 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_poll.call_count, 1)
 
     def test_load_feature_flags_wrong_key(self):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
-        with freeze_time("2020-01-01T12:01:00.0000Z"):
-            self.assertRaises(APIError, client.load_feature_flags)
+        with self._caplog.at_level(logging.ERROR):
+            client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+            client.load_feature_flags()
+            self.assertEqual(self._caplog.records[0].message, "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview")
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
