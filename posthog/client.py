@@ -64,6 +64,7 @@ class Client(object):
         self.gzip = gzip
         self.timeout = timeout
         self.feature_flags = None
+        self.feature_flags_by_key = None
         self.group_type_mapping = None
         self.poll_interval = poll_interval
         self.poller = None
@@ -127,6 +128,14 @@ class Client(object):
         return self._enqueue(msg)
 
     def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
+        return resp_data["featureFlags"]
+
+    def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
+        return resp_data["featureFlagPayloads"]
+
+    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None):
         require("distinct_id", distinct_id, ID_TYPES)
 
         if groups:
@@ -141,7 +150,7 @@ class Client(object):
             "group_properties": group_properties,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
-        return resp_data["featureFlags"]
+        return resp_data
 
     def capture(
         self,
@@ -358,10 +367,18 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
+
             response = get(
-                self.personal_api_key, f"/api/feature_flag/local_evaluation/?token={self.api_key}", self.host
+                self.personal_api_key,
+                f"/api/feature_flag/local_evaluation/?token={self.api_key}",
+                self.host,
+                timeout=10,
             )
+
             self.feature_flags = response["flags"] or []
+            self.feature_flags_by_key = {
+                flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
+            }
             self.group_type_mapping = response["group_type_mapping"] or {}
 
         except APIError as e:
@@ -522,48 +539,117 @@ class Client(object):
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
 
+    def get_feature_flag_payload(
+        self,
+        key,
+        distinct_id,
+        *,
+        match_value=None,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+    ):
+        if match_value is None:
+            match_value = self.get_feature_flag(
+                key,
+                distinct_id,
+                groups=groups,
+                person_properties=person_properties,
+                group_properties=group_properties,
+                send_feature_flag_events=send_feature_flag_events,
+                only_evaluate_locally=True,
+            )
+
+        response = None
+
+        if match_value is not None:
+            response = self._compute_payload_locally(key, match_value)
+
+        if response is None and not only_evaluate_locally:
+            decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties)
+            response = decide_payloads.get(str(key).lower(), None)
+
+        return response
+
+    def _compute_payload_locally(self, key, match_value):
+        payload = None
+
+        if self.feature_flags_by_key is None:
+            return payload
+
+        flag_definition = self.feature_flags_by_key.get(key) or {}
+        flag_filters = flag_definition.get("filters") or {}
+        flag_payloads = flag_filters.get("payloads") or {}
+        payload = flag_payloads.get(str(match_value).lower(), None)
+        return payload
+
     def get_all_flags(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
     ):
+        flags = self.get_all_flags_and_payloads(
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+        )
+        return flags["featureFlags"]
+
+    def get_all_flags_and_payloads(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
+    ):
+        flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
+            distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+        )
+        response = {"featureFlags": flags, "featureFlagPayloads": payloads}
+
+        if fallback_to_decide and not only_evaluate_locally:
+            try:
+                flags_and_payloads = self.get_decide(
+                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                )
+                response = flags_and_payloads
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
+
+        return response
+
+    def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
         if self.feature_flags == None and self.personal_api_key:
             self.load_feature_flags()
 
-        response = {}
+        flags = {}
+        payloads = {}
         fallback_to_decide = False
-
         # If loading in previous line failed
         if self.feature_flags:
             for flag in self.feature_flags:
                 try:
-                    response[flag["key"]] = self._compute_flag_locally(
+                    flags[flag["key"]] = self._compute_flag_locally(
                         flag,
                         distinct_id,
                         groups=groups,
                         person_properties=person_properties,
                         group_properties=group_properties,
                     )
+                    matched_payload = self._compute_payload_locally(flag["key"], flags[flag["key"]])
+                    if matched_payload:
+                        payloads[flag["key"]] = matched_payload
                 except InconclusiveMatchError as e:
                     # No need to log this, since it's just telling us to fall back to `/decide`
                     fallback_to_decide = True
                 except Exception as e:
-                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant: {e}")
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant and payload: {e}")
                     fallback_to_decide = True
         else:
             fallback_to_decide = True
 
-        if fallback_to_decide and not only_evaluate_locally:
-            try:
-                feature_flags = self.get_feature_variants(
-                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
-                )
-                response = {**response, **feature_flags}
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
-
-        return response
+        return flags, payloads, fallback_to_decide
 
 
 def require(name, field, data_type):
