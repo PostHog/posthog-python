@@ -32,7 +32,6 @@ print(
 )
 
 
-
 # Capture an event
 posthog.capture("distinct_id", "event", {"property1": "value", "property2": "value"}, send_feature_flags=True)
 

@@ -604,7 +604,7 @@ class Client(object):
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
         response = {"featureFlags": flags, "featureFlagPayloads": payloads}
-        
+
         if fallback_to_decide and not only_evaluate_locally:
             try:
                 flags_and_payloads = self.get_decide(
