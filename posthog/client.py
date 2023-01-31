@@ -65,7 +65,6 @@ class Client(object):
         self.timeout = timeout
         self.feature_flags = None
         self.feature_flags_by_key = None
-        self.feature_flag_payloads = None
         self.group_type_mapping = None
         self.poll_interval = poll_interval
         self.poller = None
@@ -604,18 +603,18 @@ class Client(object):
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
-
+        response = {"featureFlags": flags, "featureFlagPayloads": payloads}
+        
         if fallback_to_decide and not only_evaluate_locally:
             try:
                 flags_and_payloads = self.get_decide(
                     distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
                 )
-                flags = {**flags, **flags_and_payloads["featureFlags"]}
-                payloads = {**payloads, **flags_and_payloads["featureFlagPayloads"]}
+                response = flags_and_payloads
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
-        return {"featureFlags": flags, "featureFlagPayloads": payloads}
+        return response
 
     def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
         require("distinct_id", distinct_id, ID_TYPES)
