@@ -1,3 +1,7 @@
+## 2.3.0 - 2023-01-31
+
+1. Add support for returning payloads of matched feature flags
+
 ## 2.2.0 - 2022-11-14
 
 Changes:
