@@ -478,7 +478,9 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_get_all_flags_with_fallback(self, patch_decide, patch_capture):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2", "disabled-feature": False}
+        }  # decide should return the same flags
         client = self.client
         client.feature_flags = [
             {
