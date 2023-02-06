@@ -368,6 +368,13 @@ class Client(object):
                 self.log.error(
                     f"[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
                 )
+                if self.debug:
+                    raise APIError(
+                        status=401,
+                        message="You are using a write-only key with feature flags. "
+                        "To use feature flags, please set a personal_api_key "
+                        "More information: https://posthog.com/docs/api/overview",
+                    )
             else:
                 self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
