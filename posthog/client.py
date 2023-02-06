@@ -48,7 +48,6 @@ class Client(object):
         personal_api_key=None,
         project_api_key=None,
     ):
-
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
@@ -367,7 +366,6 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-
             response = get(
                 self.personal_api_key,
                 f"/api/feature_flag/local_evaluation/?token={self.api_key}",
@@ -412,7 +410,6 @@ class Client(object):
             self.poller.start()
 
     def _compute_flag_locally(self, feature_flag, distinct_id, *, groups={}, person_properties={}, group_properties={}):
-
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
