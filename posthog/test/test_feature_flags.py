@@ -754,7 +754,6 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_poll.call_count, 1)
 
     def test_load_feature_flags_wrong_key(self):
-
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
 
         with self.assertLogs("posthog", level="ERROR") as logs:

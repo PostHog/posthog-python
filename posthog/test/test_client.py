@@ -71,7 +71,6 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_capture_with_project_api_key(self):
-
         client = Client(project_api_key=FAKE_TEST_API_KEY, on_error=self.set_fail)
 
         success, msg = client.capture("distinct_id", "python test event")
