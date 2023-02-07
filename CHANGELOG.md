@@ -1,3 +1,9 @@
+## 2.3.1 - 2023-02-07
+
+1. Log instead of raise error on posthog personal api key errors
+2. Remove upper bound on backoff dependency
+
+
 ## 2.3.0 - 2023-01-31
 
 1. Add support for returning payloads of matched feature flags
