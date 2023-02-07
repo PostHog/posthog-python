@@ -981,8 +981,15 @@ class TestLocalEvaluation(unittest.TestCase):
 
     def test_load_feature_flags_wrong_key(self):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
-        with freeze_time("2020-01-01T12:01:00.0000Z"):
-            self.assertRaises(APIError, client.load_feature_flags)
+
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            client.load_feature_flags()
+            self.assertEqual(
+                logs.output[0],
+                "ERROR:posthog:[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview",
+            )
+        client.debug = True
+        self.assertRaises(APIError, client.load_feature_flags)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")

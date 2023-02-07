@@ -48,7 +48,6 @@ class Client(object):
         personal_api_key=None,
         project_api_key=None,
     ):
-
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
@@ -383,12 +382,16 @@ class Client(object):
 
         except APIError as e:
             if e.status == 401:
-                raise APIError(
-                    status=401,
-                    message="You are using a write-only key with feature flags. "
-                    "To use feature flags, please set a personal_api_key "
-                    "More information: https://posthog.com/docs/api/overview",
+                self.log.error(
+                    f"[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
                 )
+                if self.debug:
+                    raise APIError(
+                        status=401,
+                        message="You are using a write-only key with feature flags. "
+                        "To use feature flags, please set a personal_api_key "
+                        "More information: https://posthog.com/docs/api/overview",
+                    )
             else:
                 self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
@@ -412,7 +415,6 @@ class Client(object):
             self.poller.start()
 
     def _compute_flag_locally(self, feature_flag, distinct_id, *, groups={}, person_properties={}, group_properties={}):
-
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
