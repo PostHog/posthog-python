@@ -762,8 +762,8 @@ class TestLocalEvaluation(unittest.TestCase):
                 logs.output[0],
                 "ERROR:posthog:[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview",
             )
-      client.debug = True
-      self.assertRaises(APIError, client.load_feature_flags)
+        client.debug = True
+        self.assertRaises(APIError, client.load_feature_flags)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
