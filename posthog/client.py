@@ -366,7 +366,6 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
-
             response = get(
                 self.personal_api_key,
                 f"/api/feature_flag/local_evaluation/?token={self.api_key}",
