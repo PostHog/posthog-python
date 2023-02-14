@@ -130,6 +130,10 @@ class Client(object):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
         return resp_data["featureFlags"]
 
+    def _get_active_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+        feature_variants = self.get_feature_variants(distinct_id, groups, person_properties, group_properties)
+        return {k:v for (k,v) in feature_variants.items() if v is not False} #explicitly test for false to account for values that may seem falsy (ex: 0)
+
     def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
         return resp_data["featureFlagPayloads"]
@@ -183,7 +187,7 @@ class Client(object):
 
         if send_feature_flags:
             try:
-                feature_variants = self.get_feature_variants(distinct_id, groups)
+                feature_variants = self._get_active_feature_variants(distinct_id, groups)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
