@@ -108,16 +108,19 @@ class TestClient(unittest.TestCase):
 
     @mock.patch("posthog.client.decide")
     def test_get_active_feature_flags(self, patch_decide):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}}
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
 
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
         variants = client._get_active_feature_variants("some_id", None, None, None)
         print(variants)
 
-
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags_returns_active_only(self, patch_decide):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}}
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
 
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
         success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
