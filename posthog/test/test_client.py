@@ -114,7 +114,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
         variants = client._get_active_feature_variants("some_id", None, None, None)
-        print(variants)
+        self.assertEqual(variants, {"beta-feature": "random-variant", "alpha-feature": True})
 
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags_returns_active_only(self, patch_decide):
