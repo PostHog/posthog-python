@@ -45,7 +45,7 @@ def variant_lookup_table(feature_flag):
     return lookup_table
 
 
-def match_feature_flag_properties(flag, distinct_id, properties, cohort_properties = None):
+def match_feature_flag_properties(flag, distinct_id, properties, cohort_properties=None):
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
@@ -187,6 +187,7 @@ def match_property(property, property_values) -> bool:
 
     return False
 
+
 def match_cohort(property, property_values, cohort_properties) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
@@ -200,23 +201,24 @@ def match_cohort(property, property_values, cohort_properties) -> bool:
     cohort_id = str(property.get("value"))
     if cohort_id not in cohort_properties:
         raise InconclusiveMatchError("can't match cohort without a given cohort property value")
-    
+
     property_group = cohort_properties[cohort_id]
     return match_property_group(property_group, property_values, cohort_properties)
+
 
 def match_property_group(property_group, property_values, cohort_properties) -> bool:
     if not property_group:
         return True
-    
+
     property_group_type = property_group.get("type")
     properties = property_group.get("values")
 
     if not properties or len(properties) == 0:
         # empty groups are no-ops, always match
         return True
-    
+
     error_matching_locally = False
-    
+
     if "values" in properties[0]:
         # a nested property group
         for prop in properties:
@@ -232,7 +234,7 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
             except InconclusiveMatchError as e:
                 log.debug(f"Failed to compute property {prop} locally: {e}")
                 error_matching_locally = True
-        
+
         if error_matching_locally:
             raise InconclusiveMatchError("Can't match cohort without a given cohort property value")
         # if we get here, all matched in AND case, or none matched in OR case
@@ -245,7 +247,7 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
                     matches = match_cohort(prop, property_values, cohort_properties)
                 else:
                     matches = match_property(prop, property_values)
-                
+
                 negation = prop.get("negation", False)
 
                 if property_group_type == "AND":
@@ -263,7 +265,7 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
             except InconclusiveMatchError as e:
                 log.debug(f"Failed to compute property {prop} locally: {e}")
                 error_matching_locally = True
-        
+
         if error_matching_locally:
             raise InconclusiveMatchError("can't match cohort without a given cohort property value")
 

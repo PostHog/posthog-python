@@ -981,7 +981,7 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "value": ["USA"],
                                     "type": "person",
                                 },
-                                {"key": "id", "value": 98, "operator": None, "type": "cohort"}
+                                {"key": "id", "value": 98, "operator": None, "type": "cohort"},
                             ],
                             "rollout_percentage": 100,
                         }
@@ -1000,34 +1000,36 @@ class TestLocalEvaluation(unittest.TestCase):
                         "value": ["UK"],
                         "type": "person",
                     },
-                ]
+                ],
             },
             "1": {
                 "type": "AND",
-                "values": [
-                    {"key": "other", "operator": "exact", "value": ["thing"], "type": "person"}
-                ]
-            }
+                "values": [{"key": "other", "operator": "exact", "value": ["thing"], "type": "person"}],
+            },
         }
 
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "UK"})
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "UK"}
+        )
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
-
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "USA", "nation": "UK"})
-        # even though 'other' property is not present, the cohort should still match since it's an OR condition
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "USA", "nation": "UK"}
+        )
+        # even though 'other' property is not present, the cohort should still match since it's an OR condition
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "USA", "other": "thing"})
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "USA", "other": "thing"}
+        )
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
-
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
@@ -1050,7 +1052,7 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "value": ["USA"],
                                     "type": "person",
                                 },
-                                {"key": "id", "value": 98, "operator": None, "type": "cohort"}
+                                {"key": "id", "value": 98, "operator": None, "type": "cohort"},
                             ],
                             "rollout_percentage": 100,
                         }
@@ -1069,40 +1071,47 @@ class TestLocalEvaluation(unittest.TestCase):
                         "value": ["UK"],
                         "type": "person",
                     },
-                ]
+                ],
             },
             "1": {
                 "type": "AND",
                 "values": [
                     {"key": "other", "operator": "exact", "value": ["thing"], "type": "person", "negation": True}
-                ]
-            }
+                ],
+            },
         }
 
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "UK"})
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "UK"}
+        )
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "USA", "nation": "UK"})
-        # even though 'other' property is not present, the cohort should still match since it's an OR condition
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "USA", "nation": "UK"}
+        )
+        # even though 'other' property is not present, the cohort should still match since it's an OR condition
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "USA", "other": "thing"})
-        # since 'other' is negated, we return False. Since 'nation' is not present, we can't tell whether the flag should be true or false, so go to decide
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "USA", "other": "thing"}
+        )
+        # since 'other' is negated, we return False. Since 'nation' is not present, we can't tell whether the flag should be true or false, so go to decide
         self.assertEqual(patch_decide.call_count, 1)
         self.assertEqual(patch_get.call_count, 0)
 
         patch_decide.reset_mock()
 
-        feature_flag_match = client.get_feature_flag("beta-feature", "some-distinct-id", person_properties={"region": "USA", "other": "thing2"})
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature", "some-distinct-id", person_properties={"region": "USA", "other": "thing2"}
+        )
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_decide.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
-
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
