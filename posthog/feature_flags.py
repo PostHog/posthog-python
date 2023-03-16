@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import logging
 import re
 
 from dateutil import parser
@@ -7,6 +8,8 @@ from dateutil import parser
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
+
+log = logging.getLogger("posthog")
 
 
 class InconclusiveMatchError(Exception):
@@ -42,9 +45,10 @@ def variant_lookup_table(feature_flag):
     return lookup_table
 
 
-def match_feature_flag_properties(flag, distinct_id, properties):
+def match_feature_flag_properties(flag, distinct_id, properties, cohort_properties=None):
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
+    cohort_properties = cohort_properties or {}
 
     # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
     # evaluated first, and the variant override is applied to the first matching condition.
@@ -57,7 +61,7 @@ def match_feature_flag_properties(flag, distinct_id, properties):
         try:
             # if any one condition resolves to True, we can shortcircuit and return
             # the matching variant
-            if is_condition_match(flag, distinct_id, condition, properties):
+            if is_condition_match(flag, distinct_id, condition, properties, cohort_properties):
                 variant_override = condition.get("variant")
                 # Some filters can be explicitly set to null, which require accessing variants like so
                 flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
@@ -77,12 +81,19 @@ def match_feature_flag_properties(flag, distinct_id, properties):
     return False
 
 
-def is_condition_match(feature_flag, distinct_id, condition, properties):
+def is_condition_match(feature_flag, distinct_id, condition, properties, cohort_properties):
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
-        if not all(match_property(prop, properties) for prop in condition.get("properties")):
-            return False
-        elif rollout_percentage is None:
+        for prop in condition.get("properties"):
+            property_type = prop.get("type")
+            if property_type == "cohort":
+                matches = match_cohort(prop, properties, cohort_properties)
+            else:
+                matches = match_property(prop, properties)
+            if not matches:
+                return False
+
+        if rollout_percentage is None:
             return True
 
     if rollout_percentage is not None and _hash(feature_flag["key"], distinct_id) > (rollout_percentage / 100):
@@ -175,3 +186,88 @@ def match_property(property, property_values) -> bool:
             raise InconclusiveMatchError("The date provided must be a string or date object")
 
     return False
+
+
+def match_cohort(property, property_values, cohort_properties) -> bool:
+    # Cohort properties are in the form of property groups like this:
+    # {
+    #     "cohort_id": {
+    #         "type": "AND|OR",
+    #         "values": [{
+    #            "key": "property_name", "value": "property_value"
+    #        }]
+    #     }
+    # }
+    cohort_id = str(property.get("value"))
+    if cohort_id not in cohort_properties:
+        raise InconclusiveMatchError("can't match cohort without a given cohort property value")
+
+    property_group = cohort_properties[cohort_id]
+    return match_property_group(property_group, property_values, cohort_properties)
+
+
+def match_property_group(property_group, property_values, cohort_properties) -> bool:
+    if not property_group:
+        return True
+
+    property_group_type = property_group.get("type")
+    properties = property_group.get("values")
+
+    if not properties or len(properties) == 0:
+        # empty groups are no-ops, always match
+        return True
+
+    error_matching_locally = False
+
+    if "values" in properties[0]:
+        # a nested property group
+        for prop in properties:
+            try:
+                matches = match_property_group(prop, property_values, cohort_properties)
+                if property_group_type == "AND":
+                    if not matches:
+                        return False
+                else:
+                    # OR group
+                    if matches:
+                        return True
+            except InconclusiveMatchError as e:
+                log.debug(f"Failed to compute property {prop} locally: {e}")
+                error_matching_locally = True
+
+        if error_matching_locally:
+            raise InconclusiveMatchError("Can't match cohort without a given cohort property value")
+        # if we get here, all matched in AND case, or none matched in OR case
+        return property_group_type == "AND"
+
+    else:
+        for prop in properties:
+            try:
+                if prop.get("type") == "cohort":
+                    matches = match_cohort(prop, property_values, cohort_properties)
+                else:
+                    matches = match_property(prop, property_values)
+
+                negation = prop.get("negation", False)
+
+                if property_group_type == "AND":
+                    # if negated property, do the inverse
+                    if not matches and not negation:
+                        return False
+                    if matches and negation:
+                        return False
+                else:
+                    # OR group
+                    if matches and not negation:
+                        return True
+                    if not matches and negation:
+                        return True
+            except InconclusiveMatchError as e:
+                log.debug(f"Failed to compute property {prop} locally: {e}")
+                error_matching_locally = True
+
+        if error_matching_locally:
+            raise InconclusiveMatchError("can't match cohort without a given cohort property value")
+
+        # if we get here, all matched in AND case, or none matched in OR case
+        return property_group_type == "AND"

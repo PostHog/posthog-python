@@ -65,6 +65,7 @@ class Client(object):
         self.feature_flags = None
         self.feature_flags_by_key = None
         self.group_type_mapping = None
+        self.cohorts = None
         self.poll_interval = poll_interval
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
@@ -155,6 +156,8 @@ class Client(object):
             "group_properties": group_properties,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
+
+        print(resp_data)
         return resp_data
 
     def capture(
@@ -374,7 +377,7 @@ class Client(object):
         try:
             response = get(
                 self.personal_api_key,
-                f"/api/feature_flag/local_evaluation/?token={self.api_key}",
+                f"/api/feature_flag/local_evaluation/?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
             )
@@ -384,6 +387,7 @@ class Client(object):
                 flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
             }
             self.group_type_mapping = response["group_type_mapping"] or {}
+            self.cohorts = response["cohorts"] or {}
 
         except APIError as e:
             if e.status == 401:
@@ -449,7 +453,7 @@ class Client(object):
             focused_group_properties = group_properties[group_name]
             return match_feature_flag_properties(feature_flag, groups[group_name], focused_group_properties)
         else:
-            return match_feature_flag_properties(feature_flag, distinct_id, person_properties)
+            return match_feature_flag_properties(feature_flag, distinct_id, person_properties, self.cohorts)
 
     def feature_enabled(
         self,

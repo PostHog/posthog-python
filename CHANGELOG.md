@@ -1,3 +1,7 @@
+## 2.4.0 - 2023-03-14
+
+1. Support evaluating all cohorts in feature flags for local evaluation
+
 ## 2.3.1 - 2023-02-07
 
 1. Log instead of raise error on posthog personal api key errors
