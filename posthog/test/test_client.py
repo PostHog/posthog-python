@@ -1,7 +1,6 @@
 import time
 import unittest
-from datetime import date, datetime
-from unittest.mock import MagicMock
+from datetime import datetime
 from uuid import uuid4
 
 import mock
@@ -28,7 +27,7 @@ class TestClient(unittest.TestCase):
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print("FAIL", e, batch)
+        print("FAIL", e, batch)  # noqa: T201
         self.failed = True
 
     def setUp(self):

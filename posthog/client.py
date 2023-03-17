@@ -391,7 +391,7 @@ class Client(object):
         except APIError as e:
             if e.status == 401:
                 self.log.error(
-                    f"[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
+                    "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
                 )
                 if self.debug:
                     raise APIError(
@@ -494,7 +494,7 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
-        if self.feature_flags == None and self.personal_api_key:
+        if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
 
@@ -533,8 +533,7 @@ class Client(object):
 
         feature_flag_reported_key = f"{key}_{str(response)}"
         if (
-            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
-            and send_feature_flag_events
+            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id] and send_feature_flag_events
         ):
             self.capture(
                 distinct_id,
@@ -630,7 +629,7 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
-        if self.feature_flags == None and self.personal_api_key:
+        if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
 
         flags = {}
@@ -650,7 +649,7 @@ class Client(object):
                     matched_payload = self._compute_payload_locally(flag["key"], flags[flag["key"]])
                     if matched_payload:
                         payloads[flag["key"]] = matched_payload
-                except InconclusiveMatchError as e:
+                except InconclusiveMatchError:
                     # No need to log this, since it's just telling us to fall back to `/decide`
                     fallback_to_decide = True
                 except Exception as e:

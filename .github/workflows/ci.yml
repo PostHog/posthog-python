@@ -33,6 +33,10 @@ jobs:
             - name: Check formatting with black
               run: |
                   black --check .
+            
+            - name: Lint with flake8
+              run: |
+                  flake8 .
 
             - name: Check import order with isort
               run: |

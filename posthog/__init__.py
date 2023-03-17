@@ -1,5 +1,7 @@
 from typing import Callable, Dict, Optional
 
+import datetime
+
 from posthog.client import Client
 from posthog.version import VERSION
 
