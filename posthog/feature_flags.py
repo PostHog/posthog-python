@@ -109,7 +109,7 @@ def match_property(property, property_values) -> bool:
     operator = property.get("operator") or "exact"
     value = property.get("value")
 
-    print('TESY!')
+    print("TESY!")
 
     if key not in property_values:
         raise InconclusiveMatchError("can't match properties without a given property value")
