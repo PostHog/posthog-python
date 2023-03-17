@@ -157,7 +157,6 @@ class Client(object):
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
 
-        print(resp_data)
         return resp_data
 
     def capture(
