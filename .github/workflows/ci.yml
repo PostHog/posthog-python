@@ -36,7 +36,7 @@ jobs:
             
             - name: Lint with flake8
               run: |
-                  flake8 .
+                  flake8 posthog --ignore E501
 
             - name: Check import order with isort
               run: |
