@@ -1,3 +1,7 @@
+## 2.4.1 - 2023-03-17
+
+1. Removes accidental print call left in for decide response
+
 ## 2.4.0 - 2023-03-14
 
 1. Support evaluating all cohorts in feature flags for local evaluation
