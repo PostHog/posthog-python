@@ -24,7 +24,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print("FAIL", e, batch)
+        print("FAIL", e, batch)  # noqa: T201
         self.failed = True
 
     def setUp(self):
@@ -1739,7 +1739,7 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_b, {"key": "three"}))
 
     def test_match_properties_regex(self):
-        property_a = self.property(key="key", value="\.com$", operator="regex")
+        property_a = self.property(key="key", value="\.com$", operator="regex")  # noqa: W605
         self.assertTrue(match_property(property_a, {"key": "value.com"}))
         self.assertTrue(match_property(property_a, {"key": "value2.com"}))
 
@@ -1747,7 +1747,7 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_a, {"key": "Alakazam"}))
         self.assertFalse(match_property(property_a, {"key": 123}))
         self.assertFalse(match_property(property_a, {"key": "valuecom"}))
-        self.assertFalse(match_property(property_a, {"key": "value\com"}))
+        self.assertFalse(match_property(property_a, {"key": "value\com"}))  # noqa: W605
 
         property_b = self.property(key="key", value="3", operator="regex")
         self.assertTrue(match_property(property_b, {"key": "3"}))
@@ -1997,7 +1997,7 @@ class TestConsistency(unittest.TestCase):
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print("FAIL", e, batch)
+        print("FAIL", e, batch)  # noqa: T201
         self.failed = True
 
     def setUp(self):
