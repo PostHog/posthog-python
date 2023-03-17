@@ -1,6 +1,5 @@
-from typing import Callable, Dict, Optional
-
-import datetime
+from typing import Callable, Dict, Optional  # noqa: F401
+import datetime  # noqa: F401
 
 from posthog.client import Client
 from posthog.version import VERSION

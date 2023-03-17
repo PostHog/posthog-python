@@ -534,7 +534,7 @@ class Client(object):
         feature_flag_reported_key = f"{key}_{str(response)}"
         if (
             feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
-            and send_feature_flag_events
+            and send_feature_flag_events  # noqa: W503
         ):
             self.capture(
                 distinct_id,

@@ -9,9 +9,9 @@ from posthog.request import DEFAULT_HOST
 from posthog.sentry import POSTHOG_ID_TAG
 
 if MYPY:
-    from typing import Optional
+    from typing import Optional  # noqa: F401
 
-    from sentry_sdk._types import Event, Hint
+    from sentry_sdk._types import Event, Hint  # noqa: F401
 
 
 class PostHogIntegration(Integration):
