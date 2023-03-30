@@ -1,3 +1,7 @@
+## 2.4.2 - 2023-03-30
+
+1. Update backoff dependency for posthoganalytics package to be the same as posthog package
+
 ## 2.4.1 - 2023-03-17
 
 1. Removes accidental print call left in for decide response
