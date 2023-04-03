@@ -3,23 +3,24 @@ from typing import Callable, Dict, Optional  # noqa: F401
 
 from posthog.client import Client
 from posthog.version import VERSION
+import logging
 
 __version__ = VERSION
 
 """Settings."""
-api_key = None  # type: str
-host = None  # type: str
-on_error = None  # type: Callable
-debug = False  # type: bool
-send = True  # type: bool
-sync_mode = False  # type: bool
+_host = "https://app.posthog.com"  # type: str
+_on_error = None  # type: Callable
+_debug = False  # type: bool
+_send = True  # type: bool
+_sync_mode = False  # type: bool
 disabled = False  # type: bool
-personal_api_key = None  # type: str
-project_api_key = None  # type: str
-poll_interval = 30  # type: int
+_personal_api_key = None  # type: str
+_project_api_key = None  # type: str
+_poll_interval = 30  # type: int
 
 default_client = None
 
+log = logging.getLogger("posthog")
 
 def capture(
     distinct_id,  # type: str
@@ -409,17 +410,22 @@ def _proxy(method, *args, **kwargs):
     if disabled:
         return None
     if not default_client:
-        default_client = Client(
-            api_key,
-            host=host,
-            debug=debug,
-            on_error=on_error,
-            send=send,
-            sync_mode=sync_mode,
-            personal_api_key=personal_api_key,
-            project_api_key=project_api_key,
-            poll_interval=poll_interval,
-        )
-
+        log.error(f"posthog must be initiated with a valid api key and host using posthog.init before calling {method}")
+    
     fn = getattr(default_client, method)
     return fn(*args, **kwargs)
+
+def init(api_key, host=_host, debug=_debug, on_error=_on_error, send=_send, sync_mode=_sync_mode, personal_api_key=_personal_api_key, project_api_key=_project_api_key, poll_interval=_poll_interval):
+    """Initialize the client."""
+    global default_client
+    default_client = Client(
+        api_key,
+        host=host,
+        debug=debug,
+        on_error=on_error,
+        send=send,
+        sync_mode=sync_mode,
+        personal_api_key=personal_api_key,
+        project_api_key=project_api_key,
+        poll_interval=poll_interval,
+    )
