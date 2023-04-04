@@ -424,5 +424,6 @@ def _proxy(method, *args, **kwargs):
     fn = getattr(default_client, method)
     return fn(*args, **kwargs)
 
+
 class Posthog(Client):
     pass
