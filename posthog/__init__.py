@@ -1,9 +1,9 @@
 import datetime  # noqa: F401
+import logging
 from typing import Callable, Dict, Optional  # noqa: F401
 
 from posthog.client import Client
 from posthog.version import VERSION
-import logging
 
 __version__ = VERSION
 
