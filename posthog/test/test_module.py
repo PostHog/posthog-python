@@ -4,7 +4,6 @@ from posthog import Posthog
 
 
 class TestModule(unittest.TestCase):
-
     posthog = None
 
     def failed(self):

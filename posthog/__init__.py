@@ -9,6 +9,7 @@ __version__ = VERSION
 
 default_client = None
 
+
 class Posthog(object):
     log = logging.getLogger("posthog")
 
@@ -16,20 +17,31 @@ class Posthog(object):
     disabled = False  # type: bool
     _client: Client = None  # type: Client
 
-    def __init__(self, api_key, host="https://app.posthog.com", on_error=None, debug=False, send=True, sync_mode=False, personal_api_key=None, project_api_key=None, poll_interval=30, disabled=False):
+    def __init__(
+        self,
+        api_key,
+        host="https://app.posthog.com",
+        on_error=None,
+        debug=False,
+        send=True,
+        sync_mode=False,
+        personal_api_key=None,
+        project_api_key=None,
+        poll_interval=30,
+        disabled=False,
+    ):
         self.disabled = disabled
         self._client = Client(
-            api_key=api_key, 
-            host=host, 
-            on_error=on_error, 
-            debug=debug, 
-            send=send, 
-            sync_mode=sync_mode, 
-            personal_api_key=personal_api_key, 
-            project_api_key=project_api_key, 
-            poll_interval=poll_interval
+            api_key=api_key,
+            host=host,
+            on_error=on_error,
+            debug=debug,
+            send=send,
+            sync_mode=sync_mode,
+            personal_api_key=personal_api_key,
+            project_api_key=project_api_key,
+            poll_interval=poll_interval,
         )
-
 
     def capture(
         self,
@@ -75,7 +87,6 @@ class Posthog(object):
             send_feature_flags=send_feature_flags,
         )
 
-
     def identify(
         self,
         distinct_id,  # type: str
@@ -108,7 +119,6 @@ class Posthog(object):
             timestamp=timestamp,
             uuid=uuid,
         )
-
 
     def set(
         self,
@@ -143,7 +153,6 @@ class Posthog(object):
             uuid=uuid,
         )
 
-
     def set_once(
         self,
         distinct_id,  # type: str
@@ -176,7 +185,6 @@ class Posthog(object):
             timestamp=timestamp,
             uuid=uuid,
         )
-
 
     def group_identify(
         self,
@@ -213,7 +221,6 @@ class Posthog(object):
             uuid=uuid,
         )
 
-
     def alias(
         self,
         previous_id,  # type: str
@@ -247,7 +254,6 @@ class Posthog(object):
             timestamp=timestamp,
             uuid=uuid,
         )
-
 
     def feature_enabled(
         self,
@@ -283,7 +289,6 @@ class Posthog(object):
             only_evaluate_locally=only_evaluate_locally,
             send_feature_flag_events=send_feature_flag_events,
         )
-
 
     def get_feature_flag(
         self,
@@ -328,9 +333,8 @@ class Posthog(object):
             send_feature_flag_events=send_feature_flag_events,
         )
 
-
     def get_all_flags(
-        self, 
+        self,
         distinct_id,  # type: str
         groups={},  # type: dict
         person_properties={},  # type: dict
@@ -355,7 +359,6 @@ class Posthog(object):
             only_evaluate_locally=only_evaluate_locally,
         )
 
-
     def get_feature_flag_payload(
         self,
         key,
@@ -379,7 +382,6 @@ class Posthog(object):
             send_feature_flag_events=send_feature_flag_events,
         )
 
-
     def get_all_flags_and_payloads(
         self,
         distinct_id,
@@ -397,37 +399,31 @@ class Posthog(object):
             only_evaluate_locally=only_evaluate_locally,
         )
 
-
     def page(self, *args, **kwargs):
         """Send a page call."""
         self._proxy("page", *args, **kwargs)
-
 
     def screen(self, *args, **kwargs):
         """Send a screen call."""
         self._proxy("screen", *args, **kwargs)
 
-
     def flush(self):
         """Tell the client to flush."""
         self._proxy("flush")
 
-
     def join(self):
         """Block program until the client clears the queue"""
         self._proxy("join")
-
 
     def shutdown(self):
         """Flush all messages and cleanly shutdown the client"""
         self._proxy("flush")
         self._proxy("join")
 
-
     def _proxy(self, method, *args, **kwargs):
         """Create an analytics client if one doesn't exist and send to it."""
         if self.disabled:
             return None
-        
+
         fn = getattr(self._client, method)
         return fn(*args, **kwargs)
