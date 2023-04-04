@@ -112,7 +112,7 @@ class Posthog(object):
 
     def set(
         self,
-        distinct_id,  # type: str,
+        distinct_id,  # type: str
         properties=None,  # type: Optional[Dict]
         context=None,  # type: Optional[Dict]
         timestamp=None,  # type: Optional[datetime.datetime]
@@ -146,7 +146,7 @@ class Posthog(object):
 
     def set_once(
         self,
-        distinct_id,  # type: str,
+        distinct_id,  # type: str
         properties=None,  # type: Optional[Dict]
         context=None,  # type: Optional[Dict]
         timestamp=None,  # type: Optional[datetime.datetime]
@@ -216,8 +216,8 @@ class Posthog(object):
 
     def alias(
         self,
-        previous_id,  # type: str,
-        distinct_id,  # type: str,
+        previous_id,  # type: str
+        distinct_id,  # type: str
         context=None,  # type: Optional[Dict]
         timestamp=None,  # type: Optional[datetime.datetime]
         uuid=None,  # type: Optional[str]
@@ -251,8 +251,8 @@ class Posthog(object):
 
     def feature_enabled(
         self,
-        key,  # type: str,
-        distinct_id,  # type: str,
+        key,  # type: str
+        distinct_id,  # type: str
         groups={},  # type: dict
         person_properties={},  # type: dict
         group_properties={},  # type: dict
@@ -287,8 +287,8 @@ class Posthog(object):
 
     def get_feature_flag(
         self,
-        key,  # type: str,
-        distinct_id,  # type: str,
+        key,  # type: str
+        distinct_id,  # type: str
         groups={},  # type: dict
         person_properties={},  # type: dict
         group_properties={},  # type: dict
@@ -331,7 +331,7 @@ class Posthog(object):
 
     def get_all_flags(
         self, 
-        distinct_id,  # type: str,
+        distinct_id,  # type: str
         groups={},  # type: dict
         person_properties={},  # type: dict
         group_properties={},  # type: dict
