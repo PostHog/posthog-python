@@ -47,7 +47,7 @@ class Client(object):
         poll_interval=30,
         personal_api_key=None,
         project_api_key=None,
-        disabled=False
+        disabled=False,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -304,7 +304,7 @@ class Client(object):
 
         if self.disabled:
             return False, "disabled"
-        
+
         timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.utcnow().replace(tzinfo=tzutc())
