@@ -468,6 +468,15 @@ class TestClient(unittest.TestCase):
         for consumer in client.consumers:
             self.assertEqual(consumer.timeout, 15)
 
+    def test_disabled(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertFalse(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg, "disabled")
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_call_identify_fails(self, patch_get, patch_poll):

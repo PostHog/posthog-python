@@ -47,6 +47,7 @@ class Client(object):
         poll_interval=30,
         personal_api_key=None,
         project_api_key=None,
+        disabled=False
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -69,6 +70,7 @@ class Client(object):
         self.poll_interval = poll_interval
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        self.disabled = disabled
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -299,6 +301,10 @@ class Client(object):
 
     def _enqueue(self, msg):
         """Push a new `msg` onto the queue, return `(success, msg)`"""
+
+        if self.disabled:
+            return False, "disabled"
+        
         timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.utcnow().replace(tzinfo=tzutc())
