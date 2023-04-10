@@ -99,7 +99,7 @@ def identify(
 
 
 def set(
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
@@ -132,7 +132,7 @@ def set(
 
 
 def set_once(
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
     properties=None,  # type: Optional[Dict]
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
@@ -200,8 +200,8 @@ def group_identify(
 
 
 def alias(
-    previous_id,  # type: str,
-    distinct_id,  # type: str,
+    previous_id,  # type: str
+    distinct_id,  # type: str
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
@@ -234,8 +234,8 @@ def alias(
 
 
 def feature_enabled(
-    key,  # type: str,
-    distinct_id,  # type: str,
+    key,  # type: str
+    distinct_id,  # type: str
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
@@ -269,8 +269,8 @@ def feature_enabled(
 
 
 def get_feature_flag(
-    key,  # type: str,
-    distinct_id,  # type: str,
+    key,  # type: str
+    distinct_id,  # type: str
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
@@ -312,7 +312,7 @@ def get_feature_flag(
 
 
 def get_all_flags(
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
     groups={},  # type: dict
     person_properties={},  # type: dict
     group_properties={},  # type: dict
@@ -406,8 +406,6 @@ def shutdown():
 def _proxy(method, *args, **kwargs):
     """Create an analytics client if one doesn't exist and send to it."""
     global default_client
-    if disabled:
-        return None
     if not default_client:
         default_client = Client(
             api_key,
@@ -419,7 +417,16 @@ def _proxy(method, *args, **kwargs):
             personal_api_key=personal_api_key,
             project_api_key=project_api_key,
             poll_interval=poll_interval,
+            disabled=disabled,
         )
+
+    # always set incase user changes it
+    default_client.disabled = disabled
+    default_client.debug = debug
 
     fn = getattr(default_client, method)
     return fn(*args, **kwargs)
+
+
+class Posthog(Client):
+    pass
