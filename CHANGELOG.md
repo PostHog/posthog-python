@@ -1,3 +1,7 @@
+## 2.5.0 - 2023-04-10
+
+1. Add option for instantiating separate client object
+
 ## 2.4.2 - 2023-03-30
 
 1. Update backoff dependency for posthoganalytics package to be the same as posthog package
