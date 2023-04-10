@@ -420,6 +420,10 @@ def _proxy(method, *args, **kwargs):
             disabled=disabled,
         )
 
+    # always set incase user changes it
+    default_client.disabled = disabled
+    default_client.debug = debug
+
     fn = getattr(default_client, method)
     return fn(*args, **kwargs)
 
