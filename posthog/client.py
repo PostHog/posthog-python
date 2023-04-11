@@ -171,6 +171,7 @@ class Client(object):
         uuid=None,
         groups=None,
         send_feature_flags=False,
+        geoip_disable=True,
     ):
         properties = properties or {}
         context = context or {}
@@ -200,6 +201,9 @@ class Client(object):
                 for feature, variant in feature_variants.items():
                     msg["properties"]["$feature/{}".format(feature)] = variant
                 msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
+
+        if geoip_disable:
+            msg["properties"]["$geoip_disable"] = True
 
         return self._enqueue(msg)
 
