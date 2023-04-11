@@ -48,6 +48,7 @@ class Client(object):
         personal_api_key=None,
         project_api_key=None,
         disabled=False,
+        geoip_disable=True,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -71,6 +72,7 @@ class Client(object):
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.disabled = disabled
+        self.geoip_disable = geoip_disable
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -171,7 +173,6 @@ class Client(object):
         uuid=None,
         groups=None,
         send_feature_flags=False,
-        geoip_disable=True,
     ):
         properties = properties or {}
         context = context or {}
@@ -202,7 +203,7 @@ class Client(object):
                     msg["properties"]["$feature/{}".format(feature)] = variant
                 msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
 
-        if geoip_disable:
+        if self.geoip_disable:
             msg["properties"]["$geoip_disable"] = True
 
         return self._enqueue(msg)
