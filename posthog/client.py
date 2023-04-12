@@ -48,7 +48,7 @@ class Client(object):
         personal_api_key=None,
         project_api_key=None,
         disabled=False,
-        geoip_disable=True,
+        geoip_disable=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -114,7 +114,7 @@ class Client(object):
                 if send:
                     consumer.start()
 
-    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -129,16 +129,16 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, geoip_disable)
 
     def get_feature_variants(
-        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=None
     ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, geoip_disable)
         return resp_data["featureFlags"]
 
     def _get_active_feature_variants(
-        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=None
     ):
         feature_variants = self.get_feature_variants(
             distinct_id, groups, person_properties, group_properties, geoip_disable
@@ -148,13 +148,16 @@ class Client(object):
         }  # explicitly test for false to account for values that may seem falsy (ex: 0)
 
     def get_feature_payloads(
-        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=None
     ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, geoip_disable)
         return resp_data["featureFlagPayloads"]
 
-    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True):
+    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=None):
         require("distinct_id", distinct_id, ID_TYPES)
+
+        if geoip_disable is None:
+            geoip_disable = self.geoip_disable
 
         if groups:
             require("groups", groups, dict)
@@ -182,6 +185,7 @@ class Client(object):
         uuid=None,
         groups=None,
         send_feature_flags=False,
+        geoip_disable=None,
     ):
         properties = properties or {}
         context = context or {}
@@ -212,12 +216,9 @@ class Client(object):
                     msg["properties"]["$feature/{}".format(feature)] = variant
                 msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
 
-        if self.geoip_disable:
-            msg["properties"]["$geoip_disable"] = True
+        return self._enqueue(msg, geoip_disable)
 
-        return self._enqueue(msg)
-
-    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -232,9 +233,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, geoip_disable)
 
-    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -249,9 +250,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, geoip_disable)
 
-    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None):
+    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
         properties = properties or {}
         context = context or {}
         require("group_type", group_type, ID_TYPES)
@@ -271,9 +272,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, geoip_disable)
 
-    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None):
+    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
         context = context or {}
 
         require("previous_id", previous_id, ID_TYPES)
@@ -290,9 +291,9 @@ class Client(object):
             "distinct_id": previous_id,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, geoip_disable)
 
-    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None):
+    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
         properties = properties or {}
         context = context or {}
 
@@ -311,9 +312,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, geoip_disable)
 
-    def _enqueue(self, msg):
+    def _enqueue(self, msg, geoip_disable):
         """Push a new `msg` onto the queue, return `(success, msg)`"""
 
         if self.disabled:
@@ -340,6 +341,11 @@ class Client(object):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
         msg["properties"]["$lib_version"] = VERSION
+
+        if geoip_disable is None:
+            geoip_disable = self.geoip_disable
+            if geoip_disable is True:
+                msg["properties"]["$geoip_disable"] = True
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
@@ -484,7 +490,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
-        geoip_disable=True,
+        geoip_disable=None,
     ):
         response = self.get_feature_flag(
             key,
@@ -511,7 +517,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
-        geoip_disable=True,
+        geoip_disable=None,
     ):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
@@ -630,7 +636,7 @@ class Client(object):
         person_properties={},
         group_properties={},
         only_evaluate_locally=False,
-        geoip_disable=True,
+        geoip_disable=None,
     ):
         flags = self.get_all_flags_and_payloads(
             distinct_id,
@@ -650,7 +656,7 @@ class Client(object):
         person_properties={},
         group_properties={},
         only_evaluate_locally=False,
-        geoip_disable=True,
+        geoip_disable=None,
     ):
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
