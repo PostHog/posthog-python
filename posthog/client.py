@@ -589,7 +589,7 @@ class Client(object):
                     "locally_evaluated": flag_was_locally_evaluated,
                 },
                 groups=groups,
-                geoip_disable=geoip_disable
+                geoip_disable=geoip_disable,
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
@@ -625,7 +625,9 @@ class Client(object):
             response = self._compute_payload_locally(key, match_value)
 
         if response is None and not only_evaluate_locally:
-            decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties, geoip_disable)
+            decide_payloads = self.get_feature_payloads(
+                distinct_id, groups, person_properties, group_properties, geoip_disable
+            )
             response = decide_payloads.get(str(key).lower(), None)
 
         return response

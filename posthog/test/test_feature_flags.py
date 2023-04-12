@@ -1975,7 +1975,10 @@ class TestCaptureCalls(unittest.TestCase):
         ]
 
         client.get_feature_flag(
-            "complex-flag", "some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}, geoip_disable=False
+            "complex-flag",
+            "some-distinct-id",
+            person_properties={"region": "USA", "name": "Aloha"},
+            geoip_disable=False,
         )
 
         patch_capture.assert_called_with(
