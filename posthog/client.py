@@ -589,6 +589,7 @@ class Client(object):
                     "locally_evaluated": flag_was_locally_evaluated,
                 },
                 groups=groups,
+                geoip_disable=geoip_disable
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
