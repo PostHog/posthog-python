@@ -252,7 +252,16 @@ class Client(object):
 
         return self._enqueue(msg, geoip_disable)
 
-    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
+    def group_identify(
+        self,
+        group_type=None,
+        group_key=None,
+        properties=None,
+        context=None,
+        timestamp=None,
+        uuid=None,
+        geoip_disable=None,
+    ):
         properties = properties or {}
         context = context or {}
         require("group_type", group_type, ID_TYPES)
@@ -293,7 +302,9 @@ class Client(object):
 
         return self._enqueue(msg, geoip_disable)
 
-    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None):
+    def page(
+        self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None, geoip_disable=None
+    ):
         properties = properties or {}
         context = context or {}
 
