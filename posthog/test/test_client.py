@@ -315,6 +315,7 @@ class TestClient(unittest.TestCase):
                 "$group_set": {},
                 "$lib": "posthog-python",
                 "$lib_version": VERSION,
+                "$geoip_disable": True,
             },
         )
         self.assertTrue(isinstance(msg["timestamp"], str))
@@ -336,6 +337,7 @@ class TestClient(unittest.TestCase):
                 "$group_set": {"trait": "value"},
                 "$lib": "posthog-python",
                 "$lib_version": VERSION,
+                "$geoip_disable": True,
             },
         )
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
