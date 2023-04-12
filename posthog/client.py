@@ -131,17 +131,25 @@ class Client(object):
 
         return self._enqueue(msg)
 
-    def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True):
+    def get_feature_variants(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True
+    ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, geoip_disable)
         return resp_data["featureFlags"]
 
-    def _get_active_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True):
-        feature_variants = self.get_feature_variants(distinct_id, groups, person_properties, group_properties, geoip_disable)
+    def _get_active_feature_variants(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True
+    ):
+        feature_variants = self.get_feature_variants(
+            distinct_id, groups, person_properties, group_properties, geoip_disable
+        )
         return {
             k: v for (k, v) in feature_variants.items() if v is not False
         }  # explicitly test for false to account for values that may seem falsy (ex: 0)
 
-    def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True):
+    def get_feature_payloads(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=True
+    ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, geoip_disable)
         return resp_data["featureFlagPayloads"]
 
@@ -158,7 +166,7 @@ class Client(object):
             "groups": groups,
             "person_properties": person_properties,
             "group_properties": group_properties,
-            "geoip_disable": geoip_disable
+            "geoip_disable": geoip_disable,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
 
@@ -537,7 +545,11 @@ class Client(object):
         if not flag_was_locally_evaluated and not only_evaluate_locally:
             try:
                 feature_flags = self.get_feature_variants(
-                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties, geoip_disable=geoip_disable
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    geoip_disable=geoip_disable,
                 )
                 response = feature_flags.get(key)
                 if response is None:
@@ -611,7 +623,14 @@ class Client(object):
         return payload
 
     def get_all_flags(
-        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False, geoip_disable=True,
+        self,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        geoip_disable=True,
     ):
         flags = self.get_all_flags_and_payloads(
             distinct_id,
@@ -619,12 +638,19 @@ class Client(object):
             person_properties=person_properties,
             group_properties=group_properties,
             only_evaluate_locally=only_evaluate_locally,
-            geoip_disable=geoip_disable
+            geoip_disable=geoip_disable,
         )
         return flags["featureFlags"]
 
     def get_all_flags_and_payloads(
-        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False, geoip_disable=True
+        self,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        geoip_disable=True,
     ):
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
@@ -634,7 +660,11 @@ class Client(object):
         if fallback_to_decide and not only_evaluate_locally:
             try:
                 flags_and_payloads = self.get_decide(
-                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties, geoip_disable=geoip_disable
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    geoip_disable=geoip_disable,
                 )
                 response = flags_and_payloads
             except Exception as e:
