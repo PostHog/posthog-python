@@ -112,7 +112,7 @@ class TestClient(unittest.TestCase):
         }
 
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
-        variants = client._get_active_feature_variants("some_id", None, None, None)
+        variants = client._get_active_feature_variants("some_id", None, None, None, True)
         self.assertEqual(variants, {"beta-feature": "random-variant", "alpha-feature": True})
 
     @mock.patch("posthog.client.decide")
@@ -493,6 +493,11 @@ class TestClient(unittest.TestCase):
         self.assertFalse(self.failed)
 
         self.assertEqual(msg, "disabled")
+
+    def test_geoip_disable(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=True)
+        _, msg = client.capture("distinct_id", "python test event")
+        self.assertEqual(msg["properties"]["$geoip_disable"], True)
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
