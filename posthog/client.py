@@ -48,7 +48,7 @@ class Client(object):
         personal_api_key=None,
         project_api_key=None,
         disabled=False,
-        geoip_disable=None,
+        geoip_disable=True,
     ):
         self.queue = queue.Queue(max_queue_size)
 
