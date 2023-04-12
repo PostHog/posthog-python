@@ -604,6 +604,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
+        geoip_disable=None,
     ):
         if match_value is None:
             match_value = self.get_feature_flag(
@@ -614,6 +615,7 @@ class Client(object):
                 group_properties=group_properties,
                 send_feature_flag_events=send_feature_flag_events,
                 only_evaluate_locally=True,
+                geoip_disable=geoip_disable,
             )
 
         response = None
@@ -622,7 +624,7 @@ class Client(object):
             response = self._compute_payload_locally(key, match_value)
 
         if response is None and not only_evaluate_locally:
-            decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties)
+            decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties, geoip_disable)
             response = decide_payloads.get(str(key).lower(), None)
 
         return response

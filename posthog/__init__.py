@@ -17,6 +17,7 @@ disabled = False  # type: bool
 personal_api_key = None  # type: str
 project_api_key = None  # type: str
 poll_interval = 30  # type: int
+geoip_disable = True # type: bool
 
 default_client = None
 
@@ -30,6 +31,7 @@ def capture(
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
     send_feature_flags=False,
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> None
     """
@@ -62,6 +64,7 @@ def capture(
         uuid=uuid,
         groups=groups,
         send_feature_flags=send_feature_flags,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -71,6 +74,7 @@ def identify(
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> None
     """
@@ -95,6 +99,7 @@ def identify(
         context=context,
         timestamp=timestamp,
         uuid=uuid,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -104,6 +109,7 @@ def set(
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> None
     """
@@ -128,6 +134,7 @@ def set(
         context=context,
         timestamp=timestamp,
         uuid=uuid,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -137,6 +144,7 @@ def set_once(
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> None
     """
@@ -161,6 +169,7 @@ def set_once(
         context=context,
         timestamp=timestamp,
         uuid=uuid,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -171,6 +180,7 @@ def group_identify(
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> None
     """
@@ -196,6 +206,7 @@ def group_identify(
         context=context,
         timestamp=timestamp,
         uuid=uuid,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -205,6 +216,7 @@ def alias(
     context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> None
     """
@@ -230,6 +242,7 @@ def alias(
         context=context,
         timestamp=timestamp,
         uuid=uuid,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -241,6 +254,7 @@ def feature_enabled(
     group_properties={},  # type: dict
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
+    geoip_disable=None, # type: Optional[bool]
 ):
     # type: (...) -> bool
     """
@@ -265,6 +279,7 @@ def feature_enabled(
         group_properties=group_properties,
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -276,6 +291,7 @@ def get_feature_flag(
     group_properties={},  # type: dict
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
+    geoip_disable=None, # type: Optional[bool]
 ):
     """
     Get feature flag variant for users. Used with experiments.
@@ -308,6 +324,7 @@ def get_feature_flag(
         group_properties=group_properties,
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -317,6 +334,7 @@ def get_all_flags(
     person_properties={},  # type: dict
     group_properties={},  # type: dict
     only_evaluate_locally=False,  # type: bool
+    geoip_disable=None, # type: Optional[bool]
 ):
     """
     Get all flags for a given user.
@@ -334,6 +352,7 @@ def get_all_flags(
         person_properties=person_properties,
         group_properties=group_properties,
         only_evaluate_locally=only_evaluate_locally,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -346,6 +365,7 @@ def get_feature_flag_payload(
     group_properties={},
     only_evaluate_locally=False,
     send_feature_flag_events=True,
+    geoip_disable=None, # type: Optional[bool]
 ):
     return _proxy(
         "get_feature_flag_payload",
@@ -357,6 +377,7 @@ def get_feature_flag_payload(
         group_properties=group_properties,
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -366,6 +387,7 @@ def get_all_flags_and_payloads(
     person_properties={},
     group_properties={},
     only_evaluate_locally=False,
+    geoip_disable=None, # type: Optional[bool]
 ):
     return _proxy(
         "get_all_flags_and_payloads",
@@ -374,6 +396,7 @@ def get_all_flags_and_payloads(
         person_properties=person_properties,
         group_properties=group_properties,
         only_evaluate_locally=only_evaluate_locally,
+        geoip_disable=geoip_disable,
     )
 
 
@@ -418,6 +441,7 @@ def _proxy(method, *args, **kwargs):
             project_api_key=project_api_key,
             poll_interval=poll_interval,
             disabled=disabled,
+            geoip_disable=geoip_disable,
         )
 
     # always set incase user changes it
