@@ -208,7 +208,7 @@ class Client(object):
 
         if send_feature_flags:
             try:
-                feature_variants = self._get_active_feature_variants(distinct_id, groups)
+                feature_variants = self._get_active_feature_variants(distinct_id, groups, geoip_disable)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
