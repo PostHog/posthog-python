@@ -159,14 +159,16 @@ class TestClient(unittest.TestCase):
             group_properties=None,
             geoip_disable=True,
         )
-    
+
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags_and_geoip_disable_returns_correctly(self, patch_decide):
         patch_decide.return_value = {
             "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
         }
 
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY, geoip_disable=True)
+        client = Client(
+            FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY, geoip_disable=True
+        )
         success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, geoip_disable=False)
         client.flush()
         self.assertTrue(success)

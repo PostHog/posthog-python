@@ -139,7 +139,7 @@ class Client(object):
 
     def _get_active_feature_variants(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=None
-    ):        
+    ):
         feature_variants = self.get_feature_variants(
             distinct_id, groups, person_properties, group_properties, geoip_disable
         )
