@@ -562,6 +562,16 @@ class TestClient(unittest.TestCase):
         client.flush()
         self.assertEqual(identify_msg["properties"]["$geoip_disable"], True)
 
+    def test_geoip_disable_override_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=False)
+        _, capture_msg = client.set("distinct_id", {"a": "b", "c": "d"}, geoip_disable=True)
+        client.flush()
+        self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
+
+        _, identify_msg = client.page("distinct_id", "http://a.com", {"trait": "value"}, geoip_disable=False)
+        client.flush()
+        self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
+
     def test_geoip_disable_method_overrides_init_on_events(self):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=True)
         _, msg = client.capture("distinct_id", "python test event", geoip_disable=False)

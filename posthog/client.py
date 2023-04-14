@@ -355,8 +355,9 @@ class Client(object):
 
         if geoip_disable is None:
             geoip_disable = self.geoip_disable
-            if geoip_disable:
-                msg["properties"]["$geoip_disable"] = True
+
+        if geoip_disable:
+            msg["properties"]["$geoip_disable"] = True
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
