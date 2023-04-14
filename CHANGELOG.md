@@ -2,7 +2,7 @@
 
 Breaking change:
 
-All events by default now send the `$geoip_disable` property to disable geoip lookup in app. This is because usually we don't
+All events by default now send the `$disable_geoip` property to disable geoip lookup in app. This is because usually we don't
 want to update person properties to take the server's location.
 
 The same now happens for feature flag requests, where we discard the IP address of the server for matching on geoip properties like city, country, continent.
@@ -10,10 +10,10 @@ The same now happens for feature flag requests, where we discard the IP address 
 To restore previous behaviour, you can set the default to False like so:
 
 ```python
-posthog.geoip_disable = False
+posthog.disable_geoip = False
 
 # // and if using client instantiation:
-posthog = Posthog('api_key', geoip_disable=False)
+posthog = Posthog('api_key', disable_geoip=False)
 
 ```
 

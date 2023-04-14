@@ -122,7 +122,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties=None,
             group_properties=None,
-            geoip_disable=False,
+            disable_geoip=False,
         )
 
     @mock.patch("posthog.client.decide")
@@ -157,19 +157,19 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties=None,
             group_properties=None,
-            geoip_disable=True,
+            disable_geoip=True,
         )
 
     @mock.patch("posthog.client.decide")
-    def test_basic_capture_with_feature_flags_and_geoip_disable_returns_correctly(self, patch_decide):
+    def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(self, patch_decide):
         patch_decide.return_value = {
             "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
         }
 
         client = Client(
-            FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY, geoip_disable=True
+            FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY, disable_geoip=True
         )
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, geoip_disable=False)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, disable_geoip=False)
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -194,7 +194,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties=None,
             group_properties=None,
-            geoip_disable=False,
+            disable_geoip=False,
         )
 
     @mock.patch("posthog.client.decide")
@@ -554,8 +554,8 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(msg, "disabled")
 
-    def test_geoip_disable_default_on_events(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=True)
+    def test_disable_geoip_default_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=True)
         _, capture_msg = client.capture("distinct_id", "python test event")
         client.flush()
         self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
@@ -564,29 +564,29 @@ class TestClient(unittest.TestCase):
         client.flush()
         self.assertEqual(identify_msg["properties"]["$geoip_disable"], True)
 
-    def test_geoip_disable_override_on_events(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=False)
-        _, capture_msg = client.set("distinct_id", {"a": "b", "c": "d"}, geoip_disable=True)
+    def test_disable_geoip_override_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
+        _, capture_msg = client.set("distinct_id", {"a": "b", "c": "d"}, disable_geoip=True)
         client.flush()
         self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
 
-        _, identify_msg = client.page("distinct_id", "http://a.com", {"trait": "value"}, geoip_disable=False)
+        _, identify_msg = client.page("distinct_id", "http://a.com", {"trait": "value"}, disable_geoip=False)
         client.flush()
         self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
 
-    def test_geoip_disable_method_overrides_init_on_events(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=True)
-        _, msg = client.capture("distinct_id", "python test event", geoip_disable=False)
+    def test_disable_geoip_method_overrides_init_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=True)
+        _, msg = client.capture("distinct_id", "python test event", disable_geoip=False)
         client.flush()
         self.assertTrue("$geoip_disable" not in msg["properties"])
 
     @mock.patch("posthog.client.decide")
-    def test_geoip_disable_default_on_decide(self, patch_decide):
+    def test_disable_geoip_default_on_decide(self, patch_decide):
         patch_decide.return_value = {
             "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
         }
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, geoip_disable=False)
-        client.get_feature_flag("random_key", "some_id", geoip_disable=True)
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
+        client.get_feature_flag("random_key", "some_id", disable_geoip=True)
         patch_decide.assert_called_with(
             "random_key",
             None,
@@ -595,10 +595,10 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={},
             group_properties={},
-            geoip_disable=True,
+            disable_geoip=True,
         )
         patch_decide.reset_mock()
-        client.feature_enabled("random_key", "feature_enabled_distinct_id", geoip_disable=True)
+        client.feature_enabled("random_key", "feature_enabled_distinct_id", disable_geoip=True)
         patch_decide.assert_called_with(
             "random_key",
             None,
@@ -607,7 +607,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={},
             group_properties={},
-            geoip_disable=True,
+            disable_geoip=True,
         )
         patch_decide.reset_mock()
         client.get_all_flags_and_payloads("all_flags_payloads_id")
@@ -619,7 +619,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={},
             group_properties={},
-            geoip_disable=False,
+            disable_geoip=False,
         )
 
     @mock.patch("posthog.client.Poller")
