@@ -141,6 +141,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(isinstance(msg["timestamp"], str))
         self.assertIsNone(msg.get("uuid"))
         self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertTrue(msg["properties"]["$geoip_disable"])
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
@@ -148,6 +149,51 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature", "alpha-feature"])
 
         self.assertEqual(patch_decide.call_count, 1)
+        patch_decide.assert_called_with(
+            "random_key",
+            None,
+            timeout=10,
+            distinct_id="distinct_id",
+            groups={},
+            person_properties=None,
+            group_properties=None,
+            geoip_disable=True,
+        )
+    
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags_and_geoip_disable_returns_correctly(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
+
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY, geoip_disable=True)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, geoip_disable=False)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertTrue("$geoip_disable" not in msg["properties"])
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature", "alpha-feature"])
+
+        self.assertEqual(patch_decide.call_count, 1)
+        patch_decide.assert_called_with(
+            "random_key",
+            None,
+            timeout=10,
+            distinct_id="distinct_id",
+            groups={},
+            person_properties=None,
+            group_properties=None,
+            geoip_disable=False,
+        )
 
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(self, patch_decide):

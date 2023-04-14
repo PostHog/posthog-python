@@ -139,7 +139,7 @@ class Client(object):
 
     def _get_active_feature_variants(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, geoip_disable=None
-    ):
+    ):        
         feature_variants = self.get_feature_variants(
             distinct_id, groups, person_properties, group_properties, geoip_disable
         )
@@ -208,7 +208,7 @@ class Client(object):
 
         if send_feature_flags:
             try:
-                feature_variants = self._get_active_feature_variants(distinct_id, groups, geoip_disable)
+                feature_variants = self._get_active_feature_variants(distinct_id, groups, geoip_disable=geoip_disable)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
@@ -355,7 +355,7 @@ class Client(object):
 
         if geoip_disable is None:
             geoip_disable = self.geoip_disable
-            if geoip_disable is True:
+            if geoip_disable:
                 msg["properties"]["$geoip_disable"] = True
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
