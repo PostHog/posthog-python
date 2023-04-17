@@ -48,6 +48,7 @@ class Client(object):
         personal_api_key=None,
         project_api_key=None,
         disabled=False,
+        disable_geoip=True,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -71,6 +72,7 @@ class Client(object):
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.disabled = disabled
+        self.disable_geoip = disable_geoip
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -112,7 +114,7 @@ class Client(object):
                 if send:
                     consumer.start()
 
-    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -127,24 +129,35 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def get_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
+    def get_feature_variants(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
+    ):
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return resp_data["featureFlags"]
 
-    def _get_active_feature_variants(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        feature_variants = self.get_feature_variants(distinct_id, groups, person_properties, group_properties)
+    def _get_active_feature_variants(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
+    ):
+        feature_variants = self.get_feature_variants(
+            distinct_id, groups, person_properties, group_properties, disable_geoip
+        )
         return {
             k: v for (k, v) in feature_variants.items() if v is not False
         }  # explicitly test for false to account for values that may seem falsy (ex: 0)
 
-    def get_feature_payloads(self, distinct_id, groups=None, person_properties=None, group_properties=None):
-        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties)
+    def get_feature_payloads(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
+    ):
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return resp_data["featureFlagPayloads"]
 
-    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None):
+    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None):
         require("distinct_id", distinct_id, ID_TYPES)
+
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
 
         if groups:
             require("groups", groups, dict)
@@ -156,6 +169,7 @@ class Client(object):
             "groups": groups,
             "person_properties": person_properties,
             "group_properties": group_properties,
+            "disable_geoip": disable_geoip,
         }
         resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
 
@@ -171,6 +185,7 @@ class Client(object):
         uuid=None,
         groups=None,
         send_feature_flags=False,
+        disable_geoip=None,
     ):
         properties = properties or {}
         context = context or {}
@@ -193,7 +208,7 @@ class Client(object):
 
         if send_feature_flags:
             try:
-                feature_variants = self._get_active_feature_variants(distinct_id, groups)
+                feature_variants = self._get_active_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
@@ -201,9 +216,9 @@ class Client(object):
                     msg["properties"]["$feature/{}".format(feature)] = variant
                 msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -218,9 +233,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None):
+    def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         properties = properties or {}
         context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -235,9 +250,18 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def group_identify(self, group_type=None, group_key=None, properties=None, context=None, timestamp=None, uuid=None):
+    def group_identify(
+        self,
+        group_type=None,
+        group_key=None,
+        properties=None,
+        context=None,
+        timestamp=None,
+        uuid=None,
+        disable_geoip=None,
+    ):
         properties = properties or {}
         context = context or {}
         require("group_type", group_type, ID_TYPES)
@@ -257,9 +281,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None):
+    def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         context = context or {}
 
         require("previous_id", previous_id, ID_TYPES)
@@ -276,9 +300,11 @@ class Client(object):
             "distinct_id": previous_id,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def page(self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None):
+    def page(
+        self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None
+    ):
         properties = properties or {}
         context = context or {}
 
@@ -297,9 +323,9 @@ class Client(object):
             "uuid": uuid,
         }
 
-        return self._enqueue(msg)
+        return self._enqueue(msg, disable_geoip)
 
-    def _enqueue(self, msg):
+    def _enqueue(self, msg, disable_geoip):
         """Push a new `msg` onto the queue, return `(success, msg)`"""
 
         if self.disabled:
@@ -326,6 +352,12 @@ class Client(object):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
         msg["properties"]["$lib_version"] = VERSION
+
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
+
+        if disable_geoip:
+            msg["properties"]["$geoip_disable"] = True
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
@@ -470,6 +502,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
+        disable_geoip=None,
     ):
         response = self.get_feature_flag(
             key,
@@ -479,6 +512,7 @@ class Client(object):
             group_properties=group_properties,
             only_evaluate_locally=only_evaluate_locally,
             send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
         )
 
         if response is None:
@@ -495,6 +529,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
+        disable_geoip=None,
     ):
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
@@ -528,7 +563,11 @@ class Client(object):
         if not flag_was_locally_evaluated and not only_evaluate_locally:
             try:
                 feature_flags = self.get_feature_variants(
-                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    disable_geoip=disable_geoip,
                 )
                 response = feature_flags.get(key)
                 if response is None:
@@ -551,6 +590,7 @@ class Client(object):
                     "locally_evaluated": flag_was_locally_evaluated,
                 },
                 groups=groups,
+                disable_geoip=disable_geoip,
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
@@ -566,6 +606,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
+        disable_geoip=None,
     ):
         if match_value is None:
             match_value = self.get_feature_flag(
@@ -576,6 +617,7 @@ class Client(object):
                 group_properties=group_properties,
                 send_feature_flag_events=send_feature_flag_events,
                 only_evaluate_locally=True,
+                disable_geoip=disable_geoip,
             )
 
         response = None
@@ -584,7 +626,9 @@ class Client(object):
             response = self._compute_payload_locally(key, match_value)
 
         if response is None and not only_evaluate_locally:
-            decide_payloads = self.get_feature_payloads(distinct_id, groups, person_properties, group_properties)
+            decide_payloads = self.get_feature_payloads(
+                distinct_id, groups, person_properties, group_properties, disable_geoip
+            )
             response = decide_payloads.get(str(key).lower(), None)
 
         return response
@@ -602,7 +646,14 @@ class Client(object):
         return payload
 
     def get_all_flags(
-        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
+        self,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        disable_geoip=None,
     ):
         flags = self.get_all_flags_and_payloads(
             distinct_id,
@@ -610,11 +661,19 @@ class Client(object):
             person_properties=person_properties,
             group_properties=group_properties,
             only_evaluate_locally=only_evaluate_locally,
+            disable_geoip=disable_geoip,
         )
         return flags["featureFlags"]
 
     def get_all_flags_and_payloads(
-        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, only_evaluate_locally=False
+        self,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        disable_geoip=None,
     ):
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
@@ -624,7 +683,11 @@ class Client(object):
         if fallback_to_decide and not only_evaluate_locally:
             try:
                 flags_and_payloads = self.get_decide(
-                    distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    disable_geoip=disable_geoip,
                 )
                 response = flags_and_payloads
             except Exception as e:

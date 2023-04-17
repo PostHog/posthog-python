@@ -1890,6 +1890,7 @@ class TestCaptureCalls(unittest.TestCase):
             "$feature_flag_called",
             {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
             groups={},
+            disable_geoip=None,
         )
         patch_capture.reset_mock()
 
@@ -1914,6 +1915,7 @@ class TestCaptureCalls(unittest.TestCase):
             "$feature_flag_called",
             {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
             groups={},
+            disable_geoip=None,
         )
         patch_capture.reset_mock()
 
@@ -1946,6 +1948,45 @@ class TestCaptureCalls(unittest.TestCase):
             "$feature_flag_called",
             {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value", "locally_evaluated": False},
             groups={"organization": "org1"},
+            disable_geoip=None,
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_disable_geoip_get_flag_capture_call(self, patch_decide, patch_capture):
+        patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY, disable_geoip=True)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "region", "value": "USA"}],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        client.get_feature_flag(
+            "complex-flag",
+            "some-distinct-id",
+            person_properties={"region": "USA", "name": "Aloha"},
+            disable_geoip=False,
+        )
+
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+            groups={},
+            disable_geoip=False,
         )
 
     @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
@@ -1979,6 +2020,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_called",
                 {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
                 groups={},
+                disable_geoip=None,
             )
 
             self.assertEqual(len(client.distinct_ids_feature_flags_reported), i % 100 + 1)
