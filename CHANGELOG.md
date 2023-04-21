@@ -1,3 +1,7 @@
+## 3.0.1 - 2023-04-21
+
+1. Restore how feature flags work when the client library is disabled: All requests return `None` and no events are sent when the client is disabled.
+2. Add a `feature_flag_definitions()` debug option, which returns currently loaded feature flag definitions. You can use this to more cleverly decide when to request local evaluation of feature flags.
 ## 3.0.0 - 2023-04-14
 
 Breaking change:

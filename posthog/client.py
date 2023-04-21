@@ -535,6 +535,9 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
+        if self.disabled:
+            return None
+
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
@@ -608,6 +611,9 @@ class Client(object):
         send_feature_flag_events=True,
         disable_geoip=None,
     ):
+        if self.disabled:
+            return None
+
         if match_value is None:
             match_value = self.get_feature_flag(
                 key,
@@ -675,6 +681,9 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
     ):
+        if self.disabled:
+            return {"featureFlags": None, "featureFlagPayloads": None}
+
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
@@ -729,6 +738,9 @@ class Client(object):
             fallback_to_decide = True
 
         return flags, payloads, fallback_to_decide
+
+    def feature_flag_definitions(self):
+        return self.feature_flags
 
 
 def require(name, field, data_type):
