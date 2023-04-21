@@ -536,7 +536,7 @@ class TestClient(unittest.TestCase):
         self.assertFalse(self.failed)
 
         self.assertEqual(msg, "disabled")
-    
+
     @mock.patch("posthog.client.decide")
     def test_disabled_with_feature_flags(self, patch_decide):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
@@ -560,7 +560,6 @@ class TestClient(unittest.TestCase):
         response = client.get_all_flags_and_payloads("12345")
         self.assertEqual(response, {"featureFlags": None, "featureFlagPayloads": None})
         patch_decide.assert_not_called()
-
 
         # no capture calls
         self.assertTrue(client.queue.empty())

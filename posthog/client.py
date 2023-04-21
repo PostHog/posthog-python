@@ -611,7 +611,6 @@ class Client(object):
         send_feature_flag_events=True,
         disable_geoip=None,
     ):
-        
         if self.disabled:
             return None
 
