@@ -1,3 +1,6 @@
+## 3.0.1 - 2023-04-21
+
+Restore how feature flags work when the client library is disabled: All requests return `None` and no events are sent when the client is disabled.
 ## 3.0.0 - 2023-04-14
 
 Breaking change:
