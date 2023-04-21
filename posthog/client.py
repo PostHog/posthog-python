@@ -739,6 +739,9 @@ class Client(object):
 
         return flags, payloads, fallback_to_decide
 
+    def feature_flag_definitions(self):
+        return self.feature_flags
+
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
