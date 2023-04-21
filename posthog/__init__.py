@@ -399,6 +399,7 @@ def get_all_flags_and_payloads(
         disable_geoip=disable_geoip,
     )
 
+
 def feature_flag_definitions():
     """Returns loaded feature flags, if any. Helpful for debugging what flag information you have loaded."""
     return _proxy("feature_flag_definitions")
