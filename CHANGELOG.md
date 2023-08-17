@@ -1,3 +1,7 @@
+## 3.0.2 - 2023-08-17
+
+1. Returns the current flag property with $feature_flag_called events, to make it easier to use in experiments
+
 ## 3.0.1 - 2023-04-21
 
 1. Restore how feature flags work when the client library is disabled: All requests return `None` and no events are sent when the client is disabled.

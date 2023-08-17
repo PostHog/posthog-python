@@ -143,16 +143,16 @@ def match_property(property, property_values) -> bool:
         return is_valid_regex(str(value)) and re.compile(str(value)).search(str(override_value)) is None
 
     if operator == "gt":
-        return type(override_value) == type(value) and override_value > value
+        return type(override_value) is type(value) and override_value > value
 
     if operator == "gte":
-        return type(override_value) == type(value) and override_value >= value
+        return type(override_value) is type(value) and override_value >= value
 
     if operator == "lt":
-        return type(override_value) == type(value) and override_value < value
+        return type(override_value) is type(value) and override_value < value
 
     if operator == "lte":
-        return type(override_value) == type(value) and override_value <= value
+        return type(override_value) is type(value) and override_value <= value
 
     if operator in ["is_date_before", "is_date_after"]:
         try:
