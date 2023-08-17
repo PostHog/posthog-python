@@ -1888,7 +1888,7 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id",
             "$feature_flag_called",
-            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True, "$feature/complex-flag": True},
             groups={},
             disable_geoip=None,
         )
@@ -1913,7 +1913,7 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id2",
             "$feature_flag_called",
-            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True, "$feature/complex-flag": True},
             groups={},
             disable_geoip=None,
         )
@@ -1946,7 +1946,7 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id2",
             "$feature_flag_called",
-            {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value", "locally_evaluated": False},
+            {"$feature_flag": "decide-flag", "$feature_flag_response": "decide-value", "locally_evaluated": False, "$feature/decide-flag": "decide-value"},
             groups={"organization": "org1"},
             disable_geoip=None,
         )
@@ -1984,7 +1984,7 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.assert_called_with(
             "some-distinct-id",
             "$feature_flag_called",
-            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+            {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True, "$feature/complex-flag": True},
             groups={},
             disable_geoip=False,
         )
@@ -2018,7 +2018,7 @@ class TestCaptureCalls(unittest.TestCase):
             patch_capture.assert_called_with(
                 distinct_id,
                 "$feature_flag_called",
-                {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True},
+                {"$feature_flag": "complex-flag", "$feature_flag_response": True, "locally_evaluated": True, "$feature/complex-flag": True},
                 groups={},
                 disable_geoip=None,
             )

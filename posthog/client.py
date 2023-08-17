@@ -591,6 +591,7 @@ class Client(object):
                     "$feature_flag": key,
                     "$feature_flag_response": response,
                     "locally_evaluated": flag_was_locally_evaluated,
+                    f"$feature/{key}": response,
                 },
                 groups=groups,
                 disable_geoip=disable_geoip,
