@@ -2,8 +2,10 @@ import datetime
 import hashlib
 import logging
 import re
+from typing import Optional
 
 from dateutil import parser
+from dateutil.relativedelta import relativedelta
 
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
@@ -117,15 +119,16 @@ def match_property(property, property_values) -> bool:
 
     override_value = property_values[key]
 
-    if operator == "exact":
-        if isinstance(value, list):
-            return override_value in value
-        return value == override_value
-
-    if operator == "is_not":
-        if isinstance(value, list):
-            return override_value not in value
-        return value != override_value
+    if operator in ("exact", "is_not"):
+        def compute_exact_match(value, override_value):
+            if isinstance(value, list):
+                return str(override_value).lower() in [str(val).lower() for val in value]
+            return str(value).lower() == str(override_value).lower()
+        
+        if operator == "exact":
+            return compute_exact_match(value, override_value)
+        else:
+            return not compute_exact_match(value, override_value)
 
     if operator == "is_set":
         return key in property_values
@@ -142,33 +145,56 @@ def match_property(property, property_values) -> bool:
     if operator == "not_regex":
         return is_valid_regex(str(value)) and re.compile(str(value)).search(str(override_value)) is None
 
-    if operator == "gt":
-        return type(override_value) is type(value) and override_value > value
+    if operator in ("gt", "gte", "lt", "lte"):
+        # :TRICKY: We adjust comparison based on the override value passed in,
+        # to make sure we handle both numeric and string comparisons appropriately.
+        def compare(lhs, rhs, operator):
+            if operator == "gt":
+                return lhs > rhs
+            elif operator == "gte":
+                return lhs >= rhs
+            elif operator == "lt":
+                return lhs < rhs
+            elif operator == "lte":
+                return lhs <= rhs
+            else:
+                raise ValueError(f"Invalid operator: {operator}")
 
-    if operator == "gte":
-        return type(override_value) is type(value) and override_value >= value
-
-    if operator == "lt":
-        return type(override_value) is type(value) and override_value < value
-
-    if operator == "lte":
-        return type(override_value) is type(value) and override_value <= value
-
-    if operator in ["is_date_before", "is_date_after"]:
+        parsed_value = None
         try:
-            parsed_date = parser.parse(value)
-            parsed_date = convert_to_datetime_aware(parsed_date)
+            parsed_value = float(value)  # type: ignore
         except Exception:
+            pass
+
+        if parsed_value is not None:
+            if isinstance(override_value, str):
+                return compare(override_value, str(value), operator)
+            else:
+                return compare(override_value, parsed_value, operator)
+        else:
+            return compare(str(override_value), str(value), operator)
+
+    if operator in ["is_date_before", "is_date_after", "is_relative_date_before", "is_relative_date_after"]:
+        try:
+            if operator in ["is_relative_date_before", "is_relative_date_after"]:
+                parsed_date = relative_date_parse_for_feature_flag_matching(str(value))
+            else:
+                parsed_date = parser.parse(str(value))
+                parsed_date = convert_to_datetime_aware(parsed_date)
+        except Exception:
+            raise InconclusiveMatchError("The date set on the flag is not a valid format")
+
+        if not parsed_date:
             raise InconclusiveMatchError("The date set on the flag is not a valid format")
 
         if isinstance(override_value, datetime.datetime):
             override_date = convert_to_datetime_aware(override_value)
-            if operator == "is_date_before":
+            if operator in ("is_date_before", "is_relative_date_before"):
                 return override_date < parsed_date
             else:
                 return override_date > parsed_date
         elif isinstance(override_value, datetime.date):
-            if operator == "is_date_before":
+            if operator in ("is_date_before", "is_relative_date_before"):
                 return override_value < parsed_date.date()
             else:
                 return override_value > parsed_date.date()
@@ -176,7 +202,7 @@ def match_property(property, property_values) -> bool:
             try:
                 override_date = parser.parse(override_value)
                 override_date = convert_to_datetime_aware(override_date)
-                if operator == "is_date_before":
+                if operator in ("is_date_before", "is_relative_date_before"):
                     return override_date < parsed_date
                 else:
                     return override_date > parsed_date
@@ -271,3 +297,27 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
 
         # if we get here, all matched in AND case, or none matched in OR case
         return property_group_type == "AND"
+
+def relative_date_parse_for_feature_flag_matching(value: str) -> Optional[datetime.datetime]:
+    regex = r"(?P<number>[0-9]+)(?P<interval>[a-z])"
+    match = re.search(regex, value)
+    parsed_dt = datetime.datetime.now(datetime.timezone.utc)
+    if match:
+        number = int(match.group("number"))
+        interval = match.group("interval")
+        if interval == "h":
+            parsed_dt = parsed_dt - relativedelta(hours=number)
+        elif interval == "d":
+            parsed_dt = parsed_dt - relativedelta(days=number)
+        elif interval == "w":
+            parsed_dt = parsed_dt - relativedelta(weeks=number)
+        elif interval == "m":
+            parsed_dt = parsed_dt - relativedelta(months=number)
+        elif interval == "y":
+            parsed_dt = parsed_dt - relativedelta(years=number)
+        else:
+            return None
+
+        return parsed_dt
+    else:
+        return None
