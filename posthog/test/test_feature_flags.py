@@ -1870,7 +1870,7 @@ class TestMatchProperties(unittest.TestCase):
 
         self.assertTrue(match_property(property_d, {"key": "2022-04-05 11:34:11 +00:00"}))
         self.assertFalse(match_property(property_d, {"key": "2022-04-05 11:34:13 +00:00"}))
-    
+
     @freeze_time("2022-05-01")
     def test_match_property_relative_date_operators(self):
         property_a = self.property(key="key", value="6h", operator="is_relative_date_before")
@@ -1914,7 +1914,7 @@ class TestMatchProperties(unittest.TestCase):
 
         with self.assertRaises(InconclusiveMatchError):
             self.assertFalse(match_property(property_c, {"key": 1}))
-        
+
         with self.assertRaises(InconclusiveMatchError):
             self.assertFalse(match_property(property_c, {"key": "2022-05-30"}))
 
@@ -1973,6 +1973,48 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_n, {"key": "2021-05-01 00:00:00"}))
         self.assertFalse(match_property(property_n, {"key": "2021-04-30 00:00:00"}))
         self.assertFalse(match_property(property_n, {"key": "2021-03-01 12:13:00"}))
+
+    def test_none_property_value_with_all_operators(self):
+        property_a = self.property(key="key", value="none", operator="is_not")
+        self.assertFalse(match_property(property_a, {"key": None}))
+        self.assertTrue(match_property(property_a, {"key": "non"}))
+
+        property_b = self.property(key="key", value=None, operator="is_set")
+        self.assertTrue(match_property(property_b, {"key": None}))
+
+        property_c = self.property(key="key", value="no", operator="icontains")
+        self.assertTrue(match_property(property_c, {"key": None}))
+        self.assertFalse(match_property(property_c, {"key": "smh"}))
+
+        property_d = self.property(key="key", value="No", operator="regex")
+        self.assertTrue(match_property(property_d, {"key": None}))
+
+        property_d_lower_case = self.property(key="key", value="no", operator="regex")
+        self.assertFalse(match_property(property_d_lower_case, {"key": None}))
+
+        property_e = self.property(key="key", value=1, operator="gt")
+        self.assertTrue(match_property(property_e, {"key": None}))
+
+        property_f = self.property(key="key", value=1, operator="lt")
+        self.assertFalse(match_property(property_f, {"key": None}))
+
+        property_g = self.property(key="key", value="xyz", operator="gte")
+        self.assertFalse(match_property(property_g, {"key": None}))
+
+        property_h = self.property(key="key", value="Oo", operator="lte")
+        self.assertTrue(match_property(property_h, {"key": None}))
+
+        property_i = self.property(key="key", value="2022-05-01", operator="is_date_before")
+        with self.assertRaises(InconclusiveMatchError):
+            self.assertFalse(match_property(property_i, {"key": None}))
+
+        property_j = self.property(key="key", value="2022-05-01", operator="is_date_after")
+        with self.assertRaises(InconclusiveMatchError):
+            self.assertFalse(match_property(property_j, {"key": None}))
+
+        property_k = self.property(key="key", value="2022-05-01", operator="is_date_before")
+        with self.assertRaises(InconclusiveMatchError):
+            self.assertFalse(match_property(property_k, {"key": "random"}))
 
 
 class TestCaptureCalls(unittest.TestCase):

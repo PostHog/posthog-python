@@ -120,11 +120,12 @@ def match_property(property, property_values) -> bool:
     override_value = property_values[key]
 
     if operator in ("exact", "is_not"):
+
         def compute_exact_match(value, override_value):
             if isinstance(value, list):
                 return str(override_value).lower() in [str(val).lower() for val in value]
             return str(value).lower() == str(override_value).lower()
-        
+
         if operator == "exact":
             return compute_exact_match(value, override_value)
         else:
@@ -297,6 +298,7 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
 
         # if we get here, all matched in AND case, or none matched in OR case
         return property_group_type == "AND"
+
 
 def relative_date_parse_for_feature_flag_matching(value: str) -> Optional[datetime.datetime]:
     regex = r"(?P<number>[0-9]+)(?P<interval>[a-z])"
