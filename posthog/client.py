@@ -213,11 +213,14 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
                 for feature, variant in feature_variants.items():
-                    msg["properties"]["$feature/{}".format(feature)] = variant
+                    msg["properties"][f"$feature/{feature}"] = variant
                 msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
         elif self.feature_flags:
-            # Local evaluation is enabled, try and get all flags we can without going to our servers
-            feature_variants
+            # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to our servers
+            feature_variants = self.get_all_flags(distinct_id, groups=groups, disable_geoip=disable_geoip, only_evaluate_locally=True)
+            for feature, variant in feature_variants.items():
+                msg["properties"][f"$feature/{feature}"] = variant
+            msg["properties"]["$active_feature_flags"] = [key for (key, value) in feature_variants.items() if value is not False]
 
         return self._enqueue(msg, disable_geoip)
 

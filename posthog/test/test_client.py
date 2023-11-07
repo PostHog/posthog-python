@@ -620,7 +620,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={},
-            person_properties={},
+            person_properties={'$current_distinct_id': 'some_id'},
             group_properties={},
             disable_geoip=True,
         )
@@ -632,7 +632,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="feature_enabled_distinct_id",
             groups={},
-            person_properties={},
+            person_properties={'$current_distinct_id': 'feature_enabled_distinct_id'},
             group_properties={},
             disable_geoip=True,
         )
@@ -644,7 +644,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="all_flags_payloads_id",
             groups={},
-            person_properties={},
+            person_properties={'$current_distinct_id': 'all_flags_payloads_id'},
             group_properties={},
             disable_geoip=False,
         )
