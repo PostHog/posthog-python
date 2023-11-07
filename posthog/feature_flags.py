@@ -166,7 +166,7 @@ def match_property(property, property_values) -> bool:
         except Exception:
             pass
 
-        if parsed_value is not None:
+        if parsed_value is not None and override_value is not None:
             if isinstance(override_value, str):
                 return compare(override_value, str(value), operator)
             else:
