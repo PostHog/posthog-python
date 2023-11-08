@@ -171,8 +171,7 @@ class TestClient(unittest.TestCase):
             "filters": {
                 "groups": [
                     {
-                        "properties": [
-                        ],
+                        "properties": [],
                         "rollout_percentage": 0,
                     }
                 ],
