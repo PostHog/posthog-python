@@ -104,7 +104,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
 
         self.assertEqual(patch_decide.call_count, 1)
-    
+
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_locally_evaluated_feature_flags(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
@@ -125,7 +125,9 @@ class TestClient(unittest.TestCase):
                         ],
                         "rollout_percentage": 100,
                     },
-                    {"rollout_percentage": 50,},
+                    {
+                        "rollout_percentage": 50,
+                    },
                 ],
                 "multivariate": {
                     "variants": [
@@ -704,7 +706,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={},
-            person_properties={'$current_distinct_id': 'some_id'},
+            person_properties={"$current_distinct_id": "some_id"},
             group_properties={},
             disable_geoip=True,
         )
@@ -716,7 +718,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="feature_enabled_distinct_id",
             groups={},
-            person_properties={'$current_distinct_id': 'feature_enabled_distinct_id'},
+            person_properties={"$current_distinct_id": "feature_enabled_distinct_id"},
             group_properties={},
             disable_geoip=True,
         )
@@ -728,7 +730,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="all_flags_payloads_id",
             groups={},
-            person_properties={'$current_distinct_id': 'all_flags_payloads_id'},
+            person_properties={"$current_distinct_id": "all_flags_payloads_id"},
             group_properties={},
             disable_geoip=False,
         )
@@ -751,28 +753,50 @@ class TestClient(unittest.TestCase):
             "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
         }
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
-        client.get_feature_flag("random_key", "some_id", groups={"company": "id:5", "instance": "app.posthog.com"}, person_properties={"x1": "y1"}, group_properties={"company": {"x": "y"}})
+        client.get_feature_flag(
+            "random_key",
+            "some_id",
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+            person_properties={"x1": "y1"},
+            group_properties={"company": {"x": "y"}},
+        )
         patch_decide.assert_called_with(
             "random_key",
             None,
             timeout=10,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={'$current_distinct_id': 'some_id', "x1": "y1"},
-            group_properties={"company": {"$group_key": "id:5", "x": "y"}, "instance": {"$group_key": "app.posthog.com"}},
+            person_properties={"$current_distinct_id": "some_id", "x1": "y1"},
+            group_properties={
+                "company": {"$group_key": "id:5", "x": "y"},
+                "instance": {"$group_key": "app.posthog.com"},
+            },
             disable_geoip=False,
         )
 
         patch_decide.reset_mock()
-        client.get_feature_flag("random_key", "some_id", groups={"company": "id:5", "instance": "app.posthog.com"}, person_properties={"$current_distinct_id": "override"}, group_properties={"company": {"$group_key": "group_override",}})
+        client.get_feature_flag(
+            "random_key",
+            "some_id",
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+            person_properties={"$current_distinct_id": "override"},
+            group_properties={
+                "company": {
+                    "$group_key": "group_override",
+                }
+            },
+        )
         patch_decide.assert_called_with(
             "random_key",
             None,
             timeout=10,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={'$current_distinct_id': 'override'},
-            group_properties={"company": {"$group_key": "group_override"}, "instance": {"$group_key": "app.posthog.com"}},
+            person_properties={"$current_distinct_id": "override"},
+            group_properties={
+                "company": {"$group_key": "group_override"},
+                "instance": {"$group_key": "app.posthog.com"},
+            },
             disable_geoip=False,
         )
 
@@ -785,7 +809,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={},
-            person_properties={'$current_distinct_id': 'some_id'},
+            person_properties={"$current_distinct_id": "some_id"},
             group_properties={},
             disable_geoip=False,
         )
