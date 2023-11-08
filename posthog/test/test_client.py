@@ -162,7 +162,24 @@ class TestClient(unittest.TestCase):
                 "payloads": {"true": 300},
             },
         }
-        client.feature_flags = [multivariate_flag, basic_flag]
+        false_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "false-flag",
+            "is_simple_flag": True,
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                        ],
+                        "rollout_percentage": 0,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        client.feature_flags = [multivariate_flag, basic_flag, false_flag]
 
         success, msg = client.capture("distinct_id", "python test event")
         client.flush()
@@ -176,6 +193,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "third-variant")
+        self.assertEqual(msg["properties"]["$feature/false-flag"], False)
         self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
         assert "$feature/beta-feature" not in msg["properties"]
 
@@ -189,6 +207,7 @@ class TestClient(unittest.TestCase):
         self.assertFalse(self.failed)
         assert "$feature/beta-feature" not in msg["properties"]
         assert "$feature/beta-feature-local" not in msg["properties"]
+        assert "$feature/false-flag" not in msg["properties"]
         assert "$active_feature_flags" not in msg["properties"]
 
     @mock.patch("posthog.client.decide")
