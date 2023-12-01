@@ -105,7 +105,7 @@ class Consumer(Thread):
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > MAX_MSG_SIZE:
-                    self.log.error("Item exceeds 32kb limit, dropping. (%s)", str(item))
+                    self.log.error("Item exceeds 900kib limit, dropping. (%s)", str(item))
                     continue
                 items.append(item)
                 total_size += item_size

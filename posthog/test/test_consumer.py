@@ -145,15 +145,20 @@ class TestConsumer(unittest.TestCase):
     def test_max_batch_size(self):
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY, flush_at=100000, flush_interval=3)
-        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
+        properties = {}
+        for n in range(0, 500):
+            properties[str(n)] = "one_long_property_value_to_build_a_big_event"
+        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id", "properties": properties}
         msg_size = len(json.dumps(track).encode())
-        # number of messages in a maximum-size batch
-        n_msgs = int(475000 / msg_size)
+        # Let's capture 8MB of data to trigger two batches
+        n_msgs = int(8_000_000 / msg_size)
 
         def mock_post_fn(_, data, **kwargs):
             res = mock.Mock()
             res.status_code = 200
-            self.assertTrue(len(data.encode()) < 500000, "batch size (%d) exceeds 500KB limit" % len(data.encode()))
+            request_size = len(data.encode())
+            # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 5% of margin
+            self.assertTrue(request_size < (5 * 1024 * 1024) * 1.05, "batch size (%d) higher than limit" % request_size)
             return res
 
         with mock.patch("posthog.request._session.post", side_effect=mock_post_fn) as mock_post:
