@@ -12,11 +12,12 @@ try:
 except ImportError:
     from Queue import Empty
 
-MAX_MSG_SIZE = 32 << 10
 
-# Our servers only accept batches less than 500KB. Here limit is set slightly
-# lower to leave space for extra data that will be added later, eg. "sentAt".
-BATCH_SIZE_LIMIT = 475000
+MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
+
+# The maximum request body size is currently 20MiB, let's be conservative
+# in case we want to lower it in the future.
+BATCH_SIZE_LIMIT = 5*1024*1024
 
 
 class Consumer(Thread):
