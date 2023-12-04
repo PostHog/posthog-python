@@ -1,3 +1,7 @@
+## 3.1.0 - 2023-12-04
+
+1. Increase maximum event size and batch size
+
 ## 3.0.2 - 2023-08-17
 
 1. Returns the current flag property with $feature_flag_called events, to make it easier to use in experiments
