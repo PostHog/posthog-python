@@ -62,4 +62,4 @@ jobs:
 
             - name: Run posthog tests
               run: |
-                  python setup.py test
+                  pytest --verbose --timeout=30
