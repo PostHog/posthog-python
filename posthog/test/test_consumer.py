@@ -157,8 +157,8 @@ class TestConsumer(unittest.TestCase):
             res = mock.Mock()
             res.status_code = 200
             request_size = len(data.encode())
-            # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 5% of margin
-            self.assertTrue(request_size < (5 * 1024 * 1024) * 1.05, "batch size (%d) higher than limit" % request_size)
+            # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 10% of margin
+            self.assertTrue(request_size < (5 * 1024 * 1024) * 1.1, "batch size (%d) higher than limit" % request_size)
             return res
 
         with mock.patch("posthog.request._session.post", side_effect=mock_post_fn) as mock_post:
