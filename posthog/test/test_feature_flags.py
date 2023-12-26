@@ -2030,7 +2030,6 @@ class TestRelativeDateParsing(unittest.TestCase):
             assert relative_date_parse_for_feature_flag_matching("000bello") is None
             assert relative_date_parse_for_feature_flag_matching("000hello") is None
 
-        
             assert relative_date_parse_for_feature_flag_matching("000h") is not None
             assert relative_date_parse_for_feature_flag_matching("1000h") is not None
 
@@ -2040,60 +2039,131 @@ class TestRelativeDateParsing(unittest.TestCase):
 
     def test_hour_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):
-            assert relative_date_parse_for_feature_flag_matching("1h") == datetime.datetime(2020, 1, 1, 11, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("2h") == datetime.datetime(2020, 1, 1, 10, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("24h") == datetime.datetime(2019, 12, 31, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("30h") == datetime.datetime(2019, 12, 31, 6, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("48h") == datetime.datetime(2019, 12, 30, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
+            assert relative_date_parse_for_feature_flag_matching("1h") == datetime.datetime(
+                2020, 1, 1, 11, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("2h") == datetime.datetime(
+                2020, 1, 1, 10, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("24h") == datetime.datetime(
+                2019, 12, 31, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("30h") == datetime.datetime(
+                2019, 12, 31, 6, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("48h") == datetime.datetime(
+                2019, 12, 30, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
 
-            assert relative_date_parse_for_feature_flag_matching("24h") == relative_date_parse_for_feature_flag_matching("1d")
-            assert relative_date_parse_for_feature_flag_matching("48h") == relative_date_parse_for_feature_flag_matching("2d")
+            assert relative_date_parse_for_feature_flag_matching(
+                "24h"
+            ) == relative_date_parse_for_feature_flag_matching("1d")
+            assert relative_date_parse_for_feature_flag_matching(
+                "48h"
+            ) == relative_date_parse_for_feature_flag_matching("2d")
 
     def test_day_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):
-            assert relative_date_parse_for_feature_flag_matching("1d") == datetime.datetime(2019, 12, 31, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("2d") == datetime.datetime(2019, 12, 30, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("7d") == datetime.datetime(2019, 12, 25, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("14d") == datetime.datetime(2019, 12, 18, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("30d") == datetime.datetime(2019, 12, 2, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
+            assert relative_date_parse_for_feature_flag_matching("1d") == datetime.datetime(
+                2019, 12, 31, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("2d") == datetime.datetime(
+                2019, 12, 30, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("7d") == datetime.datetime(
+                2019, 12, 25, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("14d") == datetime.datetime(
+                2019, 12, 18, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("30d") == datetime.datetime(
+                2019, 12, 2, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
 
-            assert relative_date_parse_for_feature_flag_matching("7d") == relative_date_parse_for_feature_flag_matching("1w")
-    
-    def test_week_parsing(self):  
+            assert relative_date_parse_for_feature_flag_matching("7d") == relative_date_parse_for_feature_flag_matching(
+                "1w"
+            )
+
+    def test_week_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):
-            assert relative_date_parse_for_feature_flag_matching("1w") == datetime.datetime(2019, 12, 25, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("2w") == datetime.datetime(2019, 12, 18, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("4w") == datetime.datetime(2019, 12, 4, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("8w") == datetime.datetime(2019, 11, 6, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
+            assert relative_date_parse_for_feature_flag_matching("1w") == datetime.datetime(
+                2019, 12, 25, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("2w") == datetime.datetime(
+                2019, 12, 18, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("4w") == datetime.datetime(
+                2019, 12, 4, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("8w") == datetime.datetime(
+                2019, 11, 6, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
 
-            assert relative_date_parse_for_feature_flag_matching("1m") == datetime.datetime(2019, 12, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("4w") != relative_date_parse_for_feature_flag_matching("1m")
-    
+            assert relative_date_parse_for_feature_flag_matching("1m") == datetime.datetime(
+                2019, 12, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("4w") != relative_date_parse_for_feature_flag_matching(
+                "1m"
+            )
+
     def test_month_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):
-            assert relative_date_parse_for_feature_flag_matching("1m") == datetime.datetime(2019, 12, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("2m") == datetime.datetime(2019, 11, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("4m") == datetime.datetime(2019, 9, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("8m") == datetime.datetime(2019, 5, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
+            assert relative_date_parse_for_feature_flag_matching("1m") == datetime.datetime(
+                2019, 12, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("2m") == datetime.datetime(
+                2019, 11, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("4m") == datetime.datetime(
+                2019, 9, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("8m") == datetime.datetime(
+                2019, 5, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
 
-            assert relative_date_parse_for_feature_flag_matching("1y") == datetime.datetime(2019, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("12m") == relative_date_parse_for_feature_flag_matching("1y")
-        
+            assert relative_date_parse_for_feature_flag_matching("1y") == datetime.datetime(
+                2019, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching(
+                "12m"
+            ) == relative_date_parse_for_feature_flag_matching("1y")
+
         with freeze_time("2020-04-03T00:00:00"):
-            assert relative_date_parse_for_feature_flag_matching("1m") == datetime.datetime(2020, 3, 3, 0, 0, 0, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("2m") == datetime.datetime(2020, 2, 3, 0, 0, 0, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("4m") == datetime.datetime(2019, 12, 3, 0, 0, 0, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("8m") == datetime.datetime(2019, 8, 3, 0, 0, 0, tzinfo=tz.gettz("UTC"))
+            assert relative_date_parse_for_feature_flag_matching("1m") == datetime.datetime(
+                2020, 3, 3, 0, 0, 0, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("2m") == datetime.datetime(
+                2020, 2, 3, 0, 0, 0, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("4m") == datetime.datetime(
+                2019, 12, 3, 0, 0, 0, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("8m") == datetime.datetime(
+                2019, 8, 3, 0, 0, 0, tzinfo=tz.gettz("UTC")
+            )
 
-            assert relative_date_parse_for_feature_flag_matching("1y") == datetime.datetime(2019, 4, 3, 0, 0, 0, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("12m") == relative_date_parse_for_feature_flag_matching("1y")
-    
+            assert relative_date_parse_for_feature_flag_matching("1y") == datetime.datetime(
+                2019, 4, 3, 0, 0, 0, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching(
+                "12m"
+            ) == relative_date_parse_for_feature_flag_matching("1y")
+
     def test_year_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):
-            assert relative_date_parse_for_feature_flag_matching("1y") == datetime.datetime(2019, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("2y") == datetime.datetime(2018, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("4y") == datetime.datetime(2016, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
-            assert relative_date_parse_for_feature_flag_matching("8y") == datetime.datetime(2012, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC"))
+            assert relative_date_parse_for_feature_flag_matching("1y") == datetime.datetime(
+                2019, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("2y") == datetime.datetime(
+                2018, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("4y") == datetime.datetime(
+                2016, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+            assert relative_date_parse_for_feature_flag_matching("8y") == datetime.datetime(
+                2012, 1, 1, 12, 1, 20, 134000, tzinfo=tz.gettz("UTC")
+            )
+
 
 class TestCaptureCalls(unittest.TestCase):
     @mock.patch.object(Client, "capture")

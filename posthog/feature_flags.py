@@ -182,8 +182,8 @@ def match_property(property, property_values) -> bool:
             else:
                 parsed_date = parser.parse(str(value))
                 parsed_date = convert_to_datetime_aware(parsed_date)
-        except Exception:
-            raise InconclusiveMatchError("The date set on the flag is not a valid format")
+        except Exception as e:
+            raise InconclusiveMatchError("The date set on the flag is not a valid format") from e
 
         if not parsed_date:
             raise InconclusiveMatchError("The date set on the flag is not a valid format")
