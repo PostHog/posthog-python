@@ -311,7 +311,6 @@ def relative_date_parse_for_feature_flag_matching(value: str) -> Optional[dateti
             # Guard against overflow, disallow numbers greater than 10_000
             return None
 
-        print(number)
         interval = match.group("interval")
         if interval == "h":
             parsed_dt = parsed_dt - relativedelta(hours=number)
