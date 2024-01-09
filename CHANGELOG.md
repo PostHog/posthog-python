@@ -1,3 +1,12 @@
+## 3.2.0 - 2024-01-09
+
+1. Numeric property handling for feature flags now does the expected: When passed in a number, we do a numeric comparison. When passed in a string, we do a string comparison. Previously, we always did a string comparison.
+2. Add support for relative date operators for local evaluation.
+
+## 3.1.0 - 2023-12-04
+
+1. Increase maximum event size and batch size
+
 ## 3.0.2 - 2023-08-17
 
 1. Returns the current flag property with $feature_flag_called events, to make it easier to use in experiments
