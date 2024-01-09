@@ -213,8 +213,19 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
                 for feature, variant in feature_variants.items():
-                    msg["properties"]["$feature/{}".format(feature)] = variant
+                    msg["properties"][f"$feature/{feature}"] = variant
                 msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
+        elif self.feature_flags:
+            # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to the server
+            feature_variants = self.get_all_flags(
+                distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=True
+            )
+            for feature, variant in feature_variants.items():
+                msg["properties"][f"$feature/{feature}"] = variant
+
+            active_feature_flags = [key for (key, value) in feature_variants.items() if value is not False]
+            if active_feature_flags:
+                msg["properties"]["$active_feature_flags"] = active_feature_flags
 
         return self._enqueue(msg, disable_geoip)
 
@@ -538,6 +549,10 @@ class Client(object):
         if self.disabled:
             return None
 
+        person_properties, group_properties = self._add_local_person_and_group_properties(
+            distinct_id, groups, person_properties, group_properties
+        )
+
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
@@ -685,6 +700,10 @@ class Client(object):
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}
 
+        person_properties, group_properties = self._add_local_person_and_group_properties(
+            distinct_id, groups, person_properties, group_properties
+        )
+
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
@@ -742,6 +761,19 @@ class Client(object):
 
     def feature_flag_definitions(self):
         return self.feature_flags
+
+    def _add_local_person_and_group_properties(self, distinct_id, groups, person_properties, group_properties):
+        all_person_properties = {"$current_distinct_id": distinct_id, **(person_properties or {})}
+
+        all_group_properties = {}
+        if groups:
+            for group_name in groups:
+                all_group_properties[group_name] = {
+                    "$group_key": groups[group_name],
+                    **(group_properties.get(group_name) or {}),
+                }
+
+        return all_person_properties, all_group_properties
 
 
 def require(name, field, data_type):
