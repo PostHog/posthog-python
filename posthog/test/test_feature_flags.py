@@ -2015,6 +2015,12 @@ class TestMatchProperties(unittest.TestCase):
         property_k = self.property(key="key", value="2022-05-01", operator="is_date_before")
         with self.assertRaises(InconclusiveMatchError):
             self.assertFalse(match_property(property_k, {"key": "random"}))
+    
+    def test_unknown_operator(self):
+        property_a = self.property(key="key", value="2022-05-01", operator="is_unknown")
+        with self.assertRaises(InconclusiveMatchError) as exception_context:
+            match_property(property_a, {"key": "random"})
+        self.assertEqual(str(exception_context.exception), "Unknown operator is_unknown")
 
 
 class TestRelativeDateParsing(unittest.TestCase):
