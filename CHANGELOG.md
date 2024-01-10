@@ -1,3 +1,7 @@
+## 3.3.1 - 2024-01-10
+
+1. Make sure we don't override any existing feature flag properties when adding locally evaluated feature flag properties.
+
 ## 3.3.0 - 2024-01-09
 
 1. When local evaluation is enabled, we automatically add flag information to all events sent to PostHog, whenever possible. This makes it easier to use these events in experiments.
