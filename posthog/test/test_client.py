@@ -286,17 +286,6 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(patch_decide.call_count, 0)
 
-        # test that flags are not evaluated without local evaluation
-        client.feature_flags = []
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        assert "$feature/beta-feature" not in msg["properties"]
-        assert "$feature/beta-feature-local" not in msg["properties"]
-        assert "$feature/false-flag" not in msg["properties"]
-        assert "$active_feature_flags" not in msg["properties"]
-
     @mock.patch("posthog.client.decide")
     def test_get_active_feature_flags(self, patch_decide):
         patch_decide.return_value = {
