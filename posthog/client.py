@@ -206,6 +206,7 @@ class Client(object):
             require("groups", groups, dict)
             msg["properties"]["$groups"] = groups
 
+        extra_properties = {}
         if send_feature_flags:
             try:
                 feature_variants = self._get_active_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
@@ -213,19 +214,22 @@ class Client(object):
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
             else:
                 for feature, variant in feature_variants.items():
-                    msg["properties"][f"$feature/{feature}"] = variant
-                msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
+                    extra_properties[f"$feature/{feature}"] = variant
+                extra_properties["$active_feature_flags"] = list(feature_variants.keys())
         elif self.feature_flags:
             # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to the server
             feature_variants = self.get_all_flags(
                 distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=True
             )
             for feature, variant in feature_variants.items():
-                msg["properties"][f"$feature/{feature}"] = variant
+                extra_properties[f"$feature/{feature}"] = variant
 
             active_feature_flags = [key for (key, value) in feature_variants.items() if value is not False]
             if active_feature_flags:
-                msg["properties"]["$active_feature_flags"] = active_feature_flags
+                extra_properties["$active_feature_flags"] = active_feature_flags
+        
+        if extra_properties:
+            msg["properties"] = {**extra_properties, **msg["properties"]}
 
         return self._enqueue(msg, disable_geoip)
 

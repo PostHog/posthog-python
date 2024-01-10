@@ -208,6 +208,94 @@ class TestClient(unittest.TestCase):
         assert "$feature/beta-feature-local" not in msg["properties"]
         assert "$feature/false-flag" not in msg["properties"]
         assert "$active_feature_flags" not in msg["properties"]
+    
+    @mock.patch("posthog.client.decide")
+    def test_dont_override_capture_with_local_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+
+        multivariate_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature-local",
+            "is_simple_flag": False,
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                        ],
+                        "rollout_percentage": 100,
+                    },
+                    {
+                        "rollout_percentage": 50,
+                    },
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                    ]
+                },
+                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+            },
+        }
+        basic_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "person-flag",
+            "is_simple_flag": True,
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person",
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        client.feature_flags = [multivariate_flag, basic_flag]
+
+        success, msg = client.capture("distinct_id", "python test event", {"$feature/beta-feature-local": "my-custom-variant"})
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "my-custom-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
+        assert "$feature/beta-feature" not in msg["properties"]
+        assert "$feature/person-flag" not in msg["properties"]
+
+        self.assertEqual(patch_decide.call_count, 0)
+
+        # test that flags are not evaluated without local evaluation
+        client.feature_flags = []
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        assert "$feature/beta-feature" not in msg["properties"]
+        assert "$feature/beta-feature-local" not in msg["properties"]
+        assert "$feature/false-flag" not in msg["properties"]
+        assert "$active_feature_flags" not in msg["properties"]
 
     @mock.patch("posthog.client.decide")
     def test_get_active_feature_flags(self, patch_decide):
