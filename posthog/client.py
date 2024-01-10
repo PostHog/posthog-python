@@ -227,7 +227,7 @@ class Client(object):
             active_feature_flags = [key for (key, value) in feature_variants.items() if value is not False]
             if active_feature_flags:
                 extra_properties["$active_feature_flags"] = active_feature_flags
-        
+
         if extra_properties:
             msg["properties"] = {**extra_properties, **msg["properties"]}
 

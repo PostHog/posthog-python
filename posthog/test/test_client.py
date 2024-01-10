@@ -208,7 +208,7 @@ class TestClient(unittest.TestCase):
         assert "$feature/beta-feature-local" not in msg["properties"]
         assert "$feature/false-flag" not in msg["properties"]
         assert "$active_feature_flags" not in msg["properties"]
-    
+
     @mock.patch("posthog.client.decide")
     def test_dont_override_capture_with_local_flags(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
@@ -268,7 +268,9 @@ class TestClient(unittest.TestCase):
         }
         client.feature_flags = [multivariate_flag, basic_flag]
 
-        success, msg = client.capture("distinct_id", "python test event", {"$feature/beta-feature-local": "my-custom-variant"})
+        success, msg = client.capture(
+            "distinct_id", "python test event", {"$feature/beta-feature-local": "my-custom-variant"}
+        )
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
