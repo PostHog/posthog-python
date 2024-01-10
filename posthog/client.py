@@ -137,16 +137,6 @@ class Client(object):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return resp_data["featureFlags"]
 
-    def _get_active_feature_variants(
-        self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
-    ):
-        feature_variants = self.get_feature_variants(
-            distinct_id, groups, person_properties, group_properties, disable_geoip
-        )
-        return {
-            k: v for (k, v) in feature_variants.items() if v is not False
-        }  # explicitly test for false to account for values that may seem falsy (ex: 0)
-
     def get_feature_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ):
@@ -206,26 +196,29 @@ class Client(object):
             require("groups", groups, dict)
             msg["properties"]["$groups"] = groups
 
+        extra_properties = {}
+        feature_variants = {}
         if send_feature_flags:
             try:
-                feature_variants = self._get_active_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
+                feature_variants = self.get_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
-            else:
-                for feature, variant in feature_variants.items():
-                    msg["properties"][f"$feature/{feature}"] = variant
-                msg["properties"]["$active_feature_flags"] = list(feature_variants.keys())
+
         elif self.feature_flags:
             # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to the server
             feature_variants = self.get_all_flags(
                 distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=True
             )
-            for feature, variant in feature_variants.items():
-                msg["properties"][f"$feature/{feature}"] = variant
 
-            active_feature_flags = [key for (key, value) in feature_variants.items() if value is not False]
-            if active_feature_flags:
-                msg["properties"]["$active_feature_flags"] = active_feature_flags
+        for feature, variant in feature_variants.items():
+            extra_properties[f"$feature/{feature}"] = variant
+
+        active_feature_flags = [key for (key, value) in feature_variants.items() if value is not False]
+        if active_feature_flags:
+            extra_properties["$active_feature_flags"] = active_feature_flags
+
+        if extra_properties:
+            msg["properties"] = {**extra_properties, **msg["properties"]}
 
         return self._enqueue(msg, disable_geoip)
 
