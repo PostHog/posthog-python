@@ -1,5 +1,5 @@
 import datetime  # noqa: F401
-from typing import Callable, Dict, Optional  # noqa: F401
+from typing import Callable, Dict, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.version import VERSION
@@ -33,7 +33,7 @@ def capture(
     send_feature_flags=False,
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+     # type: (...) -> Tuple[bool, str]
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
 
@@ -54,7 +54,7 @@ def capture(
     posthog.capture('distinct id', 'purchase', groups={'company': 'id:5'})
     ```
     """
-    _proxy(
+    return _proxy(
         "capture",
         distinct_id=distinct_id,
         event=event,
@@ -76,7 +76,7 @@ def identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+     # type: (...) -> Tuple[bool, str]
     """
     Identify lets you add metadata on your users so you can more easily identify who they are in PostHog, and even do things like segment users by these properties.
 
@@ -92,7 +92,7 @@ def identify(
     })
     ```
     """
-    _proxy(
+    return _proxy(
         "identify",
         distinct_id=distinct_id,
         properties=properties,
@@ -111,7 +111,7 @@ def set(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+     # type: (...) -> Tuple[bool, str]
     """
     Set properties on a user record.
     This will overwrite previous people property values, just like `identify`.
@@ -127,7 +127,7 @@ def set(
      })
      ```
     """
-    _proxy(
+    return _proxy(
         "set",
         distinct_id=distinct_id,
         properties=properties,
@@ -146,7 +146,7 @@ def set_once(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+     # type: (...) -> Tuple[bool, str]
     """
     Set properties on a user record, only if they do not yet exist.
     This will not overwrite previous people property values, unlike `identify`.
@@ -162,7 +162,7 @@ def set_once(
      })
      ```
     """
-    _proxy(
+    return _proxy(
         "set_once",
         distinct_id=distinct_id,
         properties=properties,
@@ -182,7 +182,7 @@ def group_identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+     # type: (...) -> Tuple[bool, str]
     """
     Set properties on a group
 
@@ -198,7 +198,7 @@ def group_identify(
      })
      ```
     """
-    _proxy(
+    return _proxy(
         "group_identify",
         group_type=group_type,
         group_key=group_key,
@@ -218,7 +218,7 @@ def alias(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, str]
     """
     To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
 
@@ -235,7 +235,7 @@ def alias(
     posthog.alias('anonymous session id', 'distinct id')
     ```
     """
-    _proxy(
+    return _proxy(
         "alias",
         previous_id=previous_id,
         distinct_id=distinct_id,
