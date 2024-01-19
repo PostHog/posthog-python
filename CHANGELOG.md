@@ -1,3 +1,8 @@
+## 3.3.2 - 2024-01-19
+
+1. Return success/failure with all capture calls from module functions
+
+
 ## 3.3.1 - 2024-01-10
 
 1. Make sure we don't override any existing feature flag properties when adding locally evaluated feature flag properties.
