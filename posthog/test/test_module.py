@@ -7,7 +7,6 @@ class TestModule(unittest.TestCase):
     posthog = None
 
     def _assert_enqueue_result(self, result):
-        print(result)
         self.assertEqual(type(result[0]), bool)
         self.assertEqual(type(result[1]), dict)
 
