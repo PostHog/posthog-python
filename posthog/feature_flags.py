@@ -302,7 +302,7 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
 
 
 def relative_date_parse_for_feature_flag_matching(value: str) -> Optional[datetime.datetime]:
-    regex = r"^(?P<number>[0-9]+)(?P<interval>[a-z])$"
+    regex = r"^-?(?P<number>[0-9]+)(?P<interval>[a-z])$"
     match = re.search(regex, value)
     parsed_dt = datetime.datetime.now(datetime.timezone.utc)
     if match:
