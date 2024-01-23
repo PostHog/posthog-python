@@ -783,7 +783,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={},
-            person_properties={"$current_distinct_id": "some_id"},
+            person_properties={"distinct_id": "some_id"},
             group_properties={},
             disable_geoip=True,
         )
@@ -795,7 +795,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="feature_enabled_distinct_id",
             groups={},
-            person_properties={"$current_distinct_id": "feature_enabled_distinct_id"},
+            person_properties={"distinct_id": "feature_enabled_distinct_id"},
             group_properties={},
             disable_geoip=True,
         )
@@ -807,7 +807,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="all_flags_payloads_id",
             groups={},
-            person_properties={"$current_distinct_id": "all_flags_payloads_id"},
+            person_properties={"distinct_id": "all_flags_payloads_id"},
             group_properties={},
             disable_geoip=False,
         )
@@ -843,7 +843,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={"$current_distinct_id": "some_id", "x1": "y1"},
+            person_properties={"distinct_id": "some_id", "x1": "y1"},
             group_properties={
                 "company": {"$group_key": "id:5", "x": "y"},
                 "instance": {"$group_key": "app.posthog.com"},
@@ -856,7 +856,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={"$current_distinct_id": "override"},
+            person_properties={"distinct_id": "override"},
             group_properties={
                 "company": {
                     "$group_key": "group_override",
@@ -869,7 +869,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={"$current_distinct_id": "override"},
+            person_properties={"distinct_id": "override"},
             group_properties={
                 "company": {"$group_key": "group_override"},
                 "instance": {"$group_key": "app.posthog.com"},
@@ -886,7 +886,7 @@ class TestClient(unittest.TestCase):
             timeout=10,
             distinct_id="some_id",
             groups={},
-            person_properties={"$current_distinct_id": "some_id"},
+            person_properties={"distinct_id": "some_id"},
             group_properties={},
             disable_geoip=False,
         )

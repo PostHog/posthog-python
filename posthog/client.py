@@ -756,7 +756,7 @@ class Client(object):
         return self.feature_flags
 
     def _add_local_person_and_group_properties(self, distinct_id, groups, person_properties, group_properties):
-        all_person_properties = {"$current_distinct_id": distinct_id, **(person_properties or {})}
+        all_person_properties = {"distinct_id": distinct_id, **(person_properties or {})}
 
         all_group_properties = {}
         if groups:

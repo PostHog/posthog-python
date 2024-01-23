@@ -175,11 +175,11 @@ def match_property(property, property_values) -> bool:
         else:
             return compare(str(override_value), str(value), operator)
 
-    if operator in ["is_date_before", "is_date_after", "is_relative_date_before", "is_relative_date_after"]:
+    if operator in ["is_date_before", "is_date_after"]:
         try:
-            if operator in ["is_relative_date_before", "is_relative_date_after"]:
-                parsed_date = relative_date_parse_for_feature_flag_matching(str(value))
-            else:
+            parsed_date = relative_date_parse_for_feature_flag_matching(str(value))
+
+            if not parsed_date:
                 parsed_date = parser.parse(str(value))
                 parsed_date = convert_to_datetime_aware(parsed_date)
         except Exception as e:
@@ -190,12 +190,12 @@ def match_property(property, property_values) -> bool:
 
         if isinstance(override_value, datetime.datetime):
             override_date = convert_to_datetime_aware(override_value)
-            if operator in ("is_date_before", "is_relative_date_before"):
+            if operator == "is_date_before":
                 return override_date < parsed_date
             else:
                 return override_date > parsed_date
         elif isinstance(override_value, datetime.date):
-            if operator in ("is_date_before", "is_relative_date_before"):
+            if operator == "is_date_before":
                 return override_value < parsed_date.date()
             else:
                 return override_value > parsed_date.date()
@@ -203,7 +203,7 @@ def match_property(property, property_values) -> bool:
             try:
                 override_date = parser.parse(override_value)
                 override_date = convert_to_datetime_aware(override_date)
-                if operator in ("is_date_before", "is_relative_date_before"):
+                if operator == "is_date_before":
                     return override_date < parsed_date
                 else:
                     return override_date > parsed_date
