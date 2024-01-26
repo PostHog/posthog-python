@@ -43,9 +43,9 @@ class PostHogIntegration(Integration):
                             not not Hub.current.client.dsn and Dsn(Hub.current.client.dsn).project_id
                         )
                         if project_id:
-                            properties[
-                                "$sentry_url"
-                            ] = f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
+                            properties["$sentry_url"] = (
+                                f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
+                            )
 
                     posthog.capture(posthog_distinct_id, "$exception", properties)
 
