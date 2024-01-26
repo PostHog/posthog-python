@@ -1,3 +1,7 @@
+## 3.3.3 - 2024-01-26
+
+1. Remove new relative date operators, combine into regular date operators
+
 ## 3.3.2 - 2024-01-19
 
 1. Return success/failure with all capture calls from module functions
