@@ -464,7 +464,16 @@ class Client(object):
             self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
             self.poller.start()
 
-    def _compute_flag_locally(self, feature_flag, distinct_id, *, groups={}, person_properties={}, group_properties={}, warn_on_unknown_groups=True):
+    def _compute_flag_locally(
+        self,
+        feature_flag,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        warn_on_unknown_groups=True,
+    ):
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
@@ -718,7 +727,9 @@ class Client(object):
 
         return response
 
-    def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}, warn_on_unknown_groups=False):
+    def _get_all_flags_and_payloads_locally(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, warn_on_unknown_groups=False
+    ):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
