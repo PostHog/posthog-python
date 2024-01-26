@@ -499,6 +499,10 @@ class Client(object):
                     self.log.warning(
                         f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
                     )
+                else:
+                    self.log.debug(
+                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                    )
                 return False
 
             focused_group_properties = group_properties[group_name]
