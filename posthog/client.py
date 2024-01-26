@@ -464,7 +464,16 @@ class Client(object):
             self.poller = Poller(interval=timedelta(seconds=self.poll_interval), execute=self._load_feature_flags)
             self.poller.start()
 
-    def _compute_flag_locally(self, feature_flag, distinct_id, *, groups={}, person_properties={}, group_properties={}):
+    def _compute_flag_locally(
+        self,
+        feature_flag,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        warn_on_unknown_groups=True,
+    ):
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
@@ -486,9 +495,14 @@ class Client(object):
             if group_name not in groups:
                 # Group flags are never enabled in `groups` aren't passed in
                 # don't failover to `/decide/`, since response will be the same
-                self.log.warning(
-                    f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
-                )
+                if warn_on_unknown_groups:
+                    self.log.warning(
+                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                    )
+                else:
+                    self.log.debug(
+                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                    )
                 return False
 
             focused_group_properties = group_properties[group_name]
@@ -717,7 +731,9 @@ class Client(object):
 
         return response
 
-    def _get_all_flags_and_payloads_locally(self, distinct_id, *, groups={}, person_properties={}, group_properties={}):
+    def _get_all_flags_and_payloads_locally(
+        self, distinct_id, *, groups={}, person_properties={}, group_properties={}, warn_on_unknown_groups=False
+    ):
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
@@ -737,6 +753,7 @@ class Client(object):
                         groups=groups,
                         person_properties=person_properties,
                         group_properties=group_properties,
+                        warn_on_unknown_groups=warn_on_unknown_groups,
                     )
                     matched_payload = self._compute_payload_locally(flag["key"], flags[flag["key"]])
                     if matched_payload:
@@ -756,7 +773,7 @@ class Client(object):
         return self.feature_flags
 
     def _add_local_person_and_group_properties(self, distinct_id, groups, person_properties, group_properties):
-        all_person_properties = {"$current_distinct_id": distinct_id, **(person_properties or {})}
+        all_person_properties = {"distinct_id": distinct_id, **(person_properties or {})}
 
         all_group_properties = {}
         if groups:
