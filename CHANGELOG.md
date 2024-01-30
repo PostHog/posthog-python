@@ -1,3 +1,7 @@
+## 3.3.4 - 2024-01-30
+
+1. Update type hints for module variables to work with newer versions of mypy
+
 ## 3.3.3 - 2024-01-26
 
 1. Remove new relative date operators, combine into regular date operators
