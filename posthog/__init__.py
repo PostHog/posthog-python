@@ -19,7 +19,7 @@ project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
 
-default_client = None # type: Optional[Client]
+default_client = None  # type: Optional[Client]
 
 
 def capture(
@@ -404,9 +404,11 @@ def feature_flag_definitions():
     """Returns loaded feature flags, if any. Helpful for debugging what flag information you have loaded."""
     return _proxy("feature_flag_definitions")
 
+
 def load_feature_flags():
     """Load feature flag definitions from PostHog."""
     return _proxy("load_feature_flags")
+
 
 def page(*args, **kwargs):
     """Send a page call."""
