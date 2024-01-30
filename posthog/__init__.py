@@ -7,19 +7,19 @@ from posthog.version import VERSION
 __version__ = VERSION
 
 """Settings."""
-api_key = None  # type: str
-host = None  # type: str
-on_error = None  # type: Callable
+api_key = None  # type: Optional[str]
+host = None  # type: Optional[str]
+on_error = None  # type: Optional[Callable]
 debug = False  # type: bool
 send = True  # type: bool
 sync_mode = False  # type: bool
 disabled = False  # type: bool
-personal_api_key = None  # type: str
-project_api_key = None  # type: str
+personal_api_key = None  # type: Optional[str]
+project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
 
-default_client = None
+default_client = None # type: Optional[Client]
 
 
 def capture(
@@ -404,6 +404,9 @@ def feature_flag_definitions():
     """Returns loaded feature flags, if any. Helpful for debugging what flag information you have loaded."""
     return _proxy("feature_flag_definitions")
 
+def load_feature_flags():
+    """Load feature flag definitions from PostHog."""
+    return _proxy("load_feature_flags")
 
 def page(*args, **kwargs):
     """Send a page call."""
