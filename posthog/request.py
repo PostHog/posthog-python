@@ -13,8 +13,21 @@ from posthog.version import VERSION
 
 _session = requests.sessions.Session()
 
-DEFAULT_HOST = "https://app.posthog.com"
+US_INGESTION_ENDPOINT = "https://us-api.i.posthog.com"
+EU_INGESTION_ENDPOINT = "https://eu-api.i.posthog.com"
+DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
+
+def determine_server_host(host: Optional[str]) -> str:
+    """Determines the server host to use."""
+    host_or_default = host or DEFAULT_HOST
+    trimmed_host = remove_trailing_slash(host_or_default)
+    if trimmed_host in ("https://app.posthog.com", "https://us.posthog.com"):
+        return US_INGESTION_ENDPOINT
+    elif trimmed_host == "https://eu.posthog.com":
+        return EU_INGESTION_ENDPOINT
+    else:
+        return host_or_default
 
 
 def post(

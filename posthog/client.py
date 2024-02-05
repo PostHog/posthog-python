@@ -10,7 +10,7 @@ from six import string_types
 from posthog.consumer import Consumer
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import APIError, batch_post, decide, get
+from posthog.request import APIError, batch_post, decide, determine_server_host, get
 from posthog.utils import SizeLimitedDict, clean, guess_timezone
 from posthog.version import VERSION
 
@@ -61,7 +61,7 @@ class Client(object):
         self.debug = debug
         self.send = send
         self.sync_mode = sync_mode
-        self.host = host
+        self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
         self.feature_flags = None
