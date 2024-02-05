@@ -1,3 +1,7 @@
+## 3.4.0 - 2024-02-05
+
+1. Point given hosts to new ingestion hosts
+
 ## 3.3.4 - 2024-01-30
 
 1. Update type hints for module variables to work with newer versions of mypy
