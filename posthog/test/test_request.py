@@ -66,4 +66,3 @@ class TestRequests(unittest.TestCase):
 )
 def test_routing_to_custom_host(host, expected):
     assert determine_server_host(host) == expected
-        
