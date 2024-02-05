@@ -1,8 +1,8 @@
 import json
 import unittest
 from datetime import date, datetime
-import pytest
 
+import pytest
 import requests
 
 from posthog.request import DatetimeSerializer, batch_post, determine_server_host
