@@ -100,7 +100,7 @@ class Client(object):
                 consumer = Consumer(
                     self.queue,
                     self.api_key,
-                    host=host,
+                    host=self.host,
                     on_error=on_error,
                     flush_at=flush_at,
                     flush_interval=flush_interval,
