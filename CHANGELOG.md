@@ -1,3 +1,7 @@
+## 3.4.1 - 2024-02-09
+
+1. Use new hosts for event capture as well
+
 ## 3.4.0 - 2024-02-05
 
 1. Point given hosts to new ingestion hosts
