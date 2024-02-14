@@ -36,6 +36,7 @@ class Consumer(Thread):
         gzip=False,
         retries=10,
         timeout=15,
+        historical_migration=False,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -55,6 +56,7 @@ class Consumer(Thread):
         self.running = True
         self.retries = retries
         self.timeout = timeout
+        self.historical_migration = historical_migration
 
     def run(self):
         """Runs the consumer."""
@@ -134,6 +136,13 @@ class Consumer(Thread):
 
         @backoff.on_exception(backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception)
         def send_request():
-            batch_post(self.api_key, self.host, gzip=self.gzip, timeout=self.timeout, batch=batch)
+            batch_post(
+                self.api_key,
+                self.host,
+                gzip=self.gzip,
+                timeout=self.timeout,
+                batch=batch,
+                historical_migration=self.historical_migration,
+            )
 
         send_request()
