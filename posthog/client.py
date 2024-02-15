@@ -49,6 +49,7 @@ class Client(object):
         project_api_key=None,
         disabled=False,
         disable_geoip=True,
+        historical_migration=False,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -73,6 +74,7 @@ class Client(object):
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.disabled = disabled
         self.disable_geoip = disable_geoip
+        self.historical_migration = historical_migration
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -107,6 +109,7 @@ class Client(object):
                     gzip=gzip,
                     retries=max_retries,
                     timeout=timeout,
+                    historical_migration=historical_migration,
                 )
                 self.consumers.append(consumer)
 
@@ -374,7 +377,14 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            batch_post(self.api_key, self.host, gzip=self.gzip, timeout=self.timeout, batch=[msg])
+            batch_post(
+                self.api_key,
+                self.host,
+                gzip=self.gzip,
+                timeout=self.timeout,
+                batch=[msg],
+                historical_migration=self.historical_migration,
+            )
 
             return True, msg
 
