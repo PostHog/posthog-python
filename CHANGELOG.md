@@ -1,3 +1,7 @@
+## 3.4.2 - 2024-02-20
+
+1. Add `historical_migration` option for bulk migration to PostHog Cloud.
+
 ## 3.4.1 - 2024-02-09
 
 1. Use new hosts for event capture as well
@@ -123,7 +127,7 @@ Changes:
 Breaking changes:
 
 1. The minimum version requirement for PostHog servers is now 1.38. If you're using PostHog Cloud, you satisfy this requirement automatically.
-2. Feature flag defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this. 
+2. Feature flag defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this.
 **Note: These are removed in 2.0.2**
 3. Feature flag remote evaluation doesn't require a personal API key.
 
