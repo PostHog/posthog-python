@@ -314,7 +314,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(patch_decide.call_count, 1)
         patch_decide.assert_called_with(
             "random_key",
-            "https://us-api.i.posthog.com",
+            "https://us.i.posthog.com",
             timeout=3,
             distinct_id="distinct_id",
             groups={},
@@ -356,7 +356,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(patch_decide.call_count, 1)
         patch_decide.assert_called_with(
             "random_key",
-            "https://us-api.i.posthog.com",
+            "https://us.i.posthog.com",
             timeout=12,
             distinct_id="distinct_id",
             groups={},
@@ -784,7 +784,7 @@ class TestClient(unittest.TestCase):
         client.get_feature_flag("random_key", "some_id", disable_geoip=True)
         patch_decide.assert_called_with(
             "random_key",
-            "https://us-api.i.posthog.com",
+            "https://us.i.posthog.com",
             timeout=3,
             distinct_id="some_id",
             groups={},
@@ -796,7 +796,7 @@ class TestClient(unittest.TestCase):
         client.feature_enabled("random_key", "feature_enabled_distinct_id", disable_geoip=True)
         patch_decide.assert_called_with(
             "random_key",
-            "https://us-api.i.posthog.com",
+            "https://us.i.posthog.com",
             timeout=3,
             distinct_id="feature_enabled_distinct_id",
             groups={},
@@ -808,7 +808,7 @@ class TestClient(unittest.TestCase):
         client.get_all_flags_and_payloads("all_flags_payloads_id")
         patch_decide.assert_called_with(
             "random_key",
-            "https://us-api.i.posthog.com",
+            "https://us.i.posthog.com",
             timeout=3,
             distinct_id="all_flags_payloads_id",
             groups={},
