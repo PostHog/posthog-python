@@ -18,6 +18,7 @@ personal_api_key = None  # type: Optional[str]
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
+feature_flags_request_timeout = 3  # type: int
 
 default_client = None  # type: Optional[Client]
 
@@ -452,6 +453,7 @@ def _proxy(method, *args, **kwargs):
             poll_interval=poll_interval,
             disabled=disabled,
             disable_geoip=disable_geoip,
+            feature_flags_request_timeout=feature_flags_request_timeout,
         )
 
     # always set incase user changes it
