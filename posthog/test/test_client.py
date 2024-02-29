@@ -335,7 +335,7 @@ class TestClient(unittest.TestCase):
             on_error=self.set_fail,
             personal_api_key=FAKE_TEST_API_KEY,
             disable_geoip=True,
-            feature_flags_request_timeout=12,
+            feature_flags_request_timeout_seconds=12,
         )
         success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, disable_geoip=False)
         client.flush()

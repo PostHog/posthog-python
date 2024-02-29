@@ -1,6 +1,6 @@
 ## 3.5.0 - 2024-02-29
 
-1. - Adds a new `feature_flags_request_timeout` timeout parameter for feature flags which defaults to 3 seconds, updated from the default 10s for all other API calls.
+1. - Adds a new `feature_flags_request_timeout_seconds` timeout parameter for feature flags which defaults to 3 seconds, updated from the default 10s for all other API calls.
 
 ## 3.4.2 - 2024-02-20
 
