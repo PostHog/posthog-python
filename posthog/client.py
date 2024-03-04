@@ -50,6 +50,7 @@ class Client(object):
         disabled=False,
         disable_geoip=True,
         historical_migration=False,
+        feature_flags_request_timeout_seconds=3,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -70,6 +71,7 @@ class Client(object):
         self.group_type_mapping = None
         self.cohorts = None
         self.poll_interval = poll_interval
+        self.feature_flags_request_timeout_seconds = feature_flags_request_timeout_seconds
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.disabled = disabled
@@ -164,7 +166,7 @@ class Client(object):
             "group_properties": group_properties,
             "disable_geoip": disable_geoip,
         }
-        resp_data = decide(self.api_key, self.host, timeout=10, **request_data)
+        resp_data = decide(self.api_key, self.host, timeout=self.feature_flags_request_timeout_seconds, **request_data)
 
         return resp_data
 

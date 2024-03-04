@@ -315,7 +315,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "https://us-api.i.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="distinct_id",
             groups={},
             person_properties=None,
@@ -335,6 +335,7 @@ class TestClient(unittest.TestCase):
             on_error=self.set_fail,
             personal_api_key=FAKE_TEST_API_KEY,
             disable_geoip=True,
+            feature_flags_request_timeout_seconds=12,
         )
         success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, disable_geoip=False)
         client.flush()
@@ -356,7 +357,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "https://us-api.i.posthog.com",
-            timeout=10,
+            timeout=12,
             distinct_id="distinct_id",
             groups={},
             person_properties=None,
@@ -784,7 +785,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "https://us-api.i.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="some_id",
             groups={},
             person_properties={"distinct_id": "some_id"},
@@ -796,7 +797,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "https://us-api.i.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="feature_enabled_distinct_id",
             groups={},
             person_properties={"distinct_id": "feature_enabled_distinct_id"},
@@ -808,7 +809,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "https://us-api.i.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="all_flags_payloads_id",
             groups={},
             person_properties={"distinct_id": "all_flags_payloads_id"},
@@ -844,7 +845,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "http://app2.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
             person_properties={"distinct_id": "some_id", "x1": "y1"},
@@ -870,7 +871,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "http://app2.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
             person_properties={"distinct_id": "override"},
@@ -887,7 +888,7 @@ class TestClient(unittest.TestCase):
         patch_decide.assert_called_with(
             "random_key",
             "http://app2.posthog.com",
-            timeout=10,
+            timeout=3,
             distinct_id="some_id",
             groups={},
             person_properties={"distinct_id": "some_id"},
