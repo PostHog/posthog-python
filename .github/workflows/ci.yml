@@ -9,16 +9,16 @@ jobs:
         runs-on: ubuntu-latest
 
         steps:
-            - uses: actions/checkout@v2
+            - uses: actions/checkout@v3
               with:
                   fetch-depth: 1
 
             - name: Set up Python 3.8
-              uses: actions/setup-python@v2
+              uses: actions/setup-python@v4
               with:
                   python-version: 3.8
 
-            - uses: actions/cache@v1
+            - uses: actions/cache@v3
               with:
                   path: ~/.cache/pip
                   key: ${{ runner.os }}-pip-${{ hashFiles('setup.py') }}
@@ -45,16 +45,26 @@ jobs:
     tests:
         name: Python tests
         runs-on: ubuntu-latest
+        strategy:
+          matrix:
+            python-version: [ "3.7", "3.8", "3.9", "3.10", "3.11" ]
 
         steps:
-            - uses: actions/checkout@v1
+            - uses: actions/checkout@v3
               with:
                   fetch-depth: 1
 
-            - name: Set up Python 3.7
-              uses: actions/setup-python@v1
+            - name: Set up Python ${{ matrix.python-version }}
+              uses: actions/setup-python@v4
               with:
-                  python-version: 3.7
+                  python-version: ${{ matrix.python-version }}
+
+            - uses: actions/cache@v3
+              with:
+                path: ~/.cache/pip
+                key: ${{ runner.os }}-pip-${{ hashFiles('setup.py') }}-${{ matrix.python-version }}
+                restore-keys: |
+                  ${{ runner.os }}-pip-
 
             - name: Install requirements.txt dependencies with pip
               run: |
