@@ -578,23 +578,21 @@ class Client(object):
 
         # If loading in previous line failed
         if self.feature_flags:
-            for flag in self.feature_flags:
-                if flag["key"] == key:
-                    try:
-                        response = self._compute_flag_locally(
-                            flag,
-                            distinct_id,
-                            groups=groups,
-                            person_properties=person_properties,
-                            group_properties=group_properties,
-                        )
-                        self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
-                    except InconclusiveMatchError as e:
-                        self.log.debug(f"Failed to compute flag {key} locally: {e}")
-                        continue
-                    except Exception as e:
-                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
-                        continue
+            flag = self.feature_flags_by_key.get(key)
+            if flag:
+                try:
+                    response = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                    self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
+                except InconclusiveMatchError as e:
+                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
 
         flag_was_locally_evaluated = response is not None
         if not flag_was_locally_evaluated and not only_evaluate_locally:
