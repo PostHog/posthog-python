@@ -670,7 +670,7 @@ class Client(object):
             decide_payloads = self.get_feature_payloads(
                 distinct_id, groups, person_properties, group_properties, disable_geoip
             )
-            response = decide_payloads.get(str(key).lower(), None)
+            response = decide_payloads.get(str(key), None)
 
         return response
 
