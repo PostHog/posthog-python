@@ -37,7 +37,7 @@ def post(
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
     body = kwargs
-    body["sentAt"] = datetime.utcnow().replace(tzinfo=tzutc()).isoformat()
+    body["sentAt"] = datetime.now(tz=tzutc()).isoformat()
     url = remove_trailing_slash(host or DEFAULT_HOST) + path
     body["api_key"] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
