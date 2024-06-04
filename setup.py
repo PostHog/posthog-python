@@ -38,6 +38,7 @@ setup(
     maintainer_email="hey@posthog.com",
     test_suite="posthog.test.all",
     packages=["posthog", "posthog.test", "posthog.sentry"],
+    package_data={"posthog": ["py.typed"]},
     license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,
