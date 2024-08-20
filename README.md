@@ -1,4 +1,5 @@
-# PostHog Python
+# PostHog Python Async
+## this is a fork of the posthog-python library with an async functionality for the capture method.
 
 [![PyPI](https://img.shields.io/pypi/v/posthog)](https://pypi.org/project/posthog/)
 
