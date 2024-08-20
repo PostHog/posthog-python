@@ -1,5 +1,11 @@
+<<<<<<< Updated upstream
 # PostHog Python Async
 ## this is a fork of the posthog-python library with an async functionality for the capture method.
+=======
+## NOTE: This is a fork of the PostHog Python package with custom modifications for Relatent. It is specifically tailored to work with the Relatent platform and Async.
+
+# PostHog Python
+>>>>>>> Stashed changes
 
 [![PyPI](https://img.shields.io/pypi/v/posthog)](https://pypi.org/project/posthog/)
 

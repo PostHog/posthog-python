@@ -8,13 +8,21 @@ except ImportError:
 
 # Don't import analytics-python module here, since deps may not be installed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "posthog"))
-from version import VERSION
+from posthog.version import VERSION
 
 long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
+This is a fork of the PostHog Python package with custom modifications for Relatent. It is specifically tailored to work with the async nature of the Relatent data platform.
 """
 
-install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff>=1.10.0", "python-dateutil>2.1"]
+install_requires = [
+    "requests>=2.7,<3.0",
+    "six>=1.5",
+    "monotonic>=1.5",
+    "backoff>=1.10.0",
+    "python-dateutil>2.1",
+    "aohttp>=3.10.5",
+]
 
 extras_require = {
     "dev": [
@@ -24,24 +32,32 @@ extras_require = {
         "flake8-print",
         "pre-commit",
     ],
-    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout"],
+    "test": [
+        "mock>=2.0.0",
+        "freezegun==0.3.15",
+        "pylint",
+        "flake8",
+        "coverage",
+        "pytest",
+        "pytest-timeout",
+    ],
     "sentry": ["sentry-sdk", "django"],
 }
 
 setup(
-    name="posthog",
+    name="posthog-async",
     version=VERSION,
-    url="https://github.com/posthog/posthog-python",
-    author="Posthog",
-    author_email="hey@posthog.com",
-    maintainer="PostHog",
-    maintainer_email="hey@posthog.com",
+    url="https://github.com/Relatent/posthog-python-async",
+    author="Ben Rapport",
+    author_email="ben@relatent.com",
+    maintainer="Relatent",
+    maintainer_email="ben@relatent.com",
     test_suite="posthog.test.all",
     packages=["posthog", "posthog.test", "posthog.sentry"],
     license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,
-    description="Integrate PostHog into any python application.",
+    description="Integrate PostHog into any python application with async support!",
     long_description=long_description,
     classifiers=[
         "Development Status :: 5 - Production/Stable",
