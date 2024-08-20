@@ -21,27 +21,21 @@ DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
 
 
-def determine_server_host(host: Optional[str]) -> str:
+async def determine_server_host(host: Optional[str]) -> str:
     """Determines the server host to use."""
-    host_or_default = host or DEFAULT_HOST
-    trimmed_host = remove_trailing_slash(host_or_default)
-    if trimmed_host in ("https://app.posthog.com", "https://us.posthog.com"):
-        return US_INGESTION_ENDPOINT
-    elif trimmed_host == "https://eu.posthog.com":
-        return EU_INGESTION_ENDPOINT
-    else:
-        return host_or_default
+    # This function doesn't need to be async, but keeping it for consistency
+    return determine_server_host(host)
 
 
-def post(
+async def post(
     api_key: str,
     host: Optional[str] = None,
     path=None,
     gzip: bool = False,
     timeout: int = 15,
     **kwargs,
-) -> requests.Response:
-    """Post the `kwargs` to the API"""
+) -> aiohttp.ClientResponse:
+    """Post the `kwargs` to the API asynchronously"""
     log = logging.getLogger("posthog")
     body = kwargs
     body["sentAt"] = datetime.utcnow().replace(tzinfo=tzutc()).isoformat()
@@ -54,70 +48,74 @@ def post(
         headers["Content-Encoding"] = "gzip"
         buf = BytesIO()
         with GzipFile(fileobj=buf, mode="w") as gz:
-            # 'data' was produced by json.dumps(),
-            # whose default encoding is utf-8.
             gz.write(data.encode("utf-8"))
         data = buf.getvalue()
 
-    res = _session.post(url, data=data, headers=headers, timeout=timeout)
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url, data=data, headers=headers, timeout=timeout
+        ) as res:
+            if res.status == 200:
+                log.debug("data uploaded successfully")
+            return res
 
-    if res.status_code == 200:
-        log.debug("data uploaded successfully")
 
-    return res
-
-
-def _process_response(
-    res: requests.Response, success_message: str, *, return_json: bool = True
-) -> Union[requests.Response, Any]:
+async def _process_response(
+    res: aiohttp.ClientResponse, success_message: str, *, return_json: bool = True
+) -> Union[aiohttp.ClientResponse, Any]:
     log = logging.getLogger("posthog")
-    if res.status_code == 200:
+    if res.status == 200:
         log.debug(success_message)
-        return res.json() if return_json else res
+        return await res.json() if return_json else res
     try:
-        payload = res.json()
+        payload = await res.json()
         log.debug("received response: %s", payload)
-        raise APIError(res.status_code, payload["detail"])
+        raise APIError(res.status, payload["detail"])
     except (KeyError, ValueError):
-        raise APIError(res.status_code, res.text)
+        raise APIError(res.status, await res.text())
 
 
-def decide(
+async def decide(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
     **kwargs,
 ) -> Any:
-    """Post the `kwargs to the decide API endpoint"""
-    res = post(api_key, host, "/decide/?v=3", gzip, timeout, **kwargs)
-    return _process_response(res, success_message="Feature flags decided successfully")
+    """Post the `kwargs` to the decide API endpoint asynchronously"""
+    res = await post(api_key, host, "/decide/?v=3", gzip, timeout, **kwargs)
+    return await _process_response(
+        res, success_message="Feature flags decided successfully"
+    )
 
 
-def batch_post(
+async def batch_post(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
     **kwargs,
-) -> requests.Response:
-    """Post the `kwargs` to the batch API endpoint for events"""
-    res = post(api_key, host, "/batch/", gzip, timeout, **kwargs)
-    return _process_response(
+) -> aiohttp.ClientResponse:
+    """Post the `kwargs` to the batch API endpoint for events asynchronously"""
+    res = await post(api_key, host, "/batch/", gzip, timeout, **kwargs)
+    return await _process_response(
         res, success_message="data uploaded successfully", return_json=False
     )
 
 
-def get(
+async def get(
     api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None
-) -> requests.Response:
+) -> Any:
     url = remove_trailing_slash(host or DEFAULT_HOST) + url
-    res = requests.get(
-        url,
-        headers={"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT},
-        timeout=timeout,
-    )
-    return _process_response(res, success_message=f"GET {url} completed successfully")
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "User-Agent": USER_AGENT},
+            timeout=timeout,
+        ) as res:
+            return await _process_response(
+                res, success_message=f"GET {url} completed successfully"
+            )
 
 
 class APIError(Exception):
