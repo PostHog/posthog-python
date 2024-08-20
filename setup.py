@@ -21,7 +21,7 @@ install_requires = [
     "monotonic>=1.5",
     "backoff>=1.10.0",
     "python-dateutil>2.1",
-    "aohttp>=3.10.5",
+    "aiohttp>=3.9",
 ]
 
 extras_require = {
