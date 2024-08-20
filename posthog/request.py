@@ -10,8 +10,6 @@ from dateutil.tz import tzutc
 
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
-import aiohttp
-import asyncio
 
 _session = requests.sessions.Session()
 
