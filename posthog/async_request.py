@@ -21,10 +21,16 @@ DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
 
 
-async def determine_server_host(host: Optional[str]) -> str:
+def determine_server_host(host: Optional[str]) -> str:
     """Determines the server host to use."""
-    # This function doesn't need to be async, but keeping it for consistency
-    return determine_server_host(host)
+    host_or_default = host or DEFAULT_HOST
+    trimmed_host = remove_trailing_slash(host_or_default)
+    if trimmed_host in ("https://app.posthog.com", "https://us.posthog.com"):
+        return US_INGESTION_ENDPOINT
+    elif trimmed_host == "https://eu.posthog.com":
+        return EU_INGESTION_ENDPOINT
+    else:
+        return host_or_default
 
 
 async def post(
