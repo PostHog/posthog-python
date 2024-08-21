@@ -1,7 +1,7 @@
+import json
 import sys
 import threading
 from typing import TYPE_CHECKING
-import json
 
 from posthog.exception_utils import single_exception_from_error_tuple
 

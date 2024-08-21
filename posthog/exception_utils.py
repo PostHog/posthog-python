@@ -2,12 +2,12 @@
 # 💖open source (under MIT License)
 # We want to keep payloads as similar to Sentry as possible for easy interoperability
 
-from typing import TYPE_CHECKING
 import linecache
 import os
 import re
 import sys
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 try:
     # Python 3.11
@@ -26,19 +26,19 @@ if TYPE_CHECKING:
     from typing import (
         Any,
         Callable,
-        cast,
         Dict,
         Iterator,
         List,
+        Literal,
         Optional,
-        overload,
         Set,
         Tuple,
         Type,
+        TypedDict,
         TypeVar,
         Union,
-        Literal,
-        TypedDict,
+        cast,
+        overload,
     )
 
     ExcInfo = Union[
