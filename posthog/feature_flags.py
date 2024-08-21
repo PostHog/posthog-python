@@ -13,6 +13,8 @@ __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
 log = logging.getLogger("posthog")
 
+NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
+
 
 class InconclusiveMatchError(Exception):
     pass
@@ -118,6 +120,9 @@ def match_property(property, property_values) -> bool:
         raise InconclusiveMatchError("can't match properties with operator is_not_set")
 
     override_value = property_values[key]
+
+    if (operator not in NONE_VALUES_ALLOWED_OPERATORS) and override_value is None:
+        return False
 
     if operator in ("exact", "is_not"):
 
