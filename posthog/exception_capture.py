@@ -1,10 +1,9 @@
 import sys
-import traceback
 import threading
 from typing import TYPE_CHECKING
 import json
 
-from posthog.exception_utils import exc_info_from_error, single_exception_from_error_tuple
+from posthog.exception_utils import single_exception_from_error_tuple
 
 if TYPE_CHECKING:
     from posthog.client import Client
@@ -22,15 +21,12 @@ class ExceptionCapture:
     def exception_handler(self, exc_type, exc_value, exc_traceback):
         # don't affect default behaviour.
         self.capture_exception(exc_type, exc_value, exc_traceback)
-        print('firing original excepthook')
         self.original_excepthook(exc_type, exc_value, exc_traceback)
 
     def thread_exception_handler(self, args):
         self.capture_exception(args.exc_type, args.exc_value, args.exc_traceback)
 
     def capture_exception(self, exc_type, exc_value, exc_traceback):
-        print('capturing exception!')
-
         # if hasattr(sys, "ps1"):
         #     # Disable the excepthook for interactive Python shells
         #     return
