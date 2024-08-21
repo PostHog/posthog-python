@@ -1,3 +1,7 @@
+## 3.5.2 - 2024-08-21
+
+1. Guard for None values in local evaluation
+
 ## 3.5.1 - 2024-08-13
 
 1. Remove "-api" suffix from ingestion hostnames
