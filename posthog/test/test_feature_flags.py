@@ -967,8 +967,8 @@ class TestLocalEvaluation(unittest.TestCase):
         client.feature_flags = [
             {
                 id: 1,
-                "name": 'Beta Feature',
-                "key": 'beta-feature',
+                "name": "Beta Feature",
+                "key": "beta-feature",
                 "is_simple_flag": True,
                 "active": True,
                 "filters": {
@@ -976,32 +976,12 @@ class TestLocalEvaluation(unittest.TestCase):
                         {
                             "variant": None,
                             "properties": [
-                                {
-                                    "key": "latestBuildVersion",
-                                    "type": "person",
-                                    "value": ".+",
-                                    "operator": "regex"
-                                },
-                                {
-                                    "key": "latestBuildVersionMajor",
-                                    "type": "person",
-                                    "value": "23",
-                                    "operator": "gt"
-                                },
-                                {
-                                    "key": "latestBuildVersionMinor",
-                                    "type": "person",
-                                    "value": "31",
-                                    "operator": "gt"
-                                },
-                                {
-                                    "key": "latestBuildVersionPatch",
-                                    "type": "person",
-                                    "value": "0",
-                                    "operator": "gt"
-                                }
+                                {"key": "latestBuildVersion", "type": "person", "value": ".+", "operator": "regex"},
+                                {"key": "latestBuildVersionMajor", "type": "person", "value": "23", "operator": "gt"},
+                                {"key": "latestBuildVersionMinor", "type": "person", "value": "31", "operator": "gt"},
+                                {"key": "latestBuildVersionPatch", "type": "person", "value": "0", "operator": "gt"},
                             ],
-                            "rollout_percentage": 100
+                            "rollout_percentage": 100,
                         }
                     ],
                 },
@@ -1009,12 +989,14 @@ class TestLocalEvaluation(unittest.TestCase):
         ]
 
         feature_flag_match = client.get_feature_flag(
-            "beta-feature", "some-distinct-id", person_properties={
+            "beta-feature",
+            "some-distinct-id",
+            person_properties={
                 "latestBuildVersion": None,
                 "latestBuildVersionMajor": None,
                 "latestBuildVersionMinor": None,
                 "latestBuildVersionPatch": None,
-            }
+            },
         )
 
         self.assertEqual(feature_flag_match, False)
@@ -1022,12 +1004,14 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_get.call_count, 0)
 
         feature_flag_match = client.get_feature_flag(
-            "beta-feature", "some-distinct-id", person_properties={
+            "beta-feature",
+            "some-distinct-id",
+            person_properties={
                 "latestBuildVersion": "24.32..1",
                 "latestBuildVersionMajor": "24",
                 "latestBuildVersionMinor": "32",
                 "latestBuildVersionPatch": "1",
-            }
+            },
         )
 
     @mock.patch("posthog.client.decide")

@@ -13,7 +13,8 @@ __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
 log = logging.getLogger("posthog")
 
-NONE_VALUES_ALLOWED_OPERATORS = ['is_not']
+NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
+
 
 class InconclusiveMatchError(Exception):
     pass
