@@ -90,7 +90,7 @@ class Client(object):
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
-        
+
         if self.alpha_enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(self)
 
