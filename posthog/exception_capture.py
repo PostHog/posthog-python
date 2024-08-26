@@ -3,7 +3,7 @@ import sys
 import threading
 from typing import TYPE_CHECKING
 
-from posthog.exception_utils import single_exception_from_error_tuple
+from posthog.exception_utils import exceptions_from_error_tuple, single_exception_from_error_tuple
 
 if TYPE_CHECKING:
     from posthog.client import Client
@@ -32,18 +32,19 @@ class ExceptionCapture:
         #     return
 
         # Format stack trace like sentry
-        # TODO: For now, we don't support exception chaining and groups, just a single top level exception...
         exception_info = single_exception_from_error_tuple(exc_type, exc_value, exc_traceback)
         stack_trace = (
             exception_info["stacktrace"]["frames"]
             if "stacktrace" in exception_info and exception_info["stacktrace"].get("frames")
             else None
         )
+        all_exceptions_with_trace = exceptions_from_error_tuple((exc_type, exc_value, exc_traceback))
 
         properties = {
-            "$exception_type": exc_type.__name__,
-            "$exception_message": str(exc_value),
+            "$exception_type": all_exceptions_with_trace[0].get('type'),
+            "$exception_message": all_exceptions_with_trace[0].get('value'),
             "$exception_stack_trace_raw": json.dumps(stack_trace),
+            "$exception_list": all_exceptions_with_trace,
             # TODO: Can we somehow get distinct_id from context here? Stateless lib makes this much harder? 😅
             # '$exception_personURL': f'{self.client.posthog_host}/project/{self.client.token}/person/{self.client.get_distinct_id()}'
         }

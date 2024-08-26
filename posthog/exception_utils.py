@@ -3,6 +3,7 @@
 # We want to keep payloads as similar to Sentry as possible for easy interoperability
 
 import linecache
+import logging
 import os
 import re
 import sys
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
         TypeVar,
         Union,
         cast,
-        overload,
+        ContextManager,
     )
 
     ExcInfo = Union[
@@ -100,6 +101,42 @@ epoch = datetime(1970, 1, 1)
 BASE64_ALPHABET = re.compile(r"^[a-zA-Z0-9/+=]*$")
 
 SENSITIVE_DATA_SUBSTITUTE = "[Filtered]"
+
+log = logging.getLogger("posthog")
+
+
+class CaptureInternalException:
+    __slots__ = ()
+
+    def __enter__(self):
+        # type: () -> ContextManager[Any]
+        return self
+
+    def __exit__(self, ty, value, tb):
+        # type: (Optional[Type[BaseException]], Optional[BaseException], Optional[TracebackType]) -> bool
+        if ty is not None and value is not None:
+            capture_internal_exception((ty, value, tb))
+
+        return True
+
+
+_CAPTURE_INTERNAL_EXCEPTION = CaptureInternalException()
+
+
+def capture_internal_exceptions():
+    # type: () -> ContextManager[Any]
+    return _CAPTURE_INTERNAL_EXCEPTION
+
+
+def capture_internal_exception(exc_info):
+    # type: (ExcInfo) -> None
+    """
+    Capture an exception that is likely caused by a bug in the SDK
+    itself.
+
+    These exceptions are not sent and are just logged instead.
+    """
+    log.error("Internal error in posthog exception capture SDK", exc_info=exc_info)
 
 
 def to_timestamp(value):
