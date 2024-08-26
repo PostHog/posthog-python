@@ -19,7 +19,8 @@ project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
-alpha_enable_exception_autocapture = False  # type: bool
+# Currently alpha, use at your own risk
+enable_exception_autocapture = False  # type: bool
 
 default_client = None  # type: Optional[Client]
 
@@ -458,7 +459,7 @@ def _proxy(method, *args, **kwargs):
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
-            alpha_enable_exception_autocapture=alpha_enable_exception_autocapture,
+            enable_exception_autocapture=enable_exception_autocapture,
         )
 
     # always set incase user changes it
