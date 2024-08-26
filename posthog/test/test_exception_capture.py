@@ -11,7 +11,7 @@ def test_excepthook(tmpdir):
         dedent(
             """
     from posthog import Posthog
-    posthog = Posthog('phc_x', host='http://localhost:8000', enable_exception_autocapture=True, debug=True, on_error=lambda e, batch: print('error handling batch: ', e, batch))
+    posthog = Posthog('phc_x', host='https://eu.i.posthog.com', enable_exception_autocapture=True, debug=True, on_error=lambda e, batch: print('error handling batch: ', e, batch))
 
     # frame_value = "LOL"
 
@@ -24,9 +24,11 @@ def test_excepthook(tmpdir):
         subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
 
     output = excinfo.value.output
-    print(output)
 
     assert b"ZeroDivisionError" in output
     assert b"LOL" in output
     assert b"DEBUG:posthog:data uploaded successfully" in output
-    assert b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"filename": "app.py", "abs_path"' in output
+    assert (
+        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"filename": "app.py", "abs_path"'
+        in output
+    )

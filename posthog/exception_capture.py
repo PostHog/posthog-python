@@ -45,8 +45,8 @@ class ExceptionCapture:
             all_exceptions_with_trace = exceptions_from_error_tuple((exc_type, exc_value, exc_traceback))
 
             properties = {
-                "$exception_type": all_exceptions_with_trace[0].get('type'),
-                "$exception_message": all_exceptions_with_trace[0].get('value'),
+                "$exception_type": all_exceptions_with_trace[0].get("type"),
+                "$exception_message": all_exceptions_with_trace[0].get("value"),
                 "$exception_stack_trace_raw": json.dumps(stack_trace),
                 "$exception_list": all_exceptions_with_trace,
                 # TODO: Can we somehow get distinct_id from context here? Stateless lib makes this much harder? 😅
@@ -59,4 +59,3 @@ class ExceptionCapture:
             self.client.capture("python-exceptions", "$exception", properties=properties)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
-

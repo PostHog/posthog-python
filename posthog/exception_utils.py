@@ -3,7 +3,6 @@
 # We want to keep payloads as similar to Sentry as possible for easy interoperability
 
 import linecache
-import logging
 import os
 import re
 import sys
@@ -24,7 +23,7 @@ DEFAULT_MAX_VALUE_LENGTH = 1024
 if TYPE_CHECKING:
 
     from types import FrameType, TracebackType
-    from typing import (
+    from typing import (  # noqa: F401
         Any,
         Callable,
         Dict,
@@ -39,7 +38,6 @@ if TYPE_CHECKING:
         TypeVar,
         Union,
         cast,
-        ContextManager,
     )
 
     ExcInfo = Union[
@@ -101,6 +99,7 @@ epoch = datetime(1970, 1, 1)
 BASE64_ALPHABET = re.compile(r"^[a-zA-Z0-9/+=]*$")
 
 SENSITIVE_DATA_SUBSTITUTE = "[Filtered]"
+
 
 def to_timestamp(value):
     # type: (datetime) -> float
@@ -213,7 +212,7 @@ def get_type_module(cls):
     return None
 
 
-def should_hide_frame(frame: 'FrameType') -> bool:
+def should_hide_frame(frame: "FrameType") -> bool:
     try:
         mod = frame.f_globals["__name__"]
         if mod.startswith("sentry_sdk."):
@@ -274,7 +273,7 @@ def get_lines_from_file(
         pre_context = [strip_string(line.strip("\r\n"), max_length=max_length) for line in source[lower_bound:lineno]]
         context_line = strip_string(source[lineno].strip("\r\n"), max_length=max_length)
         post_context = [
-            strip_string(line.strip("\r\n"), max_length=max_length) for line in source[(lineno + 1): upper_bound]
+            strip_string(line.strip("\r\n"), max_length=max_length) for line in source[(lineno + 1) : upper_bound]  # noqa: E203
         ]
         return pre_context, context_line, post_context
     except IndexError:
