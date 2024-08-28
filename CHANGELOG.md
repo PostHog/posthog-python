@@ -1,3 +1,7 @@
+## 3.6.0 - 2024-08-28
+
+1. Adds exception autocapture in alpha state. This feature is not yet stable and may change in future versions.
+
 ## 3.5.2 - 2024-08-21
 
 1. Guard for None values in local evaluation

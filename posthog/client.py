@@ -8,6 +8,7 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
+from posthog.exception_capture import ExceptionCapture
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, determine_server_host, get
@@ -51,6 +52,7 @@ class Client(object):
         disable_geoip=True,
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
+        enable_exception_autocapture=False,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -77,6 +79,7 @@ class Client(object):
         self.disabled = disabled
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
+        self.enable_exception_autocapture = enable_exception_autocapture
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -87,6 +90,9 @@ class Client(object):
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
+
+        if self.enable_exception_autocapture:
+            self.exception_capture = ExceptionCapture(self)
 
         if sync_mode:
             self.consumers = None
