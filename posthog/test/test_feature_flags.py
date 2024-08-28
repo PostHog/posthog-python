@@ -962,6 +962,60 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
+    def test_feature_flags_local_evaluation_None_values(self, patch_get, patch_decide):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                id: 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "is_simple_flag": True,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "variant": None,
+                            "properties": [
+                                {"key": "latestBuildVersion", "type": "person", "value": ".+", "operator": "regex"},
+                                {"key": "latestBuildVersionMajor", "type": "person", "value": "23", "operator": "gt"},
+                                {"key": "latestBuildVersionMinor", "type": "person", "value": "31", "operator": "gt"},
+                                {"key": "latestBuildVersionPatch", "type": "person", "value": "0", "operator": "gt"},
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature",
+            "some-distinct-id",
+            person_properties={
+                "latestBuildVersion": None,
+                "latestBuildVersionMajor": None,
+                "latestBuildVersionMinor": None,
+                "latestBuildVersionPatch": None,
+            },
+        )
+
+        self.assertEqual(feature_flag_match, False)
+        self.assertEqual(patch_decide.call_count, 0)
+        self.assertEqual(patch_get.call_count, 0)
+
+        feature_flag_match = client.get_feature_flag(
+            "beta-feature",
+            "some-distinct-id",
+            person_properties={
+                "latestBuildVersion": "24.32..1",
+                "latestBuildVersionMajor": "24",
+                "latestBuildVersionMinor": "32",
+                "latestBuildVersionPatch": "1",
+            },
+        )
+
+    @mock.patch("posthog.client.decide")
+    @mock.patch("posthog.client.get")
     def test_feature_flags_local_evaluation_for_cohorts(self, patch_get, patch_decide):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
@@ -1714,7 +1768,7 @@ class TestMatchProperties(unittest.TestCase):
         self.assertTrue(match_property(property_a, {"key": "value"}))
         self.assertTrue(match_property(property_a, {"key": "value2"}))
         self.assertTrue(match_property(property_a, {"key": ""}))
-        self.assertTrue(match_property(property_a, {"key": None}))
+        self.assertFalse(match_property(property_a, {"key": None}))
 
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_a, {"key2": "value"})
@@ -1980,20 +2034,20 @@ class TestMatchProperties(unittest.TestCase):
         self.assertTrue(match_property(property_a, {"key": "non"}))
 
         property_b = self.property(key="key", value=None, operator="is_set")
-        self.assertTrue(match_property(property_b, {"key": None}))
+        self.assertFalse(match_property(property_b, {"key": None}))
 
         property_c = self.property(key="key", value="no", operator="icontains")
-        self.assertTrue(match_property(property_c, {"key": None}))
+        self.assertFalse(match_property(property_c, {"key": None}))
         self.assertFalse(match_property(property_c, {"key": "smh"}))
 
         property_d = self.property(key="key", value="No", operator="regex")
-        self.assertTrue(match_property(property_d, {"key": None}))
+        self.assertFalse(match_property(property_d, {"key": None}))
 
         property_d_lower_case = self.property(key="key", value="no", operator="regex")
         self.assertFalse(match_property(property_d_lower_case, {"key": None}))
 
         property_e = self.property(key="key", value=1, operator="gt")
-        self.assertTrue(match_property(property_e, {"key": None}))
+        self.assertFalse(match_property(property_e, {"key": None}))
 
         property_f = self.property(key="key", value=1, operator="lt")
         self.assertFalse(match_property(property_f, {"key": None}))
@@ -2002,15 +2056,13 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_g, {"key": None}))
 
         property_h = self.property(key="key", value="Oo", operator="lte")
-        self.assertTrue(match_property(property_h, {"key": None}))
+        self.assertFalse(match_property(property_h, {"key": None}))
 
         property_i = self.property(key="key", value="2022-05-01", operator="is_date_before")
-        with self.assertRaises(InconclusiveMatchError):
-            self.assertFalse(match_property(property_i, {"key": None}))
+        self.assertFalse(match_property(property_i, {"key": None}))
 
         property_j = self.property(key="key", value="2022-05-01", operator="is_date_after")
-        with self.assertRaises(InconclusiveMatchError):
-            self.assertFalse(match_property(property_j, {"key": None}))
+        self.assertFalse(match_property(property_j, {"key": None}))
 
         property_k = self.property(key="key", value="2022-05-01", operator="is_date_before")
         with self.assertRaises(InconclusiveMatchError):

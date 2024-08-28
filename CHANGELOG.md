@@ -2,6 +2,14 @@
 
 1. Adds exception autocapture in alpha state. This feature is not yet stable and may change in future versions.
 
+## 3.5.2 - 2024-08-21
+
+1. Guard for None values in local evaluation
+
+## 3.5.1 - 2024-08-13
+
+1. Remove "-api" suffix from ingestion hostnames
+
 ## 3.5.0 - 2024-02-29
 
 1. - Adds a new `feature_flags_request_timeout_seconds` timeout parameter for feature flags which defaults to 3 seconds, updated from the default 10s for all other API calls.
