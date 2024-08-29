@@ -53,6 +53,7 @@ class Client(object):
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
         enable_exception_autocapture=False,
+        exception_autocapture_integrations=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -65,6 +66,8 @@ class Client(object):
         self.debug = debug
         self.send = send
         self.sync_mode = sync_mode
+        # Used for session replay URL generation - we don't want the server host here.
+        self.raw_host = host
         self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
@@ -80,6 +83,7 @@ class Client(object):
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
         self.enable_exception_autocapture = enable_exception_autocapture
+        self.exception_autocapture_integrations = exception_autocapture_integrations
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -92,7 +96,7 @@ class Client(object):
             self.log.setLevel(logging.WARNING)
 
         if self.enable_exception_autocapture:
-            self.exception_capture = ExceptionCapture(self)
+            self.exception_capture = ExceptionCapture(self, integrations=self.exception_autocapture_integrations)
 
         if sync_mode:
             self.consumers = None
