@@ -84,6 +84,7 @@ class Client(object):
         self.historical_migration = historical_migration
         self.enable_exception_autocapture = enable_exception_autocapture
         self.exception_autocapture_integrations = exception_autocapture_integrations
+        self.exception_capture = None
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
