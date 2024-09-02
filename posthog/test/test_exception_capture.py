@@ -34,7 +34,7 @@ def test_excepthook(tmpdir):
     )
 
 
-def test_trying_to_use_django_integration_when_django_isnt_installed(tmpdir):
+def test_trying_to_use_django_integration(tmpdir):
     app = tmpdir.join("app.py")
     app.write(
         dedent(
@@ -61,4 +61,3 @@ def test_trying_to_use_django_integration_when_django_isnt_installed(tmpdir):
         b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"filename": "app.py", "abs_path"'
         in output
     )
-    assert b"Failed to enable Django integration: Django not installed" in output

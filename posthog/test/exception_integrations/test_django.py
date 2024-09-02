@@ -1,3 +1,4 @@
+from posthog.exception_integrations import IntegrationEnablingError
 from posthog.exception_integrations.django import DjangoRequestExtractor
 
 DEFAULT_USER_AGENT = (

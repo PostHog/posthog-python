@@ -27,7 +27,7 @@ jobs:
 
             - name: Install dev dependencies
               run: |
-                  python -m pip install -e .[dev]
+                  python -m pip install -e .[dev,django]
               if: steps.cache.outputs.cache-hit != 'true'
 
             - name: Check formatting with black

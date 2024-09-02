@@ -26,6 +26,7 @@ extras_require = {
     ],
     "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout"],
     "sentry": ["sentry-sdk", "django"],
+    "django": ["django"],
 }
 
 setup(
