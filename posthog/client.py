@@ -436,6 +436,9 @@ class Client(object):
         self.flush()
         self.join()
 
+        if self.exception_capture:
+            self.exception_capture.close()
+
     def _load_feature_flags(self):
         try:
             response = get(

@@ -1,3 +1,4 @@
+import re
 import sys
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,9 @@ class DjangoIntegration:
 
         signals.got_request_exception.connect(_got_request_exception)
 
+    def uninstall(self):
+        pass
+
 
 class DjangoRequestExtractor:
 
@@ -58,10 +62,25 @@ class DjangoRequestExtractor:
 
     def extract_person_data(self):
         headers = self.headers()
+
+        # Extract traceparent and tracestate headers
+        traceparent = headers.get("traceparent")
+        tracestate = headers.get("tracestate")
+
+        # Extract the distinct_id from tracestate
+        distinct_id = None
+        if tracestate:
+            # TODO: Align on the format of the distinct_id in tracestate
+            # We can't have comma or equals in header values here, so maybe we should base64 encode it?
+            match = re.search(r"posthog-distinct-id=([^,]+)", tracestate)
+            if match:
+                distinct_id = match.group(1)
+
         return {
-            "distinct_id": headers.get("X-PostHog-Distinct-ID"),
+            "distinct_id": distinct_id,
             "ip": headers.get("X-Forwarded-For"),
             "user_agent": headers.get("User-Agent"),
+            "traceparent": traceparent,
         }
 
     def headers(self):

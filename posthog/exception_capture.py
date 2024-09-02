@@ -42,6 +42,11 @@ class ExceptionCapture:
                 except Exception as e:
                     self.log.exception(f"Failed to enable Django integration: {e}")
 
+    def close(self):
+        sys.excepthook = self.original_excepthook
+        for integration in self.enabled_integrations:
+            integration.uninstall()
+
     def exception_handler(self, exc_type, exc_value, exc_traceback):
         # don't affect default behaviour.
         self.capture_exception(exc_type, exc_value, exc_traceback)
