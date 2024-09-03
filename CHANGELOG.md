@@ -1,3 +1,7 @@
+## 3.6.2 - 2024-09-03
+
+1. Make sure setup.py discovers the new exception integration package.
+
 ## 3.6.1 - 2024-09-03
 
 1. Adds django integration to exception autocapture in alpha state. This feature is not yet stable and may change in future versions.
