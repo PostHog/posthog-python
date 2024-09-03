@@ -1,7 +1,8 @@
 import datetime  # noqa: F401
-from typing import Callable, Dict, Optional, Tuple  # noqa: F401
+from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
+from posthog.exception_capture import Integrations  # noqa: F401
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -21,6 +22,7 @@ disable_geoip = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 # Currently alpha, use at your own risk
 enable_exception_autocapture = False  # type: bool
+exception_autocapture_integrations = []  # type: List[Integrations]
 
 default_client = None  # type: Optional[Client]
 
@@ -460,6 +462,7 @@ def _proxy(method, *args, **kwargs):
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
             enable_exception_autocapture=enable_exception_autocapture,
+            exception_autocapture_integrations=exception_autocapture_integrations,
         )
 
     # always set incase user changes it

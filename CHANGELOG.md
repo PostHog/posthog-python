@@ -1,3 +1,7 @@
+## 3.6.1 - 2024-09-03
+
+1. Adds django integration to exception autocapture in alpha state. This feature is not yet stable and may change in future versions.
+
 ## 3.6.0 - 2024-08-28
 
 1. Adds exception autocapture in alpha state. This feature is not yet stable and may change in future versions.

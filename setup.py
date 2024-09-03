@@ -24,7 +24,7 @@ extras_require = {
         "flake8-print",
         "pre-commit",
     ],
-    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout"],
+    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout", "django"],
     "sentry": ["sentry-sdk", "django"],
 }
 
