@@ -4,9 +4,6 @@ import threading
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
-from posthog.exception_utils import exceptions_from_error_tuple, handle_in_app
-from posthog.utils import remove_trailing_slash
-
 if TYPE_CHECKING:
     from posthog.client import Client
 
@@ -49,11 +46,11 @@ class ExceptionCapture:
 
     def exception_handler(self, exc_type, exc_value, exc_traceback):
         # don't affect default behaviour.
-        self.capture_exception(exc_type, exc_value, exc_traceback)
+        self.capture_exception(exc_value)
         self.original_excepthook(exc_type, exc_value, exc_traceback)
 
     def thread_exception_handler(self, args):
-        self.capture_exception(args.exc_type, args.exc_value, args.exc_traceback)
+        self.capture_exception(args.exc_value)
 
     def exception_receiver(self, exc_info, extra_properties):
         if "distinct_id" in extra_properties:
@@ -62,39 +59,16 @@ class ExceptionCapture:
             metadata = None
         self.capture_exception(exc_info[0], exc_info[1], exc_info[2], metadata)
 
-    def capture_exception(self, exc_type, exc_value, exc_traceback, metadata=None):
+    def capture_exception(self, exc_value, metadata=None):
         try:
             # if hasattr(sys, "ps1"):
             #     # Disable the excepthook for interactive Python shells
             #     return
 
-            # Format stack trace like sentry
-            all_exceptions_with_trace = exceptions_from_error_tuple((exc_type, exc_value, exc_traceback))
-
-            # Add in-app property to frames in the exceptions
-            event = handle_in_app(
-                {
-                    "exception": {
-                        "values": all_exceptions_with_trace,
-                    },
-                }
-            )
-            all_exceptions_with_trace_and_in_app = event["exception"]["values"]
-
             distinct_id = metadata.get("distinct_id") if metadata else DEFAULT_DISTINCT_ID
             # Make sure we have a distinct_id if its empty in metadata
             distinct_id = distinct_id or DEFAULT_DISTINCT_ID
 
-            properties = {
-                "$exception_type": all_exceptions_with_trace_and_in_app[0].get("type"),
-                "$exception_message": all_exceptions_with_trace_and_in_app[0].get("value"),
-                "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_personURL": f"{remove_trailing_slash(self.client.raw_host)}/project/{self.client.api_key}/person/{distinct_id}",
-            }
-
-            # TODO: What distinct id should we attach these server-side exceptions to?
-            # Any heuristic seems prone to errors - how can we know if exception occurred in the context of a user that captured some other event?
-
-            self.client.capture(distinct_id, "$exception", properties=properties)
+            self.client.capture_exception(exc_value, distinct_id)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
