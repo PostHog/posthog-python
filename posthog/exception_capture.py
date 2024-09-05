@@ -46,11 +46,11 @@ class ExceptionCapture:
 
     def exception_handler(self, exc_type, exc_value, exc_traceback):
         # don't affect default behaviour.
-        self.capture_exception(exc_value)
+        self.capture_exception((exc_type, exc_value, exc_traceback))
         self.original_excepthook(exc_type, exc_value, exc_traceback)
 
     def thread_exception_handler(self, args):
-        self.capture_exception(args.exc_value)
+        self.capture_exception((args.exc_type, args.exc_value, args.exc_traceback))
 
     def exception_receiver(self, exc_info, extra_properties):
         if "distinct_id" in extra_properties:
@@ -59,7 +59,7 @@ class ExceptionCapture:
             metadata = None
         self.capture_exception(exc_info[0], exc_info[1], exc_info[2], metadata)
 
-    def capture_exception(self, exc_value, metadata=None):
+    def capture_exception(self, exception, metadata=None):
         try:
             # if hasattr(sys, "ps1"):
             #     # Disable the excepthook for interactive Python shells
@@ -69,6 +69,6 @@ class ExceptionCapture:
             # Make sure we have a distinct_id if its empty in metadata
             distinct_id = distinct_id or DEFAULT_DISTINCT_ID
 
-            self.client.capture_exception(exc_value, distinct_id)
+            self.client.capture_exception(exception, distinct_id)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")

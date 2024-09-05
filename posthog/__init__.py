@@ -267,7 +267,7 @@ def capture_exception(
 
     A `capture_exception` call does not require any fields, but we recommend sending:
     - `distinct id` which uniquely identifies your user for which this exception happens
-    - `exception` to specify the exception to capture. If not provided, the current exception is captured
+    - `exception` to specify the exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
 
     Optionally you can submit
     - `properties`, which can be a dict with any information you'd like to add
@@ -286,7 +286,7 @@ def capture_exception(
     return _proxy(
         "capture_exception",
         exception=exception,
-        distinct_id=distinct_id,
+        distinct_id=distinct_id or DEFAULT_DISTINCT_ID,
         properties=properties,
         context=context,
         timestamp=timestamp,

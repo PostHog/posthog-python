@@ -10,7 +10,7 @@ from six import string_types
 
 from posthog.consumer import Consumer
 from posthog.exception_capture import DEFAULT_DISTINCT_ID, ExceptionCapture
-from posthog.exception_utils import exceptions_from_error_tuple, handle_in_app
+from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import APIError, batch_post, decide, determine_server_host, get
@@ -364,15 +364,13 @@ class Client(object):
             require("distinct_id", distinct_id, ID_TYPES)
             require("properties", properties, dict)
 
-            if not exception:
-                _, exception, _ = sys.exc_info()
-
-            require("exception", exception, BaseException)
+            if exception is not None:
+                exc_info = exc_info_from_error(exception)
+            else:
+                exc_info = sys.exc_info()
 
             # Format stack trace like sentry
-            all_exceptions_with_trace = exceptions_from_error_tuple(
-                (type(exception), exception, exception.__traceback__)
-            )
+            all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
 
             # Add in-app property to frames in the exceptions
             event = handle_in_app(
