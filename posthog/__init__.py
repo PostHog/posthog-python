@@ -2,7 +2,7 @@ import datetime  # noqa: F401
 from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
-from posthog.exception_capture import Integrations  # noqa: F401
+from posthog.exception_capture import DEFAULT_DISTINCT_ID, Integrations  # noqa: F401
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -248,6 +248,50 @@ def alias(
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
+    )
+
+
+def capture_exception(
+    exception=None,  # type: Optional[BaseException]
+    distinct_id=None,  # type: Optional[str]
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    uuid=None,  # type: Optional[str]
+    groups=None,  # type: Optional[Dict]
+):
+    # type: (...) -> Tuple[bool, dict]
+    """
+    capture_exception allows you to capture exceptions that happen in your code. This is useful for debugging and understanding what errors your users are encountering.
+    This function never raises an exception, even if it fails to send the event.
+
+    A `capture_exception` call does not require any fields, but we recommend sending:
+    - `distinct id` which uniquely identifies your user for which this exception happens
+    - `exception` to specify the exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
+
+    Optionally you can submit
+    - `properties`, which can be a dict with any information you'd like to add
+    - `groups`, which is a dict of group type -> group key mappings
+
+    For example:
+    ```python
+    try:
+        1 / 0
+    except Exception as e:
+        posthog.capture_exception(e, 'my specific distinct id')
+        posthog.capture_exception(distinct_id='my specific distinct id')
+
+    ```
+    """
+    return _proxy(
+        "capture_exception",
+        exception=exception,
+        distinct_id=distinct_id or DEFAULT_DISTINCT_ID,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        uuid=uuid,
+        groups=groups,
     )
 
 

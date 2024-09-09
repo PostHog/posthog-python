@@ -1,3 +1,7 @@
+## 3.6.4 - 2024-09-05
+
+1. Add manual exception capture.
+
 ## 3.6.3 - 2024-09-03
 
 1. Make sure setup.py for posthoganalytics package also discovers the new exception integration package.

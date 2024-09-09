@@ -1,6 +1,7 @@
 import atexit
 import logging
 import numbers
+import sys
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -8,11 +9,12 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
-from posthog.exception_capture import ExceptionCapture
+from posthog.exception_capture import DEFAULT_DISTINCT_ID, ExceptionCapture
+from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import APIError, batch_post, decide, determine_server_host, get
-from posthog.utils import SizeLimitedDict, clean, guess_timezone
+from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get
+from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
 from posthog.version import VERSION
 
 try:
@@ -67,7 +69,7 @@ class Client(object):
         self.send = send
         self.sync_mode = sync_mode
         # Used for session replay URL generation - we don't want the server host here.
-        self.raw_host = host
+        self.raw_host = host or DEFAULT_HOST
         self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
@@ -344,6 +346,57 @@ class Client(object):
         }
 
         return self._enqueue(msg, disable_geoip)
+
+    def capture_exception(
+        self,
+        exception=None,
+        distinct_id=DEFAULT_DISTINCT_ID,
+        properties=None,
+        context=None,
+        timestamp=None,
+        uuid=None,
+        groups=None,
+    ):
+        # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
+        # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
+        try:
+            properties = properties or {}
+            require("distinct_id", distinct_id, ID_TYPES)
+            require("properties", properties, dict)
+
+            if exception is not None:
+                exc_info = exc_info_from_error(exception)
+            else:
+                exc_info = sys.exc_info()
+
+            if exc_info is None or exc_info == (None, None, None):
+                self.log.warning("No exception information available")
+                return
+
+            # Format stack trace like sentry
+            all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
+
+            # Add in-app property to frames in the exceptions
+            event = handle_in_app(
+                {
+                    "exception": {
+                        "values": all_exceptions_with_trace,
+                    },
+                }
+            )
+            all_exceptions_with_trace_and_in_app = event["exception"]["values"]
+
+            properties = {
+                "$exception_type": all_exceptions_with_trace_and_in_app[0].get("type"),
+                "$exception_message": all_exceptions_with_trace_and_in_app[0].get("value"),
+                "$exception_list": all_exceptions_with_trace_and_in_app,
+                "$exception_personURL": f"{remove_trailing_slash(self.raw_host)}/project/{self.api_key}/person/{distinct_id}",
+                **properties,
+            }
+
+            return self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
+        except Exception as e:
+            self.log.exception(f"Failed to capture exception: {e}")
 
     def _enqueue(self, msg, disable_geoip):
         """Push a new `msg` onto the queue, return `(success, msg)`"""
