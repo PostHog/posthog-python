@@ -84,6 +84,164 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
+    def test_basic_capture_exception(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = self.client
+            exception = Exception("test exception")
+            client.capture_exception(exception)
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "python-exceptions")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/python-exceptions",
+                },
+            )
+
+    def test_basic_capture_exception_with_distinct_id(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = self.client
+            exception = Exception("test exception")
+            client.capture_exception(exception, "distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_correct_host_generation(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com")
+            exception = Exception("test exception")
+            client.capture_exception(exception, "distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://aloha.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://app.posthog.com")
+            exception = Exception("test exception")
+            client.capture_exception(exception, "distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://app.posthog.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_no_exception_given(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = self.client
+            try:
+                raise Exception("test exception")
+            except Exception:
+                client.capture_exception()
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "python-exceptions")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(capture_call[2]["$exception_type"], "Exception")
+            self.assertEqual(capture_call[2]["$exception_message"], "test exception")
+            self.assertEqual(capture_call[2]["$exception_list"][0]["mechanism"]["type"], "generic")
+            self.assertEqual(capture_call[2]["$exception_list"][0]["mechanism"]["handled"], True)
+            self.assertEqual(capture_call[2]["$exception_list"][0]["module"], None)
+            self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
+            self.assertEqual(capture_call[2]["$exception_list"][0]["value"], "test exception")
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["filename"],
+                "posthog/test/test_client.py",
+            )
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["function"],
+                "test_basic_capture_exception_with_no_exception_given",
+            )
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["module"], "posthog.test.test_client"
+            )
+
+    def test_basic_capture_exception_with_no_exception_happening(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            with self.assertLogs("posthog", level="WARNING") as logs:
+
+                client = self.client
+                client.capture_exception()
+
+                self.assertFalse(patch_capture.called)
+                self.assertEqual(
+                    logs.output[0],
+                    "WARNING:posthog:No exception information available",
+                )
+
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
