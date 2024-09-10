@@ -57,7 +57,7 @@ class ExceptionCapture:
             metadata = {"distinct_id": extra_properties["distinct_id"]}
         else:
             metadata = None
-        self.capture_exception(exc_info[0], exc_info[1], exc_info[2], metadata)
+        self.capture_exception((exc_info[0], exc_info[1], exc_info[2]), metadata)
 
     def capture_exception(self, exception, metadata=None):
         try:

@@ -1,3 +1,7 @@
+## 3.6.5 - 2024-09-10
+
+1. Fix django integration support for manual exception capture.
+
 ## 3.6.4 - 2024-09-05
 
 1. Add manual exception capture.
