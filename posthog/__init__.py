@@ -23,6 +23,8 @@ feature_flags_request_timeout_seconds = 3  # type: int
 # Currently alpha, use at your own risk
 enable_exception_autocapture = False  # type: bool
 exception_autocapture_integrations = []  # type: List[Integrations]
+# Used to determine in app paths for exception autocapture. Defaults to the current working directory
+project_root = None  # type: Optional[str]
 
 default_client = None  # type: Optional[Client]
 

@@ -1,6 +1,7 @@
 import atexit
 import logging
 import numbers
+import os
 import sys
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -56,6 +57,7 @@ class Client(object):
         feature_flags_request_timeout_seconds=3,
         enable_exception_autocapture=False,
         exception_autocapture_integrations=None,
+        project_root=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -87,6 +89,14 @@ class Client(object):
         self.enable_exception_autocapture = enable_exception_autocapture
         self.exception_autocapture_integrations = exception_autocapture_integrations
         self.exception_capture = None
+        
+        if project_root is None:
+            try:
+                project_root = os.getcwd()
+            except Exception as e:
+                project_root = None
+
+        self.project_root = project_root
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
@@ -382,13 +392,15 @@ class Client(object):
                     "exception": {
                         "values": all_exceptions_with_trace,
                     },
-                }
+                },
+                project_root=self.project_root,
             )
+            print('prject root: ', self.project_root)
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
             properties = {
-                "$exception_type": all_exceptions_with_trace_and_in_app[0].get("type"),
-                "$exception_message": all_exceptions_with_trace_and_in_app[0].get("value"),
+                "$exception_type": all_exceptions_with_trace_and_in_app[-1].get("type"),
+                "$exception_message": all_exceptions_with_trace_and_in_app[-1].get("value"),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 "$exception_personURL": f"{remove_trailing_slash(self.raw_host)}/project/{self.api_key}/person/{distinct_id}",
                 **properties,
