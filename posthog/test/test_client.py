@@ -227,10 +227,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(
                 capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["module"], "posthog.test.test_client"
             )
-            self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True
-            )
-
+            self.assertEqual(capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True)
 
     def test_basic_capture_exception_with_no_exception_happening(self):
 

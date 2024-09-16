@@ -1,3 +1,7 @@
+## 3.6.6 - 2024-09-16
+
+1. Fix manual capture support for in app frames
+
 ## 3.6.5 - 2024-09-10
 
 1. Fix django integration support for manual exception capture.

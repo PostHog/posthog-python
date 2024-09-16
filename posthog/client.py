@@ -89,11 +89,11 @@ class Client(object):
         self.enable_exception_autocapture = enable_exception_autocapture
         self.exception_autocapture_integrations = exception_autocapture_integrations
         self.exception_capture = None
-        
+
         if project_root is None:
             try:
                 project_root = os.getcwd()
-            except Exception as e:
+            except Exception:
                 project_root = None
 
         self.project_root = project_root
@@ -395,12 +395,11 @@ class Client(object):
                 },
                 project_root=self.project_root,
             )
-            print('prject root: ', self.project_root)
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
             properties = {
-                "$exception_type": all_exceptions_with_trace_and_in_app[-1].get("type"),
-                "$exception_message": all_exceptions_with_trace_and_in_app[-1].get("value"),
+                "$exception_type": all_exceptions_with_trace_and_in_app[0].get("type"),
+                "$exception_message": all_exceptions_with_trace_and_in_app[0].get("value"),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 "$exception_personURL": f"{remove_trailing_slash(self.raw_host)}/project/{self.api_key}/person/{distinct_id}",
                 **properties,
