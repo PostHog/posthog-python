@@ -417,7 +417,7 @@ class Client(object):
 
         timestamp = msg["timestamp"]
         if timestamp is None:
-            timestamp = datetime.utcnow().replace(tzinfo=tzutc())
+            timestamp = datetime.now(tz=tzutc())
 
         require("timestamp", timestamp, datetime)
         require("context", msg["context"], dict)
@@ -541,7 +541,7 @@ class Client(object):
             )
             self.log.warning(e)
 
-        self._last_feature_flag_poll = datetime.utcnow().replace(tzinfo=tzutc())
+        self._last_feature_flag_poll = datetime.now(tz=tzutc())
 
     def load_feature_flags(self):
         if not self.personal_api_key:
