@@ -1,3 +1,7 @@
+## 3.6.7 - 2024-09-24
+
+1. Remove deprecated datetime.utcnow() in favour of datetime.now(tz=tzutc())
+
 ## 3.6.6 - 2024-09-16
 
 1. Fix manual capture support for in app frames
