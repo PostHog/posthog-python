@@ -13,8 +13,8 @@ from posthog.version import VERSION
 
 _session = requests.sessions.Session()
 
-US_INGESTION_ENDPOINT = "https://us-api.i.posthog.com"
-EU_INGESTION_ENDPOINT = "https://eu-api.i.posthog.com"
+US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
+EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
 DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
 

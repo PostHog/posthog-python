@@ -24,7 +24,7 @@ extras_require = {
         "flake8-print",
         "pre-commit",
     ],
-    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout"],
+    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout", "django"],
     "sentry": ["sentry-sdk", "django"],
 }
 
@@ -37,7 +37,7 @@ setup(
     maintainer="PostHog",
     maintainer_email="hey@posthog.com",
     test_suite="posthog.test.all",
-    packages=["posthog", "posthog.test", "posthog.sentry"],
+    packages=["posthog", "posthog.test", "posthog.sentry", "posthog.exception_integrations"],
     license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,

@@ -1,7 +1,8 @@
 import datetime  # noqa: F401
-from typing import Callable, Dict, Optional, Tuple  # noqa: F401
+from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
+from posthog.exception_capture import DEFAULT_DISTINCT_ID, Integrations  # noqa: F401
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -19,6 +20,11 @@ project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
+# Currently alpha, use at your own risk
+enable_exception_autocapture = False  # type: bool
+exception_autocapture_integrations = []  # type: List[Integrations]
+# Used to determine in app paths for exception autocapture. Defaults to the current working directory
+project_root = None  # type: Optional[str]
 
 default_client = None  # type: Optional[Client]
 
@@ -247,6 +253,50 @@ def alias(
     )
 
 
+def capture_exception(
+    exception=None,  # type: Optional[BaseException]
+    distinct_id=None,  # type: Optional[str]
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    uuid=None,  # type: Optional[str]
+    groups=None,  # type: Optional[Dict]
+):
+    # type: (...) -> Tuple[bool, dict]
+    """
+    capture_exception allows you to capture exceptions that happen in your code. This is useful for debugging and understanding what errors your users are encountering.
+    This function never raises an exception, even if it fails to send the event.
+
+    A `capture_exception` call does not require any fields, but we recommend sending:
+    - `distinct id` which uniquely identifies your user for which this exception happens
+    - `exception` to specify the exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
+
+    Optionally you can submit
+    - `properties`, which can be a dict with any information you'd like to add
+    - `groups`, which is a dict of group type -> group key mappings
+
+    For example:
+    ```python
+    try:
+        1 / 0
+    except Exception as e:
+        posthog.capture_exception(e, 'my specific distinct id')
+        posthog.capture_exception(distinct_id='my specific distinct id')
+
+    ```
+    """
+    return _proxy(
+        "capture_exception",
+        exception=exception,
+        distinct_id=distinct_id or DEFAULT_DISTINCT_ID,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        uuid=uuid,
+        groups=groups,
+    )
+
+
 def feature_enabled(
     key,  # type: str
     distinct_id,  # type: str
@@ -454,6 +504,11 @@ def _proxy(method, *args, **kwargs):
             disabled=disabled,
             disable_geoip=disable_geoip,
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
+            # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
+            # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
+            # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
+            enable_exception_autocapture=enable_exception_autocapture,
+            exception_autocapture_integrations=exception_autocapture_integrations,
         )
 
     # always set incase user changes it

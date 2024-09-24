@@ -1,3 +1,39 @@
+## 3.6.6 - 2024-09-16
+
+1. Fix manual capture support for in app frames
+
+## 3.6.5 - 2024-09-10
+
+1. Fix django integration support for manual exception capture.
+
+## 3.6.4 - 2024-09-05
+
+1. Add manual exception capture.
+
+## 3.6.3 - 2024-09-03
+
+1. Make sure setup.py for posthoganalytics package also discovers the new exception integration package.
+
+## 3.6.2 - 2024-09-03
+
+1. Make sure setup.py discovers the new exception integration package.
+
+## 3.6.1 - 2024-09-03
+
+1. Adds django integration to exception autocapture in alpha state. This feature is not yet stable and may change in future versions.
+
+## 3.6.0 - 2024-08-28
+
+1. Adds exception autocapture in alpha state. This feature is not yet stable and may change in future versions.
+
+## 3.5.2 - 2024-08-21
+
+1. Guard for None values in local evaluation
+
+## 3.5.1 - 2024-08-13
+
+1. Remove "-api" suffix from ingestion hostnames
+
 ## 3.5.0 - 2024-02-29
 
 1. - Adds a new `feature_flags_request_timeout_seconds` timeout parameter for feature flags which defaults to 3 seconds, updated from the default 10s for all other API calls.
