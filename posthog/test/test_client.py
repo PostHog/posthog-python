@@ -85,7 +85,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_capture_with_super_properties(self):
-        client = Client(FAKE_TEST_API_KEY, super_properties={'source': 'repo-name', 'environment': 'test'})
+        client = Client(FAKE_TEST_API_KEY, super_properties={"source": "repo-name", "environment": "test"})
 
         _, msg = client.capture("distinct_id", "python test event")
         client.flush()
