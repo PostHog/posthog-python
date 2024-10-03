@@ -1,3 +1,7 @@
+## 3.7.0 - 2024-10-03
+
+1. Adds a new `super_properties` parameter on the client that are appended to every /capture call.
+
 ## 3.6.7 - 2024-09-24
 
 1. Remove deprecated datetime.utcnow() in favour of datetime.now(tz=tzutc())
@@ -66,7 +70,6 @@
 
 1. Return success/failure with all capture calls from module functions
 
-
 ## 3.3.1 - 2024-01-10
 
 1. Make sure we don't override any existing feature flag properties when adding locally evaluated feature flag properties.
@@ -92,6 +95,7 @@
 
 1. Restore how feature flags work when the client library is disabled: All requests return `None` and no events are sent when the client is disabled.
 2. Add a `feature_flag_definitions()` debug option, which returns currently loaded feature flag definitions. You can use this to more cleverly decide when to request local evaluation of feature flags.
+
 ## 3.0.0 - 2023-04-14
 
 Breaking change:
@@ -132,7 +136,6 @@ posthog = Posthog('api_key', disable_geoip=False)
 1. Log instead of raise error on posthog personal api key errors
 2. Remove upper bound on backoff dependency
 
-
 ## 2.3.0 - 2023-01-31
 
 1. Add support for returning payloads of matched feature flags
@@ -148,6 +151,7 @@ Changes:
 Changes:
 
 1. Fixes issues with date comparison.
+
 ## 2.1.1 - 2022-09-14
 
 Changes:
@@ -160,6 +164,7 @@ Changes:
 
 1. Feature flag defaults have been removed
 2. Setup logging only when debug mode is enabled.
+
 ## 2.0.1 - 2022-08-04
 
 - Make poll_interval configurable
@@ -172,7 +177,7 @@ Breaking changes:
 
 1. The minimum version requirement for PostHog servers is now 1.38. If you're using PostHog Cloud, you satisfy this requirement automatically.
 2. Feature flag defaults apply only when there's an error fetching feature flag results. Earlier, if the default was set to `True`, even if a flag resolved to `False`, the default would override this.
-**Note: These are removed in 2.0.2**
+   **Note: These are removed in 2.0.2**
 3. Feature flag remote evaluation doesn't require a personal API key.
 
 New Changes:
@@ -180,18 +185,20 @@ New Changes:
 1. You can now evaluate feature flags locally (i.e. without sending a request to your PostHog servers) by setting a personal API key, and passing in groups and person properties to `is_feature_enabled` and `get_feature_flag` calls.
 2. Introduces a `get_all_flags` method that returns all feature flags. This is useful for when you want to seed your frontend with some initial flags, given a user ID.
 
-
-
 ## 1.4.9 - 2022-06-13
+
 - Support for sending feature flags with capture calls
 
 ## 1.4.8 - 2022-05-12
+
 - Support multi variate feature flags
 
 ## 1.4.7 - 2022-04-25
+
 - Allow feature flags usage without project_api_key
 
 ## 1.4.1 - 2021-05-28
+
 - Fix packaging issues with Sentry integrations
 
 ## 1.4.0 - 2021-05-18
