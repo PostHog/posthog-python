@@ -55,6 +55,7 @@ class Client(object):
         disable_geoip=True,
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
+        super_properties=None,
         enable_exception_autocapture=False,
         exception_autocapture_integrations=None,
         project_root=None,
@@ -86,6 +87,7 @@ class Client(object):
         self.disabled = disabled
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
+        self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.exception_autocapture_integrations = exception_autocapture_integrations
         self.exception_capture = None
@@ -210,6 +212,9 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
         require("event", event, string_types)
+
+        if self.super_properties:
+            properties = {**properties, **self.super_properties}
 
         msg = {
             "properties": properties,
