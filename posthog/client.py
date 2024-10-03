@@ -213,9 +213,6 @@ class Client(object):
         require("properties", properties, dict)
         require("event", event, string_types)
 
-        if self.super_properties:
-            properties = {**properties, **self.super_properties}
-
         msg = {
             "properties": properties,
             "timestamp": timestamp,
@@ -447,6 +444,9 @@ class Client(object):
 
         if disable_geoip:
             msg["properties"]["$geoip_disable"] = True
+
+        if self.super_properties:
+            msg["properties"] = {**msg["properties"], **self.super_properties}
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 

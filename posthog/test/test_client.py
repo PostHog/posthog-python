@@ -84,15 +84,20 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
-    def test_basic_capture_with_super_properties(self):
-        client = Client(FAKE_TEST_API_KEY, super_properties={"source": "repo-name", "environment": "test"})
+    def test_basic_super_properties(self):
+        client = Client(FAKE_TEST_API_KEY, super_properties={"source": "repo-name"})
 
         _, msg = client.capture("distinct_id", "python test event")
         client.flush()
 
         self.assertEqual(msg["event"], "python test event")
         self.assertEqual(msg["properties"]["source"], "repo-name")
-        self.assertEqual(msg["properties"]["environment"], "test")
+
+        _, msg = client.identify("distinct_id", {"trait": "value"})
+        client.flush()
+
+        self.assertEqual(msg["$set"]["trait"], "value")
+        self.assertEqual(msg["properties"]["source"], "repo-name")
 
     def test_basic_capture_exception(self):
 
