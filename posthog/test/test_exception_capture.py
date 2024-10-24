@@ -29,7 +29,7 @@ def test_excepthook(tmpdir):
     assert b"LOL" in output
     assert b"DEBUG:posthog:data uploaded successfully" in output
     assert (
-        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"filename": "app.py", "abs_path"'
+        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
         in output
     )
 
@@ -58,6 +58,6 @@ def test_trying_to_use_django_integration(tmpdir):
     assert b"LOL" in output
     assert b"DEBUG:posthog:data uploaded successfully" in output
     assert (
-        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"filename": "app.py", "abs_path"'
+        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
         in output
     )

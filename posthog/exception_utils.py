@@ -369,6 +369,7 @@ def serialize_frame(
         tb_lineno = frame.f_lineno
 
     rv = {
+        "platform": "python",
         "filename": filename_for_module(module, abs_path) or None,
         "abs_path": os.path.abspath(abs_path) if abs_path else None,
         "function": function or "<unknown>",

@@ -1,3 +1,7 @@
+## 3.7.1 - 2024-10-24
+
+1. Add `platform` property to each frame of exception stacks.
+
 ## 3.7.0 - 2024-10-03
 
 1. Adds a new `super_properties` parameter on the client that are appended to every /capture call.
