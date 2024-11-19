@@ -232,6 +232,10 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
             self.assertEqual(capture_call[2]["$exception_list"][0]["value"], "test exception")
             self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["type"],
+                "raw",
+            )
+            self.assertEqual(
                 capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["filename"],
                 "posthog/test/test_client.py",
             )

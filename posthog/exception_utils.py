@@ -418,7 +418,7 @@ def current_stacktrace(
 
     frames.reverse()
 
-    return {"frames": frames}
+    return {"frames": frames, "type": "raw"}
 
 
 def get_errno(exc_value):
@@ -504,7 +504,7 @@ def single_exception_from_error_tuple(
     ]
 
     if frames:
-        exception_value["stacktrace"] = {"frames": frames}
+        exception_value["stacktrace"] = {"frames": frames, "type": "raw"}
 
     return exception_value
 
