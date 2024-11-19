@@ -1,3 +1,7 @@
+## 3.7.2 - 2024-11-19
+
+1. Add `type` property to exception stacks.
+
 ## 3.7.1 - 2024-10-24
 
 1. Add `platform` property to each frame of exception stacks.
