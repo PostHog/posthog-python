@@ -724,7 +724,7 @@ class Client(object):
                 person_properties=person_properties,
                 group_properties=group_properties,
                 send_feature_flag_events=send_feature_flag_events,
-                only_evaluate_locally=True,
+                only_evaluate_locally=only_evaluate_locally,
                 disable_geoip=disable_geoip,
             )
 
