@@ -1632,8 +1632,9 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_decide.call_count, 0)
 
+    @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
-    def test_boolean_feature_flag_payload_decide(self, patch_decide):
+    def test_boolean_feature_flag_payload_decide(self, patch_decide, patch_capture):
         patch_decide.return_value = {"featureFlagPayloads": {"person-flag": 300}}
         self.assertEqual(
             self.client.get_feature_flag_payload(
@@ -1649,6 +1650,20 @@ class TestLocalEvaluation(unittest.TestCase):
             300,
         )
         self.assertEqual(patch_decide.call_count, 3)
+        self.assertEqual(patch_capture.call_count, 1)
+        # patch_capture.assert_called_with(
+        #     "some-distinct-id",
+        #     "$feature_flag_called",
+        #     {
+        #         "$feature_flag": "person-flag",
+        #         "$feature_flag_response": True,
+        #         "locally_evaluated": False,
+        #         "$feature/complex-flag": True,
+        #     },
+        #     groups={},
+        #     disable_geoip=None,
+        # )
+        patch_capture.reset_mock()
 
     @mock.patch("posthog.client.decide")
     def test_multivariate_feature_flag_payloads(self, patch_decide):
@@ -2334,6 +2349,97 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=None,
         )
 
+    
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_in_get_feature_flag_payload(self, patch_decide, patch_capture):
+        # Mock the decide response
+        patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}, "featureFlagPayloads": {"person-flag": 300}}
+        
+        # Initialize the Client with necessary keys
+        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        
+        # Set up feature flags
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "region", "value": "USA"}],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+        
+        # Call get_feature_flag_payload with match_value=None to trigger get_feature_flag
+        client.get_feature_flag_payload(
+            key="complex-flag",
+            distinct_id="some-distinct-id",
+            person_properties={"region": "USA", "name": "Aloha"}
+        )
+        
+        # Assert that capture was called once
+        self.assertEqual(patch_capture.call_count, 1)
+        
+        # Verify the capture was called with the correct parameters
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {
+                "$feature_flag": "complex-flag",
+                "$feature_flag_response": True,
+                "locally_evaluated": True,
+                "$feature/complex-flag": True,
+            },
+            groups={},
+            disable_geoip=None,
+        )
+        
+        # Reset mocks for further tests
+        patch_capture.reset_mock()
+        patch_decide.reset_mock()
+        
+        # Call get_feature_flag_payload again for the same user; capture should not be called again
+        client.get_feature_flag_payload(
+            key="complex-flag",
+            distinct_id="some-distinct-id",
+            person_properties={"region": "USA", "name": "Aloha"}
+        )
+        
+        self.assertEqual(patch_capture.call_count, 0)
+        patch_capture.reset_mock()
+        
+        # Call get_feature_flag_payload for a different user; capture should be called
+        client.get_feature_flag_payload(
+            key="complex-flag",
+            distinct_id="some-distinct-id2",
+            person_properties={"region": "USA", "name": "Aloha"}
+        )
+        
+        # self.assertIsNotNone(payload)
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with(
+            "some-distinct-id2",
+            "$feature_flag_called",
+            {
+                "$feature_flag": "complex-flag",
+                "$feature_flag_response": True,
+                "locally_evaluated": True,
+                "$feature/complex-flag": True,
+            },
+            groups={},
+            disable_geoip=None,
+        )
+        
+        patch_capture.reset_mock()
+    
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_disable_geoip_get_flag_capture_call(self, patch_decide, patch_capture):
