@@ -2341,13 +2341,9 @@ class TestCaptureCalls(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_in_get_feature_flag_payload(self, patch_decide, patch_capture):
-        # Mock the decide response
         patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}, "featureFlagPayloads": {"person-flag": 300}}
-        
-        # Initialize the Client with necessary keys
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         
-        # Set up feature flags
         client.feature_flags = [
             {
                 "id": 1,
@@ -2373,10 +2369,8 @@ class TestCaptureCalls(unittest.TestCase):
             person_properties={"region": "USA", "name": "Aloha"}
         )
         
-        # Assert that capture was called once
+        # Assert that capture was called once, with the correct parameters
         self.assertEqual(patch_capture.call_count, 1)
-        
-        # Verify the capture was called with the correct parameters
         patch_capture.assert_called_with(
             "some-distinct-id",
             "$feature_flag_called",
@@ -2394,7 +2388,7 @@ class TestCaptureCalls(unittest.TestCase):
         patch_capture.reset_mock()
         patch_decide.reset_mock()
         
-        # Call get_feature_flag_payload again for the same user; capture should not be called again
+        # Call get_feature_flag_payload again for the same user; capture should not be called again because we've already reported an event for this distinct_id + flag
         client.get_feature_flag_payload(
             key="complex-flag",
             distinct_id="some-distinct-id",
@@ -2411,7 +2405,6 @@ class TestCaptureCalls(unittest.TestCase):
             person_properties={"region": "USA", "name": "Aloha"}
         )
         
-        # self.assertIsNotNone(payload)
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
             "some-distinct-id2",
