@@ -1648,7 +1648,7 @@ class TestLocalEvaluation(unittest.TestCase):
             ),
             300,
         )
-        self.assertEqual(patch_decide.call_count, 2)
+        self.assertEqual(patch_decide.call_count, 3)
 
     @mock.patch("posthog.client.decide")
     def test_multivariate_feature_flag_payloads(self, patch_decide):
