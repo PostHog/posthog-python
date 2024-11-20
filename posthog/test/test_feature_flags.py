@@ -1651,18 +1651,6 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_decide.call_count, 3)
         self.assertEqual(patch_capture.call_count, 1)
-        # patch_capture.assert_called_with(
-        #     "some-distinct-id",
-        #     "$feature_flag_called",
-        #     {
-        #         "$feature_flag": "person-flag",
-        #         "$feature_flag_response": True,
-        #         "locally_evaluated": False,
-        #         "$feature/complex-flag": True,
-        #     },
-        #     groups={},
-        #     disable_geoip=None,
-        # )
         patch_capture.reset_mock()
 
     @mock.patch("posthog.client.decide")
