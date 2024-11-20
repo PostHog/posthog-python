@@ -2337,13 +2337,15 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=None,
         )
 
-    
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_in_get_feature_flag_payload(self, patch_decide, patch_capture):
-        patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}, "featureFlagPayloads": {"person-flag": 300}}
+        patch_decide.return_value = {
+            "featureFlags": {"decide-flag": "decide-value"},
+            "featureFlagPayloads": {"person-flag": 300},
+        }
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
-        
+
         client.feature_flags = [
             {
                 "id": 1,
@@ -2361,14 +2363,12 @@ class TestCaptureCalls(unittest.TestCase):
                 },
             }
         ]
-        
+
         # Call get_feature_flag_payload with match_value=None to trigger get_feature_flag
         client.get_feature_flag_payload(
-            key="complex-flag",
-            distinct_id="some-distinct-id",
-            person_properties={"region": "USA", "name": "Aloha"}
+            key="complex-flag", distinct_id="some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
         )
-        
+
         # Assert that capture was called once, with the correct parameters
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
@@ -2383,28 +2383,24 @@ class TestCaptureCalls(unittest.TestCase):
             groups={},
             disable_geoip=None,
         )
-        
+
         # Reset mocks for further tests
         patch_capture.reset_mock()
         patch_decide.reset_mock()
-        
+
         # Call get_feature_flag_payload again for the same user; capture should not be called again because we've already reported an event for this distinct_id + flag
         client.get_feature_flag_payload(
-            key="complex-flag",
-            distinct_id="some-distinct-id",
-            person_properties={"region": "USA", "name": "Aloha"}
+            key="complex-flag", distinct_id="some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
         )
-        
+
         self.assertEqual(patch_capture.call_count, 0)
         patch_capture.reset_mock()
-        
+
         # Call get_feature_flag_payload for a different user; capture should be called
         client.get_feature_flag_payload(
-            key="complex-flag",
-            distinct_id="some-distinct-id2",
-            person_properties={"region": "USA", "name": "Aloha"}
+            key="complex-flag", distinct_id="some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
         )
-        
+
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
             "some-distinct-id2",
@@ -2418,9 +2414,9 @@ class TestCaptureCalls(unittest.TestCase):
             groups={},
             disable_geoip=None,
         )
-        
+
         patch_capture.reset_mock()
-    
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_disable_geoip_get_flag_capture_call(self, patch_decide, patch_capture):
