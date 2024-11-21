@@ -1635,7 +1635,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_boolean_feature_flag_payload_decide(self, patch_decide, patch_capture):
-        patch_decide.return_value = {"featureFlagPayloads": {"person-flag": 300}}
+        patch_decide.return_value = {"featureFlags": {"person-flag": True}, "featureFlagPayloads": {"person-flag": 300}}
         self.assertEqual(
             self.client.get_feature_flag_payload(
                 "person-flag", "some-distinct-id", person_properties={"region": "USA"}
@@ -1649,7 +1649,7 @@ class TestLocalEvaluation(unittest.TestCase):
             ),
             300,
         )
-        self.assertEqual(patch_decide.call_count, 3)
+        self.assertEqual(patch_decide.call_count, 2)
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.reset_mock()
 
@@ -2341,7 +2341,7 @@ class TestCaptureCalls(unittest.TestCase):
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_in_get_feature_flag_payload(self, patch_decide, patch_capture):
         patch_decide.return_value = {
-            "featureFlags": {"decide-flag": "decide-value"},
+            "featureFlags": {"person-flag": True},
             "featureFlagPayloads": {"person-flag": 300},
         }
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -2350,7 +2350,7 @@ class TestCaptureCalls(unittest.TestCase):
             {
                 "id": 1,
                 "name": "Beta Feature",
-                "key": "complex-flag",
+                "key": "person-flag",
                 "is_simple_flag": False,
                 "active": True,
                 "filters": {
@@ -2366,7 +2366,7 @@ class TestCaptureCalls(unittest.TestCase):
 
         # Call get_feature_flag_payload with match_value=None to trigger get_feature_flag
         client.get_feature_flag_payload(
-            key="complex-flag", distinct_id="some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
+            key="person-flag", distinct_id="some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
         )
 
         # Assert that capture was called once, with the correct parameters
@@ -2375,10 +2375,11 @@ class TestCaptureCalls(unittest.TestCase):
             "some-distinct-id",
             "$feature_flag_called",
             {
-                "$feature_flag": "complex-flag",
+                "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "locally_evaluated": True,
-                "$feature/complex-flag": True,
+                "$feature_flag_payload": 300,
+                "locally_evaluated": False,
+                "$feature/person-flag": True,
             },
             groups={},
             disable_geoip=None,
@@ -2390,7 +2391,7 @@ class TestCaptureCalls(unittest.TestCase):
 
         # Call get_feature_flag_payload again for the same user; capture should not be called again because we've already reported an event for this distinct_id + flag
         client.get_feature_flag_payload(
-            key="complex-flag", distinct_id="some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
+            key="person-flag", distinct_id="some-distinct-id", person_properties={"region": "USA", "name": "Aloha"}
         )
 
         self.assertEqual(patch_capture.call_count, 0)
@@ -2398,7 +2399,7 @@ class TestCaptureCalls(unittest.TestCase):
 
         # Call get_feature_flag_payload for a different user; capture should be called
         client.get_feature_flag_payload(
-            key="complex-flag", distinct_id="some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
+            key="person-flag", distinct_id="some-distinct-id2", person_properties={"region": "USA", "name": "Aloha"}
         )
 
         self.assertEqual(patch_capture.call_count, 1)
@@ -2406,10 +2407,11 @@ class TestCaptureCalls(unittest.TestCase):
             "some-distinct-id2",
             "$feature_flag_called",
             {
-                "$feature_flag": "complex-flag",
+                "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "locally_evaluated": True,
-                "$feature/complex-flag": True,
+                "$feature_flag_payload": 300,
+                "locally_evaluated": False,
+                "$feature/person-flag": True,
             },
             groups={},
             disable_geoip=None,
