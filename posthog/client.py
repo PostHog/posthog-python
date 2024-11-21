@@ -1,6 +1,5 @@
 import atexit
 import logging
-from mailbox import NotEmptyError
 import numbers
 import sys
 from datetime import datetime, timedelta
