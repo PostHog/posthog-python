@@ -369,6 +369,7 @@ def serialize_frame(
         tb_lineno = frame.f_lineno
 
     rv = {
+        "platform": "python",
         "filename": filename_for_module(module, abs_path) or None,
         "abs_path": os.path.abspath(abs_path) if abs_path else None,
         "function": function or "<unknown>",
@@ -417,7 +418,7 @@ def current_stacktrace(
 
     frames.reverse()
 
-    return {"frames": frames}
+    return {"frames": frames, "type": "raw"}
 
 
 def get_errno(exc_value):
@@ -503,7 +504,7 @@ def single_exception_from_error_tuple(
     ]
 
     if frames:
-        exception_value["stacktrace"] = {"frames": frames}
+        exception_value["stacktrace"] = {"frames": frames, "type": "raw"}
 
     return exception_value
 

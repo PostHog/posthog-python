@@ -84,6 +84,21 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
+    def test_basic_super_properties(self):
+        client = Client(FAKE_TEST_API_KEY, super_properties={"source": "repo-name"})
+
+        _, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertEqual(msg["properties"]["source"], "repo-name")
+
+        _, msg = client.identify("distinct_id", {"trait": "value"})
+        client.flush()
+
+        self.assertEqual(msg["$set"]["trait"], "value")
+        self.assertEqual(msg["properties"]["source"], "repo-name")
+
     def test_basic_capture_exception(self):
 
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -217,6 +232,10 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
             self.assertEqual(capture_call[2]["$exception_list"][0]["value"], "test exception")
             self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["type"],
+                "raw",
+            )
+            self.assertEqual(
                 capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["filename"],
                 "posthog/test/test_client.py",
             )
@@ -227,6 +246,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(
                 capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["module"], "posthog.test.test_client"
             )
+            self.assertEqual(capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True)
 
     def test_basic_capture_exception_with_no_exception_happening(self):
 
