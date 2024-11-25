@@ -4,13 +4,13 @@ import numbers
 import os
 import sys
 from datetime import datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
-from posthog.exception_capture import DEFAULT_DISTINCT_ID, ExceptionCapture
+from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
@@ -362,7 +362,7 @@ class Client(object):
     def capture_exception(
         self,
         exception=None,
-        distinct_id=DEFAULT_DISTINCT_ID,
+        distinct_id=None,
         properties=None,
         context=None,
         timestamp=None,
@@ -373,6 +373,13 @@ class Client(object):
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
         try:
             properties = properties or {}
+
+            # if there's no distinct_id, we'll generate one and set personless mode
+            # via $process_person_profile = false
+            if distinct_id is None:
+                properties["$process_person_profile"] = False
+                distinct_id = uuid4()
+
             require("distinct_id", distinct_id, ID_TYPES)
             require("properties", properties, dict)
 
@@ -385,7 +392,7 @@ class Client(object):
                 self.log.warning("No exception information available")
                 return
 
-            # Format stack trace like sentry
+            # Format stack trace for cymbal
             all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
 
             # Add in-app property to frames in the exceptions

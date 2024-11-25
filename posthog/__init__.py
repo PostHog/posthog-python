@@ -2,7 +2,7 @@ import datetime  # noqa: F401
 from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
-from posthog.exception_capture import DEFAULT_DISTINCT_ID, Integrations  # noqa: F401
+from posthog.exception_capture import Integrations  # noqa: F401
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -289,7 +289,7 @@ def capture_exception(
     return _proxy(
         "capture_exception",
         exception=exception,
-        distinct_id=distinct_id or DEFAULT_DISTINCT_ID,
+        distinct_id=distinct_id,
         properties=properties,
         context=context,
         timestamp=timestamp,
