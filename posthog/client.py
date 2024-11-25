@@ -4,7 +4,7 @@ import numbers
 import os
 import sys
 from datetime import datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
@@ -373,6 +373,13 @@ class Client(object):
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
         try:
             properties = properties or {}
+
+            # if there's no distinct_id, we'll generate one and set personless mode
+            # via $process_person_profile = false
+            if distinct_id is None:
+                properties["$process_person_profile"] = False
+                distinct_id = uuid4()
+
             require("distinct_id", distinct_id, ID_TYPES)
             require("properties", properties, dict)
 
