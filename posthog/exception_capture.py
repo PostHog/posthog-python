@@ -12,9 +12,6 @@ class Integrations(str, Enum):
     Django = "django"
 
 
-DEFAULT_DISTINCT_ID = "python-exceptions"
-
-
 class ExceptionCapture:
     # TODO: Add client side rate limiting to prevent spamming the server with exceptions
 
@@ -61,14 +58,7 @@ class ExceptionCapture:
 
     def capture_exception(self, exception, metadata=None):
         try:
-            # if hasattr(sys, "ps1"):
-            #     # Disable the excepthook for interactive Python shells
-            #     return
-
-            distinct_id = metadata.get("distinct_id") if metadata else DEFAULT_DISTINCT_ID
-            # Make sure we have a distinct_id if its empty in metadata
-            distinct_id = distinct_id or DEFAULT_DISTINCT_ID
-
+            distinct_id = metadata.get("distinct_id") if metadata else None
             self.client.capture_exception(exception, distinct_id)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")

@@ -104,11 +104,11 @@ class TestClient(unittest.TestCase):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
-            client.capture_exception(exception)
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
             capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "python-exceptions")
+            self.assertEqual(capture_call[0], "distinct_id")
             self.assertEqual(capture_call[1], "$exception")
             self.assertEqual(
                 capture_call[2],
@@ -123,7 +123,7 @@ class TestClient(unittest.TestCase):
                             "value": "test exception",
                         }
                     ],
-                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/python-exceptions",
+                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/distinct_id",
                 },
             )
 
@@ -218,11 +218,11 @@ class TestClient(unittest.TestCase):
             try:
                 raise Exception("test exception")
             except Exception:
-                client.capture_exception()
+                client.capture_exception(distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
             capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "python-exceptions")
+            self.assertEqual(capture_call[0], "distinct_id")
             self.assertEqual(capture_call[1], "$exception")
             self.assertEqual(capture_call[2]["$exception_type"], "Exception")
             self.assertEqual(capture_call[2]["$exception_message"], "test exception")
