@@ -1,3 +1,7 @@
+## 3.7.3 - 2024-11-19
+
+1. Rename `platform` property on each frame of exception stacks to `lang`.
+
 ## 3.7.2 - 2024-11-19
 
 1. Add `type` property to exception stacks.
