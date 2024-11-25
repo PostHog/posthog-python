@@ -1,6 +1,7 @@
 import logging
 import sys
 import threading
+import uuid
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
@@ -61,14 +62,16 @@ class ExceptionCapture:
 
     def capture_exception(self, exception, metadata=None):
         try:
-            # if hasattr(sys, "ps1"):
-            #     # Disable the excepthook for interactive Python shells
-            #     return
+            distinct_id = metadata.get("distinct_id") if metadata else None
 
-            distinct_id = metadata.get("distinct_id") if metadata else DEFAULT_DISTINCT_ID
-            # Make sure we have a distinct_id if its empty in metadata
-            distinct_id = distinct_id or DEFAULT_DISTINCT_ID
+            # if there's no distinct_id, we'll generate one and set personless mode
+            # via $process_person_profile = false
+            properties = {}
+            if distinct_id is None:
+                properties["$process_person_profile"] = False
+                distinct_id = uuid.uuid4()
 
-            self.client.capture_exception(exception, distinct_id)
+
+            self.client.capture_exception(exception, distinct_id, properties)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")

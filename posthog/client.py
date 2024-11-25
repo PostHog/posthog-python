@@ -362,7 +362,7 @@ class Client(object):
     def capture_exception(
         self,
         exception=None,
-        distinct_id=DEFAULT_DISTINCT_ID,
+        distinct_id=None,
         properties=None,
         context=None,
         timestamp=None,
@@ -385,7 +385,7 @@ class Client(object):
                 self.log.warning("No exception information available")
                 return
 
-            # Format stack trace like sentry
+            # Format stack trace for cymbal
             all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
 
             # Add in-app property to frames in the exceptions
