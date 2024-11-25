@@ -100,7 +100,6 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["source"], "repo-name")
 
     def test_basic_capture_exception(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
@@ -128,7 +127,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_distinct_id(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
@@ -156,7 +154,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_correct_host_generation(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com")
             exception = Exception("test exception")
@@ -184,7 +181,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://app.posthog.com")
             exception = Exception("test exception")
@@ -212,7 +208,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_no_exception_given(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             try:
@@ -249,10 +244,8 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True)
 
     def test_basic_capture_exception_with_no_exception_happening(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             with self.assertLogs("posthog", level="WARNING") as logs:
-
                 client = self.client
                 client.capture_exception()
 

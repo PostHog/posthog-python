@@ -71,7 +71,6 @@ class ExceptionCapture:
                 properties["$process_person_profile"] = False
                 distinct_id = uuid.uuid4()
 
-
             self.client.capture_exception(exception, distinct_id, properties)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
