@@ -1,3 +1,7 @@
+## 3.7.4 - 2024-11-25
+
+1. Fix bug where this SDK incorrectly sent feature flag events with null values when calling `get_feature_flag_payload`.
+
 ## 3.7.3 - 2024-11-25
 
 1. Use personless mode when sending an exception without a provided `distinct_id`.

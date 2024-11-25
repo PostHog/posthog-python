@@ -173,6 +173,15 @@ class Client(object):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return resp_data["featureFlagPayloads"]
 
+    def get_feature_flags_and_payloads(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
+    ):
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        return {
+            "featureFlags": resp_data["featureFlags"],
+            "featureFlagPayloads": resp_data["featureFlagPayloads"],
+        }
+
     def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None):
         require("distinct_id", distinct_id, ID_TYPES)
 
@@ -746,23 +755,52 @@ class Client(object):
                 groups=groups,
                 person_properties=person_properties,
                 group_properties=group_properties,
-                send_feature_flag_events=send_feature_flag_events,
-                only_evaluate_locally=True,
+                send_feature_flag_events=False,
+                # Disable automatic sending of feature flag events because we're manually handling event dispatch.
+                # This prevents sending events with empty data when `get_feature_flag` cannot be evaluated locally.
+                only_evaluate_locally=True,  # Enable local evaluation of feature flags to avoid making multiple requests to `/decide`.
                 disable_geoip=disable_geoip,
             )
 
         response = None
+        payload = None
 
         if match_value is not None:
-            response = self._compute_payload_locally(key, match_value)
+            payload = self._compute_payload_locally(key, match_value)
 
-        if response is None and not only_evaluate_locally:
-            decide_payloads = self.get_feature_payloads(
-                distinct_id, groups, person_properties, group_properties, disable_geoip
+        flag_was_locally_evaluated = payload is not None
+        if not flag_was_locally_evaluated and not only_evaluate_locally:
+            try:
+                responses_and_payloads = self.get_feature_flags_and_payloads(
+                    distinct_id, groups, person_properties, group_properties, disable_geoip
+                )
+                response = responses_and_payloads["featureFlags"].get(key, None)
+                payload = responses_and_payloads["featureFlagPayloads"].get(str(key).lower(), None)
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
+
+        feature_flag_reported_key = f"{key}_{str(response)}"
+
+        if (
+            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
+            and send_feature_flag_events  # noqa: W503
+        ):
+            self.capture(
+                distinct_id,
+                "$feature_flag_called",
+                {
+                    "$feature_flag": key,
+                    "$feature_flag_response": response,
+                    "$feature_flag_payload": payload,
+                    "locally_evaluated": flag_was_locally_evaluated,
+                    f"$feature/{key}": response,
+                },
+                groups=groups,
+                disable_geoip=disable_geoip,
             )
-            response = decide_payloads.get(str(key).lower(), None)
+            self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
 
-        return response
+        return payload
 
     def _compute_payload_locally(self, key, match_value):
         payload = None
