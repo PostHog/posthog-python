@@ -1,3 +1,7 @@
+## 3.7.3 - 2024-11-25
+
+1. Use personless mode when sending an exception without a provided `distinct_id`.
+
 ## 3.7.2 - 2024-11-19
 
 1. Add `type` property to exception stacks.
