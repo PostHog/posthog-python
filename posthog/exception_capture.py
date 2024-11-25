@@ -13,9 +13,6 @@ class Integrations(str, Enum):
     Django = "django"
 
 
-DEFAULT_DISTINCT_ID = "python-exceptions"
-
-
 class ExceptionCapture:
     # TODO: Add client side rate limiting to prevent spamming the server with exceptions
 

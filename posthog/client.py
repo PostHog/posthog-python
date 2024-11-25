@@ -10,7 +10,7 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
-from posthog.exception_capture import DEFAULT_DISTINCT_ID, ExceptionCapture
+from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
