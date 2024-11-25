@@ -375,6 +375,7 @@ def serialize_frame(
         "function": function or "<unknown>",
         "module": module,
         "lineno": tb_lineno,
+        "lang": "python",
     }  # type: Dict[str, Any]
 
     if include_source_context:
