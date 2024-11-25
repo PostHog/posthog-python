@@ -1,6 +1,6 @@
 ## 3.7.3 - 2024-11-22
 
-Fix bug where this SDK incorrectly sent feature flag events with null values when calling `get_feature_flag_payload`, even though the actual payload is successfully retrieved and returned to the user.
+1. Fix bug where this SDK incorrectly sent feature flag events with null values when calling `get_feature_flag_payload`.
 
 ## 3.7.2 - 2024-11-19
 
