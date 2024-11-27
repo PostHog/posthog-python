@@ -733,6 +733,7 @@ def set_in_app_in_frames(frames, in_app_exclude, in_app_include, project_root=No
         # if frame has no abs_path, skip further checks
         abs_path = frame.get("abs_path")
         if abs_path is None:
+            frame["in_app"] = False
             continue
 
         if _is_external_source(abs_path):
@@ -742,6 +743,8 @@ def set_in_app_in_frames(frames, in_app_exclude, in_app_include, project_root=No
         if _is_in_project_root(abs_path, project_root):
             frame["in_app"] = True
             continue
+
+        frame["in_app"] = False
 
     return frames
 
