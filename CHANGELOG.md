@@ -1,3 +1,7 @@
+## 3.7.5 - 2024-11-27
+
+1. Fix a bug where `in_app` was occassionally not present on exception stack frames.
+
 ## 3.7.4 - 2024-11-25
 
 1. Fix bug where this SDK incorrectly sent feature flag events with null values when calling `get_feature_flag_payload`.
