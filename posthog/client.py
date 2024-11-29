@@ -102,13 +102,7 @@ class Client(object):
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
-        if debug:
-            # Ensures that debug level messages are logged when debug mode is on.
-            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
-            logging.basicConfig()
-            self.log.setLevel(logging.DEBUG)
-        else:
-            self.log.setLevel(logging.WARNING)
+        self._set_up_logger(debug)
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(self, integrations=self.exception_autocapture_integrations)
@@ -925,6 +919,19 @@ class Client(object):
 
         return all_person_properties, all_group_properties
 
+    def _set_up_logger(self, debug):
+        if debug:
+            # Ensures that debug level messages are logged when debug mode is on.
+            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
+            logging.basicConfig()
+            self.log.setLevel(logging.DEBUG)
+        else:
+            self.log.setLevel(logging.WARNING)
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter('[%(name)s] %(message)s'))
+        log.addHandler(handler)
+        log.propagate = False  # Prevents double logging (otherwise we'd have an extra log that doesn't use the handler)
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
