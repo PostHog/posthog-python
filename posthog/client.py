@@ -30,6 +30,23 @@ MAX_DICT_SIZE = 50_000
 
 class Client(object):
     """Create a new PostHog client."""
+    _instance = None
+    _enforce_singleton = True  # Can be disabled for testing
+
+    def __new__(cls, *args, **kwargs):
+        if cls._enforce_singleton:
+            if not cls._instance:
+                cls._instance = super(Client, cls).__new__(cls)
+                # Move initialization flag to __new__ since it needs to exist
+                # before __init__ is called
+                cls._instance._initialized = False
+            return cls._instance
+        # For non-singleton case (tests), still need to set _initialized
+        instance = super(Client, cls).__new__(cls)
+        instance._initialized = False
+        return instance
+
+
 
     log = logging.getLogger("posthog")
 
@@ -60,6 +77,11 @@ class Client(object):
         exception_autocapture_integrations=None,
         project_root=None,
     ):
+        if self._initialized:
+            self._warn_multiple_initialization()
+            return
+            
+        self._initialized = True
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
@@ -925,6 +947,49 @@ class Client(object):
 
         return all_person_properties, all_group_properties
 
+    def _warn_multiple_initialization(self):
+        self.log.warning(
+            "Warning: Attempting to create multiple PostHog client instances. "
+            "PostHog client should be used as a singleton. "
+            "The existing instance will be reused instead of creating a new one. "
+            "Consider using PostHog.get_instance() to access the client."
+        )
+
+    
+    @classmethod
+    def get_instance(cls):
+        """
+        Get the singleton instance of the PostHog client.
+
+        This method returns the existing PostHog client instance that was previously
+        initialized. It ensures only one client instance exists throughout your application.
+
+        Returns:
+            Client: The singleton PostHog client instance
+
+        Raises:
+            RuntimeError: If no PostHog client has been initialized yet
+
+        Example:
+            ```python
+            # First, initialize the client
+            posthog.create_posthog_client('api_key', host='https://app.posthog.com')
+
+            # Later, get the same instance
+            client = posthog.get_posthog_client()
+            client.capture('user_id', 'event_name')
+            ```
+
+        Note:
+            Make sure to initialize a client with `create_posthog_client()` or
+            `Client(api_key, ...)` before calling this method.
+        """
+        if not cls._instance:
+            raise RuntimeError(
+                "PostHog client has not been initialized. "
+                "Please create an instance with Client(api_key, ...) first."
+            )
+        return cls._instance
 
 def require(name, field, data_type):
     """Require that the named `field` has the right `data_type`"""
