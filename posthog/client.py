@@ -304,7 +304,7 @@ class Client(object):
         timestamp=None,
         uuid=None,
         disable_geoip=None,
-        distinct_id=None
+        distinct_id=None,
     ):
         properties = properties or {}
         context = context or {}

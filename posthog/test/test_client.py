@@ -758,12 +758,19 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_group_identify_with_distinct_id(self):
         success, msg = self.client.group_identify(
-            "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid", distinct_id="distinct_id"
+            "organization",
+            "id:5",
+            {"trait": "value"},
+            {"ip": "192.168.0.1"},
+            datetime(2014, 9, 3),
+            "new-uuid",
+            distinct_id="distinct_id",
         )
 
         self.assertTrue(success)
         self.assertEqual(msg["event"], "$groupidentify")
         self.assertEqual(msg["distinct_id"], "distinct_id")
+
         self.assertEqual(
             msg["properties"],
             {
