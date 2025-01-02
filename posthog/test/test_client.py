@@ -715,6 +715,25 @@ class TestClient(unittest.TestCase):
         self.assertTrue(isinstance(msg["timestamp"], str))
         self.assertIsNone(msg.get("uuid"))
 
+    def test_basic_group_identify_with_distinct_id(self):
+        success, msg = self.client.group_identify("organization", "id:5", distinct_id="distinct_id")
+        self.assertTrue(success)
+        self.assertEqual(msg["event"], "$groupidentify")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(
+            msg["properties"],
+            {
+                "$group_type": "organization",
+                "$group_key": "id:5",
+                "$group_set": {},
+                "$lib": "posthog-python",
+                "$lib_version": VERSION,
+                "$geoip_disable": True,
+            },
+        )
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+
     def test_advanced_group_identify(self):
         success, msg = self.client.group_identify(
             "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid"
@@ -723,6 +742,28 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(msg["event"], "$groupidentify")
         self.assertEqual(msg["distinct_id"], "$organization_id:5")
+        self.assertEqual(
+            msg["properties"],
+            {
+                "$group_type": "organization",
+                "$group_key": "id:5",
+                "$group_set": {"trait": "value"},
+                "$lib": "posthog-python",
+                "$lib_version": VERSION,
+                "$geoip_disable": True,
+            },
+        )
+        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
+
+    def test_advanced_group_identify_with_distinct_id(self):
+        success, msg = self.client.group_identify(
+            "organization", "id:5", {"trait": "value"}, {"ip": "192.168.0.1"}, datetime(2014, 9, 3), "new-uuid", distinct_id="distinct_id"
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(msg["event"], "$groupidentify")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(
             msg["properties"],
             {
