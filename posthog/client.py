@@ -304,12 +304,18 @@ class Client(object):
         timestamp=None,
         uuid=None,
         disable_geoip=None,
+        distinct_id=None
     ):
         properties = properties or {}
         context = context or {}
         require("group_type", group_type, ID_TYPES)
         require("group_key", group_key, ID_TYPES)
         require("properties", properties, dict)
+
+        if distinct_id:
+            require("distinct_id", distinct_id, ID_TYPES)
+        else:
+            distinct_id = "${}_{}".format(group_type, group_key)
 
         msg = {
             "event": "$groupidentify",
@@ -318,7 +324,7 @@ class Client(object):
                 "$group_key": group_key,
                 "$group_set": properties,
             },
-            "distinct_id": "${}_{}".format(group_type, group_key),
+            "distinct_id": distinct_id,
             "timestamp": timestamp,
             "context": context,
             "uuid": uuid,
