@@ -1,7 +1,7 @@
 # PostHog Python library example
 
 # Import the library
-import time
+# import time
 
 import posthog
 
