@@ -33,6 +33,7 @@ class TestClient(unittest.TestCase):
     def setUp(self):
         self.failed = False
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        Client._enforce_singleton = False  # Disable singleton for tests
 
     def test_requires_api_key(self):
         self.assertRaises(AssertionError, Client)
@@ -159,6 +160,7 @@ class TestClient(unittest.TestCase):
 
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com")
+            print(client.host)
             exception = Exception("test exception")
             client.capture_exception(exception, "distinct_id")
 
@@ -187,6 +189,7 @@ class TestClient(unittest.TestCase):
 
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://app.posthog.com")
+            print(client.host)
             exception = Exception("test exception")
             client.capture_exception(exception, "distinct_id")
 
@@ -1073,3 +1076,58 @@ class TestClient(unittest.TestCase):
             group_properties={},
             disable_geoip=False,
         )
+
+    def test_singleton_behavior(self):
+        # Reset singleton state
+        Client._instance = None
+        Client._enforce_singleton = True
+
+        # Create first instance
+        client1 = Client(FAKE_TEST_API_KEY, host="https://host1.com")
+        
+        # Create second instance with different params
+        client2 = Client(FAKE_TEST_API_KEY, host="https://host2.com")
+        
+        # Both should reference the same instance
+        self.assertIs(client1, client2)
+        
+        # Host should be from first initialization
+        self.assertEqual(client1.host, "https://host1.com")
+        self.assertEqual(client2.host, "https://host1.com")
+
+    def test_singleton_disabled_for_testing(self):
+        # Reset singleton state
+        Client._instance = None
+        Client._enforce_singleton = False
+
+        # Create instances with different params
+        client1 = Client(FAKE_TEST_API_KEY, host="https://host1.com")
+        client2 = Client(FAKE_TEST_API_KEY, host="https://host2.com")
+        
+        # Should be different instances
+        self.assertIsNot(client1, client2)
+        
+        # Each should maintain their own host
+        self.assertEqual(client1.host, "https://host1.com")
+        self.assertEqual(client2.host, "https://host2.com")
+
+    def test_singleton_warning_on_multiple_initialization(self):
+        # Reset singleton state
+        Client._instance = None
+        Client._enforce_singleton = True
+
+        # Create first instance
+        client1 = Client(FAKE_TEST_API_KEY)
+        
+        # Second initialization should log warning
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            client2 = Client(FAKE_TEST_API_KEY)
+            self.assertEqual(
+                logs.output[0],
+                "WARNING:posthog:Warning: Attempting to create multiple PostHog client instances. "
+                "PostHog client should be used as a singleton. "
+                "The existing instance will be reused instead of creating a new one. "
+                "Consider using PostHog.get_instance() to access the client."
+            )
+    
+    

@@ -1,3 +1,7 @@
+## 3.7.5 - 2024-12-11
+
+1. Modify the SDK to use a Singleton factory pattern; warn on non-singleton instantiation.
+
 ## 3.7.4 - 2024-11-25
 
 1. Fix bug where this SDK incorrectly sent feature flag events with null values when calling `get_feature_flag_payload`.

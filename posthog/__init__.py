@@ -1,13 +1,48 @@
+"""
+PostHog Python SDK - Main module for interacting with PostHog analytics.
+
+This module provides the main interface for sending analytics data to PostHog.
+It includes functions for tracking events, identifying users, managing feature flags,
+and handling group analytics.
+
+Basic usage:
+    import posthog
+    
+    # Configure the client
+    posthog.api_key = 'your_api_key'
+    
+    # Track an event
+    posthog.capture('distinct_id', 'event_name')
+"""
 import datetime  # noqa: F401
 from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
 from posthog.version import VERSION
+from posthog.factory import PostHogFactory
 
 __version__ = VERSION
 
-"""Settings."""
+"""Settings.
+These settings control the behavior of the PostHog client:
+
+api_key: Your PostHog API key
+host: PostHog server URL (defaults to Cloud instance)
+debug: Enable debug logging
+send: Enable/disable sending events to PostHog
+sync_mode: Run in synchronous mode instead of async
+disabled: Completely disable the client
+personal_api_key: Personal API key for feature flag evaluation
+project_api_key: Project API key for direct feature flag access
+poll_interval: Interval in seconds between feature flag updates
+disable_geoip: Disable IP geolocation (recommended for server-side)
+feature_flags_request_timeout_seconds: Timeout for feature flag requests
+super_properties: Properties to be added to every event
+enable_exception_autocapture: (Alpha) Enable automatic exception capturing
+exception_autocapture_integrations: List of exception capture integrations
+project_root: Root directory for exception source mapping
+"""
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
 on_error = None  # type: Optional[Callable]
@@ -521,5 +556,12 @@ def _proxy(method, *args, **kwargs):
     return fn(*args, **kwargs)
 
 
+# For backwards compatibility with older versions of the SDK.
+# This class is deprecated and will be removed in a future version.
 class Posthog(Client):
     pass
+
+# The recommended way to create and manage PostHog client instances.
+# These factory methods ensure proper singleton management and configuration.
+create_posthog_client = PostHogFactory.create  # Create a new PostHog client instance
+get_posthog_client = PostHogFactory.get_instance  # Get the existing client instance
