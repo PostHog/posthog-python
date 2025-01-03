@@ -1,3 +1,7 @@
+## 3.7.5 - 2025-01-03
+
+1. Add `distinct_id` to group_identify
+
 ## 3.7.4 - 2024-11-25
 
 1. Fix bug where this SDK incorrectly sent feature flag events with null values when calling `get_feature_flag_payload`.
