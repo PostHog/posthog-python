@@ -1,5 +1,6 @@
 # PostHog Python library example
 import argparse
+
 import posthog
 
 # Add argument parsing
