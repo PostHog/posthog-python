@@ -1,9 +1,13 @@
 # PostHog Python library example
-
-# Import the library
-# import time
-
+import argparse
 import posthog
+
+# Add argument parsing
+parser = argparse.ArgumentParser(description='PostHog Python library example')
+parser.add_argument('--flag', 
+                   default='person-on-events-enabled',
+                   help='Feature flag key to check (default: person-on-events-enabled)')
+args = parser.parse_args()
 
 posthog.debug = True
 
@@ -18,7 +22,7 @@ posthog.poll_interval = 10
 
 print(
     posthog.feature_enabled(
-        "person-on-events-enabled",
+        args.flag,  # Use the flag from command line arguments
         "12345",
         groups={"organization": str("0182ee91-8ef7-0000-4cb9-fedc5f00926a")},
         group_properties={
