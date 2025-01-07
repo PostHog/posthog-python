@@ -3,10 +3,10 @@ import argparse
 import posthog
 
 # Add argument parsing
-parser = argparse.ArgumentParser(description='PostHog Python library example')
-parser.add_argument('--flag', 
-                   default='person-on-events-enabled',
-                   help='Feature flag key to check (default: person-on-events-enabled)')
+parser = argparse.ArgumentParser(description="PostHog Python library example")
+parser.add_argument(
+    "--flag", default="person-on-events-enabled", help="Feature flag key to check (default: person-on-events-enabled)"
+)
 args = parser.parse_args()
 
 posthog.debug = True
