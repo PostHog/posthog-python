@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, Optional, Union
 
 try:
@@ -6,7 +7,10 @@ except ImportError:
     raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
 
 from posthog.client import Client as PostHogClient
-from posthog.ai.utils import process_sync_streaming_response, track_usage
+from posthog.ai.utils import (
+    track_usage,
+    get_model_params,
+)
 
 
 class OpenAI:
@@ -56,31 +60,98 @@ class ChatCompletions:
         posthog_properties: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        """
-        Wraps openai chat completions and captures a $ai_generation event in PostHog.
-
-        PostHog-specific parameters:
-            - posthog_distinct_id: Ties the resulting event to a user in PostHog.
-            - posthog_trace_id: For grouping multiple calls into a single trace.
-            - posthog_properties: Additional custom properties for PostHog analytics.
-        """
         distinct_id = posthog_distinct_id or "anonymous_ai_user"
-
-        # If streaming, handle it separately
+        
         if kwargs.get("stream", False):
-            response = self._openai_client.chat.completions.create(**kwargs)
-            return process_sync_streaming_response(
-                response=response,
-                ph_client=self._ph_client,
-                event_properties={},
-                distinct_id=distinct_id,
+            return self._create_streaming(
+                distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                **kwargs,
             )
 
-        # Non-streaming: let track_usage handle the request and analytics
+        
         def call_method(**call_kwargs):
             return self._openai_client.chat.completions.create(**call_kwargs)
 
-        response = track_usage(
-            distinct_id, self._ph_client, posthog_trace_id, posthog_properties, call_method, **kwargs
+        return track_usage(
+            distinct_id,
+            self._ph_client,
+            posthog_trace_id,
+            posthog_properties,
+            call_method,
+            **kwargs,
         )
-        return response
+
+    def _create_streaming(
+        self,
+        distinct_id: str,
+        posthog_trace_id: Optional[str],
+        posthog_properties: Optional[Dict[str, Any]],
+        **kwargs: Any,
+    ):
+        start_time = time.time()
+        usage_stats: Dict[str, int] = {}
+        accumulated_content = []
+        stream_options = {"include_usage": True}
+        response = self._openai_client.chat.completions.create(**kwargs, stream_options=stream_options)
+
+        def generator():
+            nonlocal usage_stats
+            nonlocal accumulated_content
+            try:
+                for chunk in response:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage_stats = {
+                            k: getattr(chunk.usage, k, 0)
+                            for k in ["prompt_tokens", "completion_tokens", "total_tokens"]
+                        }
+                    if chunk.choices[0].delta.content:
+                        accumulated_content.append(chunk.choices[0].delta.content)
+                    yield chunk
+            finally:
+                end_time = time.time()
+                latency = end_time - start_time
+                output = "".join(accumulated_content)
+                self._capture_streaming_event(distinct_id, posthog_trace_id, posthog_properties, kwargs, usage_stats, latency, output)
+
+        return generator()
+
+    def _capture_streaming_event(
+        self,
+        distinct_id: str,
+        posthog_trace_id: Optional[str],
+        posthog_properties: Optional[Dict[str, Any]],
+        kwargs: Dict[str, Any],
+        usage_stats: Dict[str, int],
+        latency: float,
+        output: str,
+    ):
+        
+        event_properties = {
+            "$ai_provider": "openai",
+            "$ai_model": kwargs.get("model"),
+            "$ai_model_parameters": get_model_params(kwargs),
+            "$ai_input": kwargs.get("messages"),
+            "$ai_output": {
+                "choices": [
+                    {
+                        "content": output,
+                        "role": "assistant",
+                    }
+                ]
+            }, 
+            "$ai_http_status": 200,
+            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
+            "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
+            "$ai_latency": latency,
+            "$ai_trace_id": posthog_trace_id,
+            "$ai_posthog_properties": posthog_properties,
+        }
+
+        if hasattr(self._ph_client, "capture"):
+            self._ph_client.capture(
+                distinct_id=distinct_id,
+                event="$ai_generation",
+                properties=event_properties,
+            )

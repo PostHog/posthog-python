@@ -39,75 +39,6 @@ def format_response(response):
     return output
 
 
-def process_sync_streaming_response(
-    response,
-    ph_client,
-    event_properties,
-    distinct_id,
-):
-    """
-    Processes chunks from a synchronous streaming response, accumulating them
-    so we can capture them in analytics afterward.
-    """
-    accumulated_content = []
-
-    try:
-        for chunk in response:
-            if chunk.choices[0].delta.content:
-                accumulated_content.append(chunk.choices[0].delta.content)
-            yield chunk
-    finally:
-        final_content = "".join(accumulated_content)
-        event_properties["$ai_output"] = {
-            "choices": [
-                {
-                    "content": final_content,
-                    "role": "assistant",
-                }
-            ]
-        }
-        if hasattr(ph_client, "capture"):
-            ph_client.capture(
-                distinct_id=distinct_id,
-                event="$ai_generation",
-                properties=event_properties,
-            )
-
-
-async def process_async_streaming_response(
-    response,
-    ph_client,
-    event_properties,
-    distinct_id,
-) -> AsyncGenerator[Any, None]:
-    """
-    Processes chunks from an asynchronous streaming response, accumulating them
-    so we can capture them in analytics afterward.
-    """
-    accumulated_content = []
-    try:
-        async for chunk in response:
-            if chunk.choices[0].delta.content:
-                accumulated_content.append(chunk.choices[0].delta.content)
-            yield chunk
-    finally:
-        final_content = "".join(accumulated_content)
-        event_properties["$ai_output"] = {
-            "choices": [
-                {
-                    "content": final_content,
-                    "role": "assistant",
-                }
-            ]
-        }
-        if hasattr(ph_client, "capture"):
-            ph_client.capture(
-                distinct_id=distinct_id,
-                event="$ai_generation",
-                properties=event_properties,
-            )
-
-
 def track_usage(
     distinct_id: str,
     ph_client: PostHogClient,
@@ -145,7 +76,7 @@ def track_usage(
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": kwargs.get("messages"),
-            "$ai_output": None,
+            "$ai_output": format_response(response),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -201,7 +132,7 @@ async def track_usage_async(
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": kwargs.get("messages"),
-            "$ai_output": None,
+            "$ai_output": format_response(response),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,

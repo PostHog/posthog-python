@@ -25,23 +25,30 @@ async_openai_client = AsyncOpenAI(
 def main_sync():
     trace_id = str(uuid.uuid4())
     print("Trace ID:", trace_id)
+    distinct_id = "test_distinct_id"
+    properties = {"test_property": "test_value"}
 
     try:
-        basic_openai_call()
-        streaming_openai_call()
+        basic_openai_call(distinct_id, trace_id, properties)
+        # streaming_openai_call(distinct_id, trace_id, properties)
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
 
 async def main_async():
+    trace_id = str(uuid.uuid4())
+    print("Trace ID:", trace_id)
+    distinct_id = "test_distinct_id"
+    properties = {"test_property": "test_value"}
+
     try:
-        await basic_async_openai_call()
-        await streaming_async_openai_call()
+        await basic_async_openai_call(distinct_id, trace_id, properties)
+        await streaming_async_openai_call(distinct_id, trace_id, properties)
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
 
-def basic_openai_call():
+def basic_openai_call(distinct_id, trace_id, properties):
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -50,6 +57,9 @@ def basic_openai_call():
         ],
         max_tokens=100,
         temperature=0.7,
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
     )
     if response and response.choices:
         print("OpenAI response:", response.choices[0].message.content)
@@ -58,7 +68,7 @@ def basic_openai_call():
     return response
 
 
-async def basic_async_openai_call():
+async def basic_async_openai_call(distinct_id, trace_id, properties):
     response = await async_openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -67,6 +77,9 @@ async def basic_async_openai_call():
         ],
         max_tokens=100,
         temperature=0.7,
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
     )
     if response and hasattr(response, "choices"):
         print("OpenAI response:", response.choices[0].message.content)
@@ -75,7 +88,7 @@ async def basic_async_openai_call():
     return response
 
 
-def streaming_openai_call():
+def streaming_openai_call(distinct_id, trace_id, properties):
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -85,6 +98,9 @@ def streaming_openai_call():
         max_tokens=100,
         temperature=0.7,
         stream=True,
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
     )
 
     for chunk in response:
@@ -93,7 +109,7 @@ def streaming_openai_call():
     return response
 
 
-async def streaming_async_openai_call():
+async def streaming_async_openai_call(distinct_id, trace_id, properties):
     response = await async_openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -103,6 +119,9 @@ async def streaming_async_openai_call():
         max_tokens=100,
         temperature=0.7,
         stream=True,
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
     )
 
     async for chunk in response:
