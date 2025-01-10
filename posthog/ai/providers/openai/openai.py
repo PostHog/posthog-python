@@ -30,6 +30,7 @@ class OpenAI:
         """
         self._openai_client = openai.OpenAI(**openai_config)
         self._posthog_client = posthog_client
+        self._base_url = openai_config.get("base_url", "https://api.openai.com/v1")
 
     def __getattr__(self, name: str) -> Any:
         """
@@ -42,23 +43,25 @@ class OpenAI:
 
     @property
     def chat(self) -> "ChatNamespace":
-        return ChatNamespace(self._posthog_client, self._openai_client)
+        return ChatNamespace(self._posthog_client, self._openai_client, self._base_url)
 
 
 class ChatNamespace:
-    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any):
+    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any, base_url: Optional[str]):
         self._ph_client = posthog_client
         self._openai_client = openai_client
+        self._base_url = base_url
 
     @property
     def completions(self):
-        return ChatCompletions(self._ph_client, self._openai_client)
+        return ChatCompletions(self._ph_client, self._openai_client, self._base_url)
 
 
 class ChatCompletions:
-    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any):
+    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any, base_url: Optional[str]):
         self._ph_client = posthog_client
         self._openai_client = openai_client
+        self._base_url = base_url
 
     def create(
         self,
@@ -86,6 +89,7 @@ class ChatCompletions:
             posthog_trace_id,
             posthog_properties,
             call_method,
+            self._base_url,
             **kwargs,
         )
 
@@ -151,6 +155,7 @@ class ChatCompletions:
                     }
                 ]
             },
+            "$ai_request_url": f"{self._base_url}/chat/completions",
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),

@@ -29,6 +29,7 @@ class AsyncOpenAI:
         """
         self._openai_client = openai.AsyncOpenAI(**openai_config)
         self._posthog_client = posthog_client
+        self._base_url = openai_config.get("base_url", "https://api.openai.com/v1")
 
     def __getattr__(self, name: str) -> Any:
         """
@@ -41,23 +42,25 @@ class AsyncOpenAI:
 
     @property
     def chat(self) -> "AsyncChatNamespace":
-        return AsyncChatNamespace(self._posthog_client, self._openai_client)
+        return AsyncChatNamespace(self._posthog_client, self._openai_client, self._base_url)
 
 
 class AsyncChatNamespace:
-    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any):
+    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any, base_url: Optional[str]):
         self._ph_client = posthog_client
         self._openai_client = openai_client
+        self._base_url = base_url
 
     @property
     def completions(self):
-        return AsyncChatCompletions(self._ph_client, self._openai_client)
+        return AsyncChatCompletions(self._ph_client, self._openai_client, self._base_url)
 
 
 class AsyncChatCompletions:
-    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any):
+    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any, base_url: Optional[str]):
         self._ph_client = posthog_client
         self._openai_client = openai_client
+        self._base_url = base_url
 
     async def create(
         self,
@@ -82,7 +85,13 @@ class AsyncChatCompletions:
             return await self._openai_client.chat.completions.create(**call_kwargs)
 
         response = await call_llm_and_track_usage_async(
-            distinct_id, self._ph_client, posthog_trace_id, posthog_properties, call_async_method, **kwargs
+            distinct_id,
+            self._ph_client,
+            posthog_trace_id,
+            posthog_properties,
+            call_async_method,
+            self._base_url,
+            **kwargs,
         )
         return response
 
@@ -154,6 +163,7 @@ class AsyncChatCompletions:
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_posthog_properties": posthog_properties,
+            "$ai_request_url": f"{self._base_url}/chat/completions",
         }
 
         if hasattr(self._ph_client, "capture"):
