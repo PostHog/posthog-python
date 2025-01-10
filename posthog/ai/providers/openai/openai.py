@@ -28,7 +28,6 @@ class OpenAI:
                             of the global posthog.
             **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
-        # The standard OpenAI client for synchronous usage
         self._openai_client = openai.OpenAI(**openai_config)
         self._posthog_client = posthog_client
 
@@ -60,7 +59,7 @@ class ChatCompletions:
         **kwargs: Any,
     ):
         """
-        Wraps openai chat completions (sync) and captures a $ai_generation event in PostHog.
+        Wraps openai chat completions and captures a $ai_generation event in PostHog.
 
         PostHog-specific parameters:
             - posthog_distinct_id: Ties the resulting event to a user in PostHog.
@@ -75,7 +74,7 @@ class ChatCompletions:
             return process_sync_streaming_response(
                 response=response,
                 ph_client=self._ph_client,
-                event_properties={},  # Will be filled in by the streaming logic
+                event_properties={},
                 distinct_id=distinct_id,
             )
 

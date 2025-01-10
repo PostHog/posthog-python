@@ -27,7 +27,6 @@ class AsyncOpenAI:
             posthog_client: If provided, events will be captured via this client instance.
             **openai_config: Additional keyword args (e.g. organization="xxx").
         """
-        # The async OpenAI client for async usage
         self._openai_client = openai.AsyncOpenAI(**openai_config)
         self._posthog_client = posthog_client
 
@@ -73,7 +72,7 @@ class AsyncChatCompletions:
             return process_async_streaming_response(
                 response=response,
                 ph_client=self._ph_client,
-                event_properties={},  # The streaming method will define event props
+                event_properties={},
                 distinct_id=distinct_id,
             )
 
