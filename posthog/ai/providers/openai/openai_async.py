@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
+import openai.resources
+
 try:
     import openai
 except ImportError:
@@ -28,31 +30,20 @@ class AsyncOpenAI(openai.AsyncOpenAI):
             **openai_config: Additional keyword args (e.g. organization="xxx").
         """
         super().__init__(**kwargs)
-        super().chat
         self._ph_client = posthog_client
-
-    @property
-    def chat(self) -> "AsyncChatNamespace":
-        """OpenAI `chat` wrapped with PostHog usage tracking."""
-        return AsyncChatNamespace(self)
+        self.chat = WrappedChat(self)
 
 
-class AsyncChatNamespace:
-    _openai_client: AsyncOpenAI
-
-    def __init__(self, openai_client: AsyncOpenAI):
-        self._openai_client = openai_client
+class WrappedChat(openai.resources.chat.AsyncChat):
+    _client: AsyncOpenAI
 
     @property
     def completions(self):
-        return AsyncChatCompletions(self._openai_client)
+        return WrappedCompletions(self._client)
 
 
-class AsyncChatCompletions:
-    _openai_client: AsyncOpenAI
-
-    def __init__(self, openai_client: AsyncOpenAI):
-        self._openai_client = openai_client
+class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
+    _client: AsyncOpenAI
 
     async def create(
         self,
@@ -72,17 +63,13 @@ class AsyncChatCompletions:
                 **kwargs,
             )
 
-        # Non-streaming: let track_usage_async handle request and analytics
-        async def call_async_method(**call_kwargs):
-            return await self._openai_client.chat.completions.create(**call_kwargs)
-
         response = await call_llm_and_track_usage_async(
             distinct_id,
-            self._openai_client._ph_client,
+            self._client._ph_client,
             posthog_trace_id,
             posthog_properties,
-            call_async_method,
-            self._openai_client.base_url,
+            self._client.base_url,
+            super().create,
             **kwargs,
         )
         return response
@@ -98,7 +85,7 @@ class AsyncChatCompletions:
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
         stream_options = {"include_usage": True}
-        response = await self._openai_client.chat.completions.create(
+        response = await self._client.chat.completions.create(
             **kwargs, stream_options=stream_options
         )
 
@@ -166,11 +153,13 @@ class AsyncChatCompletions:
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": str(self._openai_client.base_url.join("chat/completions")),
+            "$ai_request_url": str(
+                self._client.base_url.join("chat/completions")
+            ),
         }
 
-        if hasattr(self._openai_client._ph_client, "capture"):
-            self._openai_client._ph_client.capture(
+        if hasattr(self._client._ph_client, "capture"):
+            self._client._ph_client.capture(
                 distinct_id=distinct_id,
                 event="$ai_generation",
                 properties=event_properties,

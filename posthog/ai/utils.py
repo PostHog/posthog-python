@@ -50,8 +50,8 @@ def call_llm_and_track_usage(
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
-    call_method: Callable[..., Any],
     base_url: Optional[str],
+    call_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
     """
@@ -115,8 +115,8 @@ async def call_llm_and_track_usage_async(
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
-    call_async_method: Callable[..., Any],
     base_url: URL,
+    call_async_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
     start_time = time.time()

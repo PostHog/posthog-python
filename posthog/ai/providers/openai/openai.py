@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
+import openai.resources
+
 try:
     import openai
 except ImportError:
@@ -30,29 +32,19 @@ class OpenAI(openai.OpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client
-
-    @property
-    def chat(self) -> "ChatNamespace":
-        """OpenAI `chat` wrapped with PostHog usage tracking."""
-        return ChatNamespace(self)
+        self.chat = WrappedChat(self)
 
 
-class ChatNamespace:
-    _openai_client: OpenAI
-
-    def __init__(self, openai_client: OpenAI):
-        self._openai_client = openai_client
+class WrappedChat(openai.resources.chat.Chat):
+    _client: OpenAI
 
     @property
     def completions(self):
-        return ChatCompletions(self._openai_client)
+        return WrappedCompletions(self._client)
 
 
-class ChatCompletions:
-    _openai_client: OpenAI
-
-    def __init__(self, openai_client: OpenAI):
-        self._client = openai_client
+class WrappedCompletions(openai.resources.chat.completions.Completions):
+    _client: OpenAI
 
     def create(
         self,
@@ -71,16 +63,13 @@ class ChatCompletions:
                 **kwargs,
             )
 
-        def call_method(**call_kwargs):
-            return self._openai_client.chat.completions.create(**call_kwargs)
-
         return call_llm_and_track_usage(
             distinct_id,
-            self._openai_client._ph_client,
+            self._client._ph_client,
             posthog_trace_id,
             posthog_properties,
-            call_method,
-            self._openai_client.base_url,
+            self._client.base_url,
+            super().create,
             **kwargs,
         )
 
@@ -95,7 +84,7 @@ class ChatCompletions:
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
         stream_options = {"include_usage": True}
-        response = self._openai_client.chat.completions.create(
+        response = self._client.chat.completions.create(
             **kwargs, stream_options=stream_options
         )
 
@@ -158,7 +147,9 @@ class ChatCompletions:
                     }
                 ]
             },
-            "$ai_request_url": str(self._openai_client.base_url.join("chat/completions")),
+            "$ai_request_url": str(
+                self._client.base_url.join("chat/completions")
+            ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
@@ -167,8 +158,8 @@ class ChatCompletions:
             "$ai_posthog_properties": posthog_properties,
         }
 
-        if hasattr(self._openai_client._ph_client, "capture"):
-            self._openai_client._ph_client.capture(
+        if hasattr(self._client._ph_client, "capture"):
+            self._client._ph_client.capture(
                 distinct_id=distinct_id,
                 event="$ai_generation",
                 properties=event_properties,
