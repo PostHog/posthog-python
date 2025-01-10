@@ -82,8 +82,10 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
-        stream_options = {"include_usage": True}
-        response = await self._client.chat.completions.create(**kwargs, stream_options=stream_options)
+        if "stream_options" not in kwargs:
+            kwargs["stream_options"] = {}
+        kwargs["stream_options"]["include_usage"] = True
+        response = await super().create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats, accumulated_content
