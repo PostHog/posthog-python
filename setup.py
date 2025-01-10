@@ -14,7 +14,7 @@ long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
 """
 
-install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff>=1.10.0", "python-dateutil>2.1", "openai>=1.59.5"]
+install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff>=1.10.0", "python-dateutil>2.1"]
 
 extras_require = {
     "dev": [
