@@ -1,5 +1,4 @@
-import time
-from typing import Any, Dict, Optional, Union, AsyncGenerator
+from typing import Any, Dict, Optional, Union
 
 try:
     import openai
@@ -7,7 +6,7 @@ except ImportError:
     raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
 
 from posthog.client import Client as PostHogClient
-from posthog.ai.utils import get_model_params, format_response, process_async_streaming_response, track_usage_async
+from posthog.ai.utils import process_async_streaming_response, track_usage_async
 
 
 class AsyncOpenAI:
