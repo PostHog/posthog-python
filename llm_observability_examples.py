@@ -33,7 +33,7 @@ def main_sync():
 
 async def main_async():
     try:
-        #await basic_async_openai_call()
+        await basic_async_openai_call()
         await streaming_async_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
@@ -92,6 +92,9 @@ async def streaming_async_openai_call():
         print(chunk.choices[0].delta.content or "", end="")
 
     return response
+
+# HOW TO RUN:
+# comment out one of these to run the other
 
 if __name__ == "__main__":
     main_sync()
