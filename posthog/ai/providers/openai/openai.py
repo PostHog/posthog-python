@@ -1,26 +1,26 @@
 import time
 import uuid
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 try:
     import openai
 except ImportError:
-    raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
+    raise ModuleNotFoundError(
+        "Please install the OpenAI SDK to use this feature: 'pip install openai'"
+    )
 
 from posthog.ai.utils import call_llm_and_track_usage, get_model_params
 from posthog.client import Client as PostHogClient
 
 
-class OpenAI:
+class OpenAI(openai.OpenAI):
     """
     A wrapper around the OpenAI SDK that automatically sends LLM usage events to PostHog.
     """
 
-    def __init__(
-        self,
-        posthog_client: PostHogClient,
-        **openai_config: Any,
-    ):
+    _ph_client: PostHogClient
+
+    def __init__(self, posthog_client: PostHogClient, **kwargs):
         """
         Args:
             api_key: OpenAI API key.
@@ -28,40 +28,31 @@ class OpenAI:
                             of the global posthog.
             **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
-        self._openai_client = openai.OpenAI(**openai_config)
-        self._posthog_client = posthog_client
-        self._base_url = openai_config.get("base_url", "https://api.openai.com/v1")
-
-    def __getattr__(self, name: str) -> Any:
-        """
-        Expose all attributes of the underlying openai.OpenAI instance except for the 'chat' property,
-        which is replaced with a custom ChatNamespace for usage tracking.
-        """
-        if name == "chat":
-            return self.chat
-        return getattr(self._openai_client, name)
+        super().__init__(**kwargs)
+        self._ph_client = posthog_client
 
     @property
     def chat(self) -> "ChatNamespace":
-        return ChatNamespace(self._posthog_client, self._openai_client, self._base_url)
+        """OpenAI `chat` wrapped with PostHog usage tracking."""
+        return ChatNamespace(self)
 
 
 class ChatNamespace:
-    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any, base_url: Optional[str]):
-        self._ph_client = posthog_client
+    _openai_client: OpenAI
+
+    def __init__(self, openai_client: OpenAI):
         self._openai_client = openai_client
-        self._base_url = base_url
 
     @property
     def completions(self):
-        return ChatCompletions(self._ph_client, self._openai_client, self._base_url)
+        return ChatCompletions(self._openai_client)
 
 
 class ChatCompletions:
-    def __init__(self, posthog_client: Union[PostHogClient, Any], openai_client: Any, base_url: Optional[str]):
-        self._ph_client = posthog_client
-        self._openai_client = openai_client
-        self._base_url = base_url
+    _openai_client: OpenAI
+
+    def __init__(self, openai_client: OpenAI):
+        self._client = openai_client
 
     def create(
         self,
@@ -85,11 +76,11 @@ class ChatCompletions:
 
         return call_llm_and_track_usage(
             distinct_id,
-            self._ph_client,
+            self._openai_client._ph_client,
             posthog_trace_id,
             posthog_properties,
             call_method,
-            self._base_url,
+            self._openai_client.base_url,
             **kwargs,
         )
 
@@ -104,7 +95,9 @@ class ChatCompletions:
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
         stream_options = {"include_usage": True}
-        response = self._openai_client.chat.completions.create(**kwargs, stream_options=stream_options)
+        response = self._openai_client.chat.completions.create(
+            **kwargs, stream_options=stream_options
+        )
 
         def generator():
             nonlocal usage_stats
@@ -114,7 +107,11 @@ class ChatCompletions:
                     if hasattr(chunk, "usage") and chunk.usage:
                         usage_stats = {
                             k: getattr(chunk.usage, k, 0)
-                            for k in ["prompt_tokens", "completion_tokens", "total_tokens"]
+                            for k in [
+                                "prompt_tokens",
+                                "completion_tokens",
+                                "total_tokens",
+                            ]
                         }
                     if chunk.choices[0].delta.content:
                         accumulated_content.append(chunk.choices[0].delta.content)
@@ -124,7 +121,13 @@ class ChatCompletions:
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
                 self._capture_streaming_event(
-                    distinct_id, posthog_trace_id, posthog_properties, kwargs, usage_stats, latency, output
+                    distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    kwargs,
+                    usage_stats,
+                    latency,
+                    output,
                 )
 
         return generator()
@@ -155,7 +158,7 @@ class ChatCompletions:
                     }
                 ]
             },
-            "$ai_request_url": f"{self._base_url}/chat/completions",
+            "$ai_request_url": str(self._openai_client.base_url.join("chat/completions")),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
@@ -164,8 +167,8 @@ class ChatCompletions:
             "$ai_posthog_properties": posthog_properties,
         }
 
-        if hasattr(self._ph_client, "capture"):
-            self._ph_client.capture(
+        if hasattr(self._openai_client._ph_client, "capture"):
+            self._openai_client._ph_client.capture(
                 distinct_id=distinct_id,
                 event="$ai_generation",
                 properties=event_properties,

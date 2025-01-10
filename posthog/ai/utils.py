@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Optional
 
+from httpx import URL
+
 from posthog.client import Client as PostHogClient
 
 
@@ -114,7 +116,7 @@ async def call_llm_and_track_usage_async(
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
     call_async_method: Callable[..., Any],
-    base_url: Optional[str],
+    base_url: URL,
     **kwargs: Any,
 ) -> Any:
     start_time = time.time()
@@ -152,7 +154,7 @@ async def call_llm_and_track_usage_async(
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": f"{base_url}/chat/completions",
+            "$ai_request_url": str(base_url.join("chat/completions")),
         }
 
         # send the event to posthog
