@@ -1,9 +1,9 @@
+import asyncio
 import os
 import uuid
-import asyncio
 
 import posthog
-from posthog.ai import OpenAI, AsyncOpenAI
+from posthog.ai import AsyncOpenAI, OpenAI
 
 # Example credentials - replace these with your own or use environment variables
 posthog.project_api_key = os.getenv("POSTHOG_PROJECT_API_KEY", "your-project-api-key")

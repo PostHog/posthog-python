@@ -1,5 +1,6 @@
-from typing import Any, Dict, Callable, Optional
 import time
+from typing import Any, Callable, Dict, Optional
+
 from posthog.client import Client as PostHogClient
 
 

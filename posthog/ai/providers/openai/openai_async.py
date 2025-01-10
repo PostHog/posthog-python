@@ -6,8 +6,8 @@ try:
 except ImportError:
     raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
 
-from posthog.client import Client as PostHogClient
 from posthog.ai.utils import call_llm_and_track_usage_async, get_model_params
+from posthog.client import Client as PostHogClient
 
 
 class AsyncOpenAI:
