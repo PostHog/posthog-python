@@ -4,12 +4,11 @@ from typing import Any, Dict, Optional, Union, AsyncGenerator
 try:
     import openai
 except ImportError:
-    raise ModuleNotFoundError(
-        "Please install OpenAI to use this feature: 'pip install openai'"
-    )
+    raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
 
 from posthog.client import Client as PostHogClient
 from posthog.ai.utils import get_model_params, format_response, process_async_streaming_response, track_usage_async
+
 
 class AsyncOpenAI:
     """
@@ -60,7 +59,7 @@ class AsyncChatCompletions:
         """
         Wraps openai chat completions (async) and captures a $ai_generation event in PostHog.
 
-        To use streaming in async mode: 
+        To use streaming in async mode:
             async for chunk in async_openai.chat.completions.create(stream=True, ...):
                 ...
         """
@@ -81,11 +80,6 @@ class AsyncChatCompletions:
             return await self._openai_client.chat.completions.create(**call_kwargs)
 
         response = await track_usage_async(
-            distinct_id,
-            self._ph_client,
-            posthog_trace_id,
-            posthog_properties,
-            call_async_method,
-            **kwargs
+            distinct_id, self._ph_client, posthog_trace_id, posthog_properties, call_async_method, **kwargs
         )
         return response

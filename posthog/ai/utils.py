@@ -2,6 +2,7 @@ from typing import Any, Dict, AsyncGenerator, Callable, Optional
 import time
 from posthog.client import Client as PostHogClient
 
+
 def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extracts model parameters from the kwargs dictionary.
@@ -56,7 +57,6 @@ def process_sync_streaming_response(
                 accumulated_content.append(chunk.choices[0].delta.content)
             yield chunk
     finally:
-        # Once we've finished, capture the final content in PostHog
         final_content = "".join(accumulated_content)
         event_properties["$ai_output"] = {
             "choices": [
@@ -107,17 +107,18 @@ async def process_async_streaming_response(
                 properties=event_properties,
             )
 
+
 def track_usage(
     distinct_id: str,
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
-    call_method: Callable[..., Any],  # This will be the function that actually calls OpenAI
+    call_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
     """
     Common usage-tracking logic for both sync and async calls.
-    call_method: a function or coroutine that actually implements the call to openai
+    call_method: the llm call method (e.g. openai.chat.completions.create)
     """
     start_time = time.time()
     response = None
@@ -134,11 +135,9 @@ def track_usage(
         end_time = time.time()
         latency = end_time - start_time
 
-        # Extract usage if available
         if response and hasattr(response, "usage"):
             usage = response.usage.model_dump()
 
-        # Prepare analytics data
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
         event_properties = {
@@ -155,7 +154,7 @@ def track_usage(
             "$ai_posthog_properties": posthog_properties,
         }
 
-        # Capture usage in PostHog
+        # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
                 distinct_id=distinct_id,
@@ -163,11 +162,11 @@ def track_usage(
                 properties=event_properties,
             )
 
-    # Re-raise the error if it occurred
     if error:
         raise error
 
     return response
+
 
 async def track_usage_async(
     distinct_id: str,
@@ -192,11 +191,9 @@ async def track_usage_async(
         end_time = time.time()
         latency = end_time - start_time
 
-        # Extract usage if available
         if response and hasattr(response, "usage"):
             usage = response.usage.model_dump()
 
-        # Prepare analytics data
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
         event_properties = {
@@ -213,7 +210,7 @@ async def track_usage_async(
             "$ai_posthog_properties": posthog_properties,
         }
 
-        # Capture usage in PostHog
+        # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
                 distinct_id=distinct_id,

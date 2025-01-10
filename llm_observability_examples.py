@@ -21,6 +21,7 @@ async_openai_client = AsyncOpenAI(
     posthog_client=posthog,
 )
 
+
 def main_sync():
     trace_id = str(uuid.uuid4())
     print("Trace ID:", trace_id)
@@ -30,6 +31,7 @@ def main_sync():
         streaming_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
+
 
 async def main_async():
     try:
@@ -42,7 +44,10 @@ async def main_async():
 def basic_openai_call():
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You are a complex problem solver."}, {"role": "user", "content": "Explain quantum computing in simple terms."}],
+        messages=[
+            {"role": "system", "content": "You are a complex problem solver."},
+            {"role": "user", "content": "Explain quantum computing in simple terms."},
+        ],
         max_tokens=100,
         temperature=0.7,
     )
@@ -52,10 +57,14 @@ def basic_openai_call():
         print("No response or unexpected format returned.")
     return response
 
+
 async def basic_async_openai_call():
     response = await async_openai_client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You are a complex problem solver."}, {"role": "user", "content": "Explain quantum computing in simple terms."}],
+        messages=[
+            {"role": "system", "content": "You are a complex problem solver."},
+            {"role": "user", "content": "Explain quantum computing in simple terms."},
+        ],
         max_tokens=100,
         temperature=0.7,
     )
@@ -65,10 +74,14 @@ async def basic_async_openai_call():
         print("No response or unexpected format returned.")
     return response
 
+
 def streaming_openai_call():
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You are a complex problem solver."}, {"role": "user", "content": "Explain quantum computing in simple terms."}],
+        messages=[
+            {"role": "system", "content": "You are a complex problem solver."},
+            {"role": "user", "content": "Explain quantum computing in simple terms."},
+        ],
         max_tokens=100,
         temperature=0.7,
         stream=True,
@@ -79,10 +92,14 @@ def streaming_openai_call():
 
     return response
 
+
 async def streaming_async_openai_call():
     response = await async_openai_client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "system", "content": "You are a complex problem solver."}, {"role": "user", "content": "Explain quantum computing in simple terms."}],
+        messages=[
+            {"role": "system", "content": "You are a complex problem solver."},
+            {"role": "user", "content": "Explain quantum computing in simple terms."},
+        ],
         max_tokens=100,
         temperature=0.7,
         stream=True,
@@ -92,6 +109,7 @@ async def streaming_async_openai_call():
         print(chunk.choices[0].delta.content or "", end="")
 
     return response
+
 
 # HOW TO RUN:
 # comment out one of these to run the other

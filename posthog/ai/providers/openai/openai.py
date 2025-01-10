@@ -4,12 +4,11 @@ from typing import Any, Dict, Optional, Union, AsyncGenerator
 try:
     import openai
 except ImportError:
-    raise ModuleNotFoundError(
-        "Please install OpenAI to use this feature: 'pip install openai'"
-    )
+    raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
 
 from posthog.client import Client as PostHogClient
 from posthog.ai.utils import get_model_params, format_response, process_sync_streaming_response, track_usage
+
 
 class OpenAI:
     """
@@ -83,11 +82,6 @@ class ChatCompletions:
             return self._openai_client.chat.completions.create(**call_kwargs)
 
         response = track_usage(
-            distinct_id,
-            self._ph_client,
-            posthog_trace_id,
-            posthog_properties,
-            call_method,
-            **kwargs
+            distinct_id, self._ph_client, posthog_trace_id, posthog_properties, call_method, **kwargs
         )
         return response
