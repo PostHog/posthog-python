@@ -31,7 +31,7 @@ def main_sync():
     try:
         basic_openai_call(distinct_id, trace_id, properties)
         # streaming_openai_call(distinct_id, trace_id, properties)
-        non_instrumented_openai_call()
+        # non_instrumented_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -62,6 +62,7 @@ def basic_openai_call(distinct_id, trace_id, properties):
         posthog_trace_id=trace_id,
         posthog_properties=properties,
     )
+    print(response)
     if response and response.choices:
         print("OpenAI response:", response.choices[0].message.content)
     else:

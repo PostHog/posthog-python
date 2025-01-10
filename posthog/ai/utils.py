@@ -30,6 +30,8 @@ def format_response(response):
     Format a regular (non-streaming) response.
     """
     output = {"choices": []}
+    if response is None:
+        return output
     for choice in response.choices:
         if choice.message.content:
             output["choices"].append(
