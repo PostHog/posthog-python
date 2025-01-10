@@ -7,9 +7,7 @@ import openai.resources
 try:
     import openai
 except ImportError:
-    raise ModuleNotFoundError(
-        "Please install the OpenAI SDK to use this feature: 'pip install openai'"
-    )
+    raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
 
 from posthog.ai.utils import call_llm_and_track_usage_async, get_model_params
 from posthog.client import Client as PostHogClient
@@ -85,9 +83,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
         stream_options = {"include_usage": True}
-        response = await self._client.chat.completions.create(
-            **kwargs, stream_options=stream_options
-        )
+        response = await self._client.chat.completions.create(**kwargs, stream_options=stream_options)
 
         async def async_generator():
             nonlocal usage_stats, accumulated_content
@@ -153,9 +149,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": str(
-                self._client.base_url.join("chat/completions")
-            ),
+            "$ai_request_url": str(self._client.base_url.join("chat/completions")),
         }
 
         if hasattr(self._client._ph_client, "capture"):

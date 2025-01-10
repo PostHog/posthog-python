@@ -7,9 +7,7 @@ import openai.resources
 try:
     import openai
 except ImportError:
-    raise ModuleNotFoundError(
-        "Please install the OpenAI SDK to use this feature: 'pip install openai'"
-    )
+    raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
 
 from posthog.ai.utils import call_llm_and_track_usage, get_model_params
 from posthog.client import Client as PostHogClient
@@ -84,9 +82,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
         stream_options = {"include_usage": True}
-        response = self._client.chat.completions.create(
-            **kwargs, stream_options=stream_options
-        )
+        response = self._client.chat.completions.create(**kwargs, stream_options=stream_options)
 
         def generator():
             nonlocal usage_stats
@@ -147,9 +143,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                     }
                 ]
             },
-            "$ai_request_url": str(
-                self._client.base_url.join("chat/completions")
-            ),
+            "$ai_request_url": str(self._client.base_url.join("chat/completions")),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
