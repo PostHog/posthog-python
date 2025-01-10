@@ -21,7 +21,6 @@ async_openai_client = AsyncOpenAI(
     posthog_client=posthog,
 )
 
-
 def main_sync():
     trace_id = str(uuid.uuid4())
     print("Trace ID:", trace_id)
@@ -90,6 +89,7 @@ async def basic_async_openai_call(distinct_id, trace_id, properties):
 
 
 def streaming_openai_call(distinct_id, trace_id, properties):
+    
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -132,7 +132,7 @@ async def streaming_async_openai_call(distinct_id, trace_id, properties):
 
 
 def non_instrumented_openai_call():
-    response = openai_client.images.generate(model="dall-e-3", prompt="A cute baby sea otter", n=1, size="1024x1024")
+    response = openai_client.images.generate(model="dall-e-3", prompt="A cute baby hedgehog", n=1, size="1024x1024")
     print(response)
     return response
 

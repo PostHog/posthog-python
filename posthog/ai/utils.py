@@ -1,4 +1,5 @@
 import time
+import uuid
 from typing import Any, Callable, Dict, Optional
 
 from posthog.client import Client as PostHogClient
@@ -62,10 +63,13 @@ def call_llm_and_track_usage(
         response = call_method(**kwargs)
     except Exception as exc:
         error = exc
-        http_status = getattr(exc, "status_code", 500)
+        http_status = getattr(exc, "status_code", 0) # default to 0 becuase its liekly an SDK error
     finally:
         end_time = time.time()
         latency = end_time - start_time
+
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
 
         if response and hasattr(response, "usage"):
             usage = response.usage.model_dump()
@@ -118,10 +122,13 @@ async def call_llm_and_track_usage_async(
         response = await call_async_method(**kwargs)
     except Exception as exc:
         error = exc
-        http_status = getattr(exc, "status_code", 500)
+        http_status = getattr(exc, "status_code", 0) # default to 0 because its likely an SDK error
     finally:
         end_time = time.time()
         latency = end_time - start_time
+
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
 
         if response and hasattr(response, "usage"):
             usage = response.usage.model_dump()

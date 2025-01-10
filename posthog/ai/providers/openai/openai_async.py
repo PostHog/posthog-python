@@ -1,4 +1,5 @@
 import time
+import uuid
 from typing import Any, Dict, Optional, Union
 
 try:
@@ -65,7 +66,7 @@ class AsyncChatCompletions:
         posthog_properties: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        distinct_id = posthog_distinct_id or "anonymous_ai_user"
+        distinct_id = posthog_distinct_id or uuid.uuid4()
 
         # If streaming, handle streaming specifically
         if kwargs.get("stream", False):
@@ -130,6 +131,9 @@ class AsyncChatCompletions:
         latency: float,
         output: str,
     ):
+        
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
 
         event_properties = {
             "$ai_provider": "openai",
