@@ -131,7 +131,7 @@ class AsyncChatCompletions:
         latency: float,
         output: str,
     ):
-        
+
         if posthog_trace_id is None:
             posthog_trace_id = uuid.uuid4()
 
