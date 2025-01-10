@@ -23,7 +23,7 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         "stream",
     ]:
         if param in kwargs:
-            model_params[param] = kwargs.get(param)
+            model_params[param] = kwargs[param]
     return model_params
 
 
@@ -68,7 +68,7 @@ def call_llm_and_track_usage(
         response = call_method(**kwargs)
     except Exception as exc:
         error = exc
-        http_status = getattr(exc, "status_code", 0)  # default to 0 becuase its liekly an SDK error
+        http_status = getattr(exc, "status_code", 0)  # default to 0 becuase its likely an SDK error
     finally:
         end_time = time.time()
         latency = end_time - start_time
