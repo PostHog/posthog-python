@@ -8,7 +8,7 @@ except ImportError:
 
 from posthog.client import Client as PostHogClient
 from posthog.ai.utils import (
-    track_usage,
+    call_llm_and_track_usage,
     get_model_params,
 )
 
@@ -32,6 +32,15 @@ class OpenAI:
         """
         self._openai_client = openai.OpenAI(**openai_config)
         self._posthog_client = posthog_client
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        Expose all attributes of the underlying openai.OpenAI instance except for the 'chat' property,
+        which is replaced with a custom ChatNamespace for usage tracking.
+        """
+        if name == "chat":
+            return self.chat
+        return getattr(self._openai_client, name)
 
     @property
     def chat(self) -> "ChatNamespace":
@@ -61,7 +70,7 @@ class ChatCompletions:
         **kwargs: Any,
     ):
         distinct_id = posthog_distinct_id or "anonymous_ai_user"
-        
+
         if kwargs.get("stream", False):
             return self._create_streaming(
                 distinct_id,
@@ -70,11 +79,10 @@ class ChatCompletions:
                 **kwargs,
             )
 
-        
         def call_method(**call_kwargs):
             return self._openai_client.chat.completions.create(**call_kwargs)
 
-        return track_usage(
+        return call_llm_and_track_usage(
             distinct_id,
             self._ph_client,
             posthog_trace_id,
@@ -113,7 +121,9 @@ class ChatCompletions:
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                self._capture_streaming_event(distinct_id, posthog_trace_id, posthog_properties, kwargs, usage_stats, latency, output)
+                self._capture_streaming_event(
+                    distinct_id, posthog_trace_id, posthog_properties, kwargs, usage_stats, latency, output
+                )
 
         return generator()
 
@@ -127,7 +137,7 @@ class ChatCompletions:
         latency: float,
         output: str,
     ):
-        
+
         event_properties = {
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
@@ -140,7 +150,7 @@ class ChatCompletions:
                         "role": "assistant",
                     }
                 ]
-            }, 
+            },
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),

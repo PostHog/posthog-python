@@ -31,6 +31,7 @@ def main_sync():
     try:
         basic_openai_call(distinct_id, trace_id, properties)
         # streaming_openai_call(distinct_id, trace_id, properties)
+        non_instrumented_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -127,6 +128,12 @@ async def streaming_async_openai_call(distinct_id, trace_id, properties):
     async for chunk in response:
         print(chunk.choices[0].delta.content or "", end="")
 
+    return response
+
+
+def non_instrumented_openai_call():
+    response = openai_client.images.generate(model="dall-e-3", prompt="A cute baby sea otter", n=1, size="1024x1024")
+    print(response)
     return response
 
 

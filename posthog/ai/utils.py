@@ -1,4 +1,4 @@
-from typing import Any, Dict, AsyncGenerator, Callable, Optional
+from typing import Any, Dict, Callable, Optional
 import time
 from posthog.client import Client as PostHogClient
 
@@ -39,7 +39,7 @@ def format_response(response):
     return output
 
 
-def track_usage(
+def call_llm_and_track_usage(
     distinct_id: str,
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
@@ -99,7 +99,7 @@ def track_usage(
     return response
 
 
-async def track_usage_async(
+async def call_llm_and_track_usage_async(
     distinct_id: str,
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],

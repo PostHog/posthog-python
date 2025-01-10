@@ -7,7 +7,7 @@ except ImportError:
     raise ModuleNotFoundError("Please install OpenAI to use this feature: 'pip install openai'")
 
 from posthog.client import Client as PostHogClient
-from posthog.ai.utils import track_usage_async, get_model_params
+from posthog.ai.utils import call_llm_and_track_usage_async, get_model_params
 
 
 class AsyncOpenAI:
@@ -28,6 +28,15 @@ class AsyncOpenAI:
         """
         self._openai_client = openai.AsyncOpenAI(**openai_config)
         self._posthog_client = posthog_client
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        Expose all attributes of the underlying openai.AsyncOpenAI instance except for the 'chat' property,
+        which is replaced with a custom AsyncChatNamespace for usage tracking.
+        """
+        if name == "chat":
+            return self.chat
+        return getattr(self._openai_client, name)
 
     @property
     def chat(self) -> "AsyncChatNamespace":
@@ -71,11 +80,10 @@ class AsyncChatCompletions:
         async def call_async_method(**call_kwargs):
             return await self._openai_client.chat.completions.create(**call_kwargs)
 
-        response = await track_usage_async(
+        response = await call_llm_and_track_usage_async(
             distinct_id, self._ph_client, posthog_trace_id, posthog_properties, call_async_method, **kwargs
         )
         return response
-    
 
     async def _create_streaming(
         self,
@@ -106,7 +114,9 @@ class AsyncChatCompletions:
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                self._capture_streaming_event(distinct_id, posthog_trace_id, posthog_properties, kwargs, usage_stats, latency, output)
+                self._capture_streaming_event(
+                    distinct_id, posthog_trace_id, posthog_properties, kwargs, usage_stats, latency, output
+                )
 
         return async_generator()
 
@@ -120,7 +130,7 @@ class AsyncChatCompletions:
         latency: float,
         output: str,
     ):
-        
+
         event_properties = {
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
@@ -133,7 +143,7 @@ class AsyncChatCompletions:
                         "role": "assistant",
                     }
                 ]
-            }, 
+            },
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
@@ -148,4 +158,3 @@ class AsyncChatCompletions:
                 event="$ai_generation",
                 properties=event_properties,
             )
-
