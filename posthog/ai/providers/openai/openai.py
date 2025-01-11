@@ -100,9 +100,14 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                                 "total_tokens",
                             ]
                         }
-                    if chunk.choices[0].delta.content:
-                        accumulated_content.append(chunk.choices[0].delta.content)
+
+                    if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
+                        content = chunk.choices[0].delta.content
+                        if content:
+                            accumulated_content.append(content)
+
                     yield chunk
+
             finally:
                 end_time = time.time()
                 latency = end_time - start_time

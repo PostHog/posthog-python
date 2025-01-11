@@ -29,8 +29,8 @@ def main_sync():
 
     try:
         basic_openai_call(distinct_id, trace_id, properties)
-        # streaming_openai_call(distinct_id, trace_id, properties)
-        # non_instrumented_openai_call()
+        streaming_openai_call(distinct_id, trace_id, properties)
+        non_instrumented_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -106,7 +106,8 @@ def streaming_openai_call(distinct_id, trace_id, properties):
     )
 
     for chunk in response:
-        print(chunk.choices[0].delta.content or "", end="")
+        if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
+            print(chunk.choices[0].delta.content or "", end="")
 
     return response
 
@@ -127,7 +128,8 @@ async def streaming_async_openai_call(distinct_id, trace_id, properties):
     )
 
     async for chunk in response:
-        print(chunk.choices[0].delta.content or "", end="")
+        if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
+            print(chunk.choices[0].delta.content or "", end="")
 
     return response
 
