@@ -154,6 +154,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         """
         The callback works for both streaming and non-streaming runs. For streaming runs, the chain must set `stream_usage=True` in the LLM.
         """
+        trace_id = self._get_trace_id(run_id)
+        self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
             return
@@ -182,7 +184,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_latency": latency,
-            "$ai_trace_id": self._get_trace_id(run_id),
+            "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
         }
         try:
@@ -213,6 +215,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         tags: Optional[list[str]] = None,
         **kwargs: Any,
     ):
+        trace_id = self._get_trace_id(run_id)
+        self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
             return
@@ -225,7 +229,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "$ai_input": run.get("messages"),
             "$ai_http_status": _get_http_status(error),
             "$ai_latency": latency,
-            "$ai_trace_id": self._get_trace_id(run_id),
+            "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
         }
         self._client.capture(

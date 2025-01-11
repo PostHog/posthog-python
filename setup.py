@@ -14,7 +14,13 @@ long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
 """
 
-install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff>=1.10.0", "python-dateutil>2.1"]
+install_requires = [
+    "requests>=2.7,<3.0",
+    "six>=1.5",
+    "monotonic>=1.5",
+    "backoff>=1.10.0",
+    "python-dateutil>2.1",
+]
 
 extras_require = {
     "dev": [
@@ -24,8 +30,20 @@ extras_require = {
         "flake8-print",
         "pre-commit",
     ],
-    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest", "pytest-timeout", "django"],
+    "test": [
+        "mock>=2.0.0",
+        "freezegun==0.3.15",
+        "pylint",
+        "flake8",
+        "coverage",
+        "pytest",
+        "pytest-timeout",
+        "pytest-asyncio",
+        "django",
+        "langchain-community>=0.2.0",
+    ],
     "sentry": ["sentry-sdk", "django"],
+    "langchain": ["langchain>=0.2.0"],
 }
 
 setup(
@@ -37,7 +55,12 @@ setup(
     maintainer="PostHog",
     maintainer_email="hey@posthog.com",
     test_suite="posthog.test.all",
-    packages=["posthog", "posthog.test", "posthog.sentry", "posthog.exception_integrations"],
+    packages=[
+        "posthog",
+        "posthog.test",
+        "posthog.sentry",
+        "posthog.exception_integrations",
+    ],
     license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,
