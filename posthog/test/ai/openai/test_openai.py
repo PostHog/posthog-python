@@ -73,23 +73,22 @@ def test_basic_completion(mock_client, mock_openai_response):
 
         assert response == mock_openai_response
         assert mock_client.capture.call_count == 1
-        
+
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
-        
+
         assert call_args["distinct_id"] == "test-id"
         assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output"] == {
-            "choices": [{"role": "assistant", "content": "Test response"}]
-        }
+        assert props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Test response"}]}
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
 
 def test_embeddings(mock_client, mock_embedding_response):
     with patch("openai.resources.embeddings.Embeddings.create", return_value=mock_embedding_response):
@@ -103,10 +102,10 @@ def test_embeddings(mock_client, mock_embedding_response):
 
         assert response == mock_embedding_response
         assert mock_client.capture.call_count == 1
-        
+
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
-        
+
         assert call_args["distinct_id"] == "test-id"
         assert call_args["event"] == "$ai_embedding"
         assert props["$ai_provider"] == "openai"
