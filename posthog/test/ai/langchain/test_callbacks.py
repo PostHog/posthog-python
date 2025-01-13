@@ -50,10 +50,10 @@ def test_trace_id_generation(mock_client):
     callbacks = PosthogCallbackHandler(mock_client)
     run_id = uuid.uuid4()
     with patch("uuid.uuid4", return_value=run_id):
-        assert callbacks._get_trace_id(run_id) == str(run_id)
+        assert callbacks._get_trace_id(run_id) == run_id
     run_id = uuid.uuid4()
     callbacks = PosthogCallbackHandler(mock_client, trace_id=run_id)
-    assert callbacks._get_trace_id(uuid.uuid4()) == str(run_id)
+    assert callbacks._get_trace_id(uuid.uuid4()) == run_id
 
 
 def test_metadata_capture(mock_client):
@@ -274,6 +274,41 @@ def test_trace_id_for_multiple_chains(mock_client):
 
     # Check that the trace_id is the same as the first call
     assert first_call_props["$ai_trace_id"] == second_call_props["$ai_trace_id"]
+
+
+def test_personless_mode(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain.invoke({}, config={"callbacks": [PosthogCallbackHandler(mock_client)]})
+    assert mock_client.capture.call_count == 1
+    args = mock_client.capture.call_args_list[0][1]
+    assert args["properties"]["$process_person_profile"] is False
+
+    id = uuid.uuid4()
+    chain.invoke({}, config={"callbacks": [PosthogCallbackHandler(mock_client, distinct_id=id)]})
+    assert mock_client.capture.call_count == 2
+    args = mock_client.capture.call_args_list[1][1]
+    assert "$process_person_profile" not in args["properties"]
+    assert args["distinct_id"] == id
+
+
+def test_personless_mode_exception(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
+    callbacks = PosthogCallbackHandler(mock_client)
+    with pytest.raises(Exception):
+        chain.invoke({}, config={"callbacks": [callbacks]})
+    assert mock_client.capture.call_count == 1
+    args = mock_client.capture.call_args_list[0][1]
+    assert args["properties"]["$process_person_profile"] is False
+
+    id = uuid.uuid4()
+    with pytest.raises(Exception):
+        chain.invoke({}, config={"callbacks": [PosthogCallbackHandler(mock_client, distinct_id=id)]})
+    assert mock_client.capture.call_count == 2
+    args = mock_client.capture.call_args_list[1][1]
+    assert "$process_person_profile" not in args["properties"]
+    assert args["distinct_id"] == id
 
 
 def test_metadata(mock_client):

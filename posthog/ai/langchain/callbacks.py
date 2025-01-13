@@ -26,8 +26,6 @@ from pydantic import BaseModel
 from posthog.ai.utils import get_model_params
 from posthog.client import Client
 
-PosthogProperties = Dict[str, Any]
-
 
 class RunMetadata(TypedDict, total=False):
     messages: Union[List[Dict[str, Any]], List[str]]
@@ -48,11 +46,11 @@ class PosthogCallbackHandler(BaseCallbackHandler):
 
     _client: Client
     """PostHog client instance."""
-    _distinct_id: Optional[str]
+    _distinct_id: Optional[Union[str, int, float, UUID]]
     """Distinct ID of the user to associate the trace with."""
-    _trace_id: Optional[str]
+    _trace_id: Optional[Union[str, int, float, UUID]]
     """Global trace ID to be sent with every event. Otherwise, the top-level run ID is used."""
-    _properties: Optional[PosthogProperties]
+    _properties: Optional[Dict[str, Any]]
     """Global properties to be sent with every event."""
     _runs: RunStorage
     """Mapping of run IDs to run metadata as run metadata is only available on the start of generation."""
@@ -65,9 +63,9 @@ class PosthogCallbackHandler(BaseCallbackHandler):
     def __init__(
         self,
         client: Client,
-        distinct_id: Optional[str] = None,
-        trace_id: Optional[str] = None,
-        properties: Optional[PosthogProperties] = None,
+        distinct_id: Optional[Union[str, int, float, UUID]] = None,
+        trace_id: Optional[Union[str, int, float, UUID]] = None,
+        properties: Optional[Dict[str, Any]] = None,
     ):
         """
         Args:
@@ -173,6 +171,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
         }
+        if self._distinct_id is None:
+            event_properties["$process_person_profile"] = False
         self._client.capture(
             distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
@@ -215,6 +215,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
         }
+        if self._distinct_id is None:
+            event_properties["$process_person_profile"] = False
         self._client.capture(
             distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
@@ -277,11 +279,11 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         run["end_time"] = end_time
         return run
 
-    def _get_trace_id(self, run_id: UUID) -> str:
+    def _get_trace_id(self, run_id: UUID):
         trace_id = self._trace_id or self._find_root_run(run_id)
         if not trace_id:
             trace_id = uuid.uuid4()
-        return str(trace_id)
+        return trace_id
 
 
 def _extract_raw_esponse(last_response):
