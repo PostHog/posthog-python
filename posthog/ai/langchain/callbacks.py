@@ -173,14 +173,11 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
         }
-        try:
-            self._client.capture(
-                distinct_id=self._distinct_id,
-                event="$ai_generation",
-                properties=event_properties,
-            )
-        except Exception as e:
-            self.log.exception(f"Error capturing event: {e}")
+        self._client.capture(
+            distinct_id=self._distinct_id or trace_id,
+            event="$ai_generation",
+            properties=event_properties,
+        )
 
     def on_chain_error(
         self,
@@ -219,7 +216,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "$ai_posthog_properties": self._properties,
         }
         self._client.capture(
-            distinct_id=self._distinct_id,
+            distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
             properties=event_properties,
         )
