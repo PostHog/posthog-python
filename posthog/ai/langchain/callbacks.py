@@ -6,7 +6,16 @@ except ImportError:
 import logging
 import time
 import uuid
-from typing import Any, Optional, TypedDict, Union, cast
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
+    cast,
+)
 from uuid import UUID
 
 from langchain.callbacks.base import BaseCallbackHandler
@@ -17,19 +26,19 @@ from pydantic import BaseModel
 from posthog.ai.utils import get_model_params
 from posthog.client import Client
 
-PosthogProperties = dict[str, Any]
+PosthogProperties = Dict[str, Any]
 
 
 class RunMetadata(TypedDict, total=False):
-    messages: list[dict[str, Any]] | list[str]
+    messages: Union[List[Dict[str, Any]], List[str]]
     provider: str
     model: str
-    model_params: dict[str, Any]
+    model_params: Dict[str, Any]
     start_time: float
     end_time: float
 
 
-RunStorage = dict[UUID, RunMetadata]
+RunStorage = Dict[UUID, RunMetadata]
 
 
 class PosthogCallbackHandler(BaseCallbackHandler):
@@ -47,7 +56,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
     """Global properties to be sent with every event."""
     _runs: RunStorage
     """Mapping of run IDs to run metadata as run metadata is only available on the start of generation."""
-    _parent_tree: dict[UUID, UUID]
+    _parent_tree: Dict[UUID, UUID]
     """
     A dictionary that maps chain run IDs to their parent chain run IDs (parent pointer tree),
     so the top level can be found from a bottom-level run ID.
@@ -77,8 +86,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any],
-        inputs: dict[str, Any],
+        serialized: Dict[str, Any],
+        inputs: Dict[str, Any],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
@@ -88,8 +97,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
 
     def on_chat_model_start(
         self,
-        serialized: dict[str, Any],
-        messages: list[list[BaseMessage]],
+        serialized: Dict[str, Any],
+        messages: List[List[BaseMessage]],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
@@ -101,8 +110,8 @@ class PosthogCallbackHandler(BaseCallbackHandler):
 
     def on_llm_start(
         self,
-        serialized: dict[str, Any],
-        prompts: list[str],
+        serialized: Dict[str, Any],
+        prompts: List[str],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
@@ -113,11 +122,11 @@ class PosthogCallbackHandler(BaseCallbackHandler):
 
     def on_chain_end(
         self,
-        outputs: dict[str, Any],
+        outputs: Dict[str, Any],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
+        tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         self._pop_parent_of_run(run_id)
@@ -128,7 +137,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
+        tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         """
@@ -189,7 +198,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
+        tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         trace_id = self._get_trace_id(run_id)
@@ -243,9 +252,9 @@ class PosthogCallbackHandler(BaseCallbackHandler):
     def _set_run_metadata(
         self,
         run_id: UUID,
-        messages: list[dict[str, Any]] | list[str],
-        metadata: Optional[dict[str, Any]] = None,
-        invocation_params: Optional[dict[str, Any]] = None,
+        messages: Union[List[Dict[str, Any]], List[str]],
+        metadata: Optional[Dict[str, Any]] = None,
+        invocation_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         run: RunMetadata = {
@@ -291,7 +300,7 @@ def _extract_raw_esponse(last_response):
         return ""
 
 
-def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
+def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
     # assistant message
     if isinstance(message, HumanMessage):
         message_dict = {"role": "user", "content": message.content}
@@ -314,7 +323,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     return message_dict
 
 
-def _parse_usage_model(usage: Union[BaseModel, dict]) -> tuple[int | None, int | None]:
+def _parse_usage_model(usage: Union[BaseModel, Dict]) -> Tuple[Union[int, None], Union[int, None]]:
     if isinstance(usage, BaseModel):
         usage = usage.__dict__
 
@@ -349,7 +358,7 @@ def _parse_usage_model(usage: Union[BaseModel, dict]) -> tuple[int | None, int |
 def _parse_usage(response: LLMResult):
     # langchain-anthropic uses the usage field
     llm_usage_keys = ["token_usage", "usage"]
-    llm_usage: tuple[int | None, int | None] = (None, None)
+    llm_usage: Tuple[Union[int, None], Union[int, None]] = (None, None)
     if response.llm_output is not None:
         for key in llm_usage_keys:
             if response.llm_output.get(key):
