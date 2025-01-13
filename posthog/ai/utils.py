@@ -14,7 +14,8 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     model_params = {}
     for param in [
         "temperature",
-        "max_tokens",
+        "max_tokens",  # Deprecated field
+        "max_completion_tokens",
         "top_p",
         "frequency_penalty",
         "presence_penalty",
@@ -22,7 +23,7 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         "stop",
         "stream",
     ]:
-        if param in kwargs:
+        if param in kwargs and kwargs[param] is not None:
             model_params[param] = kwargs[param]
     return model_params
 

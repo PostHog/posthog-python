@@ -1,9 +1,7 @@
 try:
     import langchain
 except ImportError:
-    raise ModuleNotFoundError(
-        "Please install LangChain to use this feature: 'pip install langchain'"
-    )
+    raise ModuleNotFoundError("Please install LangChain to use this feature: 'pip install langchain'")
 
 import logging
 import time
@@ -31,22 +29,11 @@ from posthog.ai.utils import get_model_params
 PosthogProperties = dict[str, Any]
 
 
-class ModelParams(TypedDict, total=False):
-    temperature: Optional[float]
-    max_tokens: Optional[int]
-    top_p: Optional[float]
-    frequency_penalty: Optional[float]
-    presence_penalty: Optional[float]
-    n: Optional[int]
-    stop: Optional[list[str]]
-    stream: Optional[bool]
-
-
 class RunMetadata(TypedDict, total=False):
     messages: list[dict[str, Any]] | list[str]
     provider: str
     model: str
-    model_params: ModelParams
+    model_params: dict[str, Any]
     start_time: float
     end_time: float
 
@@ -114,9 +101,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         **kwargs,
     ):
         self._set_parent_of_run(run_id, parent_run_id)
-        input = [
-            _convert_message_to_dict(message) for row in messages for message in row
-        ]
+        input = [_convert_message_to_dict(message) for row in messages for message in row]
         self._set_run_metadata(run_id, input, **kwargs)
 
     def on_llm_start(
@@ -166,13 +151,10 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         generation_result = response.generations[-1]
         if isinstance(generation_result[-1], ChatGeneration):
             output = [
-                _convert_message_to_dict(cast(ChatGeneration, generation).message)
-                for generation in generation_result
+                _convert_message_to_dict(cast(ChatGeneration, generation).message) for generation in generation_result
             ]
         else:
-            output = [
-                _extract_raw_esponse(generation) for generation in generation_result
-            ]
+            output = [_extract_raw_esponse(generation) for generation in generation_result]
 
         event_properties = {
             "$ai_provider": run.get("provider"),
@@ -276,7 +258,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
             "start_time": time.time(),
         }
         if isinstance(invocation_params, dict):
-            run["model_params"] = cast(ModelParams, get_model_params(invocation_params))
+            run["model_params"] = get_model_params(invocation_params)
         if isinstance(metadata, dict):
             if model := metadata.get("ls_model_name"):
                 run["model"] = model
@@ -361,9 +343,7 @@ def _parse_usage_model(usage: Union[BaseModel, dict]) -> tuple[int | None, int |
         if model_key in usage:
             captured_count = usage[model_key]
             final_count = (
-                sum(captured_count)
-                if isinstance(captured_count, list)
-                else captured_count
+                sum(captured_count) if isinstance(captured_count, list) else captured_count
             )  # For Bedrock, the token count is a list when streamed
 
             parsed_usage[type_key] = final_count
@@ -384,12 +364,8 @@ def _parse_usage(response: LLMResult):
     if hasattr(response, "generations"):
         for generation in response.generations:
             for generation_chunk in generation:
-                if generation_chunk.generation_info and (
-                    "usage_metadata" in generation_chunk.generation_info
-                ):
-                    llm_usage = _parse_usage_model(
-                        generation_chunk.generation_info["usage_metadata"]
-                    )
+                if generation_chunk.generation_info and ("usage_metadata" in generation_chunk.generation_info):
+                    llm_usage = _parse_usage_model(generation_chunk.generation_info["usage_metadata"])
                     break
 
                 message_chunk = getattr(generation_chunk, "message", {})
@@ -402,9 +378,7 @@ def _parse_usage(response: LLMResult):
                         else None
                     )
                     or (
-                        response_metadata.get(
-                            "amazon-bedrock-invocationMetrics", None
-                        )  # for Bedrock-Titan
+                        response_metadata.get("amazon-bedrock-invocationMetrics", None)  # for Bedrock-Titan
                         if isinstance(response_metadata, dict)
                         else None
                     )
