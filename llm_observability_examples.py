@@ -30,7 +30,8 @@ def main_sync():
     try:
         basic_openai_call(distinct_id, trace_id, properties)
         streaming_openai_call(distinct_id, trace_id, properties)
-        non_instrumented_openai_call()
+        image_openai_call()
+        embedding_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -44,6 +45,8 @@ async def main_async():
     try:
         await basic_async_openai_call(distinct_id, trace_id, properties)
         await streaming_async_openai_call(distinct_id, trace_id, properties)
+        await embedding_async_openai_call()
+        await image_async_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -134,8 +137,26 @@ async def streaming_async_openai_call(distinct_id, trace_id, properties):
     return response
 
 
-def non_instrumented_openai_call():
+# none instrumented
+def image_openai_call():
     response = openai_client.images.generate(model="dall-e-3", prompt="A cute baby hedgehog", n=1, size="1024x1024")
+    print(response)
+    return response
+
+# none instrumented
+async def image_async_openai_call():
+    response = await async_openai_client.images.generate(model="dall-e-3", prompt="A cute baby hedgehog", n=1, size="1024x1024")
+    print(response)
+    return response
+
+
+def embedding_openai_call():
+    response = openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small")
+    print(response)
+    return response
+
+async def embedding_async_openai_call():
+    response = await async_openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small")
     print(response)
     return response
 

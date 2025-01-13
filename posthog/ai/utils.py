@@ -103,7 +103,7 @@ def call_llm_and_track_usage(
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
-                distinct_id=distinct_id,
+                distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
             )
