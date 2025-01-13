@@ -1,19 +1,18 @@
+import math
 import os
 import time
-import math
 import uuid
 from unittest.mock import patch
 
+import pytest
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
-import pytest
 
 from posthog.ai.langchain import PosthogCallbackHandler
-
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -497,7 +496,6 @@ def test_openai_streaming(mock_client):
         api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0, max_tokens=1, stream=True, stream_usage=True
     )
     callbacks = PosthogCallbackHandler(mock_client)
-    start_time = time.time()
     result = [m for m in chain.stream({}, config={"callbacks": [callbacks]})]
     result = sum(result[1:], result[0])
 
@@ -530,7 +528,6 @@ async def test_async_openai_streaming(mock_client):
         api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0, max_tokens=1, stream=True, stream_usage=True
     )
     callbacks = PosthogCallbackHandler(mock_client)
-    start_time = time.time()
     result = [m async for m in chain.astream({}, config={"callbacks": [callbacks]})]
     result = sum(result[1:], result[0])
 

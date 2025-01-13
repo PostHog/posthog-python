@@ -9,22 +9,13 @@ import uuid
 from typing import Any, Optional, TypedDict, Union, cast
 from uuid import UUID
 
-from langchain.callbacks.base import (
-    BaseCallbackHandler,
-)
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    FunctionMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
-from posthog.client import Client
 from pydantic import BaseModel
 
 from posthog.ai.utils import get_model_params
+from posthog.client import Client
 
 PosthogProperties = dict[str, Any]
 
