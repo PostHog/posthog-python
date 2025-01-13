@@ -80,7 +80,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._client = client
         self._distinct_id = distinct_id
         self._trace_id = trace_id
-        self._properties = properties
+        self._properties = properties or {}
         self._runs = {}
         self._parent_tree = {}
 
@@ -171,8 +171,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_output_tokens": output_tokens,
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
-            "$ai_posthog_properties": self._properties,
             "$ai_base_url": run.get("base_url"),
+            **self._properties,
         }
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -216,8 +216,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_http_status": _get_http_status(error),
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
-            "$ai_posthog_properties": self._properties,
             "$ai_base_url": run.get("base_url"),
+            **self._properties,
         }
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False

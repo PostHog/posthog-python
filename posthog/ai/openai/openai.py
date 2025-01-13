@@ -50,18 +50,19 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         posthog_properties: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        distinct_id = posthog_distinct_id or uuid.uuid4()
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
 
         if kwargs.get("stream", False):
             return self._create_streaming(
-                distinct_id,
+                posthog_distinct_id,
                 posthog_trace_id,
                 posthog_properties,
                 **kwargs,
             )
 
         return call_llm_and_track_usage(
-            distinct_id,
+            posthog_distinct_id,
             self._client._ph_client,
             posthog_trace_id,
             posthog_properties,
@@ -72,7 +73,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
 
     def _create_streaming(
         self,
-        distinct_id: str,
+        posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
         **kwargs: Any,
@@ -112,7 +113,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
                 self._capture_streaming_event(
-                    distinct_id,
+                    posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
                     kwargs,
@@ -125,7 +126,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
 
     def _capture_streaming_event(
         self,
-        distinct_id: str,
+        posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
@@ -149,18 +150,21 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                     }
                 ]
             },
-            "$ai_request_url": str(self._client.base_url.join("chat/completions")),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
-            "$ai_posthog_properties": posthog_properties,
+            "$ai_base_url": str(self._client.base_url),
+            **posthog_properties,
         }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
             self._client._ph_client.capture(
-                distinct_id=distinct_id,
+                distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
             )

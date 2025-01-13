@@ -49,19 +49,20 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         posthog_properties: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        distinct_id = posthog_distinct_id or uuid.uuid4()
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
 
         # If streaming, handle streaming specifically
         if kwargs.get("stream", False):
             return await self._create_streaming(
-                distinct_id,
+                posthog_distinct_id,
                 posthog_trace_id,
                 posthog_properties,
                 **kwargs,
             )
 
         response = await call_llm_and_track_usage_async(
-            distinct_id,
+            posthog_distinct_id,
             self._client._ph_client,
             posthog_trace_id,
             posthog_properties,
@@ -73,7 +74,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
 
     async def _create_streaming(
         self,
-        distinct_id: str,
+        posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
         **kwargs: Any,
@@ -111,7 +112,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
                 self._capture_streaming_event(
-                    distinct_id,
+                    posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
                     kwargs,
@@ -124,7 +125,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
 
     def _capture_streaming_event(
         self,
-        distinct_id: str,
+        posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
@@ -153,13 +154,16 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
-            "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": str(self._client.base_url.join("chat/completions")),
+            "$ai_base_url": str(self._client.base_url),
+            **posthog_properties,
         }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
             self._client._ph_client.capture(
-                distinct_id=distinct_id,
+                distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
             )

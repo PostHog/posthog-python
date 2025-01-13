@@ -47,11 +47,11 @@ def format_response(response):
 
 
 def call_llm_and_track_usage(
-    distinct_id: str,
+    posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
-    base_url: Optional[str],
+    base_url: URL,
     call_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
@@ -93,9 +93,12 @@ def call_llm_and_track_usage(
             "$ai_output_tokens": output_tokens,
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
-            "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": f"{base_url}/chat/completions",
+            "$ai_base_url": str(base_url),
+            **(posthog_properties or {}),
         }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
@@ -112,7 +115,7 @@ def call_llm_and_track_usage(
 
 
 async def call_llm_and_track_usage_async(
-    distinct_id: str,
+    posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
@@ -154,14 +157,17 @@ async def call_llm_and_track_usage_async(
             "$ai_output_tokens": output_tokens,
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
-            "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": str(base_url.join("chat/completions")),
+            "$ai_base_url": str(base_url),
+            **(posthog_properties or {}),
         }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
-                distinct_id=distinct_id,
+                distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
             )
