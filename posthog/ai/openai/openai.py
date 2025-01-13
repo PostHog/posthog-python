@@ -30,6 +30,7 @@ class OpenAI(openai.OpenAI):
         super().__init__(**kwargs)
         self._ph_client = posthog_client
         self.chat = WrappedChat(self)
+        self.embeddings = WrappedEmbeddings(self)
 
 
 class WrappedChat(openai.resources.chat.Chat):
@@ -168,3 +169,69 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                 event="$ai_generation",
                 properties=event_properties,
             )
+
+
+class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
+    _client: OpenAI
+
+    def create(
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Create an embedding using OpenAI's 'embeddings.create' method, but also track usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional ID to associate with the usage event.
+            posthog_trace_id: Optional trace UUID for linking events.
+            posthog_properties: Optional dictionary of extra properties to include in the event.
+            **kwargs: Any additional parameters for the OpenAI Embeddings API.
+
+        Returns:
+            The response from OpenAI's embeddings.create call.
+        """
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
+
+        start_time = time.time()
+        response = super().create(**kwargs)
+        end_time = time.time()
+
+        # Extract usage statistics if available
+        usage_stats = {}
+        if hasattr(response, "usage") and response.usage:
+            usage_stats = {
+                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                "total_tokens": getattr(response.usage, "total_tokens", 0),
+            }
+
+        latency = end_time - start_time
+
+        # Build the event properties
+        event_properties = {
+            "$ai_provider": "openai",
+            "$ai_model": kwargs.get("model"),
+            "$ai_input": kwargs.get("input"),
+            "$ai_http_status": 200,
+            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
+            "$ai_latency": latency,
+            "$ai_trace_id": posthog_trace_id,
+            "$ai_base_url": str(self._client.base_url),
+            **posthog_properties,
+        }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
+        # Send capture event for embeddings
+        if hasattr(self._client._ph_client, "capture"):
+            self._client._ph_client.capture(
+                distinct_id=posthog_distinct_id or posthog_trace_id,
+                event="$ai_embedding",
+                properties=event_properties,
+            )
+
+        return response

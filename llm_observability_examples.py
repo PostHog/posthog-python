@@ -24,14 +24,14 @@ async_openai_client = AsyncOpenAI(
 def main_sync():
     trace_id = str(uuid.uuid4())
     print("Trace ID:", trace_id)
-    distinct_id = "test_distinct_id"
+    distinct_id = "test2_distinct_id"
     properties = {"test_property": "test_value"}
 
     try:
         basic_openai_call(distinct_id, trace_id, properties)
         streaming_openai_call(distinct_id, trace_id, properties)
+        embedding_openai_call(distinct_id, trace_id, properties)
         image_openai_call()
-        embedding_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -45,7 +45,7 @@ async def main_async():
     try:
         await basic_async_openai_call(distinct_id, trace_id, properties)
         await streaming_async_openai_call(distinct_id, trace_id, properties)
-        await embedding_async_openai_call()
+        await embedding_async_openai_call(distinct_id, trace_id, properties)
         await image_async_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
@@ -150,13 +150,13 @@ async def image_async_openai_call():
     return response
 
 
-def embedding_openai_call():
-    response = openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small")
+def embedding_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties):
+    response = openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small", posthog_distinct_id=posthog_distinct_id, posthog_trace_id=posthog_trace_id, posthog_properties=posthog_properties)
     print(response)
     return response
 
-async def embedding_async_openai_call():
-    response = await async_openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small")
+async def embedding_async_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties):
+    response = await async_openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small", posthog_distinct_id=posthog_distinct_id, posthog_trace_id=posthog_trace_id, posthog_properties=posthog_properties)
     print(response)
     return response
 
