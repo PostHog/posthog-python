@@ -1,5 +1,5 @@
 try:
-    import langchain
+    import langchain  # noqa: F401
 except ImportError:
     raise ModuleNotFoundError("Please install LangChain to use this feature: 'pip install langchain'")
 
@@ -42,6 +42,10 @@ RunStorage = dict[UUID, RunMetadata]
 
 
 class PosthogCallbackHandler(BaseCallbackHandler):
+    """
+    A callback handler for LangChain that sends events to PostHog LLM Observability.
+    """
+
     _client: Client
     """PostHog client instance."""
     _distinct_id: Optional[str]
@@ -371,20 +375,19 @@ def _parse_usage(response: LLMResult):
                 message_chunk = getattr(generation_chunk, "message", {})
                 response_metadata = getattr(message_chunk, "response_metadata", {})
 
-                chunk_usage = (
-                    (
-                        response_metadata.get("usage", None)  # for Bedrock-Anthropic
-                        if isinstance(response_metadata, dict)
-                        else None
-                    )
-                    or (
-                        response_metadata.get("amazon-bedrock-invocationMetrics", None)  # for Bedrock-Titan
-                        if isinstance(response_metadata, dict)
-                        else None
-                    )
-                    or getattr(message_chunk, "usage_metadata", None)  # for Ollama
+                bedrock_anthropic_usage = (
+                    response_metadata.get("usage", None)  # for Bedrock-Anthropic
+                    if isinstance(response_metadata, dict)
+                    else None
                 )
+                bedrock_titan_usage = (
+                    response_metadata.get("amazon-bedrock-invocationMetrics", None)  # for Bedrock-Titan
+                    if isinstance(response_metadata, dict)
+                    else None
+                )
+                ollama_usage = getattr(message_chunk, "usage_metadata", None)  # for Ollama
 
+                chunk_usage = bedrock_anthropic_usage or bedrock_titan_usage or ollama_usage
                 if chunk_usage:
                     llm_usage = _parse_usage_model(chunk_usage)
                     break

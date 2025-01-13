@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
 import pytest
 
-from posthog.ai.providers.langchain import PosthogCallbackHandler
+from posthog.ai.langchain import PosthogCallbackHandler
 
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

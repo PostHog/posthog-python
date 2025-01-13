@@ -2,12 +2,12 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-import openai.resources
-
 try:
     import openai
 except ImportError:
     raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
+
+import openai.resources
 
 from posthog.ai.utils import call_llm_and_track_usage, get_model_params
 from posthog.client import Client as PostHogClient
