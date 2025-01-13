@@ -12,7 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
 
-from posthog.ai.langchain import PosthogCallbackHandler
+from posthog.ai.langchain import CallbackHandler
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -24,7 +24,7 @@ def mock_client():
 
 
 def test_parent_capture(mock_client):
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     parent_run_id = uuid.uuid4()
     run_id = uuid.uuid4()
     callbacks._set_parent_of_run(run_id, parent_run_id)
@@ -35,7 +35,7 @@ def test_parent_capture(mock_client):
 
 
 def test_find_root_run(mock_client):
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     root_run_id = uuid.uuid4()
     parent_run_id = uuid.uuid4()
     run_id = uuid.uuid4()
@@ -47,17 +47,17 @@ def test_find_root_run(mock_client):
 
 
 def test_trace_id_generation(mock_client):
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     run_id = uuid.uuid4()
     with patch("uuid.uuid4", return_value=run_id):
         assert callbacks._get_trace_id(run_id) == run_id
     run_id = uuid.uuid4()
-    callbacks = PosthogCallbackHandler(mock_client, trace_id=run_id)
+    callbacks = CallbackHandler(mock_client, trace_id=run_id)
     assert callbacks._get_trace_id(uuid.uuid4()) == run_id
 
 
 def test_metadata_capture(mock_client):
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     run_id = uuid.uuid4()
     with patch("time.time", return_value=1234567890):
         callbacks._set_run_metadata(
@@ -97,7 +97,7 @@ def test_basic_chat_chain(mock_client, stream):
             )
         ]
     )
-    callbacks = [PosthogCallbackHandler(mock_client)]
+    callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model
     if stream:
         result = [m for m in chain.stream({}, config={"callbacks": callbacks})][0]
@@ -143,7 +143,7 @@ async def test_async_basic_chat_chain(mock_client, stream):
             )
         ]
     )
-    callbacks = [PosthogCallbackHandler(mock_client)]
+    callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model
     if stream:
         result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][0]
@@ -178,7 +178,7 @@ async def test_async_basic_chat_chain(mock_client, stream):
 )
 def test_basic_llm_chain(mock_client, Model, stream):
     model = Model(responses=["The Los Angeles Dodgers won the World Series in 2020."])
-    callbacks: list[PosthogCallbackHandler] = [PosthogCallbackHandler(mock_client)]
+    callbacks: list[CallbackHandler] = [CallbackHandler(mock_client)]
 
     if stream:
         result = "".join(
@@ -209,7 +209,7 @@ def test_basic_llm_chain(mock_client, Model, stream):
 )
 async def test_async_basic_llm_chain(mock_client, Model, stream):
     model = Model(responses=["The Los Angeles Dodgers won the World Series in 2020."])
-    callbacks: list[PosthogCallbackHandler] = [PosthogCallbackHandler(mock_client)]
+    callbacks: list[CallbackHandler] = [CallbackHandler(mock_client)]
 
     if stream:
         result = "".join(
@@ -241,7 +241,7 @@ def test_trace_id_for_multiple_chains(mock_client):
         ]
     )
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
-    callbacks = [PosthogCallbackHandler(mock_client)]
+    callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model | RunnableLambda(lambda x: [x]) | model
     result = chain.invoke({}, config={"callbacks": callbacks})
 
@@ -279,13 +279,13 @@ def test_trace_id_for_multiple_chains(mock_client):
 def test_personless_mode(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
-    chain.invoke({}, config={"callbacks": [PosthogCallbackHandler(mock_client)]})
+    chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
     assert mock_client.capture.call_count == 1
     args = mock_client.capture.call_args_list[0][1]
     assert args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
-    chain.invoke({}, config={"callbacks": [PosthogCallbackHandler(mock_client, distinct_id=id)]})
+    chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
     assert mock_client.capture.call_count == 2
     args = mock_client.capture.call_args_list[1][1]
     assert "$process_person_profile" not in args["properties"]
@@ -295,7 +295,7 @@ def test_personless_mode(mock_client):
 def test_personless_mode_exception(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     with pytest.raises(Exception):
         chain.invoke({}, config={"callbacks": [callbacks]})
     assert mock_client.capture.call_count == 1
@@ -304,7 +304,7 @@ def test_personless_mode_exception(mock_client):
 
     id = uuid.uuid4()
     with pytest.raises(Exception):
-        chain.invoke({}, config={"callbacks": [PosthogCallbackHandler(mock_client, distinct_id=id)]})
+        chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
     assert mock_client.capture.call_count == 2
     args = mock_client.capture.call_args_list[1][1]
     assert "$process_person_profile" not in args["properties"]
@@ -319,7 +319,7 @@ def test_metadata(mock_client):
     )
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     callbacks = [
-        PosthogCallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
+        CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
     ]
     chain = prompt | model
     result = chain.invoke({}, config={"callbacks": callbacks})
@@ -343,9 +343,7 @@ def test_metadata(mock_client):
 def test_callbacks_logic(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
-    callbacks = PosthogCallbackHandler(
-        mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"}
-    )
+    callbacks = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
     chain = prompt | model
 
     chain.invoke({}, config={"callbacks": [callbacks]})
@@ -366,7 +364,7 @@ def test_exception_in_chain(mock_client):
     def runnable(_):
         raise ValueError("test")
 
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     with pytest.raises(ValueError):
         RunnableLambda(runnable).invoke({}, config={"callbacks": [callbacks]})
 
@@ -378,7 +376,7 @@ def test_exception_in_chain(mock_client):
 def test_openai_error(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
 
     # 401
     with pytest.raises(Exception):
@@ -408,9 +406,7 @@ def test_openai_chain(mock_client):
         temperature=0,
         max_tokens=1,
     )
-    callbacks = PosthogCallbackHandler(
-        mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"}
-    )
+    callbacks = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
     start_time = time.time()
     result = chain.invoke({}, config={"callbacks": [callbacks]})
     approximate_latency = math.floor(time.time() - start_time)
@@ -475,7 +471,7 @@ def test_openai_captures_multiple_generations(mock_client):
         max_tokens=1,
         n=2,
     )
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     result = chain.invoke({}, config={"callbacks": [callbacks]})
 
     assert result.content == "Bar"
@@ -530,7 +526,7 @@ def test_openai_streaming(mock_client):
     chain = prompt | ChatOpenAI(
         api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0, max_tokens=1, stream=True, stream_usage=True
     )
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     result = [m for m in chain.stream({}, config={"callbacks": [callbacks]})]
     result = sum(result[1:], result[0])
 
@@ -562,7 +558,7 @@ async def test_async_openai_streaming(mock_client):
     chain = prompt | ChatOpenAI(
         api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0, max_tokens=1, stream=True, stream_usage=True
     )
-    callbacks = PosthogCallbackHandler(mock_client)
+    callbacks = CallbackHandler(mock_client)
     result = [m async for m in chain.astream({}, config={"callbacks": [callbacks]})]
     result = sum(result[1:], result[0])
 

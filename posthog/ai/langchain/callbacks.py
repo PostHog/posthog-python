@@ -26,6 +26,8 @@ from pydantic import BaseModel
 from posthog.ai.utils import get_model_params
 from posthog.client import Client
 
+log = logging.getLogger("posthog")
+
 
 class RunMetadata(TypedDict, total=False):
     messages: Union[List[Dict[str, Any]], List[str]]
@@ -39,7 +41,7 @@ class RunMetadata(TypedDict, total=False):
 RunStorage = Dict[UUID, RunMetadata]
 
 
-class PosthogCallbackHandler(BaseCallbackHandler):
+class CallbackHandler(BaseCallbackHandler):
     """
     A callback handler for LangChain that sends events to PostHog LLM Observability.
     """
@@ -80,7 +82,6 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         self._properties = properties
         self._runs = {}
         self._parent_tree = {}
-        self.log = logging.getLogger("posthog")
 
     def on_chain_start(
         self,
@@ -274,7 +275,7 @@ class PosthogCallbackHandler(BaseCallbackHandler):
         try:
             run = self._runs.pop(run_id)
         except KeyError:
-            self.log.warning(f"No run metadata found for run {run_id}")
+            log.warning(f"No run metadata found for run {run_id}")
             return None
         run["end_time"] = end_time
         return run
@@ -395,7 +396,7 @@ def _parse_usage(response: LLMResult):
 
 
 def _get_http_status(error: BaseException) -> int:
-    # OpenAI: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_exceptions.py
+    # OpenAI: https://github.com/openai/openai-python/blob/main/src/openai/_exceptions.py
     # Anthropic: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_exceptions.py
     # Google: https://github.com/googleapis/python-api-core/blob/main/google/api_core/exceptions.py
     status_code = getattr(error, "status_code", getattr(error, "code", 0))

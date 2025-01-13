@@ -4,10 +4,9 @@ from typing import Any, Dict, Optional
 
 try:
     import openai
+    import openai.resources
 except ImportError:
     raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
-
-import openai.resources
 
 from posthog.ai.utils import call_llm_and_track_usage_async, get_model_params
 from posthog.client import Client as PostHogClient

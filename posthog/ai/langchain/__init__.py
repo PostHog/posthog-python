@@ -1,3 +1,3 @@
-from .callbacks import PosthogCallbackHandler
+from .callbacks import CallbackHandler
 
-__all__ = ["PosthogCallbackHandler"]
+__all__ = ["CallbackHandler"]
