@@ -61,6 +61,7 @@ def test_metadata_capture(mock_client):
     run_id = uuid.uuid4()
     with patch("time.time", return_value=1234567890):
         callbacks._set_run_metadata(
+            {"kwargs": {"openai_api_base": "https://us.posthog.com"}},
             run_id,
             messages=[{"role": "user", "content": "Who won the world series in 2020?"}],
             invocation_params={"temperature": 0.5},
@@ -72,6 +73,7 @@ def test_metadata_capture(mock_client):
         "start_time": 1234567890,
         "model_params": {"temperature": 0.5},
         "provider": "posthog",
+        "base_url": "https://us.posthog.com",
     }
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -577,3 +579,19 @@ async def test_async_openai_streaming(mock_client):
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
+
+
+def test_base_url_retrieval(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | ChatOpenAI(
+        api_key="test",
+        model="posthog-mini",
+        base_url="https://test.posthog.com",
+    )
+    callbacks = CallbackHandler(mock_client)
+    with pytest.raises(Exception):
+        chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    assert call["properties"]["$ai_base_url"] == "https://test.posthog.com"

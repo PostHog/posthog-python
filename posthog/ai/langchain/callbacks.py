@@ -34,6 +34,7 @@ class RunMetadata(TypedDict, total=False):
     provider: str
     model: str
     model_params: Dict[str, Any]
+    base_url: str
     start_time: float
     end_time: float
 
@@ -105,7 +106,7 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._set_parent_of_run(run_id, parent_run_id)
         input = [_convert_message_to_dict(message) for row in messages for message in row]
-        self._set_run_metadata(run_id, input, **kwargs)
+        self._set_run_metadata(serialized, run_id, input, **kwargs)
 
     def on_llm_start(
         self,
@@ -117,7 +118,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         self._set_parent_of_run(run_id, parent_run_id)
-        self._set_run_metadata(run_id, prompts, **kwargs)
+        self._set_run_metadata(serialized, run_id, prompts, **kwargs)
 
     def on_chain_end(
         self,
@@ -171,6 +172,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
+            "$ai_base_url": run.get("base_url"),
         }
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -215,6 +217,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
             "$ai_posthog_properties": self._properties,
+            "$ai_base_url": run.get("base_url"),
         }
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -251,6 +254,7 @@ class CallbackHandler(BaseCallbackHandler):
 
     def _set_run_metadata(
         self,
+        serialized: Dict[str, Any],
         run_id: UUID,
         messages: Union[List[Dict[str, Any]], List[str]],
         metadata: Optional[Dict[str, Any]] = None,
@@ -268,6 +272,12 @@ class CallbackHandler(BaseCallbackHandler):
                 run["model"] = model
             if provider := metadata.get("ls_provider"):
                 run["provider"] = provider
+        try:
+            base_url = serialized["kwargs"]["openai_api_base"]
+            if base_url is not None:
+                run["base_url"] = base_url
+        except KeyError:
+            pass
         self._runs[run_id] = run
 
     def _pop_run_metadata(self, run_id: UUID) -> Optional[RunMetadata]:
