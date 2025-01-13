@@ -143,20 +143,36 @@ def image_openai_call():
     print(response)
     return response
 
+
 # none instrumented
 async def image_async_openai_call():
-    response = await async_openai_client.images.generate(model="dall-e-3", prompt="A cute baby hedgehog", n=1, size="1024x1024")
+    response = await async_openai_client.images.generate(
+        model="dall-e-3", prompt="A cute baby hedgehog", n=1, size="1024x1024"
+    )
     print(response)
     return response
 
 
 def embedding_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties):
-    response = openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small", posthog_distinct_id=posthog_distinct_id, posthog_trace_id=posthog_trace_id, posthog_properties=posthog_properties)
+    response = openai_client.embeddings.create(
+        input="The hedgehog is cute",
+        model="text-embedding-3-small",
+        posthog_distinct_id=posthog_distinct_id,
+        posthog_trace_id=posthog_trace_id,
+        posthog_properties=posthog_properties,
+    )
     print(response)
     return response
 
+
 async def embedding_async_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties):
-    response = await async_openai_client.embeddings.create(input="The hedgehog is cute", model="text-embedding-3-small", posthog_distinct_id=posthog_distinct_id, posthog_trace_id=posthog_trace_id, posthog_properties=posthog_properties)
+    response = await async_openai_client.embeddings.create(
+        input="The hedgehog is cute",
+        model="text-embedding-3-small",
+        posthog_distinct_id=posthog_distinct_id,
+        posthog_trace_id=posthog_trace_id,
+        posthog_properties=posthog_properties,
+    )
     print(response)
     return response
 

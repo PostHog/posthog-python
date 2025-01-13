@@ -31,6 +31,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         self.chat = WrappedChat(self)
         self.embeddings = WrappedEmbeddings(self)
 
+
 class WrappedChat(openai.resources.chat.AsyncChat):
     _client: AsyncOpenAI
 
@@ -167,6 +168,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                 event="$ai_generation",
                 properties=event_properties,
             )
+
 
 class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
     _client: AsyncOpenAI
