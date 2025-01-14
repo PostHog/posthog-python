@@ -59,6 +59,8 @@ setup(
     packages=[
         "posthog",
         "posthog.ai",
+        "posthog.ai.langchain",
+        "posthog.ai.openai",
         "posthog.test",
         "posthog.sentry",
         "posthog.exception_integrations",
