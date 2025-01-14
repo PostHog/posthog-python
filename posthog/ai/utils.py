@@ -51,6 +51,8 @@ def call_llm_and_track_usage(
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
+    posthog_privacy_mode: bool,
+    posthog_groups: Optional[Dict[str, Any]],
     base_url: URL,
     call_method: Callable[..., Any],
     **kwargs: Any,
@@ -86,8 +88,8 @@ def call_llm_and_track_usage(
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(ph_client, kwargs.get("messages")),
-            "$ai_output": with_privacy_mode(ph_client, format_response(response)),
+            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_output": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response)),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -106,6 +108,7 @@ def call_llm_and_track_usage(
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
+                groups=posthog_groups,
             )
 
     if error:
@@ -119,6 +122,8 @@ async def call_llm_and_track_usage_async(
     ph_client: PostHogClient,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
+    posthog_privacy_mode: bool,
+    posthog_groups: Optional[Dict[str, Any]],
     base_url: URL,
     call_async_method: Callable[..., Any],
     **kwargs: Any,
@@ -150,8 +155,8 @@ async def call_llm_and_track_usage_async(
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(ph_client, kwargs.get("messages")),
-            "$ai_output": with_privacy_mode(ph_client, format_response(response)),
+            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_output": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response)),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -170,6 +175,7 @@ async def call_llm_and_track_usage_async(
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
+                groups=posthog_groups,
             )
 
     if error:
@@ -177,7 +183,8 @@ async def call_llm_and_track_usage_async(
 
     return response
 
-def with_privacy_mode(ph_client: PostHogClient, value: Any):
-    if ph_client.privacy_mode:
+
+def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
+    if ph_client.privacy_mode or privacy_mode:
         return None
     return value

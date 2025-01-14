@@ -59,6 +59,7 @@ class Client(object):
         enable_exception_autocapture=False,
         exception_autocapture_integrations=None,
         project_root=None,
+        privacy_mode=False,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -91,6 +92,7 @@ class Client(object):
         self.enable_exception_autocapture = enable_exception_autocapture
         self.exception_autocapture_integrations = exception_autocapture_integrations
         self.exception_capture = None
+        self.privacy_mode = privacy_mode
 
         if project_root is None:
             try:

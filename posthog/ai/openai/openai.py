@@ -49,6 +49,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         posthog_distinct_id: Optional[str] = None,
         posthog_trace_id: Optional[str] = None,
         posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         if posthog_trace_id is None:
@@ -59,6 +61,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                 posthog_distinct_id,
                 posthog_trace_id,
                 posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
                 **kwargs,
             )
 
@@ -67,6 +71,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             self._client._ph_client,
             posthog_trace_id,
             posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
             self._client.base_url,
             super().create,
             **kwargs,
@@ -77,6 +83,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
+        posthog_privacy_mode: bool,
+        posthog_groups: Optional[Dict[str, Any]],
         **kwargs: Any,
     ):
         start_time = time.time()
@@ -117,6 +125,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                     posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
                     kwargs,
                     usage_stats,
                     latency,
@@ -130,6 +140,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
+        posthog_privacy_mode: bool,
+        posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
@@ -142,15 +154,19 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(self._client._ph_client, kwargs.get("messages")),
-            "$ai_output": with_privacy_mode(self._client._ph_client, {
-                "choices": [
-                    {
-                        "content": output,
-                        "role": "assistant",
-                    }
-                ]
-            }),
+            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_output": with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                {
+                    "choices": [
+                        {
+                            "content": output,
+                            "role": "assistant",
+                        }
+                    ]
+                },
+            ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
@@ -168,6 +184,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
+                groups=posthog_groups,
             )
 
 
@@ -179,6 +196,8 @@ class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
         posthog_distinct_id: Optional[str] = None,
         posthog_trace_id: Optional[str] = None,
         posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -214,7 +233,7 @@ class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
         event_properties = {
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
-            "$ai_input": with_privacy_mode(self._client._ph_client, kwargs.get("input")),
+            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("input")),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_latency": latency,
@@ -232,6 +251,7 @@ class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_embedding",
                 properties=event_properties,
+                groups=posthog_groups,
             )
 
         return response

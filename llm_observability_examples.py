@@ -10,11 +10,11 @@ posthog.personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "your-personal-
 posthog.host = os.getenv("POSTHOG_HOST", "http://localhost:8000")  # Or https://app.posthog.com
 posthog.debug = True
 # change this to False to see usage events
-posthog.privacy_mode = True
+# posthog.privacy_mode = True
 
 openai_client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY", "your-openai-api-key"),
-    posthog_client=posthog
+    posthog_client=posthog,
 )
 
 async_openai_client = AsyncOpenAI(
@@ -28,11 +28,12 @@ def main_sync():
     print("Trace ID:", trace_id)
     distinct_id = "test2_distinct_id"
     properties = {"test_property": "test_value"}
+    groups = {"company": "test_company"}
 
     try:
-        basic_openai_call(distinct_id, trace_id, properties)
-        streaming_openai_call(distinct_id, trace_id, properties)
-        embedding_openai_call(distinct_id, trace_id, properties)
+        basic_openai_call(distinct_id, trace_id, properties, groups)
+        streaming_openai_call(distinct_id, trace_id, properties, groups)
+        embedding_openai_call(distinct_id, trace_id, properties, groups)
         image_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
@@ -43,17 +44,18 @@ async def main_async():
     print("Trace ID:", trace_id)
     distinct_id = "test_distinct_id"
     properties = {"test_property": "test_value"}
+    groups = {"company": "test_company"}
 
     try:
-        await basic_async_openai_call(distinct_id, trace_id, properties)
-        await streaming_async_openai_call(distinct_id, trace_id, properties)
-        await embedding_async_openai_call(distinct_id, trace_id, properties)
+        await basic_async_openai_call(distinct_id, trace_id, properties, groups)
+        await streaming_async_openai_call(distinct_id, trace_id, properties, groups)
+        await embedding_async_openai_call(distinct_id, trace_id, properties, groups)
         await image_async_openai_call()
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
 
-def basic_openai_call(distinct_id, trace_id, properties):
+def basic_openai_call(distinct_id, trace_id, properties, groups):
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -65,6 +67,7 @@ def basic_openai_call(distinct_id, trace_id, properties):
         posthog_distinct_id=distinct_id,
         posthog_trace_id=trace_id,
         posthog_properties=properties,
+        posthog_groups=groups,
     )
     print(response)
     if response and response.choices:
@@ -74,7 +77,7 @@ def basic_openai_call(distinct_id, trace_id, properties):
     return response
 
 
-async def basic_async_openai_call(distinct_id, trace_id, properties):
+async def basic_async_openai_call(distinct_id, trace_id, properties, groups):
     response = await async_openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -86,6 +89,7 @@ async def basic_async_openai_call(distinct_id, trace_id, properties):
         posthog_distinct_id=distinct_id,
         posthog_trace_id=trace_id,
         posthog_properties=properties,
+        posthog_groups=groups,
     )
     if response and hasattr(response, "choices"):
         print("OpenAI response:", response.choices[0].message.content)
@@ -94,7 +98,7 @@ async def basic_async_openai_call(distinct_id, trace_id, properties):
     return response
 
 
-def streaming_openai_call(distinct_id, trace_id, properties):
+def streaming_openai_call(distinct_id, trace_id, properties, groups):
 
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -108,6 +112,7 @@ def streaming_openai_call(distinct_id, trace_id, properties):
         posthog_distinct_id=distinct_id,
         posthog_trace_id=trace_id,
         posthog_properties=properties,
+        posthog_groups=groups,
     )
 
     for chunk in response:
@@ -117,7 +122,7 @@ def streaming_openai_call(distinct_id, trace_id, properties):
     return response
 
 
-async def streaming_async_openai_call(distinct_id, trace_id, properties):
+async def streaming_async_openai_call(distinct_id, trace_id, properties, groups):
     response = await async_openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -130,6 +135,7 @@ async def streaming_async_openai_call(distinct_id, trace_id, properties):
         posthog_distinct_id=distinct_id,
         posthog_trace_id=trace_id,
         posthog_properties=properties,
+        posthog_groups=groups,
     )
 
     async for chunk in response:
@@ -155,25 +161,27 @@ async def image_async_openai_call():
     return response
 
 
-def embedding_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties):
+def embedding_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties, posthog_groups):
     response = openai_client.embeddings.create(
         input="The hedgehog is cute",
         model="text-embedding-3-small",
         posthog_distinct_id=posthog_distinct_id,
         posthog_trace_id=posthog_trace_id,
         posthog_properties=posthog_properties,
+        posthog_groups=posthog_groups,
     )
     print(response)
     return response
 
 
-async def embedding_async_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties):
+async def embedding_async_openai_call(posthog_distinct_id, posthog_trace_id, posthog_properties, posthog_groups):
     response = await async_openai_client.embeddings.create(
         input="The hedgehog is cute",
         model="text-embedding-3-small",
         posthog_distinct_id=posthog_distinct_id,
         posthog_trace_id=posthog_trace_id,
         posthog_properties=posthog_properties,
+        posthog_groups=posthog_groups,
     )
     print(response)
     return response
