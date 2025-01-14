@@ -9,10 +9,12 @@ posthog.project_api_key = os.getenv("POSTHOG_PROJECT_API_KEY", "your-project-api
 posthog.personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "your-personal-api-key")
 posthog.host = os.getenv("POSTHOG_HOST", "http://localhost:8000")  # Or https://app.posthog.com
 posthog.debug = True
+# change this to False to see usage events
+posthog.privacy_mode = True
 
 openai_client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY", "your-openai-api-key"),
-    posthog_client=posthog,
+    posthog_client=posthog
 )
 
 async_openai_client = AsyncOpenAI(

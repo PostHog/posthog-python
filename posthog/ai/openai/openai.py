@@ -8,7 +8,7 @@ try:
 except ImportError:
     raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params
+from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
 from posthog.client import Client as PostHogClient
 
 
@@ -142,15 +142,15 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": kwargs.get("messages"),
-            "$ai_output": {
+            "$ai_input": with_privacy_mode(self._client._ph_client, kwargs.get("messages")),
+            "$ai_output": with_privacy_mode(self._client._ph_client, {
                 "choices": [
                     {
                         "content": output,
                         "role": "assistant",
                     }
                 ]
-            },
+            }),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
@@ -214,7 +214,7 @@ class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
         event_properties = {
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
-            "$ai_input": kwargs.get("input"),
+            "$ai_input": with_privacy_mode(self._client._ph_client, kwargs.get("input")),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_latency": latency,

@@ -86,8 +86,8 @@ def call_llm_and_track_usage(
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": kwargs.get("messages"),
-            "$ai_output": format_response(response),
+            "$ai_input": with_privacy_mode(ph_client, kwargs.get("messages")),
+            "$ai_output": with_privacy_mode(ph_client, format_response(response)),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -150,8 +150,8 @@ async def call_llm_and_track_usage_async(
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": kwargs.get("messages"),
-            "$ai_output": format_response(response),
+            "$ai_input": with_privacy_mode(ph_client, kwargs.get("messages")),
+            "$ai_output": with_privacy_mode(ph_client, format_response(response)),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -176,3 +176,8 @@ async def call_llm_and_track_usage_async(
         raise error
 
     return response
+
+def with_privacy_mode(ph_client: PostHogClient, value: Any):
+    if ph_client.privacy_mode:
+        return None
+    return value
