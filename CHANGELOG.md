@@ -1,4 +1,4 @@
-## 3.8.0 - 2025-01-14
+## 3.8.1 - 2025-01-14
 
 1. Add LLM Observability with support for OpenAI and Langchain callbacks.
 

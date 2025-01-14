@@ -29,6 +29,7 @@ setup(
     test_suite="posthoganalytics.test.all",
     packages=[
         "posthoganalytics",
+        "posthoganalytics.ai",
         "posthoganalytics.test",
         "posthoganalytics.sentry",
         "posthoganalytics.exception_integrations",

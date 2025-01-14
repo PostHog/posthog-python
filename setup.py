@@ -58,6 +58,7 @@ setup(
     test_suite="posthog.test.all",
     packages=[
         "posthog",
+        "posthog.ai",
         "posthog.test",
         "posthog.sentry",
         "posthog.exception_integrations",
