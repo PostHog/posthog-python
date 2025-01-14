@@ -1,3 +1,7 @@
+## 3.8.0 - 2025-01-14
+
+1. Add LLM Observability with support for OpenAI and Langchain callbacks.
+
 ## 3.7.5 - 2025-01-03
 
 1. Add `distinct_id` to group_identify

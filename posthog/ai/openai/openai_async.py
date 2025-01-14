@@ -29,6 +29,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         super().__init__(**kwargs)
         self._ph_client = posthog_client
         self.chat = WrappedChat(self)
+        self.embeddings = WrappedEmbeddings(self)
 
 
 class WrappedChat(openai.resources.chat.AsyncChat):
@@ -49,19 +50,20 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         posthog_properties: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        distinct_id = posthog_distinct_id or uuid.uuid4()
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
 
         # If streaming, handle streaming specifically
         if kwargs.get("stream", False):
             return await self._create_streaming(
-                distinct_id,
+                posthog_distinct_id,
                 posthog_trace_id,
                 posthog_properties,
                 **kwargs,
             )
 
         response = await call_llm_and_track_usage_async(
-            distinct_id,
+            posthog_distinct_id,
             self._client._ph_client,
             posthog_trace_id,
             posthog_properties,
@@ -73,7 +75,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
 
     async def _create_streaming(
         self,
-        distinct_id: str,
+        posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
         **kwargs: Any,
@@ -111,7 +113,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
                 self._capture_streaming_event(
-                    distinct_id,
+                    posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
                     kwargs,
@@ -124,7 +126,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
 
     def _capture_streaming_event(
         self,
-        distinct_id: str,
+        posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
@@ -153,13 +155,82 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
-            "$ai_posthog_properties": posthog_properties,
-            "$ai_request_url": str(self._client.base_url.join("chat/completions")),
+            "$ai_base_url": str(self._client.base_url),
+            **posthog_properties,
         }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
             self._client._ph_client.capture(
-                distinct_id=distinct_id,
+                distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
             )
+
+
+class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
+    _client: AsyncOpenAI
+
+    async def create(
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Create an embedding using OpenAI's 'embeddings.create' method, but also track usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional ID to associate with the usage event.
+            posthog_trace_id: Optional trace UUID for linking events.
+            posthog_properties: Optional dictionary of extra properties to include in the event.
+            **kwargs: Any additional parameters for the OpenAI Embeddings API.
+
+        Returns:
+            The response from OpenAI's embeddings.create call.
+        """
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
+
+        start_time = time.time()
+        response = await super().create(**kwargs)
+        end_time = time.time()
+
+        # Extract usage statistics if available
+        usage_stats = {}
+        if hasattr(response, "usage") and response.usage:
+            usage_stats = {
+                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                "total_tokens": getattr(response.usage, "total_tokens", 0),
+            }
+
+        latency = end_time - start_time
+
+        # Build the event properties
+        event_properties = {
+            "$ai_provider": "openai",
+            "$ai_model": kwargs.get("model"),
+            "$ai_input": kwargs.get("input"),
+            "$ai_http_status": 200,
+            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
+            "$ai_latency": latency,
+            "$ai_trace_id": posthog_trace_id,
+            "$ai_base_url": str(self._client.base_url),
+            **posthog_properties,
+        }
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
+        # Send capture event for embeddings
+        if hasattr(self._client._ph_client, "capture"):
+            self._client._ph_client.capture(
+                distinct_id=posthog_distinct_id or posthog_trace_id,
+                event="$ai_embedding",
+                properties=event_properties,
+            )
+
+        return response
