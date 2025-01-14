@@ -1,3 +1,7 @@
+## 3.8.3 - 2025-01-14
+
+1. Fix setuptools to include the `posthog.ai.openai` and `posthog.ai.langchain` packages for the `posthoganalytics` package.
+
 ## 3.8.2 - 2025-01-14
 
 1. Fix setuptools to include the `posthog.ai.openai` and `posthog.ai.langchain` packages.
