@@ -335,7 +335,7 @@ def test_metadata(mock_client):
     first_call_props = first_call_args["properties"]
     assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
-    assert first_call_props["$foo"] == "bar"
+    assert first_call_props["foo"] == "bar"
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
     assert first_call_props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
     assert first_call_props["$ai_http_status"] == 200
@@ -422,7 +422,7 @@ def test_openai_chain(mock_client):
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
     assert first_call_props["$ai_provider"] == "openai"
     assert first_call_props["$ai_model"] == "gpt-4o-mini"
-    assert first_call_props["$foo"] == "bar"
+    assert first_call_props["foo"] == "bar"
 
     # langchain-openai for langchain v3
     if "max_completion_tokens" in first_call_props["$ai_model_parameters"]:
