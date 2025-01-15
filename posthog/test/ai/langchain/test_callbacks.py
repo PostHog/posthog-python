@@ -604,7 +604,8 @@ def test_groups(mock_client):
             ("user", "Foo"),
         ]
     )
-    chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain = prompt | model
     callbacks = CallbackHandler(mock_client, groups={"company": "test_company"})
     chain.invoke({}, config={"callbacks": [callbacks]})
 
@@ -620,7 +621,8 @@ def test_privacy_mode_local(mock_client):
             ("user", "Foo"),
         ]
     )
-    chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain = prompt | model
     callbacks = CallbackHandler(mock_client, privacy_mode=True)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
@@ -638,7 +640,8 @@ def test_privacy_mode_global(mock_client):
             ("user", "Foo"),
         ]
     )
-    chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain = prompt | model
     callbacks = CallbackHandler(mock_client)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
