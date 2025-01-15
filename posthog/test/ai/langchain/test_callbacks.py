@@ -20,6 +20,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 @pytest.fixture(scope="function")
 def mock_client():
     with patch("posthog.client.Client") as mock_client:
+        mock_client.privacy_mode = False
         yield mock_client
 
 
@@ -595,3 +596,57 @@ def test_base_url_retrieval(mock_client):
     assert mock_client.capture.call_count == 1
     call = mock_client.capture.call_args[1]
     assert call["properties"]["$ai_base_url"] == "https://test.posthog.com"
+
+
+def test_groups(mock_client):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", 'You must always answer with "Bar".'),
+            ("user", "Foo"),
+        ]
+    )
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain = prompt | model
+    callbacks = CallbackHandler(mock_client, groups={"company": "test_company"})
+    chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    assert call["groups"] == {"company": "test_company"}
+
+
+def test_privacy_mode_local(mock_client):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", 'You must always answer with "Bar".'),
+            ("user", "Foo"),
+        ]
+    )
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain = prompt | model
+    callbacks = CallbackHandler(mock_client, privacy_mode=True)
+    chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    assert call["properties"]["$ai_input"] is None
+    assert call["properties"]["$ai_output"] is None
+
+
+def test_privacy_mode_global(mock_client):
+    mock_client.privacy_mode = True
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", 'You must always answer with "Bar".'),
+            ("user", "Foo"),
+        ]
+    )
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    chain = prompt | model
+    callbacks = CallbackHandler(mock_client)
+    chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    assert call["properties"]["$ai_input"] is None
+    assert call["properties"]["$ai_output"] is None

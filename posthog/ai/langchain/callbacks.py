@@ -23,7 +23,7 @@ from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, Hum
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
-from posthog.ai.utils import get_model_params
+from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -69,6 +69,8 @@ class CallbackHandler(BaseCallbackHandler):
         distinct_id: Optional[Union[str, int, float, UUID]] = None,
         trace_id: Optional[Union[str, int, float, UUID]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        privacy_mode: bool = False,
+        groups: Optional[Dict[str, Any]] = None,
     ):
         """
         Args:
@@ -76,11 +78,15 @@ class CallbackHandler(BaseCallbackHandler):
             distinct_id: Optional distinct ID of the user to associate the trace with.
             trace_id: Optional trace ID to use for the event.
             properties: Optional additional metadata to use for the trace.
+            privacy_mode: Whether to redact the input and output of the trace.
+            groups: Optional additional PostHog groups to use for the trace.
         """
         self._client = client
         self._distinct_id = distinct_id
         self._trace_id = trace_id
         self._properties = properties or {}
+        self._privacy_mode = privacy_mode
+        self._groups = groups or {}
         self._runs = {}
         self._parent_tree = {}
 
@@ -164,8 +170,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.get("provider"),
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": run.get("messages"),
-            "$ai_output": {"choices": output},
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
+            "$ai_output": with_privacy_mode(self._client, self._privacy_mode, {"choices": output}),
             "$ai_http_status": 200,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -180,6 +186,7 @@ class CallbackHandler(BaseCallbackHandler):
             distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
             properties=event_properties,
+            groups=self._groups,
         )
 
     def on_chain_error(
@@ -212,7 +219,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.get("provider"),
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": run.get("messages"),
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
             "$ai_http_status": _get_http_status(error),
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
@@ -225,6 +232,7 @@ class CallbackHandler(BaseCallbackHandler):
             distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
             properties=event_properties,
+            groups=self._groups,
         )
 
     def _set_parent_of_run(self, run_id: UUID, parent_run_id: Optional[UUID] = None):

@@ -14,6 +14,7 @@ from posthog.ai.openai import OpenAI
 @pytest.fixture
 def mock_client():
     with patch("posthog.client.Client") as mock_client:
+        mock_client.privacy_mode = False
         yield mock_client
 
 
@@ -115,3 +116,60 @@ def test_embeddings(mock_client, mock_embedding_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_groups(mock_client, mock_openai_response):
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_groups={"company": "test_company"},
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+
+        assert call_args["groups"] == {"company": "test_company"}
+
+
+def test_privacy_mode_local(mock_client, mock_openai_response):
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_privacy_mode=True,
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_input"] is None
+        assert props["$ai_output"] is None
+
+
+def test_privacy_mode_global(mock_client, mock_openai_response):
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+        mock_client.privacy_mode = True
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_privacy_mode=False,
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_input"] is None
+        assert props["$ai_output"] is None
