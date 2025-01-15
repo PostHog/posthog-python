@@ -20,6 +20,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 @pytest.fixture(scope="function")
 def mock_client():
     with patch("posthog.client.Client") as mock_client:
+        mock_client.privacy_mode = False
         yield mock_client
 
 
