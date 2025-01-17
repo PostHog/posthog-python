@@ -120,9 +120,9 @@ def test_basic_chat_chain(mock_client, stream):
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Who won the world series in 2020?"},
     ]
-    assert props["$ai_output_choices"] == {
-        "choices": [{"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}]
-    }
+    assert props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}
+    ]
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_http_status"] == 200
@@ -165,9 +165,9 @@ async def test_async_basic_chat_chain(mock_client, stream):
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Who won the world series in 2020?"},
     ]
-    assert props["$ai_output_choices"] == {
-        "choices": [{"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}]
-    }
+    assert props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}
+    ]
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_http_status"] == 200
@@ -200,7 +200,7 @@ def test_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == {"choices": ["The Los Angeles Dodgers won the World Series in 2020."]}
+    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -231,7 +231,7 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == {"choices": ["The Los Angeles Dodgers won the World Series in 2020."]}
+    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -258,7 +258,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert "$ai_model" in first_call_props
     assert "$ai_provider" in first_call_props
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_trace_id"] is not None
     assert isinstance(first_call_props["$ai_latency"], float)
@@ -270,7 +270,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert "$ai_model" in second_call_props
     assert "$ai_provider" in second_call_props
     assert second_call_props["$ai_input"] == [{"role": "assistant", "content": "Bar"}]
-    assert second_call_props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert second_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert second_call_props["$ai_http_status"] == 200
     assert second_call_props["$ai_trace_id"] is not None
     assert isinstance(second_call_props["$ai_latency"], float)
@@ -338,7 +338,7 @@ def test_metadata(mock_client):
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
     assert first_call_props["foo"] == "bar"
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
 
@@ -443,15 +443,13 @@ def test_openai_chain(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == {
-        "choices": [
-            {
-                "role": "assistant",
-                "content": "Bar",
-                "additional_kwargs": {"refusal": None},
-            }
-        ]
-    }
+    assert first_call_props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "Bar",
+            "additional_kwargs": {"refusal": None},
+        }
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
     assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
@@ -486,19 +484,17 @@ def test_openai_captures_multiple_generations(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == {
-        "choices": [
-            {
-                "role": "assistant",
-                "content": "Bar",
-                "additional_kwargs": {"refusal": None},
-            },
-            {
-                "role": "assistant",
-                "content": "Bar",
-            },
-        ]
-    }
+    assert first_call_props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "Bar",
+            "additional_kwargs": {"refusal": None},
+        },
+        {
+            "role": "assistant",
+            "content": "Bar",
+        },
+    ]
 
     # langchain-openai for langchain v3
     if "max_completion_tokens" in first_call_props["$ai_model_parameters"]:
@@ -544,7 +540,7 @@ def test_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -576,7 +572,7 @@ async def test_async_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
