@@ -28,16 +28,38 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return model_params
 
 
-def format_response(response):
+def format_response(response, provider: str):
     """
     Format a regular (non-streaming) response.
     """
-    output = {"choices": []}
+    output = []
     if response is None:
         return output
+    if provider == "anthropic":
+        return format_response_anthropic(response)
+    elif provider == "openai":
+        return format_response_openai(response)
+    return output
+
+
+def format_response_anthropic(response):
+    output = []
+    for choice in response.content:
+        if choice.text:
+            output.append(
+                {
+                    "role": "assistant",
+                    "content": choice.text,
+                }
+            )
+    return output
+
+
+def format_response_openai(response):
+    output = []
     for choice in response.choices:
         if choice.message.content:
-            output["choices"].append(
+            output.append(
                 {
                     "content": choice.message.content,
                     "role": choice.message.role,
@@ -49,6 +71,7 @@ def format_response(response):
 def call_llm_and_track_usage(
     posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
+    provider: str,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
@@ -85,11 +108,11 @@ def call_llm_and_track_usage(
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
         event_properties = {
-            "$ai_provider": "openai",
+            "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
-            "$ai_output": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response)),
+            "$ai_output_choices": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response, provider)),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -120,6 +143,7 @@ def call_llm_and_track_usage(
 async def call_llm_and_track_usage_async(
     posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
+    provider: str,
     posthog_trace_id: Optional[str],
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
@@ -152,11 +176,11 @@ async def call_llm_and_track_usage_async(
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
         event_properties = {
-            "$ai_provider": "openai",
+            "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
-            "$ai_output": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response)),
+            "$ai_output_choices": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response, provider)),
             "$ai_http_status": http_status,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
