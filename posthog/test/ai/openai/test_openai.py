@@ -83,7 +83,7 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Test response"}]}
+        assert props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Test response"}]}
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
@@ -152,7 +152,7 @@ def test_privacy_mode_local(mock_client, mock_openai_response):
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
         assert props["$ai_input"] is None
-        assert props["$ai_output"] is None
+        assert props["$ai_output_choices"] is None
 
 
 def test_privacy_mode_global(mock_client, mock_openai_response):
@@ -172,4 +172,4 @@ def test_privacy_mode_global(mock_client, mock_openai_response):
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
         assert props["$ai_input"] is None
-        assert props["$ai_output"] is None
+        assert props["$ai_output_choices"] is None
