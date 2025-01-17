@@ -42,6 +42,7 @@ extras_require = {
         "django",
         "langchain-community>=0.2.0",
         "langchain-openai>=0.2.0",
+        "anthropic",
     ],
     "sentry": ["sentry-sdk", "django"],
     "langchain": ["langchain>=0.2.0"],
