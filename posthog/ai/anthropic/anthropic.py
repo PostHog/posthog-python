@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
+from posthog.ai.utils import call_llm_and_track_usage, get_model_params, merge_system_prompt, with_privacy_mode
 from posthog.client import Client as PostHogClient
 
 
@@ -171,7 +171,11 @@ class WrappedMessages(Messages):
             "$ai_provider": "anthropic",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_input": with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                merge_system_prompt(kwargs, "anthropic"),
+            ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
