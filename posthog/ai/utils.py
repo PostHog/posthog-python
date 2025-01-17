@@ -127,7 +127,9 @@ def call_llm_and_track_usage(
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
-            "$ai_output_choices": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response, provider)),
+            "$ai_output_choices": with_privacy_mode(
+                ph_client, posthog_privacy_mode, format_response(response, provider)
+            ),
             "$ai_http_status": http_status,
             "$ai_input_tokens": usage.get("input_tokens", 0),
             "$ai_output_tokens": usage.get("output_tokens", 0),
@@ -193,7 +195,9 @@ async def call_llm_and_track_usage_async(
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
-            "$ai_output_choices": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response, provider)),
+            "$ai_output_choices": with_privacy_mode(
+                ph_client, posthog_privacy_mode, format_response(response, provider)
+            ),
             "$ai_http_status": http_status,
             "$ai_input_tokens": usage.get("input_tokens", 0),
             "$ai_output_tokens": usage.get("output_tokens", 0),

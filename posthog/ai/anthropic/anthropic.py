@@ -4,11 +4,12 @@ try:
 except ImportError:
     raise ModuleNotFoundError("Please install the Anthropic SDK to use this feature: 'pip install anthropic'")
 
+import time
+import uuid
+from typing import Any, Dict, Optional
+
 from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
 from posthog.client import Client as PostHogClient
-from typing import Any, Dict, Optional
-import uuid
-import time
 
 
 class Anthropic(anthropic.Anthropic):
@@ -43,7 +44,7 @@ class WrappedMessages(Messages):
     ):
         """
         Create a message using Anthropic's API while tracking usage in PostHog.
-        
+
         Args:
             posthog_distinct_id: Optional ID to associate with the usage event
             posthog_trace_id: Optional trace UUID for linking events
@@ -77,7 +78,7 @@ class WrappedMessages(Messages):
             super().create,
             **kwargs,
         )
-    
+
     def stream(
         self,
         posthog_distinct_id: Optional[str] = None,
@@ -89,7 +90,7 @@ class WrappedMessages(Messages):
     ):
         if posthog_trace_id is None:
             posthog_trace_id = uuid.uuid4()
-        
+
         return self._create_streaming(
             posthog_distinct_id,
             posthog_trace_id,
@@ -136,7 +137,7 @@ class WrappedMessages(Messages):
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                
+
                 self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -195,4 +196,3 @@ class WrappedMessages(Messages):
                 properties=event_properties,
                 groups=posthog_groups,
             )
-

@@ -98,7 +98,7 @@ def test_streaming(mock_client, mock_anthropic_stream):
         assert chunks[0].content == "A"
         assert chunks[1].content == "B"
         assert chunks[2].content == "C"
-        
+
         # Wait a bit to ensure the capture is called
         time.sleep(0.1)
         assert mock_client.capture.call_count == 1
@@ -134,7 +134,7 @@ def test_streaming_with_stream_endpoint(mock_client, mock_anthropic_stream):
         assert chunks[0].content == "A"
         assert chunks[1].content == "B"
         assert chunks[2].content == "C"
-        
+
         # Wait a bit to ensure the capture is called
         time.sleep(0.1)
         assert mock_client.capture.call_count == 1

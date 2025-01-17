@@ -7,6 +7,7 @@ from posthog.ai.anthropic.anthropic import WrappedMessages
 from posthog.ai.anthropic.anthropic_async import AsyncWrappedMessages
 from posthog.client import Client as PostHogClient
 
+
 class AnthropicBedrock(anthropic.AnthropicBedrock):
     """
     A wrapper around the Anthropic Bedrock SDK that automatically sends LLM usage events to PostHog.
