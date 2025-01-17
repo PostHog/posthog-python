@@ -61,6 +61,7 @@ setup(
         "posthog.ai",
         "posthog.ai.langchain",
         "posthog.ai.openai",
+        "posthog.ai.anthropic",
         "posthog.test",
         "posthog.sentry",
         "posthog.exception_integrations",
