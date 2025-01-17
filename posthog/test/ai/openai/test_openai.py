@@ -83,7 +83,7 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output_choices"] == {"choices": [{"role": "assistant", "content": "Test response"}]}
+        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200

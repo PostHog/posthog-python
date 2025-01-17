@@ -21,7 +21,8 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         "presence_penalty",
         "n",
         "stop",
-        "stream",
+        "stream",  # OpenAI-specific field
+        "streaming",  # Anthropic-specific field
     ]:
         if param in kwargs and kwargs[param] is not None:
             model_params[param] = kwargs[param]
