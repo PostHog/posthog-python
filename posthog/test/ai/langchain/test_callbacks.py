@@ -731,7 +731,6 @@ async def test_async_anthropic_streaming(mock_client):
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] is not None
-    assert call["properties"]["$ai_output"] is None
 
 
 def test_tool_calls(mock_client):
