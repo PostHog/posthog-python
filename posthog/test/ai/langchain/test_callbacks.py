@@ -770,4 +770,4 @@ def test_tool_calls(mock_client):
             },
         }
     ]
-    assert "additional_kwargs" not in call["properties"]["$ai_output"]["choices"][0]
+    assert "additional_kwargs" not in call["properties"]["$ai_output_choices"][0]
