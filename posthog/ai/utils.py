@@ -28,6 +28,7 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             model_params[param] = kwargs[param]
     return model_params
 
+
 def extract_core_model_params(kwargs: Dict[str, Any], provider: str) -> Dict[str, Any]:
     """
     Extracts core model parameters from the kwargs dictionary.
@@ -47,7 +48,7 @@ def extract_core_model_params(kwargs: Dict[str, Any], provider: str) -> Dict[str
             output["$ai_max_tokens"] = kwargs.get("max_completion_tokens")
         if "stream" in kwargs:
             output["$ai_stream"] = kwargs.get("stream")
-    else: # default to openai params
+    else:  # default to openai params
         if "temperature" in kwargs:
             output["$ai_temperature"] = kwargs.get("temperature")
         if "max_tokens" in kwargs:
