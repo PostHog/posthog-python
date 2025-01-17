@@ -7,6 +7,8 @@ from anthropic.types import Message, Usage
 
 from posthog.ai.anthropic import Anthropic, AsyncAnthropic
 
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
 
 @pytest.fixture
 def mock_client():
@@ -211,7 +213,7 @@ def test_privacy_mode_global(mock_client, mock_anthropic_response):
         assert props["$ai_output_choices"] is None
 
 
-@pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY is not set")
+@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 def test_basic_integration(mock_client):
     client = Anthropic(posthog_client=mock_client)
     client.messages.create(
@@ -241,7 +243,7 @@ def test_basic_integration(mock_client):
     assert isinstance(props["$ai_latency"], float)
 
 
-@pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY is not set")
+@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 async def test_basic_async_integration(mock_client):
     client = AsyncAnthropic(posthog_client=mock_client)
     await client.messages.create(
