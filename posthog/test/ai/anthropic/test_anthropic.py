@@ -218,25 +218,29 @@ def test_basic_integration(mock_client):
     client = Anthropic(posthog_client=mock_client)
     client.messages.create(
         model="claude-3-opus-20240229",
-        messages=[{"role": "user", "content": "You must always answer with 'Bar'."}],
+        messages=[{"role": "user", "content": "Foo"}],
         max_tokens=1,
         temperature=0,
         posthog_distinct_id="test-id",
         posthog_properties={"foo": "bar"},
+        system="You must always answer with 'Bar'.",
     )
 
     assert mock_client.capture.call_count == 1
 
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
-
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "anthropic"
     assert props["$ai_model"] == "claude-3-opus-20240229"
-    assert props["$ai_input"] == [{"role": "user", "content": "You must always answer with 'Bar'."}]
+    assert props["$ai_input"] == [
+        {"role": "system", "content": "You must always answer with 'Bar'."},
+        {"role": "user", "content": "Foo"},
+    ]
     assert props["$ai_output_choices"][0]["role"] == "assistant"
-    assert props["$ai_input_tokens"] == 16
+    assert props["$ai_output_choices"][0]["content"] == "Bar"
+    assert props["$ai_input_tokens"] == 18
     assert props["$ai_output_tokens"] == 1
     assert props["$ai_http_status"] == 200
     assert props["foo"] == "bar"
@@ -271,3 +275,53 @@ async def test_basic_async_integration(mock_client):
     assert props["$ai_http_status"] == 200
     assert props["foo"] == "bar"
     assert isinstance(props["$ai_latency"], float)
+
+
+def test_streaming_system_prompt(mock_client, mock_anthropic_stream):
+    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_stream):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            system="Foo",
+            messages=[{"role": "user", "content": "Bar"}],
+            stream=True,
+        )
+
+        # Consume the stream
+        list(response)
+
+        # Wait a bit to ensure the capture is called
+        time.sleep(0.1)
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert props["$ai_input"] == [{"role": "system", "content": "Foo"}, {"role": "user", "content": "Bar"}]
+
+
+@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
+async def test_async_streaming_system_prompt(mock_client, mock_anthropic_stream):
+    client = AsyncAnthropic(posthog_client=mock_client)
+    response = await client.messages.create(
+        model="claude-3-opus-20240229",
+        system="You must always answer with 'Bar'.",
+        messages=[{"role": "user", "content": "Foo"}],
+        stream=True,
+        max_tokens=1,
+    )
+
+    # Consume the stream
+    [c async for c in response]
+
+    # Wait a bit to ensure the capture is called
+    time.sleep(0.1)
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert props["$ai_input"] == [
+        {"role": "system", "content": "You must always answer with 'Bar'."},
+        {"role": "user", "content": "Foo"},
+    ]
