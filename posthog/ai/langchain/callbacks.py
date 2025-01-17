@@ -333,10 +333,8 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
     else:
         message_dict = {"role": message.type, "content": str(message.content)}
 
-    if "name" in message.additional_kwargs:
-        message_dict["name"] = message.additional_kwargs["name"]
     if message.additional_kwargs:
-        message_dict["additional_kwargs"] = message.additional_kwargs
+        message_dict.update(message.additional_kwargs)
 
     return message_dict
 

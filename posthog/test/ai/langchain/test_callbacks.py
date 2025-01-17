@@ -448,7 +448,7 @@ def test_openai_chain(mock_client):
             {
                 "role": "assistant",
                 "content": "Bar",
-                "additional_kwargs": {"refusal": None},
+                "refusal": None,
             }
         ]
     }
@@ -491,7 +491,7 @@ def test_openai_captures_multiple_generations(mock_client):
             {
                 "role": "assistant",
                 "content": "Bar",
-                "additional_kwargs": {"refusal": None},
+                "refusal": None,
             },
             {
                 "role": "assistant",
@@ -650,3 +650,44 @@ def test_privacy_mode_global(mock_client):
     call = mock_client.capture.call_args[1]
     assert call["properties"]["$ai_input"] is None
     assert call["properties"]["$ai_output"] is None
+
+
+def test_tool_calls(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Bar",
+                additional_kwargs={
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "id": "123",
+                            "function": {
+                                "name": "test",
+                                "args": '{"a": 1}',
+                            },
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    chain = prompt | model
+    callbacks = CallbackHandler(mock_client)
+    chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    print(call["properties"]["$ai_output"]["choices"])
+    assert call["properties"]["$ai_output"]["choices"][0]["tool_calls"] == [
+        {
+            "type": "function",
+            "id": "123",
+            "function": {
+                "name": "test",
+                "args": '{"a": 1}',
+            },
+        }
+    ]
+    assert "additional_kwargs" not in call["properties"]["$ai_output"]["choices"][0]
