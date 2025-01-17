@@ -171,7 +171,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
             "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
-            "$ai_output": with_privacy_mode(self._client, self._privacy_mode, {"choices": output}),
+            "$ai_output_choices": with_privacy_mode(self._client, self._privacy_mode, output),
             "$ai_http_status": 200,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,

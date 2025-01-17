@@ -5,6 +5,7 @@ import uuid
 from unittest.mock import patch
 
 import pytest
+from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
 from langchain_core.messages import AIMessage
@@ -15,6 +16,7 @@ from langchain_openai.chat_models import ChatOpenAI
 from posthog.ai.langchain import CallbackHandler
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 
 @pytest.fixture(scope="function")
@@ -120,9 +122,9 @@ def test_basic_chat_chain(mock_client, stream):
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Who won the world series in 2020?"},
     ]
-    assert props["$ai_output"] == {
-        "choices": [{"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}]
-    }
+    assert props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}
+    ]
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_http_status"] == 200
@@ -165,9 +167,9 @@ async def test_async_basic_chat_chain(mock_client, stream):
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Who won the world series in 2020?"},
     ]
-    assert props["$ai_output"] == {
-        "choices": [{"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}]
-    }
+    assert props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}
+    ]
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_http_status"] == 200
@@ -200,7 +202,7 @@ def test_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output"] == {"choices": ["The Los Angeles Dodgers won the World Series in 2020."]}
+    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -231,7 +233,7 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output"] == {"choices": ["The Los Angeles Dodgers won the World Series in 2020."]}
+    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -258,7 +260,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert "$ai_model" in first_call_props
     assert "$ai_provider" in first_call_props
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_trace_id"] is not None
     assert isinstance(first_call_props["$ai_latency"], float)
@@ -270,7 +272,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert "$ai_model" in second_call_props
     assert "$ai_provider" in second_call_props
     assert second_call_props["$ai_input"] == [{"role": "assistant", "content": "Bar"}]
-    assert second_call_props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert second_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert second_call_props["$ai_http_status"] == 200
     assert second_call_props["$ai_trace_id"] is not None
     assert isinstance(second_call_props["$ai_latency"], float)
@@ -338,7 +340,7 @@ def test_metadata(mock_client):
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
     assert first_call_props["foo"] == "bar"
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
 
@@ -392,7 +394,7 @@ def test_openai_error(mock_client):
     props = args["properties"]
     assert props["$ai_http_status"] == 401
     assert props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert "$ai_output" not in props
+    assert "$ai_output_choices" not in props
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OpenAI API key not set")
@@ -443,15 +445,13 @@ def test_openai_chain(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output"] == {
-        "choices": [
-            {
-                "role": "assistant",
-                "content": "Bar",
-                "refusal": None,
-            }
-        ]
-    }
+    assert first_call_props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "Bar",
+            "additional_kwargs": {"refusal": None},
+        }
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
     assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
@@ -486,19 +486,17 @@ def test_openai_captures_multiple_generations(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output"] == {
-        "choices": [
-            {
-                "role": "assistant",
-                "content": "Bar",
-                "refusal": None,
-            },
-            {
-                "role": "assistant",
-                "content": "Bar",
-            },
-        ]
-    }
+    assert first_call_props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "Bar",
+            "additional_kwargs": {"refusal": None},
+        },
+        {
+            "role": "assistant",
+            "content": "Bar",
+        },
+    ]
 
     # langchain-openai for langchain v3
     if "max_completion_tokens" in first_call_props["$ai_model_parameters"]:
@@ -544,7 +542,7 @@ def test_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -576,7 +574,7 @@ async def test_async_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output"] == {"choices": [{"role": "assistant", "content": "Bar"}]}
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -630,7 +628,7 @@ def test_privacy_mode_local(mock_client):
     assert mock_client.capture.call_count == 1
     call = mock_client.capture.call_args[1]
     assert call["properties"]["$ai_input"] is None
-    assert call["properties"]["$ai_output"] is None
+    assert call["properties"]["$ai_output_choices"] is None
 
 
 def test_privacy_mode_global(mock_client):
@@ -649,7 +647,90 @@ def test_privacy_mode_global(mock_client):
     assert mock_client.capture.call_count == 1
     call = mock_client.capture.call_args[1]
     assert call["properties"]["$ai_input"] is None
-    assert call["properties"]["$ai_output"] is None
+    assert call["properties"]["$ai_output_choices"] is None
+
+
+@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
+def test_anthropic_chain(mock_client):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", 'You must always answer with "Bar".'),
+            ("user", "Foo"),
+        ]
+    )
+    chain = prompt | ChatAnthropic(
+        api_key=ANTHROPIC_API_KEY,
+        model="claude-3-opus-20240229",
+        temperature=0,
+        max_tokens=1,
+    )
+    callbacks = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
+    start_time = time.time()
+    result = chain.invoke({}, config={"callbacks": [callbacks]})
+    approximate_latency = math.floor(time.time() - start_time)
+
+    assert result.content == "Bar"
+    assert mock_client.capture.call_count == 1
+
+    first_call_args = mock_client.capture.call_args[1]
+    first_call_props = first_call_args["properties"]
+    assert first_call_args["event"] == "$ai_generation"
+    assert first_call_props["$ai_trace_id"] == "test-trace-id"
+    assert first_call_props["$ai_provider"] == "anthropic"
+    assert first_call_props["$ai_model"] == "claude-3-opus-20240229"
+    assert first_call_props["foo"] == "bar"
+
+    assert first_call_props["$ai_model_parameters"] == {
+        "temperature": 0.0,
+        "max_tokens": 1,
+        "streaming": False,
+    }
+    assert first_call_props["$ai_input"] == [
+        {"role": "system", "content": 'You must always answer with "Bar".'},
+        {"role": "user", "content": "Foo"},
+    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_http_status"] == 200
+    assert isinstance(first_call_props["$ai_latency"], float)
+    assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
+    assert first_call_props["$ai_input_tokens"] == 17
+    assert first_call_props["$ai_output_tokens"] == 1
+
+
+@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
+async def test_async_anthropic_streaming(mock_client):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", 'You must always answer with "Bar".'),
+            ("user", "Foo"),
+        ]
+    )
+    chain = prompt | ChatAnthropic(
+        api_key=ANTHROPIC_API_KEY,
+        model="claude-3-opus-20240229",
+        temperature=0,
+        max_tokens=1,
+        streaming=True,
+        stream_usage=True,
+    )
+    callbacks = CallbackHandler(mock_client)
+    result = [m async for m in chain.astream({}, config={"callbacks": [callbacks]})]
+    result = sum(result[1:], result[0])
+
+    assert result.content == "Bar"
+    assert mock_client.capture.call_count == 1
+
+    first_call_args = mock_client.capture.call_args[1]
+    first_call_props = first_call_args["properties"]
+    assert first_call_props["$ai_model_parameters"]["streaming"]
+    assert first_call_props["$ai_input"] == [
+        {"role": "system", "content": 'You must always answer with "Bar".'},
+        {"role": "user", "content": "Foo"},
+    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_http_status"] == 200
+    assert first_call_props["$ai_input_tokens"] == 17
+    assert first_call_props["$ai_output_tokens"] is not None
 
 
 def test_tool_calls(mock_client):
@@ -679,7 +760,7 @@ def test_tool_calls(mock_client):
 
     assert mock_client.capture.call_count == 1
     call = mock_client.capture.call_args[1]
-    assert call["properties"]["$ai_output"]["choices"][0]["tool_calls"] == [
+    assert call["properties"]["$ai_output_choices"][0]["tool_calls"] == [
         {
             "type": "function",
             "id": "123",
@@ -689,4 +770,4 @@ def test_tool_calls(mock_client):
             },
         }
     ]
-    assert "additional_kwargs" not in call["properties"]["$ai_output"]["choices"][0]
+    assert "additional_kwargs" not in call["properties"]["$ai_output_choices"][0]

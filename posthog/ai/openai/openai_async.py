@@ -69,6 +69,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         response = await call_llm_and_track_usage_async(
             posthog_distinct_id,
             self._client._ph_client,
+            "openai",
             posthog_trace_id,
             posthog_properties,
             self._client.base_url,
@@ -118,7 +119,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                self._capture_streaming_event(
+                await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
@@ -132,7 +133,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
 
         return async_generator()
 
-    def _capture_streaming_event(
+    async def _capture_streaming_event(
         self,
         posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
@@ -152,17 +153,10 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")),
-            "$ai_output": with_privacy_mode(
+            "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                {
-                    "choices": [
-                        {
-                            "content": output,
-                            "role": "assistant",
-                        }
-                    ]
-                },
+                [{"content": output, "role": "assistant"}],
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
