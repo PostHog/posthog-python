@@ -8,7 +8,7 @@ try:
 except ImportError:
     raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
+from posthog.ai.utils import call_llm_and_track_usage, extract_core_model_params, get_model_params, with_privacy_mode
 from posthog.client import Client as PostHogClient
 
 
@@ -167,6 +167,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
+            **extract_core_model_params(kwargs, "openai"),
             **posthog_properties,
         }
 

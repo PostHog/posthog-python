@@ -173,3 +173,27 @@ def test_privacy_mode_global(mock_client, mock_openai_response):
         props = call_args["properties"]
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
+
+def test_core_model_params(mock_client, mock_openai_response):
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            temperature=0.5,
+            max_completion_tokens=100,
+            stream=False,
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_model_parameters"] == {"temperature": 0.5, "max_completion_tokens": 100, "stream": False}
+        assert props["$ai_temperature"] == 0.5
+        assert props["$ai_max_tokens"] == 100
+        assert props["$ai_stream"] == False
+        assert props["foo"] == "bar"

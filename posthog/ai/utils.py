@@ -28,6 +28,34 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             model_params[param] = kwargs[param]
     return model_params
 
+def extract_core_model_params(kwargs: Dict[str, Any], provider: str) -> Dict[str, Any]:
+    """
+    Extracts core model parameters from the kwargs dictionary.
+    """
+    output = {}
+    if provider == "anthropic":
+        if "temperature" in kwargs:
+            output["$ai_temperature"] = kwargs.get("temperature")
+        if "max_tokens" in kwargs:
+            output["$ai_max_tokens"] = kwargs.get("max_tokens")
+        if "stream" in kwargs:
+            output["$ai_stream"] = kwargs.get("stream")
+    elif provider == "openai":
+        if "temperature" in kwargs:
+            output["$ai_temperature"] = kwargs.get("temperature")
+        if "max_completion_tokens" in kwargs:
+            output["$ai_max_tokens"] = kwargs.get("max_completion_tokens")
+        if "stream" in kwargs:
+            output["$ai_stream"] = kwargs.get("stream")
+    else: # default to openai params
+        if "temperature" in kwargs:
+            output["$ai_temperature"] = kwargs.get("temperature")
+        if "max_tokens" in kwargs:
+            output["$ai_max_tokens"] = kwargs.get("max_completion_tokens")
+        if "stream" in kwargs:
+            output["$ai_stream"] = kwargs.get("stream")
+    return output
+
 
 def get_usage(response, provider: str) -> Dict[str, Any]:
     if provider == "anthropic":
@@ -137,6 +165,7 @@ def call_llm_and_track_usage(
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(base_url),
+            **extract_core_model_params(kwargs, provider),
             **(posthog_properties or {}),
         }
 
@@ -205,6 +234,7 @@ async def call_llm_and_track_usage_async(
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(base_url),
+            **extract_core_model_params(kwargs, provider),
             **(posthog_properties or {}),
         }
 

@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
+from posthog.ai.utils import call_llm_and_track_usage, extract_core_model_params, get_model_params, with_privacy_mode
 from posthog.client import Client as PostHogClient
 
 
@@ -183,6 +183,7 @@ class WrappedMessages(Messages):
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
+            **extract_core_model_params(kwargs, "anthropic"),
             **(posthog_properties or {}),
         }
 
