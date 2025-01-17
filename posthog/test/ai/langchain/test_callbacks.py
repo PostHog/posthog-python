@@ -760,7 +760,7 @@ def test_tool_calls(mock_client):
 
     assert mock_client.capture.call_count == 1
     call = mock_client.capture.call_args[1]
-    assert call["properties"]["$ai_output"]["choices"][0]["tool_calls"] == [
+    assert call["properties"]["$ai_output_choices"][0]["tool_calls"] == [
         {
             "type": "function",
             "id": "123",
