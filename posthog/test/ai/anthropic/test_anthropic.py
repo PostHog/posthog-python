@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from anthropic.types import Message, Usage
 
-from posthog.ai.anthropic import Anthropic
+from posthog.ai.anthropic import Anthropic, AsyncAnthropic
 
 
 @pytest.fixture
@@ -215,6 +215,36 @@ def test_privacy_mode_global(mock_client, mock_anthropic_response):
 def test_basic_integration(mock_client):
     client = Anthropic(posthog_client=mock_client)
     client.messages.create(
+        model="claude-3-opus-20240229",
+        messages=[{"role": "user", "content": "You must always answer with 'Bar'."}],
+        max_tokens=1,
+        temperature=0,
+        posthog_distinct_id="test-id",
+        posthog_properties={"foo": "bar"},
+    )
+
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "anthropic"
+    assert props["$ai_model"] == "claude-3-opus-20240229"
+    assert props["$ai_input"] == [{"role": "user", "content": "You must always answer with 'Bar'."}]
+    assert props["$ai_output_choices"][0]["role"] == "assistant"
+    assert props["$ai_input_tokens"] == 16
+    assert props["$ai_output_tokens"] == 1
+    assert props["$ai_http_status"] == 200
+    assert props["foo"] == "bar"
+    assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY is not set")
+async def test_basic_async_integration(mock_client):
+    client = AsyncAnthropic(posthog_client=mock_client)
+    await client.messages.create(
         model="claude-3-opus-20240229",
         messages=[{"role": "user", "content": "You must always answer with 'Bar'."}],
         max_tokens=1,
