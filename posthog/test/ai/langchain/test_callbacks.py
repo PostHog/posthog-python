@@ -773,6 +773,7 @@ def test_tool_calls(mock_client):
     assert "additional_kwargs" not in call["properties"]["$ai_output_choices"][0]
 
 
+@pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
 def test_core_model_params(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | ChatOpenAI(
