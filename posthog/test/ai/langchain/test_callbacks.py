@@ -771,3 +771,25 @@ def test_tool_calls(mock_client):
         }
     ]
     assert "additional_kwargs" not in call["properties"]["$ai_output_choices"][0]
+
+
+@pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
+def test_core_model_params(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | ChatOpenAI(
+        api_key=OPENAI_API_KEY,
+        model="gpt-4",
+        temperature=0.5,
+        max_tokens=100,
+        stream=False,
+    )
+    callbacks = CallbackHandler(mock_client)
+    chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    assert call["properties"]["$ai_model_parameters"] == {"temperature": 0.5, "max_tokens": 100, "stream": False}
+    assert call["properties"]["$ai_temperature"] == 0.5
+    assert call["properties"]["$ai_max_tokens"] == 100
+    assert call["properties"]["$ai_stream"] == False
+    assert call["properties"]["foo"] == "bar"

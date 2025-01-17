@@ -23,7 +23,7 @@ from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, Hum
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
-from posthog.ai.utils import get_model_params, with_privacy_mode
+from posthog.ai.utils import extract_core_model_params, get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -178,6 +178,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
             "$ai_base_url": run.get("base_url"),
+            **extract_core_model_params(run.get("model_params"), run.get("provider")),
             **self._properties,
         }
         if self._distinct_id is None:
@@ -224,6 +225,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
             "$ai_base_url": run.get("base_url"),
+            **extract_core_model_params(run.get("model_params"), run.get("provider")),
             **self._properties,
         }
         if self._distinct_id is None:

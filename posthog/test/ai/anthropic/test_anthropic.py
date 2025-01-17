@@ -296,7 +296,6 @@ def test_streaming_system_prompt(mock_client, mock_anthropic_stream):
 
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
-
         assert props["$ai_input"] == [{"role": "system", "content": "Foo"}, {"role": "user", "content": "Bar"}]
 
 
@@ -325,3 +324,25 @@ async def test_async_streaming_system_prompt(mock_client, mock_anthropic_stream)
         {"role": "system", "content": "You must always answer with 'Bar'."},
         {"role": "user", "content": "Foo"},
     ]
+
+
+def test_core_model_params(mock_client, mock_anthropic_response):
+    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            temperature=0.5,
+            max_tokens=100,
+            stream=False,
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_anthropic_response
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_model_parameters"] == {"temperature": 0.5, "max_tokens": 100, "stream": False}
+        assert props["$ai_temperature"] == 0.5
+        assert props["$ai_max_tokens"] == 100
+        assert props["$ai_stream"] == False
+        assert props["foo"] == "bar"
