@@ -80,13 +80,16 @@ class WrappedMessages(Messages):
     
     def stream(
         self,
-        posthog_distinct_id: Optional[str],
-        posthog_trace_id: Optional[str],
-        posthog_properties: Optional[Dict[str, Any]],
-        posthog_privacy_mode: bool,
-        posthog_groups: Optional[Dict[str, Any]],
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
+        
         return self._create_streaming(
             posthog_distinct_id,
             posthog_trace_id,
@@ -106,7 +109,7 @@ class WrappedMessages(Messages):
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {}
+        usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         accumulated_content = []
         response = super().create(**kwargs)
 
@@ -117,8 +120,11 @@ class WrappedMessages(Messages):
                 for event in response:
                     if hasattr(event, "usage") and event.usage:
                         usage_stats = {
-                            "input_tokens": getattr(event.usage, "input_tokens", 0),
-                            "output_tokens": getattr(event.usage, "output_tokens", 0),
+                            k: getattr(event.usage, k, 0)
+                            for k in [
+                                "input_tokens",
+                                "output_tokens",
+                            ]
                         }
 
                     if hasattr(event, "content") and event.content:
@@ -130,6 +136,7 @@ class WrappedMessages(Messages):
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
+                
                 self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,

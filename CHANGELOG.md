@@ -1,3 +1,8 @@
+## 3.8.4 - 2025-01-17
+
+1. Add Anthropic support for LLM Observability.
+2. Update LLM Observability to use output_choices.
+
 ## 3.8.3 - 2025-01-14
 
 1. Fix setuptools to include the `posthog.ai.openai` and `posthog.ai.langchain` packages for the `posthoganalytics` package.

@@ -28,6 +28,23 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return model_params
 
 
+def get_usage(response, provider: str) -> Dict[str, Any]:
+    if provider == "anthropic":
+        return {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+    elif provider == "openai":
+        return {
+            "input_tokens": response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+        }
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+
+
 def format_response(response, provider: str):
     """
     Format a regular (non-streaming) response.
@@ -103,10 +120,8 @@ def call_llm_and_track_usage(
             posthog_trace_id = uuid.uuid4()
 
         if response and hasattr(response, "usage"):
-            usage = response.usage.model_dump()
+            usage = get_usage(response, provider)
 
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
         event_properties = {
             "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
@@ -114,8 +129,8 @@ def call_llm_and_track_usage(
             "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
             "$ai_output_choices": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response, provider)),
             "$ai_http_status": http_status,
-            "$ai_input_tokens": input_tokens,
-            "$ai_output_tokens": output_tokens,
+            "$ai_input_tokens": usage.get("input_tokens", 0),
+            "$ai_output_tokens": usage.get("output_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(base_url),
@@ -171,10 +186,8 @@ async def call_llm_and_track_usage_async(
             posthog_trace_id = uuid.uuid4()
 
         if response and hasattr(response, "usage"):
-            usage = response.usage.model_dump()
+            usage = get_usage(response, provider)
 
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
         event_properties = {
             "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
@@ -182,8 +195,8 @@ async def call_llm_and_track_usage_async(
             "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
             "$ai_output_choices": with_privacy_mode(ph_client, posthog_privacy_mode, format_response(response, provider)),
             "$ai_http_status": http_status,
-            "$ai_input_tokens": input_tokens,
-            "$ai_output_tokens": output_tokens,
+            "$ai_input_tokens": usage.get("input_tokens", 0),
+            "$ai_output_tokens": usage.get("output_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(base_url),
