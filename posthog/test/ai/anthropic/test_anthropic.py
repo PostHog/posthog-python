@@ -325,6 +325,7 @@ async def test_async_streaming_system_prompt(mock_client, mock_anthropic_stream)
         {"role": "user", "content": "Foo"},
     ]
 
+
 def test_core_model_params(mock_client, mock_anthropic_response):
     with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)

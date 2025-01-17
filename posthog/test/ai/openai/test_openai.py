@@ -174,6 +174,7 @@ def test_privacy_mode_global(mock_client, mock_openai_response):
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
 
+
 def test_core_model_params(mock_client, mock_openai_response):
     with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
