@@ -119,7 +119,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                self._capture_streaming_event(
+                await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
@@ -133,7 +133,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
 
         return async_generator()
 
-    def _capture_streaming_event(
+    async def _capture_streaming_event(
         self,
         posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
