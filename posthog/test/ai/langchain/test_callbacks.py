@@ -5,15 +5,15 @@ import uuid
 from unittest.mock import patch
 
 import pytest
+from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
-from langchain_anthropic.chat_models import ChatAnthropic
-from posthog.ai.langchain import CallbackHandler
 
+from posthog.ai.langchain import CallbackHandler
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
