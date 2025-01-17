@@ -731,3 +731,43 @@ async def test_async_anthropic_streaming(mock_client):
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] is not None
+
+
+def test_tool_calls(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Bar",
+                additional_kwargs={
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "id": "123",
+                            "function": {
+                                "name": "test",
+                                "args": '{"a": 1}',
+                            },
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    chain = prompt | model
+    callbacks = CallbackHandler(mock_client)
+    chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call = mock_client.capture.call_args[1]
+    assert call["properties"]["$ai_output_choices"][0]["tool_calls"] == [
+        {
+            "type": "function",
+            "id": "123",
+            "function": {
+                "name": "test",
+                "args": '{"a": 1}',
+            },
+        }
+    ]
+    assert "additional_kwargs" not in call["properties"]["$ai_output_choices"][0]
