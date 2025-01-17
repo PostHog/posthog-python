@@ -115,6 +115,15 @@ def format_response_openai(response):
     return output
 
 
+def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
+    if provider != "anthropic":
+        return kwargs.get("messages")
+    messages = kwargs.get("messages") or []
+    if kwargs.get("system") is None:
+        return messages
+    return [{"role": "system", "content": kwargs.get("system")}] + messages
+
+
 def call_llm_and_track_usage(
     posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
@@ -152,11 +161,13 @@ def call_llm_and_track_usage(
         if response and hasattr(response, "usage"):
             usage = get_usage(response, provider)
 
+        messages = merge_system_prompt(kwargs, provider)
+
         event_properties = {
             "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, messages),
             "$ai_output_choices": with_privacy_mode(
                 ph_client, posthog_privacy_mode, format_response(response, provider)
             ),
@@ -221,11 +232,13 @@ async def call_llm_and_track_usage_async(
         if response and hasattr(response, "usage"):
             usage = get_usage(response, provider)
 
+        messages = merge_system_prompt(kwargs, provider)
+
         event_properties = {
             "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, messages),
             "$ai_output_choices": with_privacy_mode(
                 ph_client, posthog_privacy_mode, format_response(response, provider)
             ),
