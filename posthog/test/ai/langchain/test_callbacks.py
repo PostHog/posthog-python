@@ -3,7 +3,7 @@ import math
 import os
 from pyexpat.errors import messages
 import time
-from typing import Optional, TypedDict
+from typing import List, Optional, TypedDict, Union
 import uuid
 from unittest.mock import patch, ANY
 
@@ -169,9 +169,7 @@ async def test_async_basic_chat_chain(mock_client, stream):
     callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model
     if stream:
-        result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][
-            0
-        ]
+        result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][0]
     else:
         result = await chain.ainvoke({}, config={"callbacks": callbacks})
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
@@ -218,21 +216,14 @@ async def test_async_basic_chat_chain(mock_client, stream):
 )
 def test_basic_llm_chain(mock_client, Model, stream):
     model = Model(responses=["The Los Angeles Dodgers won the World Series in 2020."])
-    callbacks: list[CallbackHandler] = [CallbackHandler(mock_client)]
+    callbacks: List[CallbackHandler] = [CallbackHandler(mock_client)]
 
     if stream:
         result = "".join(
-            [
-                m
-                for m in model.stream(
-                    "Who won the world series in 2020?", config={"callbacks": callbacks}
-                )
-            ]
+            [m for m in model.stream("Who won the world series in 2020?", config={"callbacks": callbacks})]
         )
     else:
-        result = model.invoke(
-            "Who won the world series in 2020?", config={"callbacks": callbacks}
-        )
+        result = model.invoke("Who won the world series in 2020?", config={"callbacks": callbacks})
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
     assert mock_client.capture.call_count == 1
@@ -244,9 +235,7 @@ def test_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == [
-        "The Los Angeles Dodgers won the World Series in 2020."
-    ]
+    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -263,21 +252,14 @@ def test_basic_llm_chain(mock_client, Model, stream):
 )
 async def test_async_basic_llm_chain(mock_client, Model, stream):
     model = Model(responses=["The Los Angeles Dodgers won the World Series in 2020."])
-    callbacks: list[CallbackHandler] = [CallbackHandler(mock_client)]
+    callbacks: List[CallbackHandler] = [CallbackHandler(mock_client)]
 
     if stream:
         result = "".join(
-            [
-                m
-                async for m in model.astream(
-                    "Who won the world series in 2020?", config={"callbacks": callbacks}
-                )
-            ]
+            [m async for m in model.astream("Who won the world series in 2020?", config={"callbacks": callbacks})]
         )
     else:
-        result = await model.ainvoke(
-            "Who won the world series in 2020?", config={"callbacks": callbacks}
-        )
+        result = await model.ainvoke("Who won the world series in 2020?", config={"callbacks": callbacks})
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
     assert mock_client.capture.call_count == 1
@@ -289,9 +271,7 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == [
-        "The Los Angeles Dodgers won the World Series in 2020."
-    ]
+    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -318,9 +298,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert "$ai_model" in first_generation_props
     assert "$ai_provider" in first_generation_props
     assert first_generation_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_generation_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert first_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_generation_props["$ai_http_status"] == 200
     assert first_generation_props["$ai_trace_id"] is not None
     assert isinstance(first_generation_props["$ai_latency"], float)
@@ -331,12 +309,8 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert "distinct_id" in second_generation_args
     assert "$ai_model" in second_generation_props
     assert "$ai_provider" in second_generation_props
-    assert second_generation_props["$ai_input"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
-    assert second_generation_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert second_generation_props["$ai_input"] == [{"role": "assistant", "content": "Bar"}]
+    assert second_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert second_generation_props["$ai_http_status"] == 200
     assert second_generation_props["$ai_trace_id"] is not None
     assert isinstance(second_generation_props["$ai_latency"], float)
@@ -350,10 +324,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert trace_props["$ai_trace_id"] is not None
 
     # Check that the trace_id is the same as the first call
-    assert (
-        first_generation_props["$ai_trace_id"]
-        == second_generation_props["$ai_trace_id"]
-    )
+    assert first_generation_props["$ai_trace_id"] == second_generation_props["$ai_trace_id"]
     assert first_generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
 
@@ -370,9 +341,7 @@ def test_personless_mode(mock_client):
     assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
-    chain.invoke(
-        {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
-    )
+    chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
     assert mock_client.capture.call_count == 4
     generation_args = mock_client.capture.call_args_list[2][1]
     trace_args = mock_client.capture.call_args_list[3][1]
@@ -398,9 +367,7 @@ def test_personless_mode_exception(mock_client):
 
     id = uuid.uuid4()
     with pytest.raises(Exception):
-        chain.invoke(
-            {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
-        )
+        chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
     assert mock_client.capture.call_count == 4
     generation_args = mock_client.capture.call_args_list[2][1]
     trace_args = mock_client.capture.call_args_list[3][1]
@@ -438,9 +405,7 @@ def test_metadata(mock_client):
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
     assert first_call_props["foo"] == "bar"
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
 
@@ -456,7 +421,7 @@ def test_metadata(mock_client):
 
 
 class FakeGraphState(TypedDict):
-    messages: list[HumanMessage | AIMessage]
+    messages: List[Union[HumanMessage, AIMessage]]
     xyz: Optional[str]
 
 
@@ -504,7 +469,7 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][0], HumanMessage)
     assert result["messages"][0].content == "What's a bar?"
     assert isinstance(result["messages"][1], AIMessage)
-    assert result["messages"][1].content == "Let's explore bar." # TODO
+    assert result["messages"][1].content == "Let's explore bar."  # TODO
 
     assert mock_client.capture.call_count == 3
     generation_args = mock_client.capture.call_args_list[0][1]
@@ -541,9 +506,7 @@ def test_callbacks_logic(mock_client):
         assert len(callbacks._parent_tree.items()) == 1
         return [m]
 
-    (chain | RunnableLambda(assert_intermediary_run) | model).invoke(
-        {}, config={"callbacks": [callbacks]}
-    )
+    (chain | RunnableLambda(assert_intermediary_run) | model).invoke({}, config={"callbacks": [callbacks]})
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
 
@@ -644,11 +607,7 @@ def test_openai_chain(mock_client):
     ]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
-    assert (
-        min(approximate_latency - 1, 0)
-        <= math.floor(first_call_props["$ai_latency"])
-        <= approximate_latency
-    )
+    assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
 
@@ -741,9 +700,7 @@ def test_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -780,9 +737,7 @@ async def test_async_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -902,16 +857,10 @@ def test_anthropic_chain(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
-    assert (
-        min(approximate_latency - 1, 0)
-        <= math.floor(first_call_props["$ai_latency"])
-        <= approximate_latency
-    )
+    assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] == 1
 
@@ -946,9 +895,7 @@ async def test_async_anthropic_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Bar"}
-    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] is not None
@@ -991,7 +938,4 @@ def test_tool_calls(mock_client):
             },
         }
     ]
-    assert (
-        "additional_kwargs"
-        not in generation_call["properties"]["$ai_output_choices"][0]
-    )
+    assert "additional_kwargs" not in generation_call["properties"]["$ai_output_choices"][0]

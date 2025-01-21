@@ -1,9 +1,7 @@
 try:
     import langchain  # noqa: F401
 except ImportError:
-    raise ModuleNotFoundError(
-        "Please install LangChain to use this feature: 'pip install langchain'"
-    )
+    raise ModuleNotFoundError("Please install LangChain to use this feature: 'pip install langchain'")
 
 import json
 import logging
@@ -126,13 +124,9 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs,
     ):
-        self._log_debug_event(
-            "on_chat_model_start", run_id, parent_run_id, messages=messages
-        )
+        self._log_debug_event("on_chat_model_start", run_id, parent_run_id, messages=messages)
         self._set_parent_of_run(run_id, parent_run_id)
-        input = [
-            _convert_message_to_dict(message) for row in messages for message in row
-        ]
+        input = [_convert_message_to_dict(message) for row in messages for message in row]
         self._set_run_metadata(serialized, run_id, input, **kwargs)
 
     def on_llm_start(
@@ -157,9 +151,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run on new LLM token. Only available when streaming is enabled."""
-        self.log.debug(
-            f"on llm new token: run_id: {run_id} parent_run_id: {parent_run_id}"
-        )
+        self.log.debug(f"on llm new token: run_id: {run_id} parent_run_id: {parent_run_id}")
 
     def on_tool_start(
         self,
@@ -172,9 +164,7 @@ class CallbackHandler(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        self._log_debug_event(
-            "on_tool_start", run_id, parent_run_id, input_str=input_str
-        )
+        self._log_debug_event("on_tool_start", run_id, parent_run_id, input_str=input_str)
 
     def on_tool_end(
         self,
@@ -247,9 +237,7 @@ class CallbackHandler(BaseCallbackHandler):
         """
         The callback works for both streaming and non-streaming runs. For streaming runs, the chain must set `stream_usage=True` in the LLM.
         """
-        self._log_debug_event(
-            "on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs
-        )
+        self._log_debug_event("on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs)
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
@@ -262,24 +250,17 @@ class CallbackHandler(BaseCallbackHandler):
         generation_result = response.generations[-1]
         if isinstance(generation_result[-1], ChatGeneration):
             output = [
-                _convert_message_to_dict(cast(ChatGeneration, generation).message)
-                for generation in generation_result
+                _convert_message_to_dict(cast(ChatGeneration, generation).message) for generation in generation_result
             ]
         else:
-            output = [
-                _extract_raw_esponse(generation) for generation in generation_result
-            ]
+            output = [_extract_raw_esponse(generation) for generation in generation_result]
 
         event_properties = {
             "$ai_provider": run.get("provider"),
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(
-                self._client, self._privacy_mode, run.get("messages")
-            ),
-            "$ai_output_choices": with_privacy_mode(
-                self._client, self._privacy_mode, output
-            ),
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
+            "$ai_output_choices": with_privacy_mode(self._client, self._privacy_mode, output),
             "$ai_http_status": 200,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -318,9 +299,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.get("provider"),
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(
-                self._client, self._privacy_mode, run.get("messages")
-            ),
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
             "$ai_http_status": _get_http_status(error),
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
@@ -450,20 +429,14 @@ class CallbackHandler(BaseCallbackHandler):
             trace_id = uuid.uuid4()
         return trace_id
 
-    def _end_trace(
-        self, trace_id: UUID, inputs: Dict[str, Any], outputs: Optional[Dict[str, Any]]
-    ):
+    def _end_trace(self, trace_id: UUID, inputs: Dict[str, Any], outputs: Optional[Dict[str, Any]]):
         event_properties = {
             "$ai_trace_id": trace_id,
-            "$ai_input_state": with_privacy_mode(
-                self._client, self._privacy_mode, inputs
-            ),
+            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, inputs),
             **self._properties,
         }
         if outputs is not None:
-            event_properties["$ai_output_state"] = with_privacy_mode(
-                self._client, self._privacy_mode, outputs
-            )
+            event_properties["$ai_output_state"] = with_privacy_mode(self._client, self._privacy_mode, outputs)
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
         self._client.capture(
@@ -545,9 +518,7 @@ def _parse_usage_model(
         if model_key in usage:
             captured_count = usage[model_key]
             final_count = (
-                sum(captured_count)
-                if isinstance(captured_count, list)
-                else captured_count
+                sum(captured_count) if isinstance(captured_count, list) else captured_count
             )  # For Bedrock, the token count is a list when streamed
 
             parsed_usage[type_key] = final_count
@@ -568,12 +539,8 @@ def _parse_usage(response: LLMResult):
     if hasattr(response, "generations"):
         for generation in response.generations:
             for generation_chunk in generation:
-                if generation_chunk.generation_info and (
-                    "usage_metadata" in generation_chunk.generation_info
-                ):
-                    llm_usage = _parse_usage_model(
-                        generation_chunk.generation_info["usage_metadata"]
-                    )
+                if generation_chunk.generation_info and ("usage_metadata" in generation_chunk.generation_info):
+                    llm_usage = _parse_usage_model(generation_chunk.generation_info["usage_metadata"])
                     break
 
                 message_chunk = getattr(generation_chunk, "message", {})
@@ -585,19 +552,13 @@ def _parse_usage(response: LLMResult):
                     else None
                 )
                 bedrock_titan_usage = (
-                    response_metadata.get(
-                        "amazon-bedrock-invocationMetrics", None
-                    )  # for Bedrock-Titan
+                    response_metadata.get("amazon-bedrock-invocationMetrics", None)  # for Bedrock-Titan
                     if isinstance(response_metadata, dict)
                     else None
                 )
-                ollama_usage = getattr(
-                    message_chunk, "usage_metadata", None
-                )  # for Ollama
+                ollama_usage = getattr(message_chunk, "usage_metadata", None)  # for Ollama
 
-                chunk_usage = (
-                    bedrock_anthropic_usage or bedrock_titan_usage or ollama_usage
-                )
+                chunk_usage = bedrock_anthropic_usage or bedrock_titan_usage or ollama_usage
                 if chunk_usage:
                     llm_usage = _parse_usage_model(chunk_usage)
                     break
