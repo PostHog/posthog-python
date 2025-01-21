@@ -1,3 +1,7 @@
+## 3.8.5 - 2025-01-22
+
+1. Add tracing event to langchain callbacks.
+
 ## 3.8.4 - 2025-01-17
 
 1. Add Anthropic support for LLM Observability.
