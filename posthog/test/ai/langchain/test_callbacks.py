@@ -323,6 +323,7 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert isinstance(trace_props["$ai_output_state"], AIMessage)
     assert trace_props["$ai_output_state"].content == "Bar"
     assert trace_props["$ai_trace_id"] is not None
+    assert trace_props["$ai_trace_name"] == "RunnableSequence"
 
     # Check that the trace_id is the same as the first call
     assert first_call_props["$ai_trace_id"] == second_generation_props["$ai_trace_id"]
@@ -415,6 +416,7 @@ def test_metadata(mock_client):
     assert trace_call_args["distinct_id"] == "test_id"
     assert trace_call_args["event"] == "$ai_trace"
     assert trace_call_props["$ai_trace_id"] == "test-trace-id"
+    assert trace_call_props["$ai_trace_name"] == "RunnableSequence"
     assert trace_call_props["foo"] == "bar"
     assert trace_call_props["$ai_input_state"] == {"plan": None}
     assert isinstance(trace_call_props["$ai_output_state"], AIMessage)
@@ -477,6 +479,7 @@ def test_graph_state(mock_client):
     trace_args = mock_client.capture.call_args_list[2][1]
     assert generation_args["event"] == "$ai_generation"
     assert trace_args["event"] == "$ai_trace"
+    assert trace_args["properties"]["$ai_trace_name"] == "LangGraph"
     assert len(trace_args["properties"]["$ai_input_state"]["messages"]) == 1
     assert isinstance(trace_args["properties"]["$ai_input_state"]["messages"][0], HumanMessage)
     assert trace_args["properties"]["$ai_input_state"]["messages"][0].content == "What's a bar?"
@@ -528,6 +531,7 @@ def test_exception_in_chain(mock_client):
     assert mock_client.capture.call_count == 1
     trace_call_args = mock_client.capture.call_args_list[0][1]
     assert trace_call_args["event"] == "$ai_trace"
+    assert trace_call_args["properties"]["$ai_trace_name"] == "runnable"
 
 
 def test_openai_error(mock_client):
