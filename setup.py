@@ -42,6 +42,7 @@ extras_require = {
         "django",
         "openai",
         "anthropic",
+        "langgraph",
         "langchain-community>=0.2.0",
         "langchain-openai>=0.2.0",
         "langchain-anthropic>=0.2.0",

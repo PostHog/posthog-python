@@ -1,17 +1,21 @@
+import logging
 import math
 import os
+from pyexpat.errors import messages
 import time
+from typing import Optional, TypedDict
 import uuid
-from unittest.mock import patch
+from unittest.mock import patch, ANY
 
 import pytest
 from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
+from langgraph.graph.state import StateGraph, START, END
 
 from posthog.ai.langchain import CallbackHandler
 
@@ -23,6 +27,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 def mock_client():
     with patch("posthog.client.Client") as mock_client:
         mock_client.privacy_mode = False
+        logging.getLogger("posthog").setLevel(logging.DEBUG)
         yield mock_client
 
 
@@ -98,7 +103,11 @@ def test_basic_chat_chain(mock_client, stream):
         responses=[
             AIMessage(
                 content="The Los Angeles Dodgers won the World Series in 2020.",
-                usage_metadata={"input_tokens": 10, "output_tokens": 10, "total_tokens": 20},
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "total_tokens": 20,
+                },
             )
         ]
     )
@@ -110,26 +119,31 @@ def test_basic_chat_chain(mock_client, stream):
         result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
-    assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args[1]
-    props = args["properties"]
+    assert mock_client.capture.call_count == 2
+    generation_args = mock_client.capture.call_args_list[0][1]
+    generation_props = generation_args["properties"]
+    trace_args = mock_client.capture.call_args_list[1][1]
 
-    assert args["event"] == "$ai_generation"
-    assert "distinct_id" in args
-    assert "$ai_model" in props
-    assert "$ai_provider" in props
-    assert props["$ai_input"] == [
+    assert generation_args["event"] == "$ai_generation"
+    assert "distinct_id" in generation_args
+    assert "$ai_model" in generation_props
+    assert "$ai_provider" in generation_props
+    assert generation_props["$ai_input"] == [
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Who won the world series in 2020?"},
     ]
-    assert props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}
+    assert generation_props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "The Los Angeles Dodgers won the World Series in 2020.",
+        }
     ]
-    assert props["$ai_input_tokens"] == 10
-    assert props["$ai_output_tokens"] == 10
-    assert props["$ai_http_status"] == 200
-    assert props["$ai_trace_id"] is not None
-    assert isinstance(props["$ai_latency"], float)
+    assert generation_props["$ai_input_tokens"] == 10
+    assert generation_props["$ai_output_tokens"] == 10
+    assert generation_props["$ai_http_status"] == 200
+    assert generation_props["$ai_trace_id"] is not None
+    assert isinstance(generation_props["$ai_latency"], float)
+    assert trace_args["event"] == "$ai_trace"
 
 
 @pytest.mark.parametrize("stream", [True, False])
@@ -144,42 +158,63 @@ async def test_async_basic_chat_chain(mock_client, stream):
         responses=[
             AIMessage(
                 content="The Los Angeles Dodgers won the World Series in 2020.",
-                usage_metadata={"input_tokens": 10, "output_tokens": 10, "total_tokens": 20},
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "total_tokens": 20,
+                },
             )
         ]
     )
     callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model
     if stream:
-        result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][0]
+        result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][
+            0
+        ]
     else:
         result = await chain.ainvoke({}, config={"callbacks": callbacks})
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
-    args = mock_client.capture.call_args[1]
-    props = args["properties"]
-    assert args["event"] == "$ai_generation"
-    assert "distinct_id" in args
-    assert "$ai_model" in props
-    assert "$ai_provider" in props
-    assert props["$ai_input"] == [
+    generation_args = mock_client.capture.call_args_list[0][1]
+    generation_props = generation_args["properties"]
+    trace_args = mock_client.capture.call_args_list[1][1]
+    trace_props = trace_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert "distinct_id" in generation_args
+    assert "$ai_model" in generation_props
+    assert "$ai_provider" in generation_props
+    assert generation_props["$ai_input"] == [
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Who won the world series in 2020?"},
     ]
-    assert props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."}
+    assert generation_props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "The Los Angeles Dodgers won the World Series in 2020.",
+        }
     ]
-    assert props["$ai_input_tokens"] == 10
-    assert props["$ai_output_tokens"] == 10
-    assert props["$ai_http_status"] == 200
-    assert props["$ai_trace_id"] is not None
-    assert isinstance(props["$ai_latency"], float)
+    assert generation_props["$ai_input_tokens"] == 10
+    assert generation_props["$ai_output_tokens"] == 10
+    assert generation_props["$ai_http_status"] == 200
+    assert generation_props["$ai_trace_id"] is not None
+    assert isinstance(generation_props["$ai_latency"], float)
+
+    assert trace_args["event"] == "$ai_trace"
+    assert "distinct_id" in generation_args
+    assert trace_props["$ai_trace_id"] == generation_props["$ai_trace_id"]
 
 
 @pytest.mark.parametrize(
     "Model,stream",
-    [(FakeListLLM, True), (FakeListLLM, False), (FakeStreamingListLLM, True), (FakeStreamingListLLM, False)],
+    [
+        (FakeListLLM, True),
+        (FakeListLLM, False),
+        (FakeStreamingListLLM, True),
+        (FakeStreamingListLLM, False),
+    ],
 )
 def test_basic_llm_chain(mock_client, Model, stream):
     model = Model(responses=["The Los Angeles Dodgers won the World Series in 2020."])
@@ -187,14 +222,21 @@ def test_basic_llm_chain(mock_client, Model, stream):
 
     if stream:
         result = "".join(
-            [m for m in model.stream("Who won the world series in 2020?", config={"callbacks": callbacks})]
+            [
+                m
+                for m in model.stream(
+                    "Who won the world series in 2020?", config={"callbacks": callbacks}
+                )
+            ]
         )
     else:
-        result = model.invoke("Who won the world series in 2020?", config={"callbacks": callbacks})
+        result = model.invoke(
+            "Who won the world series in 2020?", config={"callbacks": callbacks}
+        )
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
     assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args[1]
+    args = mock_client.capture.call_args_list[0][1]
     props = args["properties"]
 
     assert args["event"] == "$ai_generation"
@@ -202,7 +244,9 @@ def test_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
+    assert props["$ai_output_choices"] == [
+        "The Los Angeles Dodgers won the World Series in 2020."
+    ]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -210,7 +254,12 @@ def test_basic_llm_chain(mock_client, Model, stream):
 
 @pytest.mark.parametrize(
     "Model,stream",
-    [(FakeListLLM, True), (FakeListLLM, False), (FakeStreamingListLLM, True), (FakeStreamingListLLM, False)],
+    [
+        (FakeListLLM, True),
+        (FakeListLLM, False),
+        (FakeStreamingListLLM, True),
+        (FakeStreamingListLLM, False),
+    ],
 )
 async def test_async_basic_llm_chain(mock_client, Model, stream):
     model = Model(responses=["The Los Angeles Dodgers won the World Series in 2020."])
@@ -218,14 +267,21 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
 
     if stream:
         result = "".join(
-            [m async for m in model.astream("Who won the world series in 2020?", config={"callbacks": callbacks})]
+            [
+                m
+                async for m in model.astream(
+                    "Who won the world series in 2020?", config={"callbacks": callbacks}
+                )
+            ]
         )
     else:
-        result = await model.ainvoke("Who won the world series in 2020?", config={"callbacks": callbacks})
+        result = await model.ainvoke(
+            "Who won the world series in 2020?", config={"callbacks": callbacks}
+        )
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
     assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args[1]
+    args = mock_client.capture.call_args_list[0][1]
     props = args["properties"]
 
     assert args["event"] == "$ai_generation"
@@ -233,7 +289,9 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
+    assert props["$ai_output_choices"] == [
+        "The Los Angeles Dodgers won the World Series in 2020."
+    ]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -251,50 +309,77 @@ def test_trace_id_for_multiple_chains(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 2
+    assert mock_client.capture.call_count == 3
 
-    first_call_args = mock_client.capture.call_args_list[0][1]
-    first_call_props = first_call_args["properties"]
-    assert first_call_args["event"] == "$ai_generation"
-    assert "distinct_id" in first_call_args
-    assert "$ai_model" in first_call_props
-    assert "$ai_provider" in first_call_props
-    assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
-    assert first_call_props["$ai_http_status"] == 200
-    assert first_call_props["$ai_trace_id"] is not None
-    assert isinstance(first_call_props["$ai_latency"], float)
+    first_generation_args = mock_client.capture.call_args_list[0][1]
+    first_generation_props = first_generation_args["properties"]
+    assert first_generation_args["event"] == "$ai_generation"
+    assert "distinct_id" in first_generation_args
+    assert "$ai_model" in first_generation_props
+    assert "$ai_provider" in first_generation_props
+    assert first_generation_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
+    assert first_generation_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
+    assert first_generation_props["$ai_http_status"] == 200
+    assert first_generation_props["$ai_trace_id"] is not None
+    assert isinstance(first_generation_props["$ai_latency"], float)
 
-    second_call_args = mock_client.capture.call_args_list[1][1]
-    second_call_props = second_call_args["properties"]
-    assert second_call_args["event"] == "$ai_generation"
-    assert "distinct_id" in second_call_args
-    assert "$ai_model" in second_call_props
-    assert "$ai_provider" in second_call_props
-    assert second_call_props["$ai_input"] == [{"role": "assistant", "content": "Bar"}]
-    assert second_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
-    assert second_call_props["$ai_http_status"] == 200
-    assert second_call_props["$ai_trace_id"] is not None
-    assert isinstance(second_call_props["$ai_latency"], float)
+    second_generation_args = mock_client.capture.call_args_list[1][1]
+    second_generation_props = second_generation_args["properties"]
+    assert second_generation_args["event"] == "$ai_generation"
+    assert "distinct_id" in second_generation_args
+    assert "$ai_model" in second_generation_props
+    assert "$ai_provider" in second_generation_props
+    assert second_generation_props["$ai_input"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
+    assert second_generation_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
+    assert second_generation_props["$ai_http_status"] == 200
+    assert second_generation_props["$ai_trace_id"] is not None
+    assert isinstance(second_generation_props["$ai_latency"], float)
+
+    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_props = trace_args["properties"]
+    assert trace_args["event"] == "$ai_trace"
+    assert "distinct_id" in trace_args
+    assert trace_props["$ai_input_state"] == [{"role": "assistant", "content": "Bar"}]
+    assert trace_props["$ai_output_state"] == [{"role": "assistant", "content": "Bar"}]
+    assert trace_props["$ai_trace_id"] is not None
 
     # Check that the trace_id is the same as the first call
-    assert first_call_props["$ai_trace_id"] == second_call_props["$ai_trace_id"]
+    assert (
+        first_generation_props["$ai_trace_id"]
+        == second_generation_props["$ai_trace_id"]
+    )
+    assert first_generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
 
 def test_personless_mode(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
-    assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args_list[0][1]
-    assert args["properties"]["$process_person_profile"] is False
+    assert mock_client.capture.call_count == 2
+    generation_args = mock_client.capture.call_args_list[0][1]
+    trace_args = mock_client.capture.call_args_list[1][1]
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_args["properties"]["$process_person_profile"] is False
+    assert trace_args["event"] == "$ai_trace"
+    assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
-    chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
-    assert mock_client.capture.call_count == 2
-    args = mock_client.capture.call_args_list[1][1]
-    assert "$process_person_profile" not in args["properties"]
-    assert args["distinct_id"] == id
+    chain.invoke(
+        {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
+    )
+    assert mock_client.capture.call_count == 4
+    generation_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture.call_args_list[3][1]
+    assert "$process_person_profile" not in generation_args["properties"]
+    assert generation_args["distinct_id"] == id
+    assert "$process_person_profile" not in trace_args["properties"]
+    assert trace_args["distinct_id"] == id
 
 
 def test_personless_mode_exception(mock_client):
@@ -303,17 +388,26 @@ def test_personless_mode_exception(mock_client):
     callbacks = CallbackHandler(mock_client)
     with pytest.raises(Exception):
         chain.invoke({}, config={"callbacks": [callbacks]})
-    assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args_list[0][1]
-    assert args["properties"]["$process_person_profile"] is False
+    assert mock_client.capture.call_count == 2
+    generation_args = mock_client.capture.call_args_list[0][1]
+    trace_args = mock_client.capture.call_args_list[1][1]
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_args["properties"]["$process_person_profile"] is False
+    assert trace_args["event"] == "$ai_trace"
+    assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
     with pytest.raises(Exception):
-        chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
-    assert mock_client.capture.call_count == 2
-    args = mock_client.capture.call_args_list[1][1]
-    assert "$process_person_profile" not in args["properties"]
-    assert args["distinct_id"] == id
+        chain.invoke(
+            {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
+        )
+    assert mock_client.capture.call_count == 4
+    generation_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture.call_args_list[3][1]
+    assert "$process_person_profile" not in generation_args["properties"]
+    assert generation_args["distinct_id"] == id
+    assert "$process_person_profile" not in trace_args["properties"]
+    assert trace_args["distinct_id"] == id
 
 
 def test_metadata(mock_client):
@@ -324,31 +418,118 @@ def test_metadata(mock_client):
     )
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     callbacks = [
-        CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
+        CallbackHandler(
+            mock_client,
+            trace_id="test-trace-id",
+            distinct_id="test_id",
+            properties={"foo": "bar"},
+        )
     ]
     chain = prompt | model
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
-    first_call_args = mock_client.capture.call_args[1]
-    assert first_call_args["distinct_id"] == "test_id"
-
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
+    assert first_call_args["distinct_id"] == "test_id"
     assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
     assert first_call_props["foo"] == "bar"
     assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
+
+    second_call_args = mock_client.capture.call_args_list[1][1]
+    second_call_props = second_call_args["properties"]
+    assert second_call_args["distinct_id"] == "test_id"
+    assert second_call_args["event"] == "$ai_trace"
+    assert second_call_props["$ai_trace_id"] == "test-trace-id"
+    assert second_call_props["foo"] == "bar"
+    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
+    assert second_call_props["$ai_output_state"].content == "Bar"
+    assert second_call_props["$ai_input_state"] == "Foo"
+
+
+class FakeGraphState(TypedDict):
+    messages: list[HumanMessage | AIMessage]
+    xyz: Optional[str]
+
+
+def test_graph_state(mock_client):
+    config = {"callbacks": [CallbackHandler(mock_client)]}
+
+    graph = StateGraph(FakeGraphState)
+    graph.add_node(
+        "fake_plain",
+        lambda state: (
+            {
+                "messages": [
+                    *state["messages"],
+                    AIMessage(content="Let's explore bar."),
+                ],
+                "xyz": "abc",
+            }
+        ),
+    )
+    graph.add_node(
+        "fake_llm",
+        lambda state: (
+            ChatPromptTemplate.from_messages([("user", "Foo")])
+            | FakeMessagesListChatModel(
+                responses=[
+                    *state["messages"],
+                    AIMessage(content="It's a type of greeble."),
+                ]
+            )
+        ).invoke(
+            state,
+            config=config,
+        ),
+    )
+    graph.add_edge(START, "fake_plain")
+    graph.add_edge("fake_plain", "fake_llm")
+    graph.add_edge("fake_llm", END)
+
+    result = graph.compile().invoke(
+        {"messages": [HumanMessage(content="What's a bar?")], "xyz": None},
+        config=config,
+    )
+
+    assert len(result["messages"]) == 2
+    assert isinstance(result["messages"][0], HumanMessage)
+    assert result["messages"][0].content == "What's a bar?"
+    assert isinstance(result["messages"][1], AIMessage)
+    assert result["messages"][1].content == "Let's explore bar." # TODO
+
+    assert mock_client.capture.call_count == 3
+    generation_args = mock_client.capture.call_args_list[0][1]
+    trace_args = mock_client.capture.call_args_list[2][1]
+    assert generation_args["event"] == "$ai_generation"
+    assert trace_args["event"] == "$ai_trace"
+    assert trace_args["properties"]["$ai_input_state"] == {
+        "messages": [HumanMessage(content="What's a bar?")],
+        "xyz": None,
+    }
+    assert trace_args["properties"]["$ai_output_state"] == {
+        "messages": [AIMessage(content="Let's explore bar.")],
+        "xyz": "abc",
+    }
 
 
 def test_callbacks_logic(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
-    callbacks = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
+    callbacks = CallbackHandler(
+        mock_client,
+        trace_id="test-trace-id",
+        distinct_id="test_id",
+        properties={"foo": "bar"},
+    )
     chain = prompt | model
 
     chain.invoke({}, config={"callbacks": [callbacks]})
@@ -360,7 +541,9 @@ def test_callbacks_logic(mock_client):
         assert len(callbacks._parent_tree.items()) == 1
         return [m]
 
-    (chain | RunnableLambda(assert_intermediary_run) | model).invoke({}, config={"callbacks": [callbacks]})
+    (chain | RunnableLambda(assert_intermediary_run) | model).invoke(
+        {}, config={"callbacks": [callbacks]}
+    )
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
 
@@ -375,7 +558,9 @@ def test_exception_in_chain(mock_client):
 
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
-    assert mock_client.capture.call_count == 0
+    assert mock_client.capture.call_count == 1
+    trace_call_args = mock_client.capture.call_args_list[0][1]
+    assert trace_call_args["event"] == "$ai_trace"
 
 
 def test_openai_error(mock_client):
@@ -389,9 +574,9 @@ def test_openai_error(mock_client):
 
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
-    assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args[1]
-    props = args["properties"]
+    assert mock_client.capture.call_count == 2
+    generation_args = mock_client.capture.call_args_list[0][1]
+    props = generation_args["properties"]
     assert props["$ai_http_status"] == 401
     assert props["$ai_input"] == [{"role": "user", "content": "Foo"}]
     assert "$ai_output_choices" not in props
@@ -411,7 +596,12 @@ def test_openai_chain(mock_client):
         temperature=0,
         max_tokens=1,
     )
-    callbacks = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
+    callbacks = CallbackHandler(
+        mock_client,
+        trace_id="test-trace-id",
+        distinct_id="test_id",
+        properties={"foo": "bar"},
+    )
     start_time = time.time()
     result = chain.invoke({}, config={"callbacks": [callbacks]})
     approximate_latency = math.floor(time.time() - start_time)
@@ -419,7 +609,7 @@ def test_openai_chain(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 1
 
-    first_call_args = mock_client.capture.call_args[1]
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
     assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
@@ -454,7 +644,11 @@ def test_openai_chain(mock_client):
     ]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
-    assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
+    assert (
+        min(approximate_latency - 1, 0)
+        <= math.floor(first_call_props["$ai_latency"])
+        <= approximate_latency
+    )
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
 
@@ -480,7 +674,7 @@ def test_openai_captures_multiple_generations(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 1
 
-    first_call_args = mock_client.capture.call_args[1]
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
     assert first_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
@@ -525,7 +719,12 @@ def test_openai_streaming(mock_client):
         ]
     )
     chain = prompt | ChatOpenAI(
-        api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0, max_tokens=1, stream=True, stream_usage=True
+        api_key=OPENAI_API_KEY,
+        model="gpt-4o-mini",
+        temperature=0,
+        max_tokens=1,
+        stream=True,
+        stream_usage=True,
     )
     callbacks = CallbackHandler(mock_client)
     result = [m for m in chain.stream({}, config={"callbacks": [callbacks]})]
@@ -534,7 +733,7 @@ def test_openai_streaming(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 1
 
-    first_call_args = mock_client.capture.call_args[1]
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
 
     assert first_call_props["$ai_model_parameters"]["stream"]
@@ -542,7 +741,9 @@ def test_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -557,7 +758,12 @@ async def test_async_openai_streaming(mock_client):
         ]
     )
     chain = prompt | ChatOpenAI(
-        api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0, max_tokens=1, stream=True, stream_usage=True
+        api_key=OPENAI_API_KEY,
+        model="gpt-4o-mini",
+        temperature=0,
+        max_tokens=1,
+        stream=True,
+        stream_usage=True,
     )
     callbacks = CallbackHandler(mock_client)
     result = [m async for m in chain.astream({}, config={"callbacks": [callbacks]})]
@@ -566,7 +772,7 @@ async def test_async_openai_streaming(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 1
 
-    first_call_args = mock_client.capture.call_args[1]
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
 
     assert first_call_props["$ai_model_parameters"]["stream"]
@@ -574,7 +780,9 @@ async def test_async_openai_streaming(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
@@ -591,9 +799,9 @@ def test_base_url_retrieval(mock_client):
     with pytest.raises(Exception):
         chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 1
-    call = mock_client.capture.call_args[1]
-    assert call["properties"]["$ai_base_url"] == "https://test.posthog.com"
+    assert mock_client.capture.call_count == 2
+    generation_call = mock_client.capture.call_args_list[0][1]
+    assert generation_call["properties"]["$ai_base_url"] == "https://test.posthog.com"
 
 
 def test_groups(mock_client):
@@ -608,9 +816,9 @@ def test_groups(mock_client):
     callbacks = CallbackHandler(mock_client, groups={"company": "test_company"})
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 1
-    call = mock_client.capture.call_args[1]
-    assert call["groups"] == {"company": "test_company"}
+    assert mock_client.capture.call_count == 2
+    generation_call = mock_client.capture.call_args_list[0][1]
+    assert generation_call["groups"] == {"company": "test_company"}
 
 
 def test_privacy_mode_local(mock_client):
@@ -625,10 +833,10 @@ def test_privacy_mode_local(mock_client):
     callbacks = CallbackHandler(mock_client, privacy_mode=True)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 1
-    call = mock_client.capture.call_args[1]
-    assert call["properties"]["$ai_input"] is None
-    assert call["properties"]["$ai_output_choices"] is None
+    assert mock_client.capture.call_count == 2
+    generation_call = mock_client.capture.call_args_list[0][1]
+    assert generation_call["properties"]["$ai_input"] is None
+    assert generation_call["properties"]["$ai_output_choices"] is None
 
 
 def test_privacy_mode_global(mock_client):
@@ -644,10 +852,10 @@ def test_privacy_mode_global(mock_client):
     callbacks = CallbackHandler(mock_client)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 1
-    call = mock_client.capture.call_args[1]
-    assert call["properties"]["$ai_input"] is None
-    assert call["properties"]["$ai_output_choices"] is None
+    assert mock_client.capture.call_count == 2
+    generation_call = mock_client.capture.call_args_list[0][1]
+    assert generation_call["properties"]["$ai_input"] is None
+    assert generation_call["properties"]["$ai_output_choices"] is None
 
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
@@ -664,7 +872,12 @@ def test_anthropic_chain(mock_client):
         temperature=0,
         max_tokens=1,
     )
-    callbacks = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test_id", properties={"foo": "bar"})
+    callbacks = CallbackHandler(
+        mock_client,
+        trace_id="test-trace-id",
+        distinct_id="test_id",
+        properties={"foo": "bar"},
+    )
     start_time = time.time()
     result = chain.invoke({}, config={"callbacks": [callbacks]})
     approximate_latency = math.floor(time.time() - start_time)
@@ -672,7 +885,7 @@ def test_anthropic_chain(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 1
 
-    first_call_args = mock_client.capture.call_args[1]
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
     assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
@@ -689,10 +902,16 @@ def test_anthropic_chain(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
-    assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
+    assert (
+        min(approximate_latency - 1, 0)
+        <= math.floor(first_call_props["$ai_latency"])
+        <= approximate_latency
+    )
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] == 1
 
@@ -720,14 +939,16 @@ async def test_async_anthropic_streaming(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 1
 
-    first_call_args = mock_client.capture.call_args[1]
+    first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
     assert first_call_props["$ai_model_parameters"]["streaming"]
     assert first_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] is not None
@@ -758,9 +979,9 @@ def test_tool_calls(mock_client):
     callbacks = CallbackHandler(mock_client)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 1
-    call = mock_client.capture.call_args[1]
-    assert call["properties"]["$ai_output_choices"][0]["tool_calls"] == [
+    assert mock_client.capture.call_count == 2
+    generation_call = mock_client.capture.call_args_list[0][1]
+    assert generation_call["properties"]["$ai_output_choices"][0]["tool_calls"] == [
         {
             "type": "function",
             "id": "123",
@@ -770,4 +991,7 @@ def test_tool_calls(mock_client):
             },
         }
     ]
-    assert "additional_kwargs" not in call["properties"]["$ai_output_choices"][0]
+    assert (
+        "additional_kwargs"
+        not in generation_call["properties"]["$ai_output_choices"][0]
+    )

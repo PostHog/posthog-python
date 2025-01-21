@@ -5,6 +5,7 @@ except ImportError:
         "Please install LangChain to use this feature: 'pip install langchain'"
     )
 
+import json
 import logging
 import time
 import uuid
@@ -30,10 +31,12 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain.schema.agent import AgentAction, AgentFinish
 from pydantic import BaseModel
 
 from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
+from posthog import default_client
 
 log = logging.getLogger("posthog")
 
@@ -53,7 +56,7 @@ RunStorage = Dict[UUID, RunMetadata]
 
 class CallbackHandler(BaseCallbackHandler):
     """
-    A callback handler for LangChain that sends events to PostHog LLM Observability.
+    The PostHog LLM observability callback handler for LangChain.
     """
 
     _client: Client
@@ -74,7 +77,8 @@ class CallbackHandler(BaseCallbackHandler):
 
     def __init__(
         self,
-        client: Client,
+        client: Optional[Client] = None,
+        *,
         distinct_id: Optional[Union[str, int, float, UUID]] = None,
         trace_id: Optional[Union[str, int, float, UUID]] = None,
         properties: Optional[Dict[str, Any]] = None,
@@ -90,7 +94,7 @@ class CallbackHandler(BaseCallbackHandler):
             privacy_mode: Whether to redact the input and output of the trace.
             groups: Optional additional PostHog groups to use for the trace.
         """
-        self._client = client
+        self._client = client or default_client
         self._distinct_id = distinct_id
         self._trace_id = trace_id
         self._properties = properties or {}
@@ -106,9 +110,12 @@ class CallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
+        self._set_run_metadata(serialized, run_id, inputs, metadata, **kwargs)
 
     def on_chat_model_start(
         self,
@@ -119,6 +126,9 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs,
     ):
+        self._log_debug_event(
+            "on_chat_model_start", run_id, parent_run_id, messages=messages
+        )
         self._set_parent_of_run(run_id, parent_run_id)
         input = [
             _convert_message_to_dict(message) for row in messages for message in row
@@ -134,8 +144,57 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
+        self._log_debug_event("on_llm_start", run_id, parent_run_id, prompts=prompts)
         self._set_parent_of_run(run_id, parent_run_id)
         self._set_run_metadata(serialized, run_id, prompts, **kwargs)
+
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run on new LLM token. Only available when streaming is enabled."""
+        self.log.debug(
+            f"on llm new token: run_id: {run_id} parent_run_id: {parent_run_id}"
+        )
+
+    def on_tool_start(
+        self,
+        serialized: Optional[Dict[str, Any]],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event(
+            "on_tool_start", run_id, parent_run_id, input_str=input_str
+        )
+
+    def on_tool_end(
+        self,
+        output: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_tool_end", run_id, parent_run_id, output=output)
+
+    def on_tool_error(
+        self,
+        error: Union[Exception, KeyboardInterrupt],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
 
     def on_chain_end(
         self,
@@ -146,7 +205,35 @@ class CallbackHandler(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
+        self._log_debug_event("on_chain_end", run_id, parent_run_id, outputs=outputs)
         self._pop_parent_of_run(run_id)
+        run_metadata = self._pop_run_metadata(run_id)
+
+        if parent_run_id is None:
+            self._end_trace(
+                self._get_trace_id(run_id),
+                inputs=run_metadata.get("messages") if run_metadata else None,
+                outputs=outputs,
+            )
+
+    def on_chain_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ):
+        self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
+        self._pop_parent_of_run(run_id)
+        run_metadata = self._pop_run_metadata(run_id)
+
+        if parent_run_id is None:
+            self._end_trace(
+                self._get_trace_id(run_id),
+                inputs=run_metadata.get("messages") if run_metadata else None,
+                outputs=None,
+            )
 
     def on_llm_end(
         self,
@@ -160,6 +247,9 @@ class CallbackHandler(BaseCallbackHandler):
         """
         The callback works for both streaming and non-streaming runs. For streaming runs, the chain must set `stream_usage=True` in the LLM.
         """
+        self._log_debug_event(
+            "on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs
+        )
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
@@ -207,16 +297,6 @@ class CallbackHandler(BaseCallbackHandler):
             groups=self._groups,
         )
 
-    def on_chain_error(
-        self,
-        error: BaseException,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any,
-    ):
-        self._pop_parent_of_run(run_id)
-
     def on_llm_error(
         self,
         error: BaseException,
@@ -226,6 +306,7 @@ class CallbackHandler(BaseCallbackHandler):
         tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
+        self._log_debug_event("on_llm_error", run_id, parent_run_id, error=error)
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
@@ -254,6 +335,51 @@ class CallbackHandler(BaseCallbackHandler):
             properties=event_properties,
             groups=self._groups,
         )
+
+    def on_retriever_start(
+        self,
+        serialized: Optional[Dict[str, Any]],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_retriever_start", run_id, parent_run_id, query=query)
+
+    def on_retriever_error(
+        self,
+        error: Union[Exception, KeyboardInterrupt],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run when Retriever errors."""
+        self._log_debug_event("on_retriever_error", run_id, parent_run_id, error=error)
+
+    def on_agent_action(
+        self,
+        action: AgentAction,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run on agent action."""
+        self._log_debug_event("on_agent_action", run_id, parent_run_id, action=action)
+
+    def on_agent_finish(
+        self,
+        finish: AgentFinish,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_agent_finish", run_id, parent_run_id, finish=finish)
 
     def _set_parent_of_run(self, run_id: UUID, parent_run_id: Optional[UUID] = None):
         """
@@ -323,6 +449,40 @@ class CallbackHandler(BaseCallbackHandler):
         if not trace_id:
             trace_id = uuid.uuid4()
         return trace_id
+
+    def _end_trace(
+        self, trace_id: UUID, inputs: Dict[str, Any], outputs: Optional[Dict[str, Any]]
+    ):
+        event_properties = {
+            "$ai_trace_id": trace_id,
+            "$ai_input_state": with_privacy_mode(
+                self._client, self._privacy_mode, inputs
+            ),
+            **self._properties,
+        }
+        if outputs is not None:
+            event_properties["$ai_output_state"] = with_privacy_mode(
+                self._client, self._privacy_mode, outputs
+            )
+        if self._distinct_id is None:
+            event_properties["$process_person_profile"] = False
+        self._client.capture(
+            distinct_id=self._distinct_id or trace_id,
+            event="$ai_trace",
+            properties=event_properties,
+            groups=self._groups,
+        )
+
+    def _log_debug_event(
+        self,
+        event_name: str,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs,
+    ):
+        log.debug(
+            f"Event: {event_name}, run_id: {str(run_id)[:5]}, parent_run_id: {str(parent_run_id)[:5]}, kwargs: {kwargs}"
+        )
 
 
 def _extract_raw_esponse(last_response):
