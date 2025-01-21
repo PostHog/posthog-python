@@ -291,17 +291,17 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 3
 
-    first_generation_args = mock_client.capture.call_args_list[0][1]
-    first_generation_props = first_generation_args["properties"]
-    assert first_generation_args["event"] == "$ai_generation"
-    assert "distinct_id" in first_generation_args
-    assert "$ai_model" in first_generation_props
-    assert "$ai_provider" in first_generation_props
-    assert first_generation_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
-    assert first_generation_props["$ai_http_status"] == 200
-    assert first_generation_props["$ai_trace_id"] is not None
-    assert isinstance(first_generation_props["$ai_latency"], float)
+    first_call_args = mock_client.capture.call_args_list[0][1]
+    first_call_props = first_call_args["properties"]
+    assert first_call_args["event"] == "$ai_generation"
+    assert "distinct_id" in first_call_args
+    assert "$ai_model" in first_call_props
+    assert "$ai_provider" in first_call_props
+    assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_call_props["$ai_http_status"] == 200
+    assert first_call_props["$ai_trace_id"] is not None
+    assert isinstance(first_call_props["$ai_latency"], float)
 
     second_generation_args = mock_client.capture.call_args_list[1][1]
     second_generation_props = second_generation_args["properties"]
@@ -325,8 +325,8 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert trace_props["$ai_trace_id"] is not None
 
     # Check that the trace_id is the same as the first call
-    assert first_generation_props["$ai_trace_id"] == second_generation_props["$ai_trace_id"]
-    assert first_generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
+    assert first_call_props["$ai_trace_id"] == second_generation_props["$ai_trace_id"]
+    assert first_call_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
 
 def test_personless_mode(mock_client):
@@ -631,17 +631,17 @@ def test_openai_captures_multiple_generations(mock_client):
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 2
 
-    generation_call_args = mock_client.capture.call_args_list[0][1]
-    generation_call_props = generation_call_args["properties"]
-    trace_call_args = mock_client.capture.call_args_list[1][1]
-    trace_call_props = trace_call_args["properties"]
+    first_call_args = mock_client.capture.call_args_list[0][1]
+    first_call_props = first_call_args["properties"]
+    second_call_args = mock_client.capture.call_args_list[1][1]
+    second_call_props = second_call_args["properties"]
 
-    assert generation_call_args["event"] == "$ai_generation"
-    assert generation_call_props["$ai_input"] == [
+    assert first_call_args["event"] == "$ai_generation"
+    assert first_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert generation_call_props["$ai_output_choices"] == [
+    assert first_call_props["$ai_output_choices"] == [
         {"role": "assistant", "content": "Bar", "refusal": None},
         {
             "role": "assistant",
@@ -650,25 +650,25 @@ def test_openai_captures_multiple_generations(mock_client):
     ]
 
     # langchain-openai for langchain v3
-    if "max_completion_tokens" in generation_call_props["$ai_model_parameters"]:
-        assert generation_call_props["$ai_model_parameters"] == {
+    if "max_completion_tokens" in first_call_props["$ai_model_parameters"]:
+        assert first_call_props["$ai_model_parameters"] == {
             "temperature": 0.0,
             "max_completion_tokens": 1,
             "stream": False,
             "n": 2,
         }
     else:
-        assert generation_call_props["$ai_model_parameters"] == {
+        assert first_call_props["$ai_model_parameters"] == {
             "temperature": 0.0,
             "max_tokens": 1,
             "stream": False,
             "n": 2,
         }
-    assert generation_call_props["$ai_http_status"] == 200
+    assert first_call_props["$ai_http_status"] == 200
 
-    assert trace_call_args["event"] == "$ai_trace"
-    assert trace_call_props["$ai_input_state"] == {}
-    assert isinstance(trace_call_props["$ai_output_state"], AIMessage)
+    assert second_call_args["event"] == "$ai_trace"
+    assert second_call_props["$ai_input_state"] == {}
+    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OpenAI API key not set")
