@@ -19,21 +19,14 @@ from typing import (
 from uuid import UUID
 
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    FunctionMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
-from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain.schema.agent import AgentAction, AgentFinish
+from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
+from posthog import default_client
 from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
-from posthog import default_client
 
 log = logging.getLogger("posthog")
 

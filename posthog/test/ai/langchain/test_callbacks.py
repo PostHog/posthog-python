@@ -1,21 +1,20 @@
 import logging
 import math
 import os
-from pyexpat.errors import messages
 import time
-from typing import List, Optional, TypedDict, Union
 import uuid
-from unittest.mock import patch, ANY
+from typing import List, Optional, TypedDict, Union
+from unittest.mock import patch
 
 import pytest
 from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
-from langgraph.graph.state import StateGraph, START, END
+from langgraph.graph.state import END, START, StateGraph
 
 from posthog.ai.langchain import CallbackHandler
 
