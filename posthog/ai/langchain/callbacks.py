@@ -3,7 +3,6 @@ try:
 except ImportError:
     raise ModuleNotFoundError("Please install LangChain to use this feature: 'pip install langchain'")
 
-import json
 import logging
 import time
 import uuid
@@ -59,14 +58,25 @@ class CallbackHandler(BaseCallbackHandler):
 
     _client: Client
     """PostHog client instance."""
+
     _distinct_id: Optional[Union[str, int, float, UUID]]
     """Distinct ID of the user to associate the trace with."""
+
     _trace_id: Optional[Union[str, int, float, UUID]]
     """Global trace ID to be sent with every event. Otherwise, the top-level run ID is used."""
+
+    _trace_input: Optional[Any]
+    """The input at the start of the trace. Any JSON object."""
+
+    _trace_name: Optional[str]
+    """Name of the trace, exposed in the UI."""
+
     _properties: Optional[Dict[str, Any]]
     """Global properties to be sent with every event."""
+
     _runs: RunStorage
     """Mapping of run IDs to run metadata as run metadata is only available on the start of generation."""
+
     _parent_tree: Dict[UUID, UUID]
     """
     A dictionary that maps chain run IDs to their parent chain run IDs (parent pointer tree),
@@ -95,6 +105,8 @@ class CallbackHandler(BaseCallbackHandler):
         self._client = client or default_client
         self._distinct_id = distinct_id
         self._trace_id = trace_id
+        self._trace_name = None
+        self._trace_input = None
         self._properties = properties or {}
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
@@ -113,7 +125,9 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
-        self._set_run_metadata(serialized, run_id, inputs, metadata, **kwargs)
+        if parent_run_id is None and self._trace_name is None:
+            self._trace_name = self._get_langchain_run_name(serialized, **kwargs)
+            self._trace_input = inputs
 
     def on_chat_model_start(
         self,
@@ -151,7 +165,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run on new LLM token. Only available when streaming is enabled."""
-        self.log.debug(f"on llm new token: run_id: {run_id} parent_run_id: {parent_run_id}")
+        self._log_debug_event("on_llm_new_token", run_id, parent_run_id, token=token)
 
     def on_tool_start(
         self,
@@ -160,7 +174,6 @@ class CallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
@@ -192,19 +205,13 @@ class CallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         self._log_debug_event("on_chain_end", run_id, parent_run_id, outputs=outputs)
         self._pop_parent_of_run(run_id)
-        run_metadata = self._pop_run_metadata(run_id)
 
         if parent_run_id is None:
-            self._end_trace(
-                self._get_trace_id(run_id),
-                inputs=run_metadata.get("messages") if run_metadata else None,
-                outputs=outputs,
-            )
+            self._capture_trace(run_id, outputs=outputs)
 
     def on_chain_error(
         self,
@@ -216,14 +223,9 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
         self._pop_parent_of_run(run_id)
-        run_metadata = self._pop_run_metadata(run_id)
 
         if parent_run_id is None:
-            self._end_trace(
-                self._get_trace_id(run_id),
-                inputs=run_metadata.get("messages") if run_metadata else None,
-                outputs=None,
-            )
+            self._capture_trace(run_id, outputs=None)
 
     def on_llm_end(
         self,
@@ -231,7 +233,6 @@ class CallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         """
@@ -284,7 +285,6 @@ class CallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
         **kwargs: Any,
     ):
         self._log_debug_event("on_llm_error", run_id, parent_run_id, error=error)
@@ -322,7 +322,6 @@ class CallbackHandler(BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
@@ -429,10 +428,41 @@ class CallbackHandler(BaseCallbackHandler):
             trace_id = uuid.uuid4()
         return trace_id
 
-    def _end_trace(self, trace_id: UUID, inputs: Dict[str, Any], outputs: Optional[Dict[str, Any]]):
+    def _get_langchain_run_name(self, serialized: Optional[Dict[str, Any]], **kwargs: Any) -> str:
+        """Retrieve the name of a serialized LangChain runnable.
+
+        The prioritization for the determination of the run name is as follows:
+        - The value assigned to the "name" key in `kwargs`.
+        - The value assigned to the "name" key in `serialized`.
+        - The last entry of the value assigned to the "id" key in `serialized`.
+        - "<unknown>".
+
+        Args:
+            serialized (Optional[Dict[str, Any]]): A dictionary containing the runnable's serialized data.
+            **kwargs (Any): Additional keyword arguments, potentially including the 'name' override.
+
+        Returns:
+            str: The determined name of the Langchain runnable.
+        """
+        if "name" in kwargs and kwargs["name"] is not None:
+            return kwargs["name"]
+
+        try:
+            return serialized["name"]
+        except (KeyError, TypeError):
+            pass
+
+        try:
+            return serialized["id"][-1]
+        except (KeyError, TypeError):
+            pass
+
+    def _capture_trace(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
+        trace_id = self._get_trace_id(run_id)
         event_properties = {
+            "$ai_trace_name": self._trace_name,
             "$ai_trace_id": trace_id,
-            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, inputs),
+            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, self._trace_input),
             **self._properties,
         }
         if outputs is not None:

@@ -319,8 +319,9 @@ def test_trace_id_for_multiple_chains(mock_client):
     trace_props = trace_args["properties"]
     assert trace_args["event"] == "$ai_trace"
     assert "distinct_id" in trace_args
-    assert trace_props["$ai_input_state"] == [{"role": "assistant", "content": "Bar"}]
-    assert trace_props["$ai_output_state"] == [{"role": "assistant", "content": "Bar"}]
+    assert trace_props["$ai_input_state"] == {}
+    assert isinstance(trace_props["$ai_output_state"], AIMessage)
+    assert trace_props["$ai_output_state"].content == "Bar"
     assert trace_props["$ai_trace_id"] is not None
 
     # Check that the trace_id is the same as the first call
@@ -393,31 +394,31 @@ def test_metadata(mock_client):
         )
     ]
     chain = prompt | model
-    result = chain.invoke({}, config={"callbacks": callbacks})
+    result = chain.invoke({"plan": None}, config={"callbacks": callbacks})
 
     assert result.content == "Bar"
     assert mock_client.capture.call_count == 2
 
-    first_call_args = mock_client.capture.call_args_list[0][1]
-    first_call_props = first_call_args["properties"]
-    assert first_call_args["distinct_id"] == "test_id"
-    assert first_call_args["event"] == "$ai_generation"
-    assert first_call_props["$ai_trace_id"] == "test-trace-id"
-    assert first_call_props["foo"] == "bar"
-    assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
-    assert first_call_props["$ai_http_status"] == 200
-    assert isinstance(first_call_props["$ai_latency"], float)
+    generation_call_args = mock_client.capture.call_args_list[0][1]
+    generation_call_props = generation_call_args["properties"]
+    assert generation_call_args["distinct_id"] == "test_id"
+    assert generation_call_args["event"] == "$ai_generation"
+    assert generation_call_props["$ai_trace_id"] == "test-trace-id"
+    assert generation_call_props["foo"] == "bar"
+    assert generation_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
+    assert generation_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert generation_call_props["$ai_http_status"] == 200
+    assert isinstance(generation_call_props["$ai_latency"], float)
 
-    second_call_args = mock_client.capture.call_args_list[1][1]
-    second_call_props = second_call_args["properties"]
-    assert second_call_args["distinct_id"] == "test_id"
-    assert second_call_args["event"] == "$ai_trace"
-    assert second_call_props["$ai_trace_id"] == "test-trace-id"
-    assert second_call_props["foo"] == "bar"
-    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
-    assert second_call_props["$ai_output_state"].content == "Bar"
-    assert second_call_props["$ai_input_state"] == "Foo"
+    trace_call_args = mock_client.capture.call_args_list[1][1]
+    trace_call_props = trace_call_args["properties"]
+    assert trace_call_args["distinct_id"] == "test_id"
+    assert trace_call_args["event"] == "$ai_trace"
+    assert trace_call_props["$ai_trace_id"] == "test-trace-id"
+    assert trace_call_props["foo"] == "bar"
+    assert trace_call_props["$ai_input_state"] == {"plan": None}
+    assert isinstance(trace_call_props["$ai_output_state"], AIMessage)
+    assert trace_call_props["$ai_output_state"].content == "Bar"
 
 
 class FakeGraphState(TypedDict):
@@ -469,21 +470,24 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][0], HumanMessage)
     assert result["messages"][0].content == "What's a bar?"
     assert isinstance(result["messages"][1], AIMessage)
-    assert result["messages"][1].content == "Let's explore bar."  # TODO
+    assert result["messages"][1].content == "Let's explore bar."
 
     assert mock_client.capture.call_count == 3
     generation_args = mock_client.capture.call_args_list[0][1]
     trace_args = mock_client.capture.call_args_list[2][1]
     assert generation_args["event"] == "$ai_generation"
     assert trace_args["event"] == "$ai_trace"
-    assert trace_args["properties"]["$ai_input_state"] == {
-        "messages": [HumanMessage(content="What's a bar?")],
-        "xyz": None,
-    }
-    assert trace_args["properties"]["$ai_output_state"] == {
-        "messages": [AIMessage(content="Let's explore bar.")],
-        "xyz": "abc",
-    }
+    assert len(trace_args["properties"]["$ai_input_state"]["messages"]) == 1
+    assert isinstance(trace_args["properties"]["$ai_input_state"]["messages"][0], HumanMessage)
+    assert trace_args["properties"]["$ai_input_state"]["messages"][0].content == "What's a bar?"
+    assert trace_args["properties"]["$ai_input_state"]["messages"][0].type == "human"
+    assert trace_args["properties"]["$ai_input_state"]["xyz"] is None
+    assert len(trace_args["properties"]["$ai_output_state"]["messages"]) == 2
+    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][0], HumanMessage)  # FIXME
+    assert trace_args["properties"]["$ai_output_state"]["messages"][0].content == "What's a bar?"
+    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][1], AIMessage)
+    assert trace_args["properties"]["$ai_output_state"]["messages"][1].content == "Let's explore bar."
+    assert trace_args["properties"]["$ai_output_state"]["xyz"] == "abc"
 
 
 def test_callbacks_logic(mock_client):
@@ -570,7 +574,7 @@ def test_openai_chain(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
     first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
@@ -598,13 +602,7 @@ def test_openai_chain(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [
-        {
-            "role": "assistant",
-            "content": "Bar",
-            "additional_kwargs": {"refusal": None},
-        }
-    ]
+    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar", "refusal": None}]
     assert first_call_props["$ai_http_status"] == 200
     assert isinstance(first_call_props["$ai_latency"], float)
     assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
@@ -631,20 +629,20 @@ def test_openai_captures_multiple_generations(mock_client):
     result = chain.invoke({}, config={"callbacks": [callbacks]})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
-    first_call_args = mock_client.capture.call_args_list[0][1]
-    first_call_props = first_call_args["properties"]
-    assert first_call_props["$ai_input"] == [
+    generation_call_args = mock_client.capture.call_args_list[0][1]
+    generation_call_props = generation_call_args["properties"]
+    trace_call_args = mock_client.capture.call_args_list[1][1]
+    trace_call_props = trace_call_args["properties"]
+
+    assert generation_call_args["event"] == "$ai_generation"
+    assert generation_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert first_call_props["$ai_output_choices"] == [
-        {
-            "role": "assistant",
-            "content": "Bar",
-            "additional_kwargs": {"refusal": None},
-        },
+    assert generation_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar", "refusal": None},
         {
             "role": "assistant",
             "content": "Bar",
@@ -652,21 +650,25 @@ def test_openai_captures_multiple_generations(mock_client):
     ]
 
     # langchain-openai for langchain v3
-    if "max_completion_tokens" in first_call_props["$ai_model_parameters"]:
-        assert first_call_props["$ai_model_parameters"] == {
+    if "max_completion_tokens" in generation_call_props["$ai_model_parameters"]:
+        assert generation_call_props["$ai_model_parameters"] == {
             "temperature": 0.0,
             "max_completion_tokens": 1,
             "stream": False,
             "n": 2,
         }
     else:
-        assert first_call_props["$ai_model_parameters"] == {
+        assert generation_call_props["$ai_model_parameters"] == {
             "temperature": 0.0,
             "max_tokens": 1,
             "stream": False,
             "n": 2,
         }
-    assert first_call_props["$ai_http_status"] == 200
+    assert generation_call_props["$ai_http_status"] == 200
+
+    assert trace_call_args["event"] == "$ai_trace"
+    assert trace_call_props["$ai_input_state"] == {}
+    assert isinstance(trace_call_props["$ai_output_state"], AIMessage)
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OpenAI API key not set")
@@ -690,11 +692,14 @@ def test_openai_streaming(mock_client):
     result = sum(result[1:], result[0])
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
     first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
+    second_call_args = mock_client.capture.call_args_list[1][1]
+    second_call_props = second_call_args["properties"]
 
+    assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_model_parameters"]["stream"]
     assert first_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
@@ -704,6 +709,10 @@ def test_openai_streaming(mock_client):
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
+
+    assert second_call_args["event"] == "$ai_trace"
+    assert second_call_props["$ai_input_state"] == {"input": ""}
+    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OpenAI API key not set")
@@ -727,11 +736,14 @@ async def test_async_openai_streaming(mock_client):
     result = sum(result[1:], result[0])
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
     first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
+    second_call_args = mock_client.capture.call_args_list[1][1]
+    second_call_props = second_call_args["properties"]
 
+    assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_model_parameters"]["stream"]
     assert first_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
@@ -741,6 +753,10 @@ async def test_async_openai_streaming(mock_client):
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 20
     assert first_call_props["$ai_output_tokens"] == 1
+
+    assert second_call_args["event"] == "$ai_trace"
+    assert second_call_props["$ai_input_state"] == {"input": ""}
+    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
 
 
 def test_base_url_retrieval(mock_client):
@@ -838,10 +854,13 @@ def test_anthropic_chain(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
     first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
+    second_call_args = mock_client.capture.call_args_list[1][1]
+    second_call_props = second_call_args["properties"]
+
     assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_trace_id"] == "test-trace-id"
     assert first_call_props["$ai_provider"] == "anthropic"
@@ -863,6 +882,10 @@ def test_anthropic_chain(mock_client):
     assert min(approximate_latency - 1, 0) <= math.floor(first_call_props["$ai_latency"]) <= approximate_latency
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] == 1
+
+    assert second_call_args["event"] == "$ai_trace"
+    assert second_call_props["$ai_input_state"] == {}
+    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
 
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
@@ -886,10 +909,14 @@ async def test_async_anthropic_streaming(mock_client):
     result = sum(result[1:], result[0])
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_count == 2
 
     first_call_args = mock_client.capture.call_args_list[0][1]
     first_call_props = first_call_args["properties"]
+    second_call_args = mock_client.capture.call_args_list[1][1]
+    second_call_props = second_call_args["properties"]
+
+    assert first_call_args["event"] == "$ai_generation"
     assert first_call_props["$ai_model_parameters"]["streaming"]
     assert first_call_props["$ai_input"] == [
         {"role": "system", "content": 'You must always answer with "Bar".'},
@@ -899,6 +926,12 @@ async def test_async_anthropic_streaming(mock_client):
     assert first_call_props["$ai_http_status"] == 200
     assert first_call_props["$ai_input_tokens"] == 17
     assert first_call_props["$ai_output_tokens"] is not None
+
+    assert second_call_args["event"] == "$ai_trace"
+    assert second_call_props["$ai_input_state"] == {
+        "input": "",
+    }
+    assert isinstance(second_call_props["$ai_output_state"], AIMessage)
 
 
 def test_tool_calls(mock_client):
