@@ -433,30 +433,30 @@ def test_graph_state(mock_client):
     graph = StateGraph(FakeGraphState)
     graph.add_node(
         "fake_plain",
-        lambda state: (
-            {
-                "messages": [
-                    *state["messages"],
-                    AIMessage(content="Let's explore bar."),
-                ],
-                "xyz": "abc",
-            }
-        ),
+        lambda state: {
+            "messages": [
+                *state["messages"],
+                AIMessage(content="Let's explore bar."),
+            ],
+            "xyz": "abc",
+        },
+    )
+    intermediate_chain = ChatPromptTemplate.from_messages(
+        [("user", "Question: What's a bar?")]
+    ) | FakeMessagesListChatModel(
+        responses=[
+            AIMessage(content="It's a type of greeble."),
+        ]
     )
     graph.add_node(
         "fake_llm",
-        lambda state: (
-            ChatPromptTemplate.from_messages([("user", "Foo")])
-            | FakeMessagesListChatModel(
-                responses=[
-                    *state["messages"],
-                    AIMessage(content="It's a type of greeble."),
-                ]
-            )
-        ).invoke(
-            state,
-            config=config,
-        ),
+        lambda state: {
+            "messages": [
+                *state["messages"],
+                intermediate_chain.invoke(state),
+            ],
+            "xyz": state["xyz"],
+        },
     )
     graph.add_edge(START, "fake_plain")
     graph.add_edge("fake_plain", "fake_llm")
@@ -467,28 +467,34 @@ def test_graph_state(mock_client):
         config=config,
     )
 
-    assert len(result["messages"]) == 2
+    assert len(result["messages"]) == 3
     assert isinstance(result["messages"][0], HumanMessage)
     assert result["messages"][0].content == "What's a bar?"
     assert isinstance(result["messages"][1], AIMessage)
     assert result["messages"][1].content == "Let's explore bar."
+    assert isinstance(result["messages"][2], AIMessage)
+    assert result["messages"][2].content == "It's a type of greeble."
 
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture.call_count == 2
     generation_args = mock_client.capture.call_args_list[0][1]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture.call_args_list[1][1]
     assert generation_args["event"] == "$ai_generation"
     assert trace_args["event"] == "$ai_trace"
     assert trace_args["properties"]["$ai_trace_name"] == "LangGraph"
+
     assert len(trace_args["properties"]["$ai_input_state"]["messages"]) == 1
     assert isinstance(trace_args["properties"]["$ai_input_state"]["messages"][0], HumanMessage)
     assert trace_args["properties"]["$ai_input_state"]["messages"][0].content == "What's a bar?"
     assert trace_args["properties"]["$ai_input_state"]["messages"][0].type == "human"
     assert trace_args["properties"]["$ai_input_state"]["xyz"] is None
-    assert len(trace_args["properties"]["$ai_output_state"]["messages"]) == 2
-    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][0], HumanMessage)  # FIXME
+    assert len(trace_args["properties"]["$ai_output_state"]["messages"]) == 3
+
+    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][0], HumanMessage)
     assert trace_args["properties"]["$ai_output_state"]["messages"][0].content == "What's a bar?"
     assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][1], AIMessage)
     assert trace_args["properties"]["$ai_output_state"]["messages"][1].content == "Let's explore bar."
+    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][2], AIMessage)
+    assert trace_args["properties"]["$ai_output_state"]["messages"][2].content == "It's a type of greeble."
     assert trace_args["properties"]["$ai_output_state"]["xyz"] == "abc"
 
 
