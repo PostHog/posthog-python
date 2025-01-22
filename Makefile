@@ -17,13 +17,13 @@ release_analytics:
 	rm -rf posthoganalytics
 	mkdir posthoganalytics
 	cp -r posthog/* posthoganalytics/
-	find ./posthoganalytics -type f -exec sed -i '' -e 's/import posthog/import posthoganalytics/g' {} \;
+	find ./posthoganalytics -type f -exec sed -i '' -e 's/from posthog /from posthoganalytics /g' {} \;
 	find ./posthoganalytics -type f -exec sed -i '' -e 's/from posthog\./from posthoganalytics\./g' {} \;
 	rm -rf posthog
 	python setup_analytics.py sdist bdist_wheel
 	twine upload dist/*
 	mkdir posthog
-	find ./posthoganalytics -type f -exec sed -i '' -e 's/import posthoganalytics/import posthog/g' {} \;
+	find ./posthoganalytics -type f -exec sed -i '' -e 's/from posthoganalytics /from posthog /g' {} \;
 	find ./posthoganalytics -type f -exec sed -i '' -e 's/from posthoganalytics\./from posthog\./g' {} \;
 	cp -r posthoganalytics/* posthog/
 	rm -rf posthoganalytics

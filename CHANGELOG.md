@@ -1,4 +1,4 @@
-## 3.9.1 - 2025-01-22
+## 3.9.2 - 2025-01-22
 
 1. Fix importing of LangChain callback handler under certain circumstances.
 
