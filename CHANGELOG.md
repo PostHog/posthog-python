@@ -1,6 +1,10 @@
-## 3.8.5 - 2025-01-22
+## 3.9.1 - 2025-01-22
 
-1. Add tracing event to langchain callbacks.
+1. Fix importing of LangChain callback handler under certain circumstances.
+
+## 3.9.0 - 2025-01-22
+
+1. Add `$ai_trace` event emission to LangChain callback handler.
 
 ## 3.8.4 - 2025-01-17
 
