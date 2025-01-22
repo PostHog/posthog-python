@@ -3,6 +3,7 @@ import math
 import os
 import time
 import uuid
+import asyncio
 from typing import List, Optional, TypedDict, Union
 from unittest.mock import patch
 
@@ -12,7 +13,7 @@ from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableLambda, RunnableParallel
 from langchain_openai.chat_models import ChatOpenAI
 from langgraph.graph.state import END, START, StateGraph
 
@@ -67,7 +68,7 @@ def test_metadata_capture(mock_client):
     callbacks = CallbackHandler(mock_client)
     run_id = uuid.uuid4()
     with patch("time.time", return_value=1234567890):
-        callbacks._set_run_metadata(
+        callbacks._set_llm_metadata(
             {"kwargs": {"openai_api_base": "https://us.posthog.com"}},
             run_id,
             messages=[{"role": "user", "content": "Who won the world series in 2020?"}],
@@ -76,7 +77,7 @@ def test_metadata_capture(mock_client):
         )
     expected = {
         "model": "hog-mini",
-        "messages": [{"role": "user", "content": "Who won the world series in 2020?"}],
+        "input": [{"role": "user", "content": "Who won the world series in 2020?"}],
         "start_time": 1234567890,
         "model_params": {"temperature": 0.5},
         "provider": "posthog",
@@ -88,6 +89,19 @@ def test_metadata_capture(mock_client):
     assert run == {**expected, "end_time": 1234567891}
     assert callbacks._runs == {}
     callbacks._pop_run_metadata(uuid.uuid4())  # should not raise
+
+
+def test_run_metadata_capture(mock_client):
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_span_metadata(run_id, "test", 1)
+    expected = {
+        "name": "test",
+        "input": 1,
+        "start_time": 1234567890,
+    }
+    assert callbacks._runs[run_id] == expected
 
 
 @pytest.mark.parametrize("stream", [True, False])
@@ -514,7 +528,11 @@ def test_callbacks_logic(mock_client):
     assert callbacks._parent_tree == {}
 
     def assert_intermediary_run(m):
-        assert callbacks._runs == {}
+        assert len(callbacks._runs) != 0
+        run = next(iter(callbacks._runs.values()))
+        assert run["name"] == "RunnableSequence"
+        assert run["input"] == {}
+        assert run["start_time"] is not None
         assert len(callbacks._parent_tree.items()) == 1
         return [m]
 
@@ -981,3 +999,33 @@ def test_tool_calls(mock_client):
         }
     ]
     assert "additional_kwargs" not in generation_call["properties"]["$ai_output_choices"][0]
+
+
+async def test_async_traces(mock_client):
+    async def sleep(x):  # -> Any:
+        await asyncio.sleep(0.1)
+        return x
+
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain1 = RunnableLambda(sleep)
+    chain2 = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+
+    cb = CallbackHandler(mock_client)
+
+    start_time = time.time()
+    await asyncio.gather(
+        chain1.ainvoke({}, config={"callbacks": [cb]}),
+        chain2.ainvoke({}, config={"callbacks": [cb]}),
+    )
+    approximate_latency = math.floor(time.time() - start_time)
+    assert mock_client.capture.call_count == 3
+    first_call, second_call, third_call = mock_client.capture.call_args_list
+    print(approximate_latency, third_call[1]["properties"]["$ai_latency"])
+    assert first_call[1]["event"] == "$ai_generation"
+    assert second_call[1]["event"] == "$ai_trace"
+    assert second_call[1]["properties"]["$ai_trace_name"] == "RunnableSequence"
+    assert third_call[1]["event"] == "$ai_trace"
+    assert third_call[1]["properties"]["$ai_trace_name"] == "sleep"
+    assert (
+        min(approximate_latency - 1, 0) <= math.floor(third_call[1]["properties"]["$ai_latency"]) <= approximate_latency
+    )
