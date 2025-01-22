@@ -1,9 +1,9 @@
+import asyncio
 import logging
 import math
 import os
 import time
 import uuid
-import asyncio
 from typing import List, Optional, TypedDict, Union
 from unittest.mock import patch
 
@@ -13,7 +13,7 @@ from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableLambda, RunnableParallel
+from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
 from langgraph.graph.state import END, START, StateGraph
 
@@ -1019,8 +1019,8 @@ async def test_async_traces(mock_client):
     )
     approximate_latency = math.floor(time.time() - start_time)
     assert mock_client.capture.call_count == 3
+
     first_call, second_call, third_call = mock_client.capture.call_args_list
-    print(approximate_latency, third_call[1]["properties"]["$ai_latency"])
     assert first_call[1]["event"] == "$ai_generation"
     assert second_call[1]["event"] == "$ai_trace"
     assert second_call[1]["properties"]["$ai_trace_name"] == "RunnableSequence"
