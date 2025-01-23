@@ -32,13 +32,22 @@ log = logging.getLogger("posthog")
 
 
 class RunMetadata(TypedDict, total=False):
-    messages: Union[List[Dict[str, Any]], List[str]]
+    input: Any
+    """Input of the run: messages, prompt variables, etc."""
+    name: str
+    """Name of the run: chain name, model name, etc."""
     provider: str
+    """Provider of the run: OpenAI, Anthropic"""
     model: str
+    """Model used in the run"""
     model_params: Dict[str, Any]
+    """Model parameters of the run: temperature, max_tokens, etc."""
     base_url: str
+    """Base URL of the provider's API used in the run."""
     start_time: float
+    """Start time of the run."""
     end_time: float
+    """End time of the run."""
 
 
 RunStorage = Dict[UUID, RunMetadata]
@@ -119,8 +128,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
         if parent_run_id is None and self._trace_name is None:
-            self._trace_name = self._get_langchain_run_name(serialized, **kwargs)
-            self._trace_input = inputs
+            self._set_span_metadata(run_id, self._get_langchain_run_name(serialized, **kwargs), inputs)
 
     def on_chat_model_start(
         self,
@@ -134,7 +142,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._log_debug_event("on_chat_model_start", run_id, parent_run_id, messages=messages)
         self._set_parent_of_run(run_id, parent_run_id)
         input = [_convert_message_to_dict(message) for row in messages for message in row]
-        self._set_run_metadata(serialized, run_id, input, **kwargs)
+        self._set_llm_metadata(serialized, run_id, input, **kwargs)
 
     def on_llm_start(
         self,
@@ -147,7 +155,7 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._log_debug_event("on_llm_start", run_id, parent_run_id, prompts=prompts)
         self._set_parent_of_run(run_id, parent_run_id)
-        self._set_run_metadata(serialized, run_id, prompts, **kwargs)
+        self._set_llm_metadata(serialized, run_id, prompts, **kwargs)
 
     def on_llm_new_token(
         self,
@@ -204,7 +212,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._pop_parent_of_run(run_id)
 
         if parent_run_id is None:
-            self._capture_trace(run_id, outputs=outputs)
+            self._pop_trace_and_capture(run_id, outputs=outputs)
 
     def on_chain_error(
         self,
@@ -218,7 +226,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._pop_parent_of_run(run_id)
 
         if parent_run_id is None:
-            self._capture_trace(run_id, outputs=None)
+            self._pop_trace_and_capture(run_id, outputs=None)
 
     def on_llm_end(
         self,
@@ -253,7 +261,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.get("provider"),
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
             "$ai_output_choices": with_privacy_mode(self._client, self._privacy_mode, output),
             "$ai_http_status": 200,
             "$ai_input_tokens": input_tokens,
@@ -292,7 +300,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.get("provider"),
             "$ai_model": run.get("model"),
             "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("messages")),
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
             "$ai_http_status": _get_http_status(error),
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
@@ -377,7 +385,14 @@ class CallbackHandler(BaseCallbackHandler):
             id = self._parent_tree[id]
         return id
 
-    def _set_run_metadata(
+    def _set_span_metadata(self, run_id: UUID, name: str, input: Any):
+        self._runs[run_id] = {
+            "name": name,
+            "input": input,
+            "start_time": time.time(),
+        }
+
+    def _set_llm_metadata(
         self,
         serialized: Dict[str, Any],
         run_id: UUID,
@@ -387,7 +402,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs,
     ):
         run: RunMetadata = {
-            "messages": messages,
+            "input": messages,
             "start_time": time.time(),
         }
         if isinstance(invocation_params, dict):
@@ -450,12 +465,16 @@ class CallbackHandler(BaseCallbackHandler):
         except (KeyError, TypeError):
             pass
 
-    def _capture_trace(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
+    def _pop_trace_and_capture(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
         trace_id = self._get_trace_id(run_id)
+        run = self._pop_run_metadata(run_id)
+        if not run:
+            return
         event_properties = {
-            "$ai_trace_name": self._trace_name,
+            "$ai_trace_name": run.get("name"),
             "$ai_trace_id": trace_id,
-            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, self._trace_input),
+            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
+            "$ai_latency": run.get("end_time", 0) - run.get("start_time", 0),
             **self._properties,
         }
         if outputs is not None:
