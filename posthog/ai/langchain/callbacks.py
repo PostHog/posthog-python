@@ -212,7 +212,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._pop_parent_of_run(run_id)
 
         if parent_run_id is None:
-            self._capture_trace(run_id, outputs=outputs)
+            self._pop_trace_and_capture(run_id, outputs=outputs)
 
     def on_chain_error(
         self,
@@ -226,7 +226,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._pop_parent_of_run(run_id)
 
         if parent_run_id is None:
-            self._capture_trace(run_id, outputs=None)
+            self._pop_trace_and_capture(run_id, outputs=None)
 
     def on_llm_end(
         self,
@@ -465,7 +465,7 @@ class CallbackHandler(BaseCallbackHandler):
         except (KeyError, TypeError):
             pass
 
-    def _capture_trace(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
+    def _pop_trace_and_capture(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
         trace_id = self._get_trace_id(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
