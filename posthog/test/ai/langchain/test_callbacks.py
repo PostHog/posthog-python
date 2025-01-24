@@ -1033,7 +1033,9 @@ async def test_async_traces(mock_client):
 
 def test_error(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
-    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    # Configure the model to raise an exception by passing an error message
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")], error="Test error")
+    chain = prompt | model
     callbacks = CallbackHandler(mock_client)
     with pytest.raises(Exception):
         chain.invoke({}, config={"callbacks": [callbacks]})
@@ -1043,3 +1045,18 @@ def test_error(mock_client):
     props = call_args["properties"]
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "Test error"
+
+def test_http_error(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")], http_status=400)
+    chain = prompt | model
+    callbacks = CallbackHandler(mock_client)
+    with pytest.raises(Exception):
+        chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] is not None
+    assert props["$ai_http_status"] == 400
