@@ -1036,8 +1036,8 @@ def test_error(mock_client):
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     chain = prompt | model
     callbacks = CallbackHandler(mock_client)
-    
-    with patch.object(FakeMessagesListChatModel, 'invoke', side_effect=Exception("Test error")):
+
+    with patch.object(FakeMessagesListChatModel, "invoke", side_effect=Exception("Test error")):
         with pytest.raises(Exception):
             chain.invoke({}, config={"callbacks": [callbacks]})
 
@@ -1053,7 +1053,7 @@ def test_http_error(mock_client):
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")], http_status=400)
     chain = prompt | model
     callbacks = CallbackHandler(mock_client)
-    with patch.object(FakeMessagesListChatModel, 'invoke', side_effect=Exception(status_code=400)):
+    with patch.object(FakeMessagesListChatModel, "invoke", side_effect=Exception(status_code=400)):
         with pytest.raises(Exception):
             chain.invoke({}, config={"callbacks": [callbacks]})
 
