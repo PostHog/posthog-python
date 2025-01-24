@@ -1029,3 +1029,17 @@ async def test_async_traces(mock_client):
     assert (
         min(approximate_latency - 1, 0) <= math.floor(third_call[1]["properties"]["$ai_latency"]) <= approximate_latency
     )
+
+
+def test_error(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    callbacks = CallbackHandler(mock_client)
+    with pytest.raises(Exception):
+        chain.invoke({}, config={"callbacks": [callbacks]})
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Test error"
