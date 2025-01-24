@@ -12,11 +12,11 @@ from typing import (
     List,
     Optional,
     Tuple,
-    TypedDict,
     Union,
     cast,
 )
 from uuid import UUID
+from dataclasses import dataclass
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema.agent import AgentAction, AgentFinish
@@ -31,26 +31,48 @@ from posthog.client import Client
 log = logging.getLogger("posthog")
 
 
-class RunMetadata(TypedDict, total=False):
-    input: Any
-    """Input of the run: messages, prompt variables, etc."""
+@dataclass
+class RunMetadata:
     name: str
     """Name of the run: chain name, model name, etc."""
-    provider: str
-    """Provider of the run: OpenAI, Anthropic"""
-    model: str
-    """Model used in the run"""
-    model_params: Dict[str, Any]
-    """Model parameters of the run: temperature, max_tokens, etc."""
-    base_url: str
-    """Base URL of the provider's API used in the run."""
     start_time: float
     """Start time of the run."""
-    end_time: float
+    end_time: Optional[float]
     """End time of the run."""
+    input: Optional[Any]
+    """Input of the run: messages, prompt variables, etc."""
+
+    @property
+    def latency(self) -> float:
+        if not self.end_time:
+            return 0
+        return self.end_time - self.start_time
 
 
-RunStorage = Dict[UUID, RunMetadata]
+@dataclass
+class TraceMetadata(RunMetadata):
+    pass
+
+
+@dataclass
+class GenerationMetadata(RunMetadata):
+    provider: Optional[str] = None
+    """Provider of the run: OpenAI, Anthropic"""
+    model: Optional[str] = None
+    """Model used in the run"""
+    model_params: Optional[Dict[str, Any]] = None
+    """Model parameters of the run: temperature, max_tokens, etc."""
+    base_url: Optional[str] = None
+    """Base URL of the provider's API used in the run."""
+
+
+@dataclass
+class SpanMetadata(RunMetadata):
+    pass
+
+
+RunMetadataUnion = Union[TraceMetadata, GenerationMetadata, SpanMetadata]
+RunMetadataStorage = Dict[UUID, RunMetadataUnion]
 
 
 class CallbackHandler(BaseCallbackHandler):
@@ -76,7 +98,7 @@ class CallbackHandler(BaseCallbackHandler):
     _properties: Optional[Dict[str, Any]]
     """Global properties to be sent with every event."""
 
-    _runs: RunStorage
+    _runs: RunMetadataStorage
     """Mapping of run IDs to run metadata as run metadata is only available on the start of generation."""
 
     _parent_tree: Dict[UUID, UUID]
@@ -107,8 +129,6 @@ class CallbackHandler(BaseCallbackHandler):
         self._client = client or default_client
         self._distinct_id = distinct_id
         self._trace_id = trace_id
-        self._trace_name = None
-        self._trace_input = None
         self._properties = properties or {}
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
@@ -127,8 +147,7 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
-        if parent_run_id is None and self._trace_name is None:
-            self._set_span_metadata(run_id, self._get_langchain_run_name(serialized, **kwargs), inputs)
+        self._set_trace_or_span_metadata(serialized, inputs, run_id, parent_run_id, **kwargs)
 
     def on_chat_model_start(
         self,
@@ -179,6 +198,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_tool_start", run_id, parent_run_id, input_str=input_str)
+        self._set_trace_or_span_metadata(serialized, input_str, run_id, parent_run_id, **kwargs)
 
     def on_tool_end(
         self,
@@ -192,10 +212,11 @@ class CallbackHandler(BaseCallbackHandler):
 
     def on_tool_error(
         self,
-        error: Union[Exception, KeyboardInterrupt],
+        error: BaseException,
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
@@ -243,10 +264,9 @@ class CallbackHandler(BaseCallbackHandler):
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
-        if not run:
+        if not run or not isinstance(run, GenerationMetadata):
             return
 
-        latency = run.get("end_time", 0) - run.get("start_time", 0)
         input_tokens, output_tokens = _parse_usage(response)
 
         generation_result = response.generations[-1]
@@ -258,19 +278,20 @@ class CallbackHandler(BaseCallbackHandler):
             output = [_extract_raw_esponse(generation) for generation in generation_result]
 
         event_properties = {
-            "$ai_provider": run.get("provider"),
-            "$ai_model": run.get("model"),
-            "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
+            "$ai_provider": run.provider,
+            "$ai_model": run.model,
+            "$ai_model_parameters": run.model_params,
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.input),
             "$ai_output_choices": with_privacy_mode(self._client, self._privacy_mode, output),
             "$ai_http_status": 200,
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
-            "$ai_latency": latency,
+            "$ai_latency": run.latency,
             "$ai_trace_id": trace_id,
-            "$ai_base_url": run.get("base_url"),
-            **self._properties,
+            "$ai_base_url": run.base_url,
         }
+        if self._properties:
+            event_properties.update(self._properties)
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
         self._client.capture(
@@ -292,21 +313,21 @@ class CallbackHandler(BaseCallbackHandler):
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
-        if not run:
+        if not run or not isinstance(run, GenerationMetadata):
             return
 
-        latency = run.get("end_time", 0) - run.get("start_time", 0)
         event_properties = {
-            "$ai_provider": run.get("provider"),
-            "$ai_model": run.get("model"),
-            "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
+            "$ai_provider": run.provider,
+            "$ai_model": run.model,
+            "$ai_model_parameters": run.model_params,
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.input),
             "$ai_http_status": _get_http_status(error),
-            "$ai_latency": latency,
+            "$ai_latency": run.latency,
             "$ai_trace_id": trace_id,
-            "$ai_base_url": run.get("base_url"),
-            **self._properties,
+            "$ai_base_url": run.base_url,
         }
+        if self._properties:
+            event_properties.update(self._properties)
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
         self._client.capture(
@@ -327,13 +348,15 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_retriever_start", run_id, parent_run_id, query=query)
+        self._set_trace_or_span_metadata(serialized, query, run_id, parent_run_id, **kwargs)
 
     def on_retriever_error(
         self,
-        error: Union[Exception, KeyboardInterrupt],
+        error: BaseException,
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
         **kwargs: Any,
     ) -> Any:
         """Run when Retriever errors."""
@@ -385,12 +408,23 @@ class CallbackHandler(BaseCallbackHandler):
             id = self._parent_tree[id]
         return id
 
-    def _set_span_metadata(self, run_id: UUID, name: str, input: Any):
-        self._runs[run_id] = {
-            "name": name,
-            "input": input,
-            "start_time": time.time(),
-        }
+    def _set_trace_or_span_metadata(
+        self,
+        serialized: Optional[Dict[str, Any]],
+        input: Any,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs,
+    ):
+        run_name = self._get_langchain_run_name(serialized, **kwargs)
+        if parent_run_id is None:
+            self._runs[run_id] = TraceMetadata(
+                name=run_name or "trace", input=input, start_time=time.time(), end_time=None
+            )
+        else:
+            self._runs[run_id] = SpanMetadata(
+                name=run_name or "span", input=input, start_time=time.time(), end_time=None
+            )
 
     def _set_llm_metadata(
         self,
@@ -401,33 +435,31 @@ class CallbackHandler(BaseCallbackHandler):
         invocation_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
-        run: RunMetadata = {
-            "input": messages,
-            "start_time": time.time(),
-        }
+        run_name = self._get_langchain_run_name(serialized, **kwargs) or "generation"
+        generation = GenerationMetadata(name=run_name, input=messages, start_time=time.time(), end_time=None)
         if isinstance(invocation_params, dict):
-            run["model_params"] = get_model_params(invocation_params)
+            generation.model_params = get_model_params(invocation_params)
         if isinstance(metadata, dict):
             if model := metadata.get("ls_model_name"):
-                run["model"] = model
+                generation.model = model
             if provider := metadata.get("ls_provider"):
-                run["provider"] = provider
+                generation.provider = provider
         try:
             base_url = serialized["kwargs"]["openai_api_base"]
             if base_url is not None:
-                run["base_url"] = base_url
+                generation.base_url = base_url
         except KeyError:
             pass
-        self._runs[run_id] = run
+        self._runs[run_id] = generation
 
-    def _pop_run_metadata(self, run_id: UUID) -> Optional[RunMetadata]:
+    def _pop_run_metadata(self, run_id: UUID) -> Optional[RunMetadataUnion]:
         end_time = time.time()
         try:
             run = self._runs.pop(run_id)
         except KeyError:
             log.warning(f"No run metadata found for run {run_id}")
             return None
-        run["end_time"] = end_time
+        run.end_time = end_time
         return run
 
     def _get_trace_id(self, run_id: UUID):
@@ -436,7 +468,7 @@ class CallbackHandler(BaseCallbackHandler):
             trace_id = uuid.uuid4()
         return trace_id
 
-    def _get_langchain_run_name(self, serialized: Optional[Dict[str, Any]], **kwargs: Any) -> str:
+    def _get_langchain_run_name(self, serialized: Optional[Dict[str, Any]], **kwargs: Any) -> Optional[str]:
         """Retrieve the name of a serialized LangChain runnable.
 
         The prioritization for the determination of the run name is as follows:
@@ -454,16 +486,17 @@ class CallbackHandler(BaseCallbackHandler):
         """
         if "name" in kwargs and kwargs["name"] is not None:
             return kwargs["name"]
-
+        if serialized is None:
+            return None
         try:
             return serialized["name"]
         except (KeyError, TypeError):
             pass
-
         try:
             return serialized["id"][-1]
         except (KeyError, TypeError):
             pass
+        return None
 
     def _pop_trace_and_capture(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
         trace_id = self._get_trace_id(run_id)
@@ -471,12 +504,13 @@ class CallbackHandler(BaseCallbackHandler):
         if not run:
             return
         event_properties = {
-            "$ai_trace_name": run.get("name"),
+            "$ai_trace_name": run.name,
             "$ai_trace_id": trace_id,
-            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
-            "$ai_latency": run.get("end_time", 0) - run.get("start_time", 0),
-            **self._properties,
+            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.input),
+            "$ai_latency": run.latency,
         }
+        if self._properties:
+            event_properties.update(self._properties)
         if outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(self._client, self._privacy_mode, outputs)
         if self._distinct_id is None:
