@@ -1033,12 +1033,13 @@ async def test_async_traces(mock_client):
 
 def test_error(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
-    # Configure the model to raise an exception by passing an error message
-    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")], error="Test error")
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     chain = prompt | model
     callbacks = CallbackHandler(mock_client)
-    with pytest.raises(Exception):
-        chain.invoke({}, config={"callbacks": [callbacks]})
+    
+    with patch.object(FakeMessagesListChatModel, 'invoke', side_effect=Exception("Test error")):
+        with pytest.raises(Exception):
+            chain.invoke({}, config={"callbacks": [callbacks]})
 
     assert mock_client.capture.call_count == 1
     call_args = mock_client.capture.call_args[1]
@@ -1052,8 +1053,9 @@ def test_http_error(mock_client):
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")], http_status=400)
     chain = prompt | model
     callbacks = CallbackHandler(mock_client)
-    with pytest.raises(Exception):
-        chain.invoke({}, config={"callbacks": [callbacks]})
+    with patch.object(FakeMessagesListChatModel, 'invoke', side_effect=Exception(status_code=400)):
+        with pytest.raises(Exception):
+            chain.invoke({}, config={"callbacks": [callbacks]})
 
     assert mock_client.capture.call_count == 1
     call_args = mock_client.capture.call_args[1]
