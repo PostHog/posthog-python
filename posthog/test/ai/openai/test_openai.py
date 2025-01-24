@@ -173,3 +173,17 @@ def test_privacy_mode_global(mock_client, mock_openai_response):
         props = call_args["properties"]
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
+
+
+def test_error(mock_client, mock_openai_response):
+    with patch("openai.resources.chat.completions.Completions.create", side_effect=Exception("Test error")):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        with pytest.raises(Exception):
+            client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": "Hello"}])
+
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_is_error"] is True
+        assert props["$ai_error"] == "Test error"

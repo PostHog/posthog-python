@@ -1,3 +1,7 @@
+## 3.10.0 - 2025-01-24
+
+1. Add `$ai_error` and `$ai_is_error` properties to LangChain callback handler, OpenAI, and Anthropic.
+
 ## 3.9.2 - 2025-01-22
 
 1. Fix importing of LangChain callback handler under certain circumstances.

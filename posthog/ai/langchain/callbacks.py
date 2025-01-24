@@ -305,6 +305,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
             "$ai_base_url": run.get("base_url"),
+            "$ai_is_error": True,
+            "$ai_error": error.__str__(),
             **self._properties,
         }
         if self._distinct_id is None:

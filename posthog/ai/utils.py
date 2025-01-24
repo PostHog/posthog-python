@@ -116,12 +116,17 @@ def call_llm_and_track_usage(
     error = None
     http_status = 200
     usage: Dict[str, Any] = {}
+    error_params: Dict[str, any] = {}
 
     try:
         response = call_method(**kwargs)
     except Exception as exc:
         error = exc
         http_status = getattr(exc, "status_code", 0)  # default to 0 becuase its likely an SDK error
+        error_params = {
+            "$ai_is_error": True,
+            "$ai_error": exc.__str__(),
+        }
     finally:
         end_time = time.time()
         latency = end_time - start_time
@@ -149,6 +154,7 @@ def call_llm_and_track_usage(
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(base_url),
             **(posthog_properties or {}),
+            **(error_params or {}),
         }
 
         if posthog_distinct_id is None:
@@ -186,12 +192,17 @@ async def call_llm_and_track_usage_async(
     error = None
     http_status = 200
     usage: Dict[str, Any] = {}
+    error_params: Dict[str, any] = {}
 
     try:
         response = await call_async_method(**kwargs)
     except Exception as exc:
         error = exc
         http_status = getattr(exc, "status_code", 0)  # default to 0 because its likely an SDK error
+        error_params = {
+            "$ai_is_error": True,
+            "$ai_error": exc.__str__(),
+        }
     finally:
         end_time = time.time()
         latency = end_time - start_time
@@ -219,6 +230,7 @@ async def call_llm_and_track_usage_async(
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(base_url),
             **(posthog_properties or {}),
+            **(error_params or {}),
         }
 
         if posthog_distinct_id is None:
