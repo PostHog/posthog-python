@@ -347,34 +347,68 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
     assert isinstance(props["$ai_latency"], float)
 
 
-def test_trace_id_for_multiple_chains(mock_client):
+def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("user", "Foo"),
+            ("user", "Foo {var}"),
         ]
     )
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model | RunnableLambda(lambda x: [x]) | model
-    result = chain.invoke({}, config={"callbacks": callbacks})
+    result = chain.invoke({"var": "bar"}, config={"callbacks": callbacks})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    # span, generation, span, generation, trace
+    assert mock_client.capture.call_count == 5
 
-    first_call_args = mock_client.capture.call_args_list[0][1]
-    first_call_props = first_call_args["properties"]
-    assert first_call_args["event"] == "$ai_generation"
-    assert "distinct_id" in first_call_args
-    assert "$ai_model" in first_call_props
-    assert "$ai_provider" in first_call_props
-    assert first_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert first_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
-    assert first_call_props["$ai_http_status"] == 200
-    assert first_call_props["$ai_trace_id"] is not None
-    assert isinstance(first_call_props["$ai_latency"], float)
+    first_span_args = mock_client.capture.call_args_list[0][1]
+    first_span_props = first_span_args["properties"]
 
-    second_generation_args = mock_client.capture.call_args_list[1][1]
+    first_generation_args = mock_client.capture.call_args_list[1][1]
+    first_generation_props = first_generation_args["properties"]
+
+    second_span_args = mock_client.capture.call_args_list[2][1]
+    second_span_props = second_span_args["properties"]
+
+    second_generation_args = mock_client.capture.call_args_list[3][1]
     second_generation_props = second_generation_args["properties"]
+
+    trace_args = mock_client.capture.call_args_list[4][1]
+    trace_props = trace_args["properties"]
+
+    # Prompt span
+    assert first_span_args["event"] == "$ai_span"
+    assert first_span_props["$ai_input_state"] == {"var": "bar"}
+    assert first_span_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
+    assert first_span_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in first_span_props
+    assert first_span_props["$ai_output_state"] == ChatPromptTemplate(
+        messages=[HumanMessage(content="Foo bar")]
+    ).invoke({})
+
+    # first model
+    assert first_generation_args["event"] == "$ai_generation"
+    assert "distinct_id" in first_generation_args
+    assert "$ai_model" in first_generation_props
+    assert "$ai_provider" in first_generation_props
+    assert first_generation_props["$ai_input"] == [{"role": "user", "content": "Foo bar"}]
+    assert first_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_generation_props["$ai_http_status"] == 200
+    assert isinstance(first_generation_props["$ai_latency"], float)
+    assert "$ai_generation_id" in first_generation_props
+    assert first_generation_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert first_generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
+
+    # lambda span
+    assert second_span_args["event"] == "$ai_span"
+    assert second_span_props["$ai_input_state"].content == "Bar"
+    assert second_span_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
+    assert second_span_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in second_span_props
+    assert second_span_props["$ai_output_state"][0].content == "Bar"
+
+    # second model
     assert second_generation_args["event"] == "$ai_generation"
     assert "distinct_id" in second_generation_args
     assert "$ai_model" in second_generation_props
@@ -385,40 +419,49 @@ def test_trace_id_for_multiple_chains(mock_client):
     assert second_generation_props["$ai_trace_id"] is not None
     assert isinstance(second_generation_props["$ai_latency"], float)
 
-    trace_args = mock_client.capture.call_args_list[2][1]
-    trace_props = trace_args["properties"]
+    # trace
     assert trace_args["event"] == "$ai_trace"
     assert "distinct_id" in trace_args
-    assert trace_props["$ai_input_state"] == {}
+    assert trace_props["$ai_input_state"] == {"var": "bar"}
     assert isinstance(trace_props["$ai_output_state"], AIMessage)
     assert trace_props["$ai_output_state"].content == "Bar"
     assert trace_props["$ai_trace_id"] is not None
     assert trace_props["$ai_trace_name"] == "RunnableSequence"
-
-    # Check that the trace_id is the same as the first call
-    assert first_call_props["$ai_trace_id"] == second_generation_props["$ai_trace_id"]
-    assert first_call_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
 
 def test_personless_mode(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
-    assert mock_client.capture.call_count == 2
-    generation_args = mock_client.capture.call_args_list[0][1]
-    trace_args = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture.call_count == 3
+    span_args = mock_client.capture.call_args_list[0][1]
+    generation_args = mock_client.capture.call_args_list[1][1]
+    trace_args = mock_client.capture.call_args_list[2][1]
+
+    # span
+    assert span_args["event"] == "$ai_span"
+    assert span_args["properties"]["$process_person_profile"] is False
+    # generation
     assert generation_args["event"] == "$ai_generation"
     assert generation_args["properties"]["$process_person_profile"] is False
+    # trace
     assert trace_args["event"] == "$ai_trace"
     assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
     chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
-    assert mock_client.capture.call_count == 4
-    generation_args = mock_client.capture.call_args_list[2][1]
-    trace_args = mock_client.capture.call_args_list[3][1]
+    assert mock_client.capture.call_count == 6
+    span_args = mock_client.capture.call_args_list[3][1]
+    generation_args = mock_client.capture.call_args_list[4][1]
+    trace_args = mock_client.capture.call_args_list[5][1]
+
+    # span
+    assert "$process_person_profile" not in span_args["properties"]
+    assert span_args["distinct_id"] == id
+    # generation
     assert "$process_person_profile" not in generation_args["properties"]
     assert generation_args["distinct_id"] == id
+    # trace
     assert "$process_person_profile" not in trace_args["properties"]
     assert trace_args["distinct_id"] == id
 
@@ -429,22 +472,41 @@ def test_personless_mode_exception(mock_client):
     callbacks = CallbackHandler(mock_client)
     with pytest.raises(Exception):
         chain.invoke({}, config={"callbacks": [callbacks]})
-    assert mock_client.capture.call_count == 2
-    generation_args = mock_client.capture.call_args_list[0][1]
-    trace_args = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture.call_count == 3
+    span_args = mock_client.capture.call_args_list[0][1]
+    generation_args = mock_client.capture.call_args_list[1][1]
+    trace_args = mock_client.capture.call_args_list[2][1]
+
+    # span
+    assert span_args["event"] == "$ai_span"
+    assert span_args["properties"]["$process_person_profile"] is False
+    # generation
     assert generation_args["event"] == "$ai_generation"
     assert generation_args["properties"]["$process_person_profile"] is False
+    # trace
     assert trace_args["event"] == "$ai_trace"
     assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
     with pytest.raises(Exception):
         chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
-    assert mock_client.capture.call_count == 4
-    generation_args = mock_client.capture.call_args_list[2][1]
-    trace_args = mock_client.capture.call_args_list[3][1]
+    assert mock_client.capture.call_count == 6
+    span_args = mock_client.capture.call_args_list[3][1]
+    generation_args = mock_client.capture.call_args_list[4][1]
+    trace_args = mock_client.capture.call_args_list[5][1]
+
+    # span
+    assert span_args["event"] == "$ai_span"
+    assert "$process_person_profile" not in span_args["properties"]
+    assert span_args["distinct_id"] == id
+
+    # generation
+    assert generation_args["event"] == "$ai_generation"
     assert "$process_person_profile" not in generation_args["properties"]
     assert generation_args["distinct_id"] == id
+
+    # trace
+    assert trace_args["event"] == "$ai_trace"
     assert "$process_person_profile" not in trace_args["properties"]
     assert trace_args["distinct_id"] == id
 
@@ -468,9 +530,18 @@ def test_metadata(mock_client):
     result = chain.invoke({"plan": None}, config={"callbacks": callbacks})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 2
+    assert mock_client.capture.call_count == 3
 
-    generation_call_args = mock_client.capture.call_args_list[0][1]
+    span_call_args = mock_client.capture.call_args_list[0][1]
+    span_call_props = span_call_args["properties"]
+    assert span_call_args["distinct_id"] == "test_id"
+    assert span_call_args["event"] == "$ai_span"
+    assert span_call_props["$ai_trace_id"] == "test-trace-id"
+    assert span_call_props["foo"] == "bar"
+    assert "$ai_parent_id" in span_call_props
+    assert "$ai_span_id" in span_call_props
+
+    generation_call_args = mock_client.capture.call_args_list[1][1]
     generation_call_props = generation_call_args["properties"]
     assert generation_call_args["distinct_id"] == "test_id"
     assert generation_call_args["event"] == "$ai_generation"
@@ -481,7 +552,7 @@ def test_metadata(mock_client):
     assert generation_call_props["$ai_http_status"] == 200
     assert isinstance(generation_call_props["$ai_latency"], float)
 
-    trace_call_args = mock_client.capture.call_args_list[1][1]
+    trace_call_args = mock_client.capture.call_args_list[2][1]
     trace_call_props = trace_call_args["properties"]
     assert trace_call_args["distinct_id"] == "test_id"
     assert trace_call_args["event"] == "$ai_trace"
