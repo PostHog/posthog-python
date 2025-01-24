@@ -604,10 +604,8 @@ def test_graph_state(mock_client):
     graph.add_edge("fake_plain", "fake_llm")
     graph.add_edge("fake_llm", END)
 
-    result = graph.compile().invoke(
-        {"messages": [HumanMessage(content="What's a bar?")], "xyz": None},
-        config=config,
-    )
+    initial_state = {"messages": [HumanMessage(content="What's a bar?")], "xyz": None}
+    result = graph.compile().invoke(initial_state, config=config)
 
     assert len(result["messages"]) == 3
     assert isinstance(result["messages"][0], HumanMessage)
@@ -617,26 +615,104 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][2], AIMessage)
     assert result["messages"][2].content == "It's a type of greeble."
 
-    assert mock_client.capture.call_count == 2
-    generation_args = mock_client.capture.call_args_list[0][1]
-    trace_args = mock_client.capture.call_args_list[1][1]
-    assert generation_args["event"] == "$ai_generation"
+    assert mock_client.capture.call_count == 11
+    calls = [call[1] for call in mock_client.capture.call_args_list]
+
+    trace_args = calls[10]
+    trace_props = calls[10]["properties"]
+
+    # Events are captured in the reverse order.
+    # Check all trace_ids
+    for call in calls:
+        assert call["properties"]["$ai_trace_id"] == trace_props["$ai_trace_id"]
+
+    # First span, write the state
+    assert calls[0]["event"] == "$ai_span"
+    assert calls[0]["properties"]["$ai_parent_id"] == calls[2]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[0]["properties"]
+    assert calls[0]["properties"]["$ai_input_state"] == initial_state
+    assert calls[0]["properties"]["$ai_output_state"] == initial_state
+
+    # Second span, set the START node
+    assert calls[1]["event"] == "$ai_span"
+    assert calls[1]["properties"]["$ai_parent_id"] == calls[2]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[1]["properties"]
+    assert calls[1]["properties"]["$ai_input_state"] == initial_state
+    assert calls[1]["properties"]["$ai_output_state"] == initial_state
+
+    # Third span, finish initialization
+    assert calls[2]["event"] == "$ai_span"
+    assert "$ai_span_id" in calls[2]["properties"]
+    assert calls[2]["properties"]["$ai_span_name"] == START
+    assert calls[2]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert calls[2]["properties"]["$ai_input_state"] == initial_state
+    assert calls[2]["properties"]["$ai_output_state"] == initial_state
+
+    # Fourth span, save the value of fake_plain during its execution
+    second_state = {
+        "messages": [HumanMessage(content="What's a bar?"), AIMessage(content="Let's explore bar.")],
+        "xyz": "abc",
+    }
+    assert calls[3]["event"] == "$ai_span"
+    assert calls[3]["properties"]["$ai_parent_id"] == calls[4]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[3]["properties"]
+    assert calls[3]["properties"]["$ai_input_state"] == second_state
+    assert calls[3]["properties"]["$ai_output_state"] == second_state
+
+    # Fifth span, run the fake_plain node
+    assert calls[4]["event"] == "$ai_span"
+    assert "$ai_span_id" in calls[4]["properties"]
+    assert calls[4]["properties"]["$ai_span_name"] == "fake_plain"
+    assert calls[4]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert calls[4]["properties"]["$ai_input_state"] == initial_state
+    assert calls[4]["properties"]["$ai_output_state"] == second_state
+
+    # Sixth span, chat prompt template
+    assert calls[5]["event"] == "$ai_span"
+    assert calls[5]["properties"]["$ai_parent_id"] == calls[7]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[5]["properties"]
+    assert calls[5]["properties"]["$ai_span_name"] == "ChatPromptTemplate"
+
+    # 7. Generation, fake_llm
+    assert calls[6]["event"] == "$ai_generation"
+    assert calls[6]["properties"]["$ai_parent_id"] == calls[7]["properties"]["$ai_span_id"]
+    assert "$ai_generation_id" in calls[6]["properties"]
+    assert "$ai_span_name" not in calls[6]["properties"]
+
+    # 8. Span, RunnableSequence
+    assert calls[7]["event"] == "$ai_span"
+    assert calls[7]["properties"]["$ai_parent_id"] == calls[9]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[7]["properties"]
+    assert calls[7]["properties"]["$ai_span_name"] == "RunnableSequence"
+
+    # 9. Span, fake_llm write
+    assert calls[8]["event"] == "$ai_span"
+    assert calls[8]["properties"]["$ai_parent_id"] == calls[9]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[8]["properties"]
+
+    # 10. Span, fake_llm node
+    assert calls[9]["event"] == "$ai_span"
+    assert calls[9]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in calls[9]["properties"]
+    assert calls[9]["properties"]["$ai_span_name"] == "fake_llm"
+
+    # 11. Trace
     assert trace_args["event"] == "$ai_trace"
-    assert trace_args["properties"]["$ai_trace_name"] == "LangGraph"
+    assert trace_props["$ai_trace_name"] == "LangGraph"
 
-    assert len(trace_args["properties"]["$ai_input_state"]["messages"]) == 1
-    assert isinstance(trace_args["properties"]["$ai_input_state"]["messages"][0], HumanMessage)
-    assert trace_args["properties"]["$ai_input_state"]["messages"][0].content == "What's a bar?"
-    assert trace_args["properties"]["$ai_input_state"]["messages"][0].type == "human"
-    assert trace_args["properties"]["$ai_input_state"]["xyz"] is None
-    assert len(trace_args["properties"]["$ai_output_state"]["messages"]) == 3
+    assert len(trace_props["$ai_input_state"]["messages"]) == 1
+    assert isinstance(trace_props["$ai_input_state"]["messages"][0], HumanMessage)
+    assert trace_props["$ai_input_state"]["messages"][0].content == "What's a bar?"
+    assert trace_props["$ai_input_state"]["messages"][0].type == "human"
+    assert trace_props["$ai_input_state"]["xyz"] is None
+    assert len(trace_props["$ai_output_state"]["messages"]) == 3
 
-    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][0], HumanMessage)
-    assert trace_args["properties"]["$ai_output_state"]["messages"][0].content == "What's a bar?"
-    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][1], AIMessage)
-    assert trace_args["properties"]["$ai_output_state"]["messages"][1].content == "Let's explore bar."
-    assert isinstance(trace_args["properties"]["$ai_output_state"]["messages"][2], AIMessage)
-    assert trace_args["properties"]["$ai_output_state"]["messages"][2].content == "It's a type of greeble."
+    assert isinstance(trace_props["$ai_output_state"]["messages"][0], HumanMessage)
+    assert trace_props["$ai_output_state"]["messages"][0].content == "What's a bar?"
+    assert isinstance(trace_props["$ai_output_state"]["messages"][1], AIMessage)
+    assert trace_props["$ai_output_state"]["messages"][1].content == "Let's explore bar."
+    assert isinstance(trace_props["$ai_output_state"]["messages"][2], AIMessage)
+    assert trace_props["$ai_output_state"]["messages"][2].content == "It's a type of greeble."
     assert trace_args["properties"]["$ai_output_state"]["xyz"] == "abc"
 
 
