@@ -1046,6 +1046,7 @@ def test_error(mock_client):
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "Test error"
 
+
 def test_http_error(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")], http_status=400)
