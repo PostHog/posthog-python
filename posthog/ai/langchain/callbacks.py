@@ -469,7 +469,7 @@ class CallbackHandler(BaseCallbackHandler):
         trace_id: Any,
         run_id: UUID,
         run: GenerationMetadata,
-        output: Union[LLMResult | BaseException],
+        output: Union[LLMResult, BaseException],
         parent_run_id: Optional[UUID] = None,
     ):
         event_properties = {

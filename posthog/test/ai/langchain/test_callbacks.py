@@ -18,6 +18,7 @@ from langchain_openai.chat_models import ChatOpenAI
 from langgraph.graph.state import END, START, StateGraph
 
 from posthog.ai.langchain import CallbackHandler
+from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -74,19 +75,23 @@ def test_metadata_capture(mock_client):
             messages=[{"role": "user", "content": "Who won the world series in 2020?"}],
             invocation_params={"temperature": 0.5},
             metadata={"ls_model_name": "hog-mini", "ls_provider": "posthog"},
+            name="test",
         )
-    expected = {
-        "model": "hog-mini",
-        "input": [{"role": "user", "content": "Who won the world series in 2020?"}],
-        "start_time": 1234567890,
-        "model_params": {"temperature": 0.5},
-        "provider": "posthog",
-        "base_url": "https://us.posthog.com",
-    }
+    expected = GenerationMetadata(
+        model="hog-mini",
+        input=[{"role": "user", "content": "Who won the world series in 2020?"}],
+        start_time=1234567890,
+        model_params={"temperature": 0.5},
+        provider="posthog",
+        base_url="https://us.posthog.com",
+        name="test",
+        end_time=None,
+    )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
         run = callbacks._pop_run_metadata(run_id)
-    assert run == {**expected, "end_time": 1234567891}
+    expected.end_time = 1234567891
+    assert run == expected
     assert callbacks._runs == {}
     callbacks._pop_run_metadata(uuid.uuid4())  # should not raise
 
@@ -95,12 +100,32 @@ def test_run_metadata_capture(mock_client):
     callbacks = CallbackHandler(mock_client)
     run_id = uuid.uuid4()
     with patch("time.time", return_value=1234567890):
-        callbacks._set_span_metadata(run_id, "test", 1)
-    expected = {
-        "name": "test",
-        "input": 1,
-        "start_time": 1234567890,
-    }
+        callbacks._set_trace_or_span_metadata(None, 1, run_id)
+    expected = SpanMetadata(
+        name="trace",
+        input=1,
+        start_time=1234567890,
+        end_time=None,
+    )
+    assert callbacks._runs[run_id] == expected
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_trace_or_span_metadata(None, 1, run_id, uuid.uuid4())
+    expected = SpanMetadata(
+        name="span",
+        input=1,
+        start_time=1234567890,
+        end_time=None,
+    )
+    assert callbacks._runs[run_id] == expected
+
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_trace_or_span_metadata({"name": "test"}, 1, run_id)
+    expected = SpanMetadata(
+        name="test",
+        input=1,
+        start_time=1234567890,
+        end_time=None,
+    )
     assert callbacks._runs[run_id] == expected
 
 
@@ -132,11 +157,24 @@ def test_basic_chat_chain(mock_client, stream):
         result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
-    assert mock_client.capture.call_count == 2
-    generation_args = mock_client.capture.call_args_list[0][1]
-    generation_props = generation_args["properties"]
-    trace_args = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture.call_count == 3
 
+    span_args = mock_client.capture.call_args_list[0][1]
+    span_props = span_args["properties"]
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_props = trace_args["properties"]
+
+    # Span is first
+    assert span_args["event"] == "$ai_span"
+    assert span_props["$ai_trace_id"] == generation_props["$ai_trace_id"]
+    assert span_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in span_props
+
+    # Generation is second
     assert generation_args["event"] == "$ai_generation"
     assert "distinct_id" in generation_args
     assert "$ai_model" in generation_props
@@ -154,9 +192,15 @@ def test_basic_chat_chain(mock_client, stream):
     assert generation_props["$ai_input_tokens"] == 10
     assert generation_props["$ai_output_tokens"] == 10
     assert generation_props["$ai_http_status"] == 200
-    assert generation_props["$ai_trace_id"] is not None
     assert isinstance(generation_props["$ai_latency"], float)
+    assert "$ai_generation_id" in generation_props
+    assert generation_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
+
+    # Trace is last
     assert trace_args["event"] == "$ai_trace"
+    assert "$ai_trace_id" in trace_props
+    assert "$ai_parent_id" not in trace_props
 
 
 @pytest.mark.parametrize("stream", [True, False])
@@ -186,13 +230,22 @@ async def test_async_basic_chat_chain(mock_client, stream):
     else:
         result = await chain.ainvoke({}, config={"callbacks": callbacks})
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
-    assert mock_client.capture.call_count == 2
+    assert mock_client.capture.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[0][1]
+    span_args = mock_client.capture.call_args_list[0][1]
+    span_props = span_args["properties"]
+    generation_args = mock_client.capture.call_args_list[1][1]
     generation_props = generation_args["properties"]
-    trace_args = mock_client.capture.call_args_list[1][1]
+    trace_args = mock_client.capture.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
+    # Span is first
+    assert span_args["event"] == "$ai_span"
+    assert span_props["$ai_trace_id"] == generation_props["$ai_trace_id"]
+    assert span_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in span_props
+
+    # Generation is second
     assert generation_args["event"] == "$ai_generation"
     assert "distinct_id" in generation_args
     assert "$ai_model" in generation_props
@@ -210,12 +263,16 @@ async def test_async_basic_chat_chain(mock_client, stream):
     assert generation_props["$ai_input_tokens"] == 10
     assert generation_props["$ai_output_tokens"] == 10
     assert generation_props["$ai_http_status"] == 200
-    assert generation_props["$ai_trace_id"] is not None
     assert isinstance(generation_props["$ai_latency"], float)
+    assert "$ai_generation_id" in generation_props
+    assert generation_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
+    # Trace is last
     assert trace_args["event"] == "$ai_trace"
     assert "distinct_id" in generation_args
     assert trace_props["$ai_trace_id"] == generation_props["$ai_trace_id"]
+    assert "$ai_parent_id" not in trace_props
 
 
 @pytest.mark.parametrize(
