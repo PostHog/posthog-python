@@ -419,7 +419,7 @@ class CallbackHandler(BaseCallbackHandler):
         if not run:
             return
         if isinstance(run, GenerationMetadata):
-            log.warning(f"Run {run_id} is not a generation but attempted to be captured as a trace or span.")
+            log.warning(f"Run {run_id} is a generation, but attempted to be captured as a trace or span.")
             return
         self._capture_trace_or_span(
             trace_id, run_id, run, outputs, self._get_parent_run_id(trace_id, run_id, parent_run_id)
@@ -471,7 +471,7 @@ class CallbackHandler(BaseCallbackHandler):
         if not run:
             return
         if not isinstance(run, GenerationMetadata):
-            log.warning(f"Run {run_id} is not a generation but attempted to be captured as a generation.")
+            log.warning(f"Run {run_id} is not a generation, but attempted to be captured as a generation.")
             return
         self._capture_generation(
             trace_id, run_id, run, response, self._get_parent_run_id(trace_id, run_id, parent_run_id)
