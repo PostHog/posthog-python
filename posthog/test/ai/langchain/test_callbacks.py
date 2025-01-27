@@ -4,20 +4,20 @@ import math
 import os
 import time
 import uuid
-from typing import List, Optional, TypedDict, Union, Literal
+from typing import List, Literal, Optional, TypedDict, Union
 from unittest.mock import patch
 
 import pytest
 from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import AIMessage, HumanMessage, ToolCall
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
+from langchain_core.tools import tool
 from langchain_openai.chat_models import ChatOpenAI
 from langgraph.graph.state import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
-from langchain_core.tools import tool
 
 from posthog.ai.langchain import CallbackHandler
 from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
@@ -1257,7 +1257,7 @@ def test_langgraph_agent(mock_client):
     graph = create_react_agent(model, tools=tools)
     inputs = {"messages": [("user", "what is the weather in sf")]}
     cb = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id")
-    res = graph.invoke(inputs, config={"callbacks": [cb]})
+    graph.invoke(inputs, config={"callbacks": [cb]})
     calls = [call[1] for call in mock_client.capture.call_args_list]
     assert len(calls) == 21
     for call in calls:

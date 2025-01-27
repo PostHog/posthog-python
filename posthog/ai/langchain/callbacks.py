@@ -6,6 +6,7 @@ except ImportError:
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
@@ -17,13 +18,12 @@ from typing import (
     cast,
 )
 from uuid import UUID
-from dataclasses import dataclass
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema.agent import AgentAction, AgentFinish
+from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
-from langchain_core.documents import Document
 from pydantic import BaseModel
 
 from posthog import default_client

@@ -1,3 +1,11 @@
+## 3.10.0 - 2025-01-27
+
+1. Add the `$ai_span` event to the LangChain callback handler to capture the input and output of intermediary chains.
+
+## 3.9.3 - 2025-01-23
+
+1. Fix capturing of multiple traces in the LangChain callback handler.
+
 ## 3.9.2 - 2025-01-22
 
 1. Fix importing of LangChain callback handler under certain circumstances.
