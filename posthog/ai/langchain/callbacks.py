@@ -438,14 +438,11 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_trace_id": trace_id,
             "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.input),
             "$ai_latency": run.latency,
+            "$ai_span_name": run.name,
+            "$ai_span_id": run_id,
         }
-
         if parent_run_id is not None:
-            event_properties["$ai_span_id"] = run_id
             event_properties["$ai_parent_id"] = parent_run_id
-            event_properties["$ai_span_name"] = run.name
-        else:
-            event_properties["$ai_trace_name"] = run.name
         if self._properties:
             event_properties.update(self._properties)
 
@@ -490,7 +487,8 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         event_properties = {
             "$ai_trace_id": trace_id,
-            "$ai_generation_id": run_id,
+            "$ai_span_id": run_id,
+            "$ai_span_name": run.name,
             "$ai_parent_id": parent_run_id,
             "$ai_provider": run.provider,
             "$ai_model": run.model,

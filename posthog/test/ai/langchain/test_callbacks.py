@@ -195,9 +195,10 @@ def test_basic_chat_chain(mock_client, stream):
     assert generation_props["$ai_output_tokens"] == 10
     assert generation_props["$ai_http_status"] == 200
     assert isinstance(generation_props["$ai_latency"], float)
-    assert "$ai_generation_id" in generation_props
+    assert "$ai_span_id" in generation_props
     assert generation_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
     assert generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
+    assert generation_props["$ai_span_name"] == "FakeMessagesListChatModel"
 
     # Trace is last
     assert trace_args["event"] == "$ai_trace"
@@ -266,7 +267,7 @@ async def test_async_basic_chat_chain(mock_client, stream):
     assert generation_props["$ai_output_tokens"] == 10
     assert generation_props["$ai_http_status"] == 200
     assert isinstance(generation_props["$ai_latency"], float)
-    assert "$ai_generation_id" in generation_props
+    assert "$ai_span_id" in generation_props
     assert generation_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
     assert generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
@@ -398,7 +399,7 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     assert first_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert first_generation_props["$ai_http_status"] == 200
     assert isinstance(first_generation_props["$ai_latency"], float)
-    assert "$ai_generation_id" in first_generation_props
+    assert "$ai_span_id" in first_generation_props
     assert first_generation_props["$ai_parent_id"] == trace_props["$ai_trace_id"]
     assert first_generation_props["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
@@ -428,7 +429,7 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     assert isinstance(trace_props["$ai_output_state"], AIMessage)
     assert trace_props["$ai_output_state"].content == "Bar"
     assert trace_props["$ai_trace_id"] is not None
-    assert trace_props["$ai_trace_name"] == "RunnableSequence"
+    assert trace_props["$ai_span_name"] == "RunnableSequence"
 
 
 def test_personless_mode(mock_client):
@@ -559,7 +560,7 @@ def test_metadata(mock_client):
     assert trace_call_args["distinct_id"] == "test_id"
     assert trace_call_args["event"] == "$ai_trace"
     assert trace_call_props["$ai_trace_id"] == "test-trace-id"
-    assert trace_call_props["$ai_trace_name"] == "RunnableSequence"
+    assert trace_call_props["$ai_span_name"] == "RunnableSequence"
     assert trace_call_props["foo"] == "bar"
     assert trace_call_props["$ai_input_state"] == {"plan": None}
     assert isinstance(trace_call_props["$ai_output_state"], AIMessage)
@@ -678,8 +679,8 @@ def test_graph_state(mock_client):
     # 7. Generation, fake_llm
     assert calls[6]["event"] == "$ai_generation"
     assert calls[6]["properties"]["$ai_parent_id"] == calls[7]["properties"]["$ai_span_id"]
-    assert "$ai_generation_id" in calls[6]["properties"]
-    assert "$ai_span_name" not in calls[6]["properties"]
+    assert "$ai_span_id" in calls[6]["properties"]
+    assert calls[6]["properties"]["$ai_span_name"] == "FakeMessagesListChatModel"
 
     # 8. Span, RunnableSequence
     assert calls[7]["event"] == "$ai_span"
@@ -700,7 +701,7 @@ def test_graph_state(mock_client):
 
     # 11. Trace
     assert trace_args["event"] == "$ai_trace"
-    assert trace_props["$ai_trace_name"] == "LangGraph"
+    assert trace_props["$ai_span_name"] == "LangGraph"
 
     assert len(trace_props["$ai_input_state"]["messages"]) == 1
     assert isinstance(trace_props["$ai_input_state"]["messages"][0], HumanMessage)
@@ -760,7 +761,7 @@ def test_exception_in_chain(mock_client):
     assert mock_client.capture.call_count == 1
     trace_call_args = mock_client.capture.call_args_list[0][1]
     assert trace_call_args["event"] == "$ai_trace"
-    assert trace_call_args["properties"]["$ai_trace_name"] == "runnable"
+    assert trace_call_args["properties"]["$ai_span_name"] == "runnable"
 
 
 def test_openai_error(mock_client):
@@ -1230,9 +1231,9 @@ async def test_async_traces(mock_client):
     assert first_call[1]["event"] == "$ai_span"
     assert second_call[1]["event"] == "$ai_generation"
     assert third_call[1]["event"] == "$ai_trace"
-    assert third_call[1]["properties"]["$ai_trace_name"] == "RunnableSequence"
+    assert third_call[1]["properties"]["$ai_span_name"] == "RunnableSequence"
     assert fourth_call[1]["event"] == "$ai_trace"
-    assert fourth_call[1]["properties"]["$ai_trace_name"] == "sleep"
+    assert fourth_call[1]["properties"]["$ai_span_name"] == "sleep"
     assert (
         min(approximate_latency - 1, 0) <= math.floor(third_call[1]["properties"]["$ai_latency"]) <= approximate_latency
     )
