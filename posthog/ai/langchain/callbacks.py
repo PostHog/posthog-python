@@ -163,7 +163,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, str(error))
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
     def on_chat_model_start(
         self,
@@ -262,7 +262,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, str(error))
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
     def on_retriever_start(
         self,
@@ -299,7 +299,7 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> Any:
         """Run when Retriever errors."""
         self._log_debug_event("on_retriever_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, str(error))
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
     def on_agent_action(
         self,
@@ -448,8 +448,13 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_trace_name"] = run.name
         if self._properties:
             event_properties.update(self._properties)
-        if outputs is not None:
+
+        if isinstance(outputs, BaseException):
+            event_properties["$ai_error"] = _stringify_exception(outputs)
+            event_properties["$ai_is_error"] = True
+        elif outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(self._client, self._privacy_mode, outputs)
+
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
 
@@ -498,7 +503,7 @@ class CallbackHandler(BaseCallbackHandler):
 
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
-            event_properties["$ai_error"] = str(output)
+            event_properties["$ai_error"] = _stringify_exception(output)
             event_properties["$ai_is_error"] = True
         else:
             # Add usage
@@ -687,3 +692,10 @@ def _get_langchain_run_name(serialized: Optional[Dict[str, Any]], **kwargs: Any)
     except (KeyError, TypeError):
         pass
     return None
+
+
+def _stringify_exception(exception: BaseException) -> str:
+    description = str(exception)
+    if description:
+        return f"{exception.__class__.__name__}: {description}"
+    return exception.__class__.__name__

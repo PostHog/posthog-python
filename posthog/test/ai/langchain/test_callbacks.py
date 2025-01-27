@@ -1311,3 +1311,35 @@ def test_span_set_parent_ids_for_third_level_run(mock_client, trace_id):
     span2, span1, trace = [call[1]["properties"] for call in mock_client.capture.call_args_list]
     assert span2["$ai_parent_id"] == span1["$ai_span_id"]
     assert span1["$ai_parent_id"] == trace["$ai_trace_id"]
+
+
+def test_captures_error_with_details_in_span(mock_client):
+    def span(_):
+        raise ValueError("test")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(span) | RunnableLambda(lambda _: "foo")
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    assert mock_client.capture.call_count == 2
+    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"] == "ValueError: test"
+    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
+
+
+def test_captures_error_without_details_in_span(mock_client):
+    def span(_):
+        raise ValueError
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(span) | RunnableLambda(lambda _: "foo")
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    assert mock_client.capture.call_count == 2
+    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"] == "ValueError"
+    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
