@@ -51,14 +51,23 @@ def clean(item):
         return float(item)
     if isinstance(item, UUID):
         return str(item)
-    elif isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
+    if isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
         return item
-    elif isinstance(item, (set, list, tuple)):
+    if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
-    elif isinstance(item, dict):
+    # Pydantic model
+    try:
+        # v2+
+        if hasattr(item, "model_dump") and callable(item.model_dump):
+            item = item.model_dump()
+        # v1
+        elif hasattr(item, "dict") and callable(item.dict):
+            item = item.dict()
+    except:
+        pass
+    if isinstance(item, dict):
         return _clean_dict(item)
-    else:
-        return _coerce_unicode(item)
+    return _coerce_unicode(item)
 
 
 def _clean_list(list_):
