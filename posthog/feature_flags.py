@@ -53,6 +53,8 @@ def match_feature_flag_properties(flag, distinct_id, properties, cohort_properti
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
+    # Some filters can be explicitly set to null, which require accessing variants like so
+    flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
 
     # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
     # evaluated first, and the variant override is applied to the first matching condition.
@@ -67,8 +69,6 @@ def match_feature_flag_properties(flag, distinct_id, properties, cohort_properti
             # the matching variant
             if is_condition_match(flag, distinct_id, condition, properties, cohort_properties):
                 variant_override = condition.get("variant")
-                # Some filters can be explicitly set to null, which require accessing variants like so
-                flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
                 if variant_override and variant_override in [variant["key"] for variant in flag_variants]:
                     variant = variant_override
                 else:
