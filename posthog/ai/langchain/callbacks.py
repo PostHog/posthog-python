@@ -5,7 +5,6 @@ except ImportError:
 
 import logging
 import time
-import uuid
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -402,8 +401,16 @@ class CallbackHandler(BaseCallbackHandler):
     def _get_trace_id(self, run_id: UUID):
         trace_id = self._trace_id or self._find_root_run(run_id)
         if not trace_id:
-            trace_id = uuid.uuid4()
+            return run_id
         return trace_id
+
+    def _get_parent_run_id(self, trace_id: Any, run_id: UUID, parent_run_id: Optional[UUID]):
+        """
+        Replace the parent run ID with the trace ID for second level runs when a custom trace ID is set.
+        """
+        if parent_run_id is not None and parent_run_id not in self._parent_tree:
+            return trace_id
+        return parent_run_id
 
     def _pop_run_and_capture_trace_or_span(self, run_id: UUID, parent_run_id: Optional[UUID], outputs: Any):
         trace_id = self._get_trace_id(run_id)
@@ -414,7 +421,9 @@ class CallbackHandler(BaseCallbackHandler):
         if isinstance(run, GenerationMetadata):
             log.warning(f"Run {run_id} is not a generation but attempted to be captured as a trace or span.")
             return
-        self._capture_trace_or_span(trace_id, run_id, run, outputs, parent_run_id)
+        self._capture_trace_or_span(
+            trace_id, run_id, run, outputs, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+        )
 
     def _capture_trace_or_span(
         self,
@@ -462,7 +471,9 @@ class CallbackHandler(BaseCallbackHandler):
         if not isinstance(run, GenerationMetadata):
             log.warning(f"Run {run_id} is not a generation but attempted to be captured as a generation.")
             return
-        self._capture_generation(trace_id, run_id, run, response, parent_run_id)
+        self._capture_generation(
+            trace_id, run_id, run, response, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+        )
 
     def _capture_generation(
         self,

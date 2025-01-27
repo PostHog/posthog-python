@@ -1265,3 +1265,27 @@ def test_langgraph_agent(mock_client):
     assert len([call for call in calls if call["event"] == "$ai_generation"]) == 2
     assert len([call for call in calls if call["event"] == "$ai_span"]) == 18
     assert len([call for call in calls if call["event"] == "$ai_trace"]) == 1
+
+
+@pytest.mark.parametrize("trace_id", ["test-trace-id", None])
+def test_span_set_parent_ids(mock_client, trace_id):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "You are a helpful assistant."),
+            ("user", "Who won the world series in 2020?"),
+        ]
+    )
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="The Los Angeles Dodgers won the World Series in 2020.")]
+    )
+    callbacks = [CallbackHandler(mock_client, trace_id=trace_id)]
+    chain = prompt | model
+    chain.invoke({}, config={"callbacks": callbacks})
+
+    assert mock_client.capture.call_count == 3
+
+    span_props = mock_client.capture.call_args_list[0][1]
+    assert span_props["properties"]["$ai_trace_id"] == span_props["properties"]["$ai_parent_id"]
+
+    generation_props = mock_client.capture.call_args_list[1][1]
+    assert generation_props["properties"]["$ai_trace_id"] == generation_props["properties"]["$ai_parent_id"]
