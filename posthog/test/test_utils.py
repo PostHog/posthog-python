@@ -1,10 +1,13 @@
 import unittest
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Optional
 from uuid import UUID
 
 import six
 from dateutil.tz import tzutc
+from pydantic import BaseModel
+from pydantic.v1 import BaseModel as BaseModelV1
 
 from posthog import utils
 
@@ -80,6 +83,32 @@ class TestUtils(unittest.TestCase):
     def test_remove_slash(self):
         self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io/"))
         self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io"))
+
+    def test_clean_pydantic(self):
+        class ModelV2(BaseModel):
+            foo: str
+            bar: int
+            baz: Optional[str] = None
+
+        class ModelV1(BaseModelV1):
+            foo: int
+            bar: str
+
+        class NestedModel(BaseModel):
+            foo: ModelV2
+
+        self.assertEqual(utils.clean(ModelV2(foo="1", bar=2)), {"foo": "1", "bar": 2, "baz": None})
+        self.assertEqual(utils.clean(ModelV1(foo=1, bar="2")), {"foo": 1, "bar": "2"})
+        self.assertEqual(
+            utils.clean(NestedModel(foo=ModelV2(foo="1", bar=2, baz="3"))), {"foo": {"foo": "1", "bar": 2, "baz": "3"}}
+        )
+
+        class Dummy:
+            def model_dump(self, required_param):
+                pass
+
+        # Skips a class with a defined non-Pydantic `model_dump` method.
+        self.assertEqual(utils.clean({"test": Dummy()}), {})
 
 
 class TestSizeLimitedDict(unittest.TestCase):

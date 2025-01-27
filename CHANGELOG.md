@@ -1,3 +1,7 @@
+## 3.11.0 - 2025-01-27
+
+1. Fix serialiazation of Pydantic models in methods.
+
 ## 3.10.0 - 2025-01-24
 
 1. Add `$ai_error` and `$ai_is_error` properties to LangChain callback handler, OpenAI, and Anthropic.
