@@ -325,3 +325,17 @@ async def test_async_streaming_system_prompt(mock_client, mock_anthropic_stream)
         {"role": "system", "content": "You must always answer with 'Bar'."},
         {"role": "user", "content": "Foo"},
     ]
+
+
+def test_error(mock_client, mock_anthropic_response):
+    with patch("anthropic.resources.Messages.create", side_effect=Exception("Test error")):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        with pytest.raises(Exception):
+            client.messages.create(model="claude-3-opus-20240229", messages=[{"role": "user", "content": "Hello"}])
+
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_is_error"] is True
+        assert props["$ai_error"] == "Test error"

@@ -1,6 +1,10 @@
-## 3.10.0 - 2025-01-27
+## 3.11.0 - 2025-01-27
 
 1. Add the `$ai_span` event to the LangChain callback handler to capture the input and output of intermediary chains.
+
+## 3.10.0 - 2025-01-24
+
+1. Add `$ai_error` and `$ai_is_error` properties to LangChain callback handler, OpenAI, and Anthropic.
 
 ## 3.9.3 - 2025-01-23
 
