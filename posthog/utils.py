@@ -63,7 +63,8 @@ def clean(item):
         # v1
         elif hasattr(item, "dict") and callable(item.dict):
             item = item.dict()
-    except:
+    except TypeError as e:
+        log.debug(f"Could not serialize Pydantic-like model: {e}")
         pass
     if isinstance(item, dict):
         return _clean_dict(item)

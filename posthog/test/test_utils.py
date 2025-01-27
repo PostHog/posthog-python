@@ -1,13 +1,13 @@
-from typing import Optional
 import unittest
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel
-from pydantic.v1 import BaseModel as BaseModelV1
 
 import six
 from dateutil.tz import tzutc
+from pydantic import BaseModel
+from pydantic.v1 import BaseModel as BaseModelV1
 
 from posthog import utils
 
