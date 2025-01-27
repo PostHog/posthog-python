@@ -1289,3 +1289,25 @@ def test_span_set_parent_ids(mock_client, trace_id):
 
     generation_props = mock_client.capture.call_args_list[1][1]
     assert generation_props["properties"]["$ai_trace_id"] == generation_props["properties"]["$ai_parent_id"]
+
+
+@pytest.mark.parametrize("trace_id", ["test-trace-id", None])
+def test_span_set_parent_ids_for_third_level_run(mock_client, trace_id):
+    def span_1(_):
+        def span_2(_):
+            def span_3(_):
+                return "span 3"
+
+            return RunnableLambda(span_3)
+
+        return RunnableLambda(span_2)
+
+    callbacks = [CallbackHandler(mock_client, trace_id=trace_id)]
+    chain = RunnableLambda(span_1)
+    chain.invoke({}, config={"callbacks": callbacks})
+
+    assert mock_client.capture.call_count == 3
+
+    span2, span1, trace = [call[1]["properties"] for call in mock_client.capture.call_args_list]
+    assert span2["$ai_parent_id"] == span1["$ai_span_id"]
+    assert span1["$ai_parent_id"] == trace["$ai_trace_id"]
