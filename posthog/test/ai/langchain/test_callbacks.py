@@ -4,18 +4,20 @@ import math
 import os
 import time
 import uuid
-from typing import List, Optional, TypedDict, Union
+from typing import List, Optional, TypedDict, Union, Literal
 from unittest.mock import patch
 
 import pytest
 from langchain_anthropic.chat_models import ChatAnthropic
 from langchain_community.chat_models.fake import FakeMessagesListChatModel
 from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolCall
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_openai.chat_models import ChatOpenAI
 from langgraph.graph.state import END, START, StateGraph
+from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool
 
 from posthog.ai.langchain import CallbackHandler
 from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
@@ -1234,3 +1236,32 @@ async def test_async_traces(mock_client):
     assert (
         min(approximate_latency - 1, 0) <= math.floor(third_call[1]["properties"]["$ai_latency"]) <= approximate_latency
     )
+
+
+@pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
+def test_langgraph_agent(mock_client):
+    @tool
+    def get_weather(city: Literal["nyc", "sf"]):
+        """
+        Use this to get weather information.
+
+        Args:
+            city: The city to get weather information for.
+        """
+        if city == "sf":
+            return "It's always sunny in sf"
+        return "No info"
+
+    tools = [get_weather]
+    model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0)
+    graph = create_react_agent(model, tools=tools)
+    inputs = {"messages": [("user", "what is the weather in sf")]}
+    cb = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id")
+    res = graph.invoke(inputs, config={"callbacks": [cb]})
+    calls = [call[1] for call in mock_client.capture.call_args_list]
+    assert len(calls) == 21
+    for call in calls:
+        assert call["properties"]["$ai_trace_id"] == "test-trace-id"
+    assert len([call for call in calls if call["event"] == "$ai_generation"]) == 2
+    assert len([call for call in calls if call["event"] == "$ai_span"]) == 18
+    assert len([call for call in calls if call["event"] == "$ai_trace"]) == 1
