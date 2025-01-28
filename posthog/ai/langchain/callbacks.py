@@ -62,8 +62,8 @@ class GenerationMetadata(SpanMetadata):
     """Base URL of the provider's API used in the run."""
 
 
-RunMetadataUnion = Union[SpanMetadata, GenerationMetadata]
-RunMetadataStorage = Dict[UUID, RunMetadataUnion]
+RunMetadata = Union[SpanMetadata, GenerationMetadata]
+RunMetadataStorage = Dict[UUID, RunMetadata]
 
 
 class CallbackHandler(BaseCallbackHandler):
@@ -388,7 +388,7 @@ class CallbackHandler(BaseCallbackHandler):
             pass
         self._runs[run_id] = generation
 
-    def _pop_run_metadata(self, run_id: UUID) -> Optional[RunMetadataUnion]:
+    def _pop_run_metadata(self, run_id: UUID) -> Optional[RunMetadata]:
         end_time = time.time()
         try:
             run = self._runs.pop(run_id)
