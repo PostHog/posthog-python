@@ -1,6 +1,8 @@
 ## 3.11.0 - 2025-01-28
 
 1. Add the `$ai_span` event to the LangChain callback handler to capture the input and output of intermediary chains.
+   > LLM observability naming change: event property `$ai_trace_name` is now `$ai_span_name`.
+
 2. Fix serialiazation of Pydantic models in methods.
 
 ## 3.10.0 - 2025-01-24
