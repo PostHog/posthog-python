@@ -1,10 +1,17 @@
-## 3.11.0 - 2025-01-27
+## 3.11.0 - 2025-01-28
 
-1. Fix serialiazation of Pydantic models in methods.
+1. Add the `$ai_span` event to the LangChain callback handler to capture the input and output of intermediary chains.
+   > LLM observability naming change: event property `$ai_trace_name` is now `$ai_span_name`.
+
+2. Fix serialiazation of Pydantic models in methods.
 
 ## 3.10.0 - 2025-01-24
 
 1. Add `$ai_error` and `$ai_is_error` properties to LangChain callback handler, OpenAI, and Anthropic.
+
+## 3.9.3 - 2025-01-23
+
+1. Fix capturing of multiple traces in the LangChain callback handler.
 
 ## 3.9.2 - 2025-01-22
 

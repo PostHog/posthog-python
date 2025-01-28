@@ -5,14 +5,14 @@ except ImportError:
 
 import logging
 import time
-import uuid
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
     List,
     Optional,
+    Sequence,
     Tuple,
-    TypedDict,
     Union,
     cast,
 )
@@ -20,6 +20,7 @@ from uuid import UUID
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema.agent import AgentAction, AgentFinish
+from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
@@ -31,26 +32,38 @@ from posthog.client import Client
 log = logging.getLogger("posthog")
 
 
-class RunMetadata(TypedDict, total=False):
-    input: Any
-    """Input of the run: messages, prompt variables, etc."""
+@dataclass
+class SpanMetadata:
     name: str
     """Name of the run: chain name, model name, etc."""
-    provider: str
-    """Provider of the run: OpenAI, Anthropic"""
-    model: str
-    """Model used in the run"""
-    model_params: Dict[str, Any]
-    """Model parameters of the run: temperature, max_tokens, etc."""
-    base_url: str
-    """Base URL of the provider's API used in the run."""
     start_time: float
     """Start time of the run."""
-    end_time: float
+    end_time: Optional[float]
     """End time of the run."""
+    input: Optional[Any]
+    """Input of the run: messages, prompt variables, etc."""
+
+    @property
+    def latency(self) -> float:
+        if not self.end_time:
+            return 0
+        return self.end_time - self.start_time
 
 
-RunStorage = Dict[UUID, RunMetadata]
+@dataclass
+class GenerationMetadata(SpanMetadata):
+    provider: Optional[str] = None
+    """Provider of the run: OpenAI, Anthropic"""
+    model: Optional[str] = None
+    """Model used in the run"""
+    model_params: Optional[Dict[str, Any]] = None
+    """Model parameters of the run: temperature, max_tokens, etc."""
+    base_url: Optional[str] = None
+    """Base URL of the provider's API used in the run."""
+
+
+RunMetadata = Union[SpanMetadata, GenerationMetadata]
+RunMetadataStorage = Dict[UUID, RunMetadata]
 
 
 class CallbackHandler(BaseCallbackHandler):
@@ -76,7 +89,7 @@ class CallbackHandler(BaseCallbackHandler):
     _properties: Optional[Dict[str, Any]]
     """Global properties to be sent with every event."""
 
-    _runs: RunStorage
+    _runs: RunMetadataStorage
     """Mapping of run IDs to run metadata as run metadata is only available on the start of generation."""
 
     _parent_tree: Dict[UUID, UUID]
@@ -104,11 +117,12 @@ class CallbackHandler(BaseCallbackHandler):
             privacy_mode: Whether to redact the input and output of the trace.
             groups: Optional additional PostHog groups to use for the trace.
         """
-        self._client = client or default_client
+        posthog_client = client or default_client
+        if posthog_client is None:
+            raise ValueError("PostHog client is required")
+        self._client = posthog_client
         self._distinct_id = distinct_id
         self._trace_id = trace_id
-        self._trace_name = None
-        self._trace_input = None
         self._properties = properties or {}
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
@@ -127,8 +141,29 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
-        if parent_run_id is None and self._trace_name is None:
-            self._set_span_metadata(run_id, self._get_langchain_run_name(serialized, **kwargs), inputs)
+        self._set_trace_or_span_metadata(serialized, inputs, run_id, parent_run_id, **kwargs)
+
+    def on_chain_end(
+        self,
+        outputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ):
+        self._log_debug_event("on_chain_end", run_id, parent_run_id, outputs=outputs)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, outputs)
+
+    def on_chain_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ):
+        self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
     def on_chat_model_start(
         self,
@@ -168,66 +203,6 @@ class CallbackHandler(BaseCallbackHandler):
         """Run on new LLM token. Only available when streaming is enabled."""
         self._log_debug_event("on_llm_new_token", run_id, parent_run_id, token=token)
 
-    def on_tool_start(
-        self,
-        serialized: Optional[Dict[str, Any]],
-        input_str: str,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> Any:
-        self._log_debug_event("on_tool_start", run_id, parent_run_id, input_str=input_str)
-
-    def on_tool_end(
-        self,
-        output: str,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any,
-    ) -> Any:
-        self._log_debug_event("on_tool_end", run_id, parent_run_id, output=output)
-
-    def on_tool_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any,
-    ) -> Any:
-        self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
-
-    def on_chain_end(
-        self,
-        outputs: Dict[str, Any],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any,
-    ):
-        self._log_debug_event("on_chain_end", run_id, parent_run_id, outputs=outputs)
-        self._pop_parent_of_run(run_id)
-
-        if parent_run_id is None:
-            self._pop_trace_and_capture(run_id, outputs=outputs)
-
-    def on_chain_error(
-        self,
-        error: BaseException,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any,
-    ):
-        self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
-        self._pop_parent_of_run(run_id)
-
-        if parent_run_id is None:
-            self._pop_trace_and_capture(run_id, outputs=None)
-
     def on_llm_end(
         self,
         response: LLMResult,
@@ -240,45 +215,7 @@ class CallbackHandler(BaseCallbackHandler):
         The callback works for both streaming and non-streaming runs. For streaming runs, the chain must set `stream_usage=True` in the LLM.
         """
         self._log_debug_event("on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs)
-        trace_id = self._get_trace_id(run_id)
-        self._pop_parent_of_run(run_id)
-        run = self._pop_run_metadata(run_id)
-        if not run:
-            return
-
-        latency = run.get("end_time", 0) - run.get("start_time", 0)
-        input_tokens, output_tokens = _parse_usage(response)
-
-        generation_result = response.generations[-1]
-        if isinstance(generation_result[-1], ChatGeneration):
-            output = [
-                _convert_message_to_dict(cast(ChatGeneration, generation).message) for generation in generation_result
-            ]
-        else:
-            output = [_extract_raw_esponse(generation) for generation in generation_result]
-
-        event_properties = {
-            "$ai_provider": run.get("provider"),
-            "$ai_model": run.get("model"),
-            "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
-            "$ai_output_choices": with_privacy_mode(self._client, self._privacy_mode, output),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": input_tokens,
-            "$ai_output_tokens": output_tokens,
-            "$ai_latency": latency,
-            "$ai_trace_id": trace_id,
-            "$ai_base_url": run.get("base_url"),
-            **self._properties,
-        }
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
-        self._client.capture(
-            distinct_id=self._distinct_id or trace_id,
-            event="$ai_generation",
-            properties=event_properties,
-            groups=self._groups,
-        )
+        self._pop_run_and_capture_generation(run_id, parent_run_id, response)
 
     def on_llm_error(
         self,
@@ -289,34 +226,43 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         self._log_debug_event("on_llm_error", run_id, parent_run_id, error=error)
-        trace_id = self._get_trace_id(run_id)
-        self._pop_parent_of_run(run_id)
-        run = self._pop_run_metadata(run_id)
-        if not run:
-            return
+        self._pop_run_and_capture_generation(run_id, parent_run_id, error)
 
-        latency = run.get("end_time", 0) - run.get("start_time", 0)
-        event_properties = {
-            "$ai_provider": run.get("provider"),
-            "$ai_model": run.get("model"),
-            "$ai_model_parameters": run.get("model_params"),
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
-            "$ai_http_status": _get_http_status(error),
-            "$ai_latency": latency,
-            "$ai_trace_id": trace_id,
-            "$ai_base_url": run.get("base_url"),
-            "$ai_is_error": True,
-            "$ai_error": error.__str__(),
-            **self._properties,
-        }
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
-        self._client.capture(
-            distinct_id=self._distinct_id or trace_id,
-            event="$ai_generation",
-            properties=event_properties,
-            groups=self._groups,
-        )
+    def on_tool_start(
+        self,
+        serialized: Optional[Dict[str, Any]],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_tool_start", run_id, parent_run_id, input_str=input_str)
+        self._set_trace_or_span_metadata(serialized, input_str, run_id, parent_run_id, **kwargs)
+
+    def on_tool_end(
+        self,
+        output: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_tool_end", run_id, parent_run_id, output=output)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, output)
+
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
     def on_retriever_start(
         self,
@@ -329,17 +275,31 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_retriever_start", run_id, parent_run_id, query=query)
+        self._set_trace_or_span_metadata(serialized, query, run_id, parent_run_id, **kwargs)
 
-    def on_retriever_error(
+    def on_retriever_end(
         self,
-        error: Union[Exception, KeyboardInterrupt],
+        documents: Sequence[Document],
         *,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
+    ):
+        self._log_debug_event("on_retriever_end", run_id, parent_run_id, documents=documents)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, documents)
+
+    def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        **kwargs: Any,
     ) -> Any:
         """Run when Retriever errors."""
         self._log_debug_event("on_retriever_error", run_id, parent_run_id, error=error)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
     def on_agent_action(
         self,
@@ -351,6 +311,8 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> Any:
         """Run on agent action."""
         self._log_debug_event("on_agent_action", run_id, parent_run_id, action=action)
+        self._set_parent_of_run(run_id, parent_run_id)
+        self._set_trace_or_span_metadata(None, action, run_id, parent_run_id, **kwargs)
 
     def on_agent_finish(
         self,
@@ -361,6 +323,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_agent_finish", run_id, parent_run_id, finish=finish)
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, finish)
 
     def _set_parent_of_run(self, run_id: UUID, parent_run_id: Optional[UUID] = None):
         """
@@ -387,12 +350,17 @@ class CallbackHandler(BaseCallbackHandler):
             id = self._parent_tree[id]
         return id
 
-    def _set_span_metadata(self, run_id: UUID, name: str, input: Any):
-        self._runs[run_id] = {
-            "name": name,
-            "input": input,
-            "start_time": time.time(),
-        }
+    def _set_trace_or_span_metadata(
+        self,
+        serialized: Optional[Dict[str, Any]],
+        input: Any,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs,
+    ):
+        default_name = "trace" if parent_run_id is None else "span"
+        run_name = _get_langchain_run_name(serialized, **kwargs) or default_name
+        self._runs[run_id] = SpanMetadata(name=run_name, input=input, start_time=time.time(), end_time=None)
 
     def _set_llm_metadata(
         self,
@@ -403,24 +371,22 @@ class CallbackHandler(BaseCallbackHandler):
         invocation_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
-        run: RunMetadata = {
-            "input": messages,
-            "start_time": time.time(),
-        }
+        run_name = _get_langchain_run_name(serialized, **kwargs) or "generation"
+        generation = GenerationMetadata(name=run_name, input=messages, start_time=time.time(), end_time=None)
         if isinstance(invocation_params, dict):
-            run["model_params"] = get_model_params(invocation_params)
+            generation.model_params = get_model_params(invocation_params)
         if isinstance(metadata, dict):
             if model := metadata.get("ls_model_name"):
-                run["model"] = model
+                generation.model = model
             if provider := metadata.get("ls_provider"):
-                run["provider"] = provider
+                generation.provider = provider
         try:
             base_url = serialized["kwargs"]["openai_api_base"]
             if base_url is not None:
-                run["base_url"] = base_url
+                generation.base_url = base_url
         except KeyError:
             pass
-        self._runs[run_id] = run
+        self._runs[run_id] = generation
 
     def _pop_run_metadata(self, run_id: UUID) -> Optional[RunMetadata]:
         end_time = time.time()
@@ -429,63 +395,140 @@ class CallbackHandler(BaseCallbackHandler):
         except KeyError:
             log.warning(f"No run metadata found for run {run_id}")
             return None
-        run["end_time"] = end_time
+        run.end_time = end_time
         return run
 
     def _get_trace_id(self, run_id: UUID):
         trace_id = self._trace_id or self._find_root_run(run_id)
         if not trace_id:
-            trace_id = uuid.uuid4()
+            return run_id
         return trace_id
 
-    def _get_langchain_run_name(self, serialized: Optional[Dict[str, Any]], **kwargs: Any) -> str:
-        """Retrieve the name of a serialized LangChain runnable.
-
-        The prioritization for the determination of the run name is as follows:
-        - The value assigned to the "name" key in `kwargs`.
-        - The value assigned to the "name" key in `serialized`.
-        - The last entry of the value assigned to the "id" key in `serialized`.
-        - "<unknown>".
-
-        Args:
-            serialized (Optional[Dict[str, Any]]): A dictionary containing the runnable's serialized data.
-            **kwargs (Any): Additional keyword arguments, potentially including the 'name' override.
-
-        Returns:
-            str: The determined name of the Langchain runnable.
+    def _get_parent_run_id(self, trace_id: Any, run_id: UUID, parent_run_id: Optional[UUID]):
         """
-        if "name" in kwargs and kwargs["name"] is not None:
-            return kwargs["name"]
+        Replace the parent run ID with the trace ID for second level runs when a custom trace ID is set.
+        """
+        if parent_run_id is not None and parent_run_id not in self._parent_tree:
+            return trace_id
+        return parent_run_id
 
-        try:
-            return serialized["name"]
-        except (KeyError, TypeError):
-            pass
-
-        try:
-            return serialized["id"][-1]
-        except (KeyError, TypeError):
-            pass
-
-    def _pop_trace_and_capture(self, run_id: UUID, *, outputs: Optional[Dict[str, Any]]):
+    def _pop_run_and_capture_trace_or_span(self, run_id: UUID, parent_run_id: Optional[UUID], outputs: Any):
         trace_id = self._get_trace_id(run_id)
+        self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
             return
+        if isinstance(run, GenerationMetadata):
+            log.warning(f"Run {run_id} is a generation, but attempted to be captured as a trace or span.")
+            return
+        self._capture_trace_or_span(
+            trace_id, run_id, run, outputs, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+        )
+
+    def _capture_trace_or_span(
+        self,
+        trace_id: Any,
+        run_id: UUID,
+        run: SpanMetadata,
+        outputs: Any,
+        parent_run_id: Optional[UUID],
+    ):
+        event_name = "$ai_trace" if parent_run_id is None else "$ai_span"
         event_properties = {
-            "$ai_trace_name": run.get("name"),
             "$ai_trace_id": trace_id,
-            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.get("input")),
-            "$ai_latency": run.get("end_time", 0) - run.get("start_time", 0),
-            **self._properties,
+            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.input),
+            "$ai_latency": run.latency,
+            "$ai_span_name": run.name,
+            "$ai_span_id": run_id,
         }
-        if outputs is not None:
+        if parent_run_id is not None:
+            event_properties["$ai_parent_id"] = parent_run_id
+        if self._properties:
+            event_properties.update(self._properties)
+
+        if isinstance(outputs, BaseException):
+            event_properties["$ai_error"] = _stringify_exception(outputs)
+            event_properties["$ai_is_error"] = True
+        elif outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(self._client, self._privacy_mode, outputs)
+
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
+
+        self._client.capture(
+            distinct_id=self._distinct_id or run_id,
+            event=event_name,
+            properties=event_properties,
+            groups=self._groups,
+        )
+
+    def _pop_run_and_capture_generation(
+        self, run_id: UUID, parent_run_id: Optional[UUID], response: Union[LLMResult, BaseException]
+    ):
+        trace_id = self._get_trace_id(run_id)
+        self._pop_parent_of_run(run_id)
+        run = self._pop_run_metadata(run_id)
+        if not run:
+            return
+        if not isinstance(run, GenerationMetadata):
+            log.warning(f"Run {run_id} is not a generation, but attempted to be captured as a generation.")
+            return
+        self._capture_generation(
+            trace_id, run_id, run, response, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+        )
+
+    def _capture_generation(
+        self,
+        trace_id: Any,
+        run_id: UUID,
+        run: GenerationMetadata,
+        output: Union[LLMResult, BaseException],
+        parent_run_id: Optional[UUID] = None,
+    ):
+        event_properties = {
+            "$ai_trace_id": trace_id,
+            "$ai_span_id": run_id,
+            "$ai_span_name": run.name,
+            "$ai_parent_id": parent_run_id,
+            "$ai_provider": run.provider,
+            "$ai_model": run.model,
+            "$ai_model_parameters": run.model_params,
+            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.input),
+            "$ai_http_status": 200,
+            "$ai_latency": run.latency,
+            "$ai_base_url": run.base_url,
+        }
+
+        if isinstance(output, BaseException):
+            event_properties["$ai_http_status"] = _get_http_status(output)
+            event_properties["$ai_error"] = _stringify_exception(output)
+            event_properties["$ai_is_error"] = True
+        else:
+            # Add usage
+            input_tokens, output_tokens = _parse_usage(output)
+            event_properties["$ai_input_tokens"] = input_tokens
+            event_properties["$ai_output_tokens"] = output_tokens
+
+            # Generation results
+            generation_result = output.generations[-1]
+            if isinstance(generation_result[-1], ChatGeneration):
+                completions = [
+                    _convert_message_to_dict(cast(ChatGeneration, generation).message)
+                    for generation in generation_result
+                ]
+            else:
+                completions = [_extract_raw_esponse(generation) for generation in generation_result]
+            event_properties["$ai_output_choices"] = with_privacy_mode(self._client, self._privacy_mode, completions)
+
+        if self._properties:
+            event_properties.update(self._properties)
+
+        if self._distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
         self._client.capture(
             distinct_id=self._distinct_id or trace_id,
-            event="$ai_trace",
+            event="$ai_generation",
             properties=event_properties,
             groups=self._groups,
         )
@@ -616,3 +659,41 @@ def _get_http_status(error: BaseException) -> int:
     # Google: https://github.com/googleapis/python-api-core/blob/main/google/api_core/exceptions.py
     status_code = getattr(error, "status_code", getattr(error, "code", 0))
     return status_code
+
+
+def _get_langchain_run_name(serialized: Optional[Dict[str, Any]], **kwargs: Any) -> Optional[str]:
+    """Retrieve the name of a serialized LangChain runnable.
+
+    The prioritization for the determination of the run name is as follows:
+    - The value assigned to the "name" key in `kwargs`.
+    - The value assigned to the "name" key in `serialized`.
+    - The last entry of the value assigned to the "id" key in `serialized`.
+    - "<unknown>".
+
+    Args:
+        serialized (Optional[Dict[str, Any]]): A dictionary containing the runnable's serialized data.
+        **kwargs (Any): Additional keyword arguments, potentially including the 'name' override.
+
+    Returns:
+        str: The determined name of the Langchain runnable.
+    """
+    if "name" in kwargs and kwargs["name"] is not None:
+        return kwargs["name"]
+    if serialized is None:
+        return None
+    try:
+        return serialized["name"]
+    except (KeyError, TypeError):
+        pass
+    try:
+        return serialized["id"][-1]
+    except (KeyError, TypeError):
+        pass
+    return None
+
+
+def _stringify_exception(exception: BaseException) -> str:
+    description = str(exception)
+    if description:
+        return f"{exception.__class__.__name__}: {description}"
+    return exception.__class__.__name__
