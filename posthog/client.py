@@ -701,6 +701,7 @@ class Client(object):
                     except Exception as e:
                         self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
                         continue
+                    break
 
         flag_was_locally_evaluated = response is not None
         if not flag_was_locally_evaluated and not only_evaluate_locally:
