@@ -683,7 +683,6 @@ class Client(object):
             self.load_feature_flags()
         response = None
 
-        # If loading in previous line failed
         if self.feature_flags:
             for flag in self.feature_flags:
                 if flag["key"] == key:
