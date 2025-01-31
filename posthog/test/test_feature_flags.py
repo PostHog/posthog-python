@@ -472,7 +472,7 @@ class TestLocalEvaluation(unittest.TestCase):
             }
         ]
         # decide called always because experience_continuity is set
-        self.assertTrue(client.get_feature_flag("beta-feature", "distinct_id"), "decide-fallback-value")
+        self.assertEqual(client.get_feature_flag("beta-feature", "distinct_id"), "decide-fallback-value")
         self.assertEqual(patch_decide.call_count, 1)
 
     @mock.patch.object(Client, "capture")
