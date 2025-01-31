@@ -1007,12 +1007,14 @@ class TestLocalEvaluation(unittest.TestCase):
             "beta-feature",
             "some-distinct-id",
             person_properties={
-                "latestBuildVersion": "24.32..1",
+                "latestBuildVersion": "24.32.1",
                 "latestBuildVersionMajor": "24",
                 "latestBuildVersionMinor": "32",
                 "latestBuildVersionPatch": "1",
             },
         )
+
+        self.assertEqual(feature_flag_match, True)
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
