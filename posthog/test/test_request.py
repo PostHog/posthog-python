@@ -2,9 +2,10 @@ import json
 import unittest
 from datetime import date, datetime
 
+import pytest
 import requests
 
-from posthog.request import DatetimeSerializer, batch_post
+from posthog.request import DatetimeSerializer, batch_post, determine_server_host
 from posthog.test.test_utils import TEST_API_KEY
 
 
@@ -42,3 +43,26 @@ class TestRequests(unittest.TestCase):
             batch_post(
                 "key", batch=[{"distinct_id": "distinct_id", "event": "python event", "type": "track"}], timeout=0.0001
             )
+
+
+@pytest.mark.parametrize(
+    "host, expected",
+    [
+        ("https://t.posthog.com", "https://t.posthog.com"),
+        ("https://t.posthog.com/", "https://t.posthog.com/"),
+        ("t.posthog.com", "t.posthog.com"),
+        ("t.posthog.com/", "t.posthog.com/"),
+        ("https://us.posthog.com.rg.proxy.com", "https://us.posthog.com.rg.proxy.com"),
+        ("app.posthog.com", "app.posthog.com"),
+        ("eu.posthog.com", "eu.posthog.com"),
+        ("https://app.posthog.com", "https://us.i.posthog.com"),
+        ("https://eu.posthog.com", "https://eu.i.posthog.com"),
+        ("https://us.posthog.com", "https://us.i.posthog.com"),
+        ("https://app.posthog.com/", "https://us.i.posthog.com"),
+        ("https://eu.posthog.com/", "https://eu.i.posthog.com"),
+        ("https://us.posthog.com/", "https://us.i.posthog.com"),
+        (None, "https://us.i.posthog.com"),
+    ],
+)
+def test_routing_to_custom_host(host, expected):
+    assert determine_server_host(host) == expected

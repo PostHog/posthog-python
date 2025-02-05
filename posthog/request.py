@@ -13,8 +13,22 @@ from posthog.version import VERSION
 
 _session = requests.sessions.Session()
 
-DEFAULT_HOST = "https://app.posthog.com"
+US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
+EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
+DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
+
+
+def determine_server_host(host: Optional[str]) -> str:
+    """Determines the server host to use."""
+    host_or_default = host or DEFAULT_HOST
+    trimmed_host = remove_trailing_slash(host_or_default)
+    if trimmed_host in ("https://app.posthog.com", "https://us.posthog.com"):
+        return US_INGESTION_ENDPOINT
+    elif trimmed_host == "https://eu.posthog.com":
+        return EU_INGESTION_ENDPOINT
+    else:
+        return host_or_default
 
 
 def post(
@@ -23,7 +37,7 @@ def post(
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
     body = kwargs
-    body["sentAt"] = datetime.utcnow().replace(tzinfo=tzutc()).isoformat()
+    body["sentAt"] = datetime.now(tz=tzutc()).isoformat()
     url = remove_trailing_slash(host or DEFAULT_HOST) + path
     body["api_key"] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
@@ -50,11 +64,6 @@ def _process_response(
     res: requests.Response, success_message: str, *, return_json: bool = True
 ) -> Union[requests.Response, Any]:
     log = logging.getLogger("posthog")
-    if not res:
-        raise APIError(
-            "N/A",
-            "Error when fetching PostHog API, please make sure you are using your public project token/key and not a private API key.",
-        )
     if res.status_code == 200:
         log.debug(success_message)
         return res.json() if return_json else res
@@ -62,13 +71,13 @@ def _process_response(
         payload = res.json()
         log.debug("received response: %s", payload)
         raise APIError(res.status_code, payload["detail"])
-    except ValueError:
+    except (KeyError, ValueError):
         raise APIError(res.status_code, res.text)
 
 
 def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
     """Post the `kwargs to the decide API endpoint"""
-    res = post(api_key, host, "/decide/", gzip, timeout, **kwargs)
+    res = post(api_key, host, "/decide/?v=3", gzip, timeout, **kwargs)
     return _process_response(res, success_message="Feature flags decided successfully")
 
 

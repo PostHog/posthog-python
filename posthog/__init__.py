@@ -1,22 +1,35 @@
-from typing import Callable, Dict, Optional
+import datetime  # noqa: F401
+from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
+from posthog.exception_capture import Integrations  # noqa: F401
 from posthog.version import VERSION
 
 __version__ = VERSION
 
 """Settings."""
-api_key = None  # type: str
-host = None  # type: str
-on_error = None  # type: Callable
+api_key = None  # type: Optional[str]
+host = None  # type: Optional[str]
+on_error = None  # type: Optional[Callable]
 debug = False  # type: bool
 send = True  # type: bool
 sync_mode = False  # type: bool
 disabled = False  # type: bool
-personal_api_key = None  # type: str
-project_api_key = None  # type: str
+personal_api_key = None  # type: Optional[str]
+project_api_key = None  # type: Optional[str]
+poll_interval = 30  # type: int
+disable_geoip = True  # type: bool
+feature_flags_request_timeout_seconds = 3  # type: int
+super_properties = None  # type: Optional[Dict]
+# Currently alpha, use at your own risk
+enable_exception_autocapture = False  # type: bool
+exception_autocapture_integrations = []  # type: List[Integrations]
+# Used to determine in app paths for exception autocapture. Defaults to the current working directory
+project_root = None  # type: Optional[str]
+# Used for our AI observability feature to not capture any prompt or output just usage + metadata
+privacy_mode = False  # type: bool
 
-default_client = None
+default_client = None  # type: Optional[Client]
 
 
 def capture(
@@ -26,8 +39,10 @@ def capture(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
+    send_feature_flags=False,
+    disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, dict]
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
 
@@ -48,7 +63,7 @@ def capture(
     posthog.capture('distinct id', 'purchase', groups={'company': 'id:5'})
     ```
     """
-    _proxy(
+    return _proxy(
         "capture",
         distinct_id=distinct_id,
         event=event,
@@ -56,6 +71,8 @@ def capture(
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
+        send_feature_flags=send_feature_flags,
+        disable_geoip=disable_geoip,
     )
 
 
@@ -64,8 +81,9 @@ def identify(
     properties=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, dict]
     """
     Identify lets you add metadata on your users so you can more easily identify who they are in PostHog, and even do things like segment users by these properties.
 
@@ -81,22 +99,24 @@ def identify(
     })
     ```
     """
-    _proxy(
+    return _proxy(
         "identify",
         distinct_id=distinct_id,
         properties=properties,
         timestamp=timestamp,
         uuid=uuid,
+        disable_geoip=disable_geoip,
     )
 
 
 def set(
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
     properties=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a user record.
     This will overwrite previous people property values, just like `identify`.
@@ -112,22 +132,24 @@ def set(
      })
      ```
     """
-    _proxy(
+    return _proxy(
         "set",
         distinct_id=distinct_id,
         properties=properties,
         timestamp=timestamp,
         uuid=uuid,
+        disable_geoip=disable_geoip,
     )
 
 
 def set_once(
-    distinct_id,  # type: str,
+    distinct_id,  # type: str
     properties=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a user record, only if they do not yet exist.
     This will not overwrite previous people property values, unlike `identify`.
@@ -143,12 +165,13 @@ def set_once(
      })
      ```
     """
-    _proxy(
+    return _proxy(
         "set_once",
         distinct_id=distinct_id,
         properties=properties,
         timestamp=timestamp,
         uuid=uuid,
+        disable_geoip=disable_geoip,
     )
 
 
@@ -158,8 +181,9 @@ def group_identify(
     properties=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a group
 
@@ -175,23 +199,25 @@ def group_identify(
      })
      ```
     """
-    _proxy(
+    return _proxy(
         "group_identify",
         group_type=group_type,
         group_key=group_key,
         properties=properties,
         timestamp=timestamp,
         uuid=uuid,
+        disable_geoip=disable_geoip,
     )
 
 
 def alias(
-    previous_id,  # type: str,
-    distinct_id,  # type: str,
+    previous_id,  # type: str
+    distinct_id,  # type: str
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
+    disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> None
+    # type: (...) -> Tuple[bool, dict]
     """
     To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
 
@@ -208,20 +234,69 @@ def alias(
     posthog.alias('anonymous session id', 'distinct id')
     ```
     """
-    _proxy(
+    return _proxy(
         "alias",
         previous_id=previous_id,
         distinct_id=distinct_id,
         timestamp=timestamp,
         uuid=uuid,
+        disable_geoip=disable_geoip,
+    )
+
+
+def capture_exception(
+    exception=None,  # type: Optional[BaseException]
+    distinct_id=None,  # type: Optional[str]
+    properties=None,  # type: Optional[Dict]
+    context=None,  # type: Optional[Dict]
+    timestamp=None,  # type: Optional[datetime.datetime]
+    uuid=None,  # type: Optional[str]
+    groups=None,  # type: Optional[Dict]
+):
+    # type: (...) -> Tuple[bool, dict]
+    """
+    capture_exception allows you to capture exceptions that happen in your code. This is useful for debugging and understanding what errors your users are encountering.
+    This function never raises an exception, even if it fails to send the event.
+
+    A `capture_exception` call does not require any fields, but we recommend sending:
+    - `distinct id` which uniquely identifies your user for which this exception happens
+    - `exception` to specify the exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
+
+    Optionally you can submit
+    - `properties`, which can be a dict with any information you'd like to add
+    - `groups`, which is a dict of group type -> group key mappings
+
+    For example:
+    ```python
+    try:
+        1 / 0
+    except Exception as e:
+        posthog.capture_exception(e, 'my specific distinct id')
+        posthog.capture_exception(distinct_id='my specific distinct id')
+
+    ```
+    """
+    return _proxy(
+        "capture_exception",
+        exception=exception,
+        distinct_id=distinct_id,
+        properties=properties,
+        context=context,
+        timestamp=timestamp,
+        uuid=uuid,
+        groups=groups,
     )
 
 
 def feature_enabled(
-    key,  # type: str,
-    distinct_id,  # type: str,
-    default=False,  # type: bool
+    key,  # type: str
+    distinct_id,  # type: str
     groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
+    only_evaluate_locally=False,  # type: bool
+    send_feature_flag_events=True,  # type: bool
+    disable_geoip=None,  # type: Optional[bool]
 ):
     # type: (...) -> bool
     """
@@ -231,13 +306,150 @@ def feature_enabled(
     ```python
     if posthog.feature_enabled('beta feature', 'distinct id'):
         # do something
-    if posthog.feature_enabled('groups feature', 'distinct id', groups={"organization": "id:5"}):
+    if posthog.feature_enabled('groups feature', 'distinct id', groups={"organization": "5"}):
         # do something
     ```
 
     You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
     """
-    return _proxy("feature_enabled", key=key, distinct_id=distinct_id, default=default, groups=groups)
+    return _proxy(
+        "feature_enabled",
+        key=key,
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
+        disable_geoip=disable_geoip,
+    )
+
+
+def get_feature_flag(
+    key,  # type: str
+    distinct_id,  # type: str
+    groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
+    only_evaluate_locally=False,  # type: bool
+    send_feature_flag_events=True,  # type: bool
+    disable_geoip=None,  # type: Optional[bool]
+):
+    """
+    Get feature flag variant for users. Used with experiments.
+    Example:
+    ```python
+    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'test-variant':
+        # do test variant code
+    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
+        # do control code
+    ```
+
+    `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5",
+    you would pass groups={"organization": "5"}.
+
+    `group_properties` take the format: { group_type_name: { group_properties } }
+
+    So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count,
+    you'll send these as:
+
+    ```python
+        group_properties={"organization": {"name": "PostHog", "employees": 11}}
+    ```
+    """
+    return _proxy(
+        "get_feature_flag",
+        key=key,
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
+        disable_geoip=disable_geoip,
+    )
+
+
+def get_all_flags(
+    distinct_id,  # type: str
+    groups={},  # type: dict
+    person_properties={},  # type: dict
+    group_properties={},  # type: dict
+    only_evaluate_locally=False,  # type: bool
+    disable_geoip=None,  # type: Optional[bool]
+):
+    """
+    Get all flags for a given user.
+    Example:
+    ```python
+    flags = posthog.get_all_flags('distinct_id')
+    ```
+
+    flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
+    """
+    return _proxy(
+        "get_all_flags",
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        disable_geoip=disable_geoip,
+    )
+
+
+def get_feature_flag_payload(
+    key,
+    distinct_id,
+    match_value=None,
+    groups={},
+    person_properties={},
+    group_properties={},
+    only_evaluate_locally=False,
+    send_feature_flag_events=True,
+    disable_geoip=None,  # type: Optional[bool]
+):
+    return _proxy(
+        "get_feature_flag_payload",
+        key=key,
+        distinct_id=distinct_id,
+        match_value=match_value,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
+        disable_geoip=disable_geoip,
+    )
+
+
+def get_all_flags_and_payloads(
+    distinct_id,
+    groups={},
+    person_properties={},
+    group_properties={},
+    only_evaluate_locally=False,
+    disable_geoip=None,  # type: Optional[bool]
+):
+    return _proxy(
+        "get_all_flags_and_payloads",
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        disable_geoip=disable_geoip,
+    )
+
+
+def feature_flag_definitions():
+    """Returns loaded feature flags, if any. Helpful for debugging what flag information you have loaded."""
+    return _proxy("feature_flag_definitions")
+
+
+def load_feature_flags():
+    """Load feature flag definitions from PostHog."""
+    return _proxy("load_feature_flags")
 
 
 def page(*args, **kwargs):
@@ -269,8 +481,6 @@ def shutdown():
 def _proxy(method, *args, **kwargs):
     """Create an analytics client if one doesn't exist and send to it."""
     global default_client
-    if disabled:
-        return None
     if not default_client:
         default_client = Client(
             api_key,
@@ -281,7 +491,25 @@ def _proxy(method, *args, **kwargs):
             sync_mode=sync_mode,
             personal_api_key=personal_api_key,
             project_api_key=project_api_key,
+            poll_interval=poll_interval,
+            disabled=disabled,
+            disable_geoip=disable_geoip,
+            feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
+            super_properties=super_properties,
+            # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
+            # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
+            # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
+            enable_exception_autocapture=enable_exception_autocapture,
+            exception_autocapture_integrations=exception_autocapture_integrations,
         )
+
+    # always set incase user changes it
+    default_client.disabled = disabled
+    default_client.debug = debug
 
     fn = getattr(default_client, method)
     return fn(*args, **kwargs)
+
+
+class Posthog(Client):
+    pass

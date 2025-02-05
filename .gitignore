@@ -15,3 +15,5 @@ posthog-analytics
 .idea
 .python-version
 .coverage
+pyrightconfig.json
+.env

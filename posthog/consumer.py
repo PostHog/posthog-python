@@ -12,11 +12,12 @@ try:
 except ImportError:
     from Queue import Empty
 
-MAX_MSG_SIZE = 32 << 10
 
-# Our servers only accept batches less than 500KB. Here limit is set slightly
-# lower to leave space for extra data that will be added later, eg. "sentAt".
-BATCH_SIZE_LIMIT = 475000
+MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
+
+# The maximum request body size is currently 20MiB, let's be conservative
+# in case we want to lower it in the future.
+BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 
 
 class Consumer(Thread):
@@ -35,6 +36,7 @@ class Consumer(Thread):
         gzip=False,
         retries=10,
         timeout=15,
+        historical_migration=False,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -54,6 +56,7 @@ class Consumer(Thread):
         self.running = True
         self.retries = retries
         self.timeout = timeout
+        self.historical_migration = historical_migration
 
     def run(self):
         """Runs the consumer."""
@@ -104,7 +107,7 @@ class Consumer(Thread):
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > MAX_MSG_SIZE:
-                    self.log.error("Item exceeds 32kb limit, dropping. (%s)", str(item))
+                    self.log.error("Item exceeds 900kib limit, dropping. (%s)", str(item))
                     continue
                 items.append(item)
                 total_size += item_size
@@ -133,6 +136,13 @@ class Consumer(Thread):
 
         @backoff.on_exception(backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception)
         def send_request():
-            batch_post(self.api_key, self.host, gzip=self.gzip, timeout=self.timeout, batch=batch)
+            batch_post(
+                self.api_key,
+                self.host,
+                gzip=self.gzip,
+                timeout=self.timeout,
+                batch=batch,
+                historical_migration=self.historical_migration,
+            )
 
         send_request()

@@ -1,5 +1,4 @@
 from sentry_sdk._types import MYPY
-from sentry_sdk.client import Client
 from sentry_sdk.hub import Hub
 from sentry_sdk.integrations import Integration
 from sentry_sdk.scope import add_global_event_processor
@@ -10,9 +9,9 @@ from posthog.request import DEFAULT_HOST
 from posthog.sentry import POSTHOG_ID_TAG
 
 if MYPY:
-    from typing import Any, Dict, Optional
+    from typing import Optional  # noqa: F401
 
-    from sentry_sdk._types import Event, Hint
+    from sentry_sdk._types import Event, Hint  # noqa: F401
 
 
 class PostHogIntegration(Integration):
@@ -44,9 +43,9 @@ class PostHogIntegration(Integration):
                             not not Hub.current.client.dsn and Dsn(Hub.current.client.dsn).project_id
                         )
                         if project_id:
-                            properties[
-                                "$sentry_url"
-                            ] = f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
+                            properties["$sentry_url"] = (
+                                f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
+                            )
 
                     posthog.capture(posthog_distinct_id, "$exception", properties)
 

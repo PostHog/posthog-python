@@ -11,7 +11,7 @@ def get_distinct_id(request):
         return None
     try:
         return GET_DISTINCT_ID(request)
-    except:
+    except:  # noqa: E722
         return None
 
 

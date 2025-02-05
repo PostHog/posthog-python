@@ -14,7 +14,7 @@ long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
 """
 
-install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff==1.6.0", "python-dateutil>2.1"]
+install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff>=1.10.0", "python-dateutil>2.1"]
 
 tests_require = ["mock>=2.0.0"]
 
@@ -27,7 +27,16 @@ setup(
     maintainer="PostHog",
     maintainer_email="hey@posthog.com",
     test_suite="posthoganalytics.test.all",
-    packages=["posthoganalytics", "posthoganalytics.test", "posthoganalytics.sentry"],
+    packages=[
+        "posthoganalytics",
+        "posthoganalytics.ai",
+        "posthoganalytics.ai.langchain",
+        "posthoganalytics.ai.openai",
+        "posthoganalytics.ai.anthropic",
+        "posthoganalytics.test",
+        "posthoganalytics.sentry",
+        "posthoganalytics.exception_integrations",
+    ],
     license="MIT License",
     install_requires=install_requires,
     tests_require=tests_require,
@@ -53,5 +62,8 @@ setup(
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
     ],
 )

@@ -1,27 +1,38 @@
 import time
 import unittest
-from datetime import date, datetime
+from datetime import datetime
 from uuid import uuid4
 
 import mock
 import six
-from freezegun import freeze_time
 
 from posthog.client import Client
-from posthog.request import APIError
-from posthog.test.test_utils import TEST_API_KEY
+from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.version import VERSION
 
 
 class TestClient(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # This ensures no real HTTP POST requests are made
+        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
+        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
+        cls.client_post_patcher.start()
+        cls.consumer_post_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client_post_patcher.stop()
+        cls.consumer_post_patcher.stop()
+
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print("FAIL", e, batch)
+        print("FAIL", e, batch)  # noqa: T201
         self.failed = True
 
     def setUp(self):
         self.failed = False
-        self.client = Client(TEST_API_KEY, on_error=self.set_fail)
+        self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     def test_requires_api_key(self):
         self.assertRaises(AssertionError, Client)
@@ -59,8 +70,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_capture_with_project_api_key(self):
-
-        client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
+        client = Client(project_api_key=FAKE_TEST_API_KEY, on_error=self.set_fail)
 
         success, msg = client.capture("distinct_id", "python test event")
         client.flush()
@@ -73,6 +83,486 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+    def test_basic_super_properties(self):
+        client = Client(FAKE_TEST_API_KEY, super_properties={"source": "repo-name"})
+
+        _, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertEqual(msg["properties"]["source"], "repo-name")
+
+        _, msg = client.identify("distinct_id", {"trait": "value"})
+        client.flush()
+
+        self.assertEqual(msg["$set"]["trait"], "value")
+        self.assertEqual(msg["properties"]["source"], "repo-name")
+
+    def test_basic_capture_exception(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = self.client
+            exception = Exception("test exception")
+            client.capture_exception(exception, distinct_id="distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_distinct_id(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = self.client
+            exception = Exception("test exception")
+            client.capture_exception(exception, "distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_correct_host_generation(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com")
+            exception = Exception("test exception")
+            client.capture_exception(exception, "distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://aloha.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://app.posthog.com")
+            exception = Exception("test exception")
+            client.capture_exception(exception, "distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(
+                capture_call[2],
+                {
+                    "$exception_type": "Exception",
+                    "$exception_message": "test exception",
+                    "$exception_list": [
+                        {
+                            "mechanism": {"type": "generic", "handled": True},
+                            "module": None,
+                            "type": "Exception",
+                            "value": "test exception",
+                        }
+                    ],
+                    "$exception_personURL": "https://app.posthog.com/project/random_key/person/distinct_id",
+                },
+            )
+
+    def test_basic_capture_exception_with_no_exception_given(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            client = self.client
+            try:
+                raise Exception("test exception")
+            except Exception:
+                client.capture_exception(distinct_id="distinct_id")
+
+            self.assertTrue(patch_capture.called)
+            capture_call = patch_capture.call_args[0]
+            self.assertEqual(capture_call[0], "distinct_id")
+            self.assertEqual(capture_call[1], "$exception")
+            self.assertEqual(capture_call[2]["$exception_type"], "Exception")
+            self.assertEqual(capture_call[2]["$exception_message"], "test exception")
+            self.assertEqual(capture_call[2]["$exception_list"][0]["mechanism"]["type"], "generic")
+            self.assertEqual(capture_call[2]["$exception_list"][0]["mechanism"]["handled"], True)
+            self.assertEqual(capture_call[2]["$exception_list"][0]["module"], None)
+            self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
+            self.assertEqual(capture_call[2]["$exception_list"][0]["value"], "test exception")
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["type"],
+                "raw",
+            )
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["filename"],
+                "posthog/test/test_client.py",
+            )
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["function"],
+                "test_basic_capture_exception_with_no_exception_given",
+            )
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["module"], "posthog.test.test_client"
+            )
+            self.assertEqual(capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True)
+
+    def test_basic_capture_exception_with_no_exception_happening(self):
+
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
+            with self.assertLogs("posthog", level="WARNING") as logs:
+
+                client = self.client
+                client.capture_exception()
+
+                self.assertFalse(patch_capture.called)
+                self.assertEqual(
+                    logs.output[0],
+                    "WARNING:posthog:No exception information available",
+                )
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+
+        self.assertEqual(patch_decide.call_count, 1)
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_locally_evaluated_feature_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+
+        multivariate_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature-local",
+            "is_simple_flag": False,
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                        ],
+                        "rollout_percentage": 100,
+                    },
+                    {
+                        "rollout_percentage": 50,
+                    },
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                    ]
+                },
+                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+            },
+        }
+        basic_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "person-flag",
+            "is_simple_flag": True,
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person",
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        false_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "false-flag",
+            "is_simple_flag": True,
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 0,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        client.feature_flags = [multivariate_flag, basic_flag, false_flag]
+
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "third-variant")
+        self.assertEqual(msg["properties"]["$feature/false-flag"], False)
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
+        assert "$feature/beta-feature" not in msg["properties"]
+
+        self.assertEqual(patch_decide.call_count, 0)
+
+        # test that flags are not evaluated without local evaluation
+        client.feature_flags = []
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        assert "$feature/beta-feature" not in msg["properties"]
+        assert "$feature/beta-feature-local" not in msg["properties"]
+        assert "$feature/false-flag" not in msg["properties"]
+        assert "$active_feature_flags" not in msg["properties"]
+
+    @mock.patch("posthog.client.decide")
+    def test_dont_override_capture_with_local_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+
+        multivariate_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature-local",
+            "is_simple_flag": False,
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                        ],
+                        "rollout_percentage": 100,
+                    },
+                    {
+                        "rollout_percentage": 50,
+                    },
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                    ]
+                },
+                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+            },
+        }
+        basic_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "person-flag",
+            "is_simple_flag": True,
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person",
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        client.feature_flags = [multivariate_flag, basic_flag]
+
+        success, msg = client.capture(
+            "distinct_id", "python test event", {"$feature/beta-feature-local": "my-custom-variant"}
+        )
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "my-custom-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
+        assert "$feature/beta-feature" not in msg["properties"]
+        assert "$feature/person-flag" not in msg["properties"]
+
+        self.assertEqual(patch_decide.call_count, 0)
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags_returns_active_only(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
+
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertTrue(msg["properties"]["$geoip_disable"])
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature", "alpha-feature"])
+
+        self.assertEqual(patch_decide.call_count, 1)
+        patch_decide.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="distinct_id",
+            groups={},
+            person_properties=None,
+            group_properties=None,
+            disable_geoip=True,
+        )
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            host="https://app.posthog.com",
+            on_error=self.set_fail,
+            personal_api_key=FAKE_TEST_API_KEY,
+            disable_geoip=True,
+            feature_flags_request_timeout_seconds=12,
+        )
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, disable_geoip=False)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertTrue("$geoip_disable" not in msg["properties"])
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature", "alpha-feature"])
+
+        self.assertEqual(patch_decide.call_count, 1)
+        patch_decide.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=12,
+            distinct_id="distinct_id",
+            groups={},
+            person_properties=None,
+            group_properties=None,
+            disable_geoip=False,
+        )
+
+    @mock.patch("posthog.client.decide")
+    def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=False)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertTrue("$feature/beta-feature" not in msg["properties"])
+        self.assertTrue("$active_feature_flags" not in msg["properties"])
+
+        self.assertEqual(patch_decide.call_count, 0)
 
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
@@ -208,6 +698,26 @@ class TestClient(unittest.TestCase):
                 "$group_set": {},
                 "$lib": "posthog-python",
                 "$lib_version": VERSION,
+                "$geoip_disable": True,
+            },
+        )
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+
+    def test_basic_group_identify_with_distinct_id(self):
+        success, msg = self.client.group_identify("organization", "id:5", distinct_id="distinct_id")
+        self.assertTrue(success)
+        self.assertEqual(msg["event"], "$groupidentify")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(
+            msg["properties"],
+            {
+                "$group_type": "organization",
+                "$group_key": "id:5",
+                "$group_set": {},
+                "$lib": "posthog-python",
+                "$lib_version": VERSION,
+                "$geoip_disable": True,
             },
         )
         self.assertTrue(isinstance(msg["timestamp"], str))
@@ -229,6 +739,36 @@ class TestClient(unittest.TestCase):
                 "$group_set": {"trait": "value"},
                 "$lib": "posthog-python",
                 "$lib_version": VERSION,
+                "$geoip_disable": True,
+            },
+        )
+        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+        self.assertEqual(msg["context"]["ip"], "192.168.0.1")
+
+    def test_advanced_group_identify_with_distinct_id(self):
+        success, msg = self.client.group_identify(
+            "organization",
+            "id:5",
+            {"trait": "value"},
+            {"ip": "192.168.0.1"},
+            datetime(2014, 9, 3),
+            "new-uuid",
+            distinct_id="distinct_id",
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(msg["event"], "$groupidentify")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+
+        self.assertEqual(
+            msg["properties"],
+            {
+                "$group_type": "organization",
+                "$group_key": "id:5",
+                "$group_set": {"trait": "value"},
+                "$lib": "posthog-python",
+                "$lib_version": VERSION,
+                "$geoip_disable": True,
             },
         )
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
@@ -307,7 +847,7 @@ class TestClient(unittest.TestCase):
             self.assertFalse(consumer.is_alive())
 
     def test_synchronous(self):
-        client = Client(TEST_API_KEY, sync_mode=True)
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
 
         success, message = client.identify("distinct_id")
         self.assertFalse(client.consumers)
@@ -315,7 +855,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
 
     def test_overflow(self):
-        client = Client(TEST_API_KEY, max_queue_size=1)
+        client = Client(FAKE_TEST_API_KEY, max_queue_size=1)
         # Ensure consumer thread is no longer uploading
         client.join()
 
@@ -338,14 +878,14 @@ class TestClient(unittest.TestCase):
         Client("bad_key", debug=True)
 
     def test_gzip(self):
-        client = Client(TEST_API_KEY, on_error=self.fail, gzip=True)
+        client = Client(FAKE_TEST_API_KEY, on_error=self.fail, gzip=True)
         for _ in range(10):
             client.identify("distinct_id", {"trait": "value"})
         client.flush()
         self.assertFalse(self.failed)
 
     def test_user_defined_flush_at(self):
-        client = Client(TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3)
+        client = Client(FAKE_TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3)
 
         def mock_post_fn(*args, **kwargs):
             self.assertEqual(len(kwargs["batch"]), 10)
@@ -359,105 +899,135 @@ class TestClient(unittest.TestCase):
             self.assertEqual(mock_post.call_count, 2)
 
     def test_user_defined_timeout(self):
-        client = Client(TEST_API_KEY, timeout=10)
+        client = Client(FAKE_TEST_API_KEY, timeout=10)
         for consumer in client.consumers:
             self.assertEqual(consumer.timeout, 10)
 
     def test_default_timeout_15(self):
-        client = Client(TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY)
         for consumer in client.consumers:
             self.assertEqual(consumer.timeout, 15)
 
-    @mock.patch("posthog.client.Poller")
-    @mock.patch("posthog.client.get")
-    def test_load_feature_flags(self, patch_get, patch_poll):
-        patch_get.return_value = {
-            "results": [
-                {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True},
-                {"id": 2, "name": "Alpha Feature", "key": "alpha-feature", "active": False},
-            ]
-        }
-        client = Client(TEST_API_KEY, personal_api_key="test")
-        with freeze_time("2020-01-01T12:01:00.0000Z"):
-            client.load_feature_flags()
-        self.assertEqual(len(client.feature_flags), 1)
-        self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
-        self.assertEqual(client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00")
-        self.assertEqual(patch_poll.call_count, 1)
+    def test_disabled(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertFalse(success)
+        self.assertFalse(self.failed)
 
-    def test_load_feature_flags_wrong_key(self):
-        client = Client(TEST_API_KEY, personal_api_key=TEST_API_KEY)
-        with freeze_time("2020-01-01T12:01:00.0000Z"):
-            self.assertRaises(APIError, client.load_feature_flags)
-
-    @mock.patch("posthog.client.get")
-    def test_feature_enabled_simple(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
-        ]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
-
-    @mock.patch("posthog.client.get")
-    def test_feature_enabled_simple_with_project_api_key(self, patch_get):
-        client = Client(project_api_key=TEST_API_KEY, on_error=self.set_fail)
-        client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percentage": 100}
-        ]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        self.assertEqual(msg, "disabled")
 
     @mock.patch("posthog.client.decide")
-    def test_feature_enabled_request(self, patch_decide):
-        patch_decide.return_value = {"featureFlags": ["beta-feature"]}
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": False, "rollout_percentage": 100}
-        ]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+    def test_disabled_with_feature_flags(self, patch_decide):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
 
-    @mock.patch("posthog.client.get")
-    def test_feature_enabled_simple_without_rollout_percentage(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [{"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True}]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        response = client.get_feature_flag("beta-feature", "12345")
+        self.assertIsNone(response)
+        patch_decide.assert_not_called()
 
-    @mock.patch("posthog.client.get")
-    def test_feature_enabled_simple_with_none_rollout_percentage(self, patch_get):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = [
-            {"id": 1, "name": "Beta Feature", "key": "beta-feature", "is_simple_flag": True, "rollout_percantage": None}
-        ]
-        self.assertTrue(client.feature_enabled("beta-feature", "distinct_id"))
+        response = client.feature_enabled("beta-feature", "12345")
+        self.assertIsNone(response)
+        patch_decide.assert_not_called()
 
-    @mock.patch("posthog.client.Poller")
-    @mock.patch("posthog.client.get")
-    def test_feature_enabled_doesnt_exist(self, patch_get, patch_poll):
-        client = Client(TEST_API_KEY, personal_api_key="test")
-        client.feature_flags = []
+        response = client.get_all_flags("12345")
+        self.assertIsNone(response)
+        patch_decide.assert_not_called()
 
-        self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
-        self.assertTrue(client.feature_enabled("doesnt-exist", "distinct_id", True))
+        response = client.get_feature_flag_payload("key", "12345")
+        self.assertIsNone(response)
+        patch_decide.assert_not_called()
 
-    @mock.patch("posthog.client.Poller")
-    @mock.patch("posthog.client.get")
-    def test_personal_api_key_doesnt_exist(self, patch_get, patch_poll):
-        client = Client(TEST_API_KEY)
-        client.feature_flags = []
+        response = client.get_all_flags_and_payloads("12345")
+        self.assertEqual(response, {"featureFlags": None, "featureFlagPayloads": None})
+        patch_decide.assert_not_called()
 
-        self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
-        self.assertTrue(client.feature_enabled("doesnt-exist", "distinct_id", True))
+        # no capture calls
+        self.assertTrue(client.queue.empty())
 
-    @mock.patch("posthog.client.Poller")
-    @mock.patch("posthog.client.get")
-    def test_load_feature_flags_error(self, patch_get, patch_poll):
-        def raise_effect():
-            raise Exception("http exception")
+    def test_enabled_to_disabled(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=False)
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
 
-        patch_get.return_value.raiseError.side_effect = raise_effect
-        client = Client(TEST_API_KEY, personal_api_key="test")
-        client.feature_flags = []
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        self.assertEqual(msg["event"], "python test event")
 
-        self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
+        client.disabled = True
+        success, msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertFalse(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg, "disabled")
+
+    def test_disable_geoip_default_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=True)
+        _, capture_msg = client.capture("distinct_id", "python test event")
+        client.flush()
+        self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
+
+        _, identify_msg = client.identify("distinct_id", {"trait": "value"})
+        client.flush()
+        self.assertEqual(identify_msg["properties"]["$geoip_disable"], True)
+
+    def test_disable_geoip_override_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
+        _, capture_msg = client.set("distinct_id", {"a": "b", "c": "d"}, disable_geoip=True)
+        client.flush()
+        self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
+
+        _, identify_msg = client.page("distinct_id", "http://a.com", {"trait": "value"}, disable_geoip=False)
+        client.flush()
+        self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
+
+    def test_disable_geoip_method_overrides_init_on_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=True)
+        _, msg = client.capture("distinct_id", "python test event", disable_geoip=False)
+        client.flush()
+        self.assertTrue("$geoip_disable" not in msg["properties"])
+
+    @mock.patch("posthog.client.decide")
+    def test_disable_geoip_default_on_decide(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
+        client.get_feature_flag("random_key", "some_id", disable_geoip=True)
+        patch_decide.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            disable_geoip=True,
+        )
+        patch_decide.reset_mock()
+        client.feature_enabled("random_key", "feature_enabled_distinct_id", disable_geoip=True)
+        patch_decide.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="feature_enabled_distinct_id",
+            groups={},
+            person_properties={"distinct_id": "feature_enabled_distinct_id"},
+            group_properties={},
+            disable_geoip=True,
+        )
+        patch_decide.reset_mock()
+        client.get_all_flags_and_payloads("all_flags_payloads_id")
+        patch_decide.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="all_flags_payloads_id",
+            groups={},
+            person_properties={"distinct_id": "all_flags_payloads_id"},
+            group_properties={},
+            disable_geoip=False,
+        )
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
@@ -466,7 +1036,74 @@ class TestClient(unittest.TestCase):
             raise Exception("http exception")
 
         patch_get.return_value.raiseError.side_effect = raise_effect
-        client = Client(TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [{"key": "example", "is_simple_flag": False}]
 
         self.assertFalse(client.feature_enabled("example", "distinct_id"))
+
+    @mock.patch("posthog.client.decide")
+    def test_default_properties_get_added_properly(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+        }
+        client = Client(FAKE_TEST_API_KEY, host="http://app2.posthog.com", on_error=self.set_fail, disable_geoip=False)
+        client.get_feature_flag(
+            "random_key",
+            "some_id",
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+            person_properties={"x1": "y1"},
+            group_properties={"company": {"x": "y"}},
+        )
+        patch_decide.assert_called_with(
+            "random_key",
+            "http://app2.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+            person_properties={"distinct_id": "some_id", "x1": "y1"},
+            group_properties={
+                "company": {"$group_key": "id:5", "x": "y"},
+                "instance": {"$group_key": "app.posthog.com"},
+            },
+            disable_geoip=False,
+        )
+
+        patch_decide.reset_mock()
+        client.get_feature_flag(
+            "random_key",
+            "some_id",
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+            person_properties={"distinct_id": "override"},
+            group_properties={
+                "company": {
+                    "$group_key": "group_override",
+                }
+            },
+        )
+        patch_decide.assert_called_with(
+            "random_key",
+            "http://app2.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+            person_properties={"distinct_id": "override"},
+            group_properties={
+                "company": {"$group_key": "group_override"},
+                "instance": {"$group_key": "app.posthog.com"},
+            },
+            disable_geoip=False,
+        )
+
+        patch_decide.reset_mock()
+        # test nones
+        client.get_all_flags_and_payloads("some_id", groups={}, person_properties=None, group_properties=None)
+        patch_decide.assert_called_with(
+            "random_key",
+            "http://app2.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            disable_geoip=False,
+        )

@@ -1,6 +1,8 @@
 import logging
 import numbers
-from datetime import date, datetime
+import re
+from collections import defaultdict
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -49,14 +51,24 @@ def clean(item):
         return float(item)
     if isinstance(item, UUID):
         return str(item)
-    elif isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
+    if isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
         return item
-    elif isinstance(item, (set, list, tuple)):
+    if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
-    elif isinstance(item, dict):
+    # Pydantic model
+    try:
+        # v2+
+        if hasattr(item, "model_dump") and callable(item.model_dump):
+            item = item.model_dump()
+        # v1
+        elif hasattr(item, "dict") and callable(item.dict):
+            item = item.dict()
+    except TypeError as e:
+        log.debug(f"Could not serialize Pydantic-like model: {e}")
+        pass
+    if isinstance(item, dict):
         return _clean_dict(item)
-    else:
-        return _coerce_unicode(item)
+    return _coerce_unicode(item)
 
 
 def _clean_list(list_):
@@ -87,3 +99,29 @@ def _coerce_unicode(cmplx):
         log.warning("Error decoding: %s", item)
         return None
     return item
+
+
+def is_valid_regex(value) -> bool:
+    try:
+        re.compile(value)
+        return True
+    except re.error:
+        return False
+
+
+class SizeLimitedDict(defaultdict):
+    def __init__(self, max_size, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if len(self) >= self.max_size:
+            self.clear()
+
+        super().__setitem__(key, value)
+
+
+def convert_to_datetime_aware(date_obj):
+    if date_obj.tzinfo is None:
+        date_obj = date_obj.replace(tzinfo=timezone.utc)
+    return date_obj

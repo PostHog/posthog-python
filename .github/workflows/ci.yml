@@ -18,7 +18,7 @@ jobs:
               with:
                   python-version: 3.8
 
-            - uses: actions/cache@v1
+            - uses: actions/cache@v3
               with:
                   path: ~/.cache/pip
                   key: ${{ runner.os }}-pip-${{ hashFiles('setup.py') }}
@@ -34,6 +34,10 @@ jobs:
               run: |
                   black --check .
 
+            - name: Lint with flake8
+              run: |
+                  flake8 posthog --ignore E501,W503
+
             - name: Check import order with isort
               run: |
                   isort --check-only .
@@ -43,14 +47,14 @@ jobs:
         runs-on: ubuntu-latest
 
         steps:
-            - uses: actions/checkout@v1
+            - uses: actions/checkout@v2
               with:
                   fetch-depth: 1
 
-            - name: Set up Python 3.7
-              uses: actions/setup-python@v1
+            - name: Set up Python 3.9
+              uses: actions/setup-python@v2
               with:
-                  python-version: 3.7
+                  python-version: 3.9
 
             - name: Install requirements.txt dependencies with pip
               run: |
@@ -58,4 +62,4 @@ jobs:
 
             - name: Run posthog tests
               run: |
-                  python setup.py test
+                  pytest --verbose --timeout=30

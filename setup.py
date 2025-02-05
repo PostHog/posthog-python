@@ -14,16 +14,42 @@ long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
 """
 
-install_requires = ["requests>=2.7,<3.0", "six>=1.5", "monotonic>=1.5", "backoff>=1.10.0,<2.0.0", "python-dateutil>2.1"]
+install_requires = [
+    "requests>=2.7,<3.0",
+    "six>=1.5",
+    "monotonic>=1.5",
+    "backoff>=1.10.0",
+    "python-dateutil>2.1",
+]
 
 extras_require = {
     "dev": [
         "black",
         "isort",
+        "flake8",
+        "flake8-print",
         "pre-commit",
     ],
-    "test": ["mock>=2.0.0", "freezegun==0.3.15", "pylint", "flake8", "coverage", "pytest"],
+    "test": [
+        "mock>=2.0.0",
+        "freezegun==0.3.15",
+        "pylint",
+        "flake8",
+        "coverage",
+        "pytest",
+        "pytest-timeout",
+        "pytest-asyncio",
+        "django",
+        "openai",
+        "anthropic",
+        "langgraph",
+        "langchain-community>=0.2.0",
+        "langchain-openai>=0.2.0",
+        "langchain-anthropic>=0.2.0",
+        "pydantic",
+    ],
     "sentry": ["sentry-sdk", "django"],
+    "langchain": ["langchain>=0.2.0"],
 }
 
 setup(
@@ -35,7 +61,16 @@ setup(
     maintainer="PostHog",
     maintainer_email="hey@posthog.com",
     test_suite="posthog.test.all",
-    packages=["posthog", "posthog.test", "posthog.sentry"],
+    packages=[
+        "posthog",
+        "posthog.ai",
+        "posthog.ai.langchain",
+        "posthog.ai.openai",
+        "posthog.ai.anthropic",
+        "posthog.test",
+        "posthog.sentry",
+        "posthog.exception_integrations",
+    ],
     license="MIT License",
     install_requires=install_requires,
     extras_require=extras_require,
@@ -58,5 +93,8 @@ setup(
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
     ],
 )
