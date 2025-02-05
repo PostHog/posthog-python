@@ -239,6 +239,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_tool_start", run_id, parent_run_id, input_str=input_str)
+        self._set_parent_of_run(run_id, parent_run_id)
         self._set_trace_or_span_metadata(serialized, input_str, run_id, parent_run_id, **kwargs)
 
     def on_tool_end(
@@ -275,6 +276,7 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         self._log_debug_event("on_retriever_start", run_id, parent_run_id, query=query)
+        self._set_parent_of_run(run_id, parent_run_id)
         self._set_trace_or_span_metadata(serialized, query, run_id, parent_run_id, **kwargs)
 
     def on_retriever_end(
