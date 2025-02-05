@@ -1,3 +1,7 @@
+## 3.11.1 - 2025-02-06
+
+1. Fix LangChain callback handler to capture parent run ID.
+
 ## 3.11.0 - 2025-01-28
 
 1. Add the `$ai_span` event to the LangChain callback handler to capture the input and output of intermediary chains.
