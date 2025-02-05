@@ -323,8 +323,6 @@ class Client(object):
         return self._enqueue(msg, disable_geoip)
 
     def alias(self, previous_id=None, distinct_id=None, timestamp=None, uuid=None, disable_geoip=None):
-        context = context or {}
-
         require("previous_id", previous_id, ID_TYPES)
         require("distinct_id", distinct_id, ID_TYPES)
 
