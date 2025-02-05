@@ -340,9 +340,7 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
-    def page(
-        self, distinct_id=None, url=None, properties=None, timestamp=None, uuid=None, disable_geoip=None
-    ):
+    def page(self, distinct_id=None, url=None, properties=None, timestamp=None, uuid=None, disable_geoip=None):
         properties = properties or {}
 
         require("distinct_id", distinct_id, ID_TYPES)
