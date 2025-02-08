@@ -435,6 +435,15 @@ def get_feature_flag_payload(
     )
 
 
+def get_decrypted_feature_flag_payload(
+    key,
+):
+    return _proxy(
+        "get_decrypted_feature_flag_payload",
+        key=key,
+    )
+
+
 def get_all_flags_and_payloads(
     distinct_id,
     groups={},
