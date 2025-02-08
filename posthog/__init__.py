@@ -436,11 +436,11 @@ def get_feature_flag_payload(
 
 
 def get_decrypted_feature_flag_payload(
-    key,
+    flag_id,
 ):
     return _proxy(
         "get_decrypted_feature_flag_payload",
-        key=key,
+        flag_id=flag_id,
     )
 
 
