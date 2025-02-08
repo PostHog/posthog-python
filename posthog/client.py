@@ -208,7 +208,7 @@ class Client(object):
     
     def get_remote_config_payload(self, flag_id):
         resp_data = remote_config(
-            self.api_key,
+            self.personal_api_key,
             self.host,
             flag_id,
             timeout=self.feature_flags_request_timeout_seconds,
