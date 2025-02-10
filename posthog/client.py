@@ -245,7 +245,7 @@ class Client(object):
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
 
-        elif self.feature_flags:
+        elif self.feature_flags and event != "$feature_flag_called":
             # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to the server
             feature_variants = self.get_all_flags(
                 distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=True
