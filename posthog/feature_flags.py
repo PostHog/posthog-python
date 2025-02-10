@@ -129,8 +129,8 @@ def match_property(property, property_values) -> bool:
 
         def compute_exact_match(value, override_value):
             if isinstance(value, list):
-                return str(override_value).lower() in [str(val).lower() for val in value]
-            return str(value).lower() == str(override_value).lower()
+                return str(override_value).casefold() in [str(val).casefold() for val in value]
+            return str(value).casefold() == str(override_value).casefold()
 
         if operator == "exact":
             return compute_exact_match(value, override_value)
@@ -141,10 +141,10 @@ def match_property(property, property_values) -> bool:
         return key in property_values
 
     if operator == "icontains":
-        return str(value).lower() in str(override_value).lower()
+        return str(value).casefold() in str(override_value).casefold()
 
     if operator == "not_icontains":
-        return str(value).lower() not in str(override_value).lower()
+        return str(value).casefold() not in str(override_value).casefold()
 
     if operator == "regex":
         return is_valid_regex(str(value)) and re.compile(str(value)).search(str(override_value)) is not None
