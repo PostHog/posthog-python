@@ -32,7 +32,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     @mock.patch("posthog.client.get")
-    def test_flag_person_properties(self):
+    def test_flag_person_properties(self, patch_get):
         self.client.feature_flags = [
             {
                 "id": 1,
