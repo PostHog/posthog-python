@@ -14,7 +14,7 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, remote_config, determine_server_host, get
+from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config
 from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
 from posthog.version import VERSION
 
