@@ -2,6 +2,7 @@ import atexit
 import logging
 import numbers
 import os
+import warnings
 import sys
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
@@ -147,14 +148,19 @@ class Client(object):
                     consumer.start()
 
     def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
         msg = {
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "$set": properties,
             "event": "$identify",
@@ -218,8 +224,14 @@ class Client(object):
         send_feature_flags=False,
         disable_geoip=None,
     ):
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
         require("event", event, string_types)
@@ -227,7 +239,6 @@ class Client(object):
         msg = {
             "properties": properties,
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "event": event,
             "uuid": uuid,
@@ -264,14 +275,19 @@ class Client(object):
         return self._enqueue(msg, disable_geoip)
 
     def set(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
         msg = {
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "$set": properties,
             "event": "$set",
@@ -281,14 +297,19 @@ class Client(object):
         return self._enqueue(msg, disable_geoip)
 
     def set_once(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         properties = properties or {}
-        context = context or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
         msg = {
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "$set_once": properties,
             "event": "$set_once",
@@ -308,8 +329,13 @@ class Client(object):
         disable_geoip=None,
         distinct_id=None,
     ):
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         properties = properties or {}
-        context = context or {}
         require("group_type", group_type, ID_TYPES)
         require("group_key", group_key, ID_TYPES)
         require("properties", properties, dict)
@@ -328,14 +354,18 @@ class Client(object):
             },
             "distinct_id": distinct_id,
             "timestamp": timestamp,
-            "context": context,
             "uuid": uuid,
         }
 
         return self._enqueue(msg, disable_geoip)
 
     def alias(self, previous_id=None, distinct_id=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
-        context = context or {}
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         require("previous_id", previous_id, ID_TYPES)
         require("distinct_id", distinct_id, ID_TYPES)
@@ -346,7 +376,6 @@ class Client(object):
                 "alias": distinct_id,
             },
             "timestamp": timestamp,
-            "context": context,
             "event": "$create_alias",
             "distinct_id": previous_id,
         }
@@ -356,9 +385,14 @@ class Client(object):
     def page(
         self, distinct_id=None, url=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None
     ):
-        properties = properties or {}
-        context = context or {}
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
+        properties = properties or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
@@ -369,7 +403,6 @@ class Client(object):
             "event": "$pageview",
             "properties": properties,
             "timestamp": timestamp,
-            "context": context,
             "distinct_id": distinct_id,
             "uuid": uuid,
         }
@@ -386,6 +419,13 @@ class Client(object):
         uuid=None,
         groups=None,
     ):
+        if context is not None:
+            warnings.warn(
+                "The 'context' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
         try:
@@ -446,7 +486,6 @@ class Client(object):
             timestamp = datetime.now(tz=tzutc())
 
         require("timestamp", timestamp, datetime)
-        require("context", msg["context"], dict)
 
         # add common
         timestamp = guess_timezone(timestamp)
