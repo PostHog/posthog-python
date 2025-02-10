@@ -1,4 +1,5 @@
 import datetime  # noqa: F401
+import warnings
 from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
@@ -43,6 +44,13 @@ def capture(
     send_feature_flags=False,
     disable_geoip=None,  # type: Optional[bool]
 ):
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     # type: (...) -> Tuple[bool, dict]
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
@@ -86,6 +94,13 @@ def identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     # type: (...) -> Tuple[bool, dict]
     """
     Identify lets you add metadata on your users so you can more easily identify who they are in PostHog, and even do things like segment users by these properties.
@@ -121,6 +136,13 @@ def set(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a user record.
@@ -156,6 +178,13 @@ def set_once(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a user record, only if they do not yet exist.
@@ -192,6 +221,12 @@ def group_identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a group
@@ -228,6 +263,12 @@ def alias(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     # type: (...) -> Tuple[bool, dict]
     """
     To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
