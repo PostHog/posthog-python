@@ -436,8 +436,19 @@ def get_feature_flag_payload(
 
 
 def get_decrypted_feature_flag_payload(
-    flag_id,
+    flag_id,  # type: str
 ):
+    """Get the decrypted payload for a specific feature flag.
+
+    Args:
+        flag_id: The unique identifier of the feature flag
+
+    Returns:
+        The decrypted payload associated with the feature flag
+
+    Note:
+        Requires personal_api_key to be set for authentication
+    """
     return _proxy(
         "get_decrypted_feature_flag_payload",
         flag_id=flag_id,
