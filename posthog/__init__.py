@@ -436,7 +436,7 @@ def get_feature_flag_payload(
 
 
 def get_decrypted_feature_flag_payload(
-    flag_id,  # type: str
+    flag_id,  # type: int
 ):
     """Get the decrypted payload for a specific feature flag.
 
