@@ -2,8 +2,8 @@ import atexit
 import logging
 import numbers
 import os
-import warnings
 import sys
+import warnings
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
