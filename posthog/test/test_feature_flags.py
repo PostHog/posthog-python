@@ -32,7 +32,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     @mock.patch("posthog.client.get")
-    def test_flag_person_properties(self, patch_get):
+    def test_flag_person_properties(self):
         self.client.feature_flags = [
             {
                 "id": 1,
@@ -68,6 +68,59 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
+
+    def test_case_insensitive_matching(self):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "person-flag",
+                "is_simple_flag": True,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "location",
+                                    "operator": "exact",
+                                    "value": ["Straße"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "star",
+                                    "operator": "exact",
+                                    "value": ["ſun"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"location": "straße"})
+        )
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"location": "strasse"})
+        )
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"star": "ſun"})
+        )
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"star": "sun"})
+        )
 
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
