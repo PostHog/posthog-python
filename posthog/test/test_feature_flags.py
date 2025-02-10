@@ -2371,13 +2371,11 @@ class TestCaptureCalls(unittest.TestCase):
                         },
                     ],
                 },
-            }
+            },
         ]
 
         self.assertTrue(
-            client.get_feature_flag(
-                "complex-flag", "some-distinct-id", person_properties={"region": "USA"}
-            )
+            client.get_feature_flag("complex-flag", "some-distinct-id", person_properties={"region": "USA"})
         )
 
         # Grab the capture message that was just added to the queue
@@ -2389,7 +2387,6 @@ class TestCaptureCalls(unittest.TestCase):
         assert msg["properties"]["$feature/complex-flag"] is True
         assert "$feature/simple-flag" not in msg["properties"]
         assert "$active_feature_flags" not in msg["properties"]
-
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
