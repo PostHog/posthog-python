@@ -206,7 +206,7 @@ class Client(object):
 
         return resp_data
     
-    def get_remote_config_payload(self, flag_id):
+    def get_remote_config_payload(self, flag_id: str):
         resp_data = remote_config(
             self.personal_api_key,
             self.host,
@@ -820,7 +820,7 @@ class Client(object):
 
         return payload
     
-    def get_decrypted_feature_flag_payload(self, flag_id):
+    def get_decrypted_feature_flag_payload(self, flag_id: str):
         if self.disabled:
             return None
 
