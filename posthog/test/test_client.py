@@ -292,7 +292,6 @@ class TestClient(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "beta-feature-local",
-            "is_simple_flag": False,
             "active": True,
             "rollout_percentage": 100,
             "filters": {
@@ -321,7 +320,6 @@ class TestClient(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "person-flag",
-            "is_simple_flag": True,
             "active": True,
             "filters": {
                 "groups": [
@@ -344,7 +342,6 @@ class TestClient(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "false-flag",
-            "is_simple_flag": True,
             "active": True,
             "filters": {
                 "groups": [
@@ -396,7 +393,6 @@ class TestClient(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "beta-feature-local",
-            "is_simple_flag": False,
             "active": True,
             "rollout_percentage": 100,
             "filters": {
@@ -425,7 +421,6 @@ class TestClient(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "person-flag",
-            "is_simple_flag": True,
             "active": True,
             "filters": {
                 "groups": [
@@ -1039,7 +1034,7 @@ class TestClient(unittest.TestCase):
 
         patch_get.return_value.raiseError.side_effect = raise_effect
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
-        client.feature_flags = [{"key": "example", "is_simple_flag": False}]
+        client.feature_flags = [{"key": "example"}]
 
         self.assertFalse(client.feature_enabled("example", "distinct_id"))
 
