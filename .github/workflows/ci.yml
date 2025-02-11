@@ -42,6 +42,10 @@ jobs:
               run: |
                   isort --check-only .
 
+            - name: Check types with mypy
+              run: |
+                  mypy . | mypy-baseline filter
+
     tests:
         name: Python tests
         runs-on: ubuntu-latest
