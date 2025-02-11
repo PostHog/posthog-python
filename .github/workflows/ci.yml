@@ -45,6 +45,10 @@ jobs:
             - name: Check mypy version
               run: mypy --version
 
+            - name: Verbose mypy output for debugging
+              run: |
+                  mypy -v --config-file mypy.ini .
+
             - name: Check types with mypy
               run: |
                   mypy --config-file mypy.ini  . | mypy-baseline filter
