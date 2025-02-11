@@ -42,12 +42,13 @@ jobs:
               run: |
                   isort --check-only .
 
-            - name: Check mypy version
-              run: mypy --version
-
             - name: Verbose mypy output for debugging
               run: |
-                  mypy --no-site-packages --config-file mypy.ini .
+                  mypy --no-site-packages --config-file mypy.ini . | mypy-baseline sync
+
+            - name: Echo the baseline file created in the previous step
+              run: |
+                  cat .mypy_cache/baseline.txt
 
             - name: Check types with mypy
               run: |
