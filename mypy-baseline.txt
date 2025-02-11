@@ -8,8 +8,18 @@ setup_analytics.py:0: error: Incompatible import of "setup" (imported name has t
 setup_analytics.py:0: error: Cannot find implementation or library stub for module named "version"  [import-not-found]
 setup.py:0: error: Incompatible import of "setup" (imported name has type "Callable[[DefaultNamedArg(str, 'name'), DefaultNamedArg(str, 'version'), DefaultNamedArg(str, 'description'), DefaultNamedArg(str, 'long_description'), DefaultNamedArg(str, 'author'), DefaultNamedArg(str, 'author_email'), DefaultNamedArg(str, 'maintainer'), DefaultNamedArg(str, 'maintainer_email'), DefaultNamedArg(str, 'url'), DefaultNamedArg(str, 'download_url'), DefaultNamedArg(list[str], 'packages'), DefaultNamedArg(list[str], 'py_modules'), DefaultNamedArg(list[str], 'scripts'), DefaultNamedArg(list[distutils.extension.Extension], 'ext_modules'), DefaultNamedArg(list[str], 'classifiers'), DefaultNamedArg(type[distutils.dist.Distribution], 'distclass'), DefaultNamedArg(str, 'script_name'), DefaultNamedArg(list[str], 'script_args'), DefaultNamedArg(Mapping[str, Any], 'options'), DefaultNamedArg(str, 'license'), DefaultNamedArg(list[str] | str, 'keywords'), DefaultNamedArg(list[str] | str, 'platforms'), DefaultNamedArg(Mapping[str, type[distutils.cmd.Command]], 'cmdclass'), DefaultNamedArg(list[tuple[str, list[str]]], 'data_files'), DefaultNamedArg(Mapping[str, str], 'package_dir'), DefaultNamedArg(list[str], 'obsoletes'), DefaultNamedArg(list[str], 'provides'), DefaultNamedArg(list[str], 'requires'), DefaultNamedArg(list[str], 'command_packages'), DefaultNamedArg(Mapping[str, Mapping[str, tuple[Any, Any]]], 'command_options'), DefaultNamedArg(Mapping[str, list[str]], 'package_data'), DefaultNamedArg(Literal[0, 1] | bool, 'include_package_data'), DefaultNamedArg(list[str], 'libraries'), DefaultNamedArg(list[str], 'headers'), DefaultNamedArg(str, 'ext_package'), DefaultNamedArg(list[str], 'include_dirs'), DefaultNamedArg(str, 'password'), DefaultNamedArg(str, 'fullname'), KwArg(Any)], distutils.dist.Distribution]", local name has type "Callable[[DefaultNamedArg(str, 'name'), DefaultNamedArg(str, 'version'), DefaultNamedArg(str, 'description'), DefaultNamedArg(str, 'long_description'), DefaultNamedArg(str, 'long_description_content_type'), DefaultNamedArg(str, 'author'), DefaultNamedArg(str, 'author_email'), DefaultNamedArg(str, 'maintainer'), DefaultNamedArg(str, 'maintainer_email'), DefaultNamedArg(str, 'url'), DefaultNamedArg(str, 'download_url'), DefaultNamedArg(list[str], 'packages'), DefaultNamedArg(list[str], 'py_modules'), DefaultNamedArg(list[str], 'scripts'), DefaultNamedArg(Sequence[setuptools.extension.Extension], 'ext_modules'), DefaultNamedArg(list[str], 'classifiers'), DefaultNamedArg(type[setuptools.dist.Distribution], 'distclass'), DefaultNamedArg(str, 'script_name'), DefaultNamedArg(list[str], 'script_args'), DefaultNamedArg(Mapping[str, Any], 'options'), DefaultNamedArg(str, 'license'), DefaultNamedArg(list[str] | str, 'keywords'), DefaultNamedArg(list[str] | str, 'platforms'), DefaultNamedArg(Mapping[str, type[setuptools._distutils.cmd.Command]], 'cmdclass'), DefaultNamedArg(list[tuple[str, list[str]]], 'data_files'), DefaultNamedArg(Mapping[str, str], 'package_dir'), DefaultNamedArg(list[str], 'obsoletes'), DefaultNamedArg(list[str], 'provides'), DefaultNamedArg(list[str], 'requires'), DefaultNamedArg(list[str], 'command_packages'), DefaultNamedArg(Mapping[str, Mapping[str, tuple[Any, Any]]], 'command_options'), DefaultNamedArg(Mapping[str, list[str]], 'package_data'), DefaultNamedArg(bool, 'include_package_data'), DefaultNamedArg(list[tuple[str, _BuildInfo]], 'libraries'), DefaultNamedArg(list[str], 'headers'), DefaultNamedArg(str, 'ext_package'), DefaultNamedArg(list[str], 'include_dirs'), DefaultNamedArg(str, 'password'), DefaultNamedArg(str, 'fullname'), KwArg(Any)], setuptools.dist.Distribution]")  [assignment]
 setup.py:0: error: Cannot find implementation or library stub for module named "version"  [import-not-found]
+posthog/sentry/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
+posthog/sentry/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
+posthog/sentry/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
 sentry_django_example/manage.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 sentry_django_example/manage.py:0: note: Use "-> None" if function does not return a value
+posthog/exception_integrations/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
+posthog/exception_integrations/django.py:0: error: Incompatible default for argument "request" (default has type "None", argument has type "WSGIRequest")  [assignment]
+posthog/exception_integrations/django.py:0: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+posthog/exception_integrations/django.py:0: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+posthog/exception_integrations/django.py:0: error: Function is missing a return type annotation  [no-untyped-def]
+posthog/exception_integrations/django.py:0: note: Use "-> None" if function does not return a value
+posthog/exception_integrations/django.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-def]
 posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-def]
 posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-def]
@@ -25,16 +35,6 @@ posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-de
 posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-def]
 posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-def]
 posthog/utils.py:0: error: Function is missing a type annotation  [no-untyped-def]
-posthog/sentry/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
-posthog/sentry/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
-posthog/sentry/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
-posthog/exception_integrations/django.py:0: error: Function is missing a type annotation  [no-untyped-def]
-posthog/exception_integrations/django.py:0: error: Incompatible default for argument "request" (default has type "None", argument has type "WSGIRequest")  [assignment]
-posthog/exception_integrations/django.py:0: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
-posthog/exception_integrations/django.py:0: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
-posthog/exception_integrations/django.py:0: error: Function is missing a return type annotation  [no-untyped-def]
-posthog/exception_integrations/django.py:0: note: Use "-> None" if function does not return a value
-posthog/exception_integrations/django.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 posthog/request.py:0: error: Function is missing a type annotation for one or more arguments  [no-untyped-def]
 posthog/request.py:0: error: Incompatible types in assignment (expression has type "bytes", variable has type "str")  [assignment]
 posthog/request.py:0: error: Function is missing a type annotation for one or more arguments  [no-untyped-def]
@@ -288,19 +288,31 @@ llm_observability_examples.py:0: error: Function is missing a return type annota
 llm_observability_examples.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Function is missing a type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_distinct_id" for "create" of "Embeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_trace_id" for "create" of "Embeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_properties" for "create" of "Embeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_groups" for "create" of "Embeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Function is missing a type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_distinct_id" for "create" of "AsyncEmbeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_trace_id" for "create" of "AsyncEmbeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_properties" for "create" of "AsyncEmbeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_groups" for "create" of "AsyncEmbeddings"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Function is missing a type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_distinct_id" for "parse" of "Completions"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_trace_id" for "parse" of "Completions"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_properties" for "parse" of "Completions"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_groups" for "parse" of "Completions"  [call-arg]
+env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 posthog/ai/langchain/callbacks.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 posthog/ai/langchain/callbacks.py:0: error: Function is missing a type annotation for one or more arguments  [no-untyped-def]
 posthog/ai/langchain/callbacks.py:0: error: Function is missing a return type annotation  [no-untyped-def]
