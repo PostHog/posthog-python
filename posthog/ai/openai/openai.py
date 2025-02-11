@@ -280,7 +280,6 @@ class WrappedBetaCompletions(openai.resources.beta.chat.completions.Completions)
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        print("kwargs", kwargs)
         return call_llm_and_track_usage(
             posthog_distinct_id,
             self._client._ph_client,

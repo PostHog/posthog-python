@@ -30,6 +30,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         self._ph_client = posthog_client
         self.chat = WrappedChat(self)
         self.embeddings = WrappedEmbeddings(self)
+        self.beta = WrappedBeta(self)
 
 
 class WrappedChat(openai.resources.chat.AsyncChat):
@@ -250,7 +251,7 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
         return response
 
 
-class WrappedBeta(openai.resources.beta.Beta):
+class WrappedBeta(openai.resources.beta.AsyncBeta):
     _client: AsyncOpenAI
 
     @property
@@ -258,7 +259,7 @@ class WrappedBeta(openai.resources.beta.Beta):
         return WrappedBetaChat(self._client)
 
 
-class WrappedBetaChat(openai.resources.beta.chat.Chat):
+class WrappedBetaChat(openai.resources.beta.chat.AsyncChat):
     _client: AsyncOpenAI
 
     @property
@@ -266,10 +267,10 @@ class WrappedBetaChat(openai.resources.beta.chat.Chat):
         return WrappedBetaCompletions(self._client)
 
 
-class WrappedBetaCompletions(openai.resources.beta.chat.completions.Completions):
+class WrappedBetaCompletions(openai.resources.beta.chat.completions.AsyncCompletions):
     _client: AsyncOpenAI
 
-    def parse(
+    async def parse(
         self,
         posthog_distinct_id: Optional[str] = None,
         posthog_trace_id: Optional[str] = None,
@@ -278,7 +279,7 @@ class WrappedBetaCompletions(openai.resources.beta.chat.completions.Completions)
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
-        return call_llm_and_track_usage_async(
+        return await call_llm_and_track_usage_async(
             posthog_distinct_id,
             self._client._ph_client,
             "openai",
