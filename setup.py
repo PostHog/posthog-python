@@ -37,7 +37,6 @@ extras_require = {
         "types-requests",
         "types-setuptools",
         "types-six",
-        "types-httpx",
         "types-pydantic",
         "pre-commit",
     ],
