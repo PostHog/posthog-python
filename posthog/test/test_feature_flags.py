@@ -2339,6 +2339,55 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=None,
         )
 
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_but_does_not_add_all_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "region", "value": "USA"}],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Gamma Feature",
+                "key": "simple-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            },
+        ]
+
+        self.assertTrue(
+            client.get_feature_flag("complex-flag", "some-distinct-id", person_properties={"region": "USA"})
+        )
+
+        # Grab the capture message that was just added to the queue
+        msg = client.queue.get(block=False)
+        assert msg["event"] == "$feature_flag_called"
+        assert msg["properties"]["$feature_flag"] == "complex-flag"
+        assert msg["properties"]["$feature_flag_response"] is True
+        assert msg["properties"]["locally_evaluated"] is True
+        assert msg["properties"]["$feature/complex-flag"] is True
+        assert "$feature/simple-flag" not in msg["properties"]
+        assert "$active_feature_flags" not in msg["properties"]
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_in_get_feature_flag_payload(self, patch_decide, patch_capture):
