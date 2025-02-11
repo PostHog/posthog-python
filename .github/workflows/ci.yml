@@ -13,10 +13,10 @@ jobs:
               with:
                   fetch-depth: 1
 
-            - name: Set up Python 3.8
+            - name: Set up Python 3.11
               uses: actions/setup-python@v2
               with:
-                  python-version: 3.8
+                  python-version: 3.11.11
 
             - uses: actions/cache@v3
               with:
@@ -41,6 +41,10 @@ jobs:
             - name: Check import order with isort
               run: |
                   isort --check-only .
+
+            - name: Check types with mypy
+              run: |
+                  mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
 
     tests:
         name: Python tests

@@ -1,0 +1,61 @@
+posthog/utils.py:0: error: Library stubs not installed for "six"  [import-untyped]
+posthog/utils.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
+posthog/utils.py:0: error: Statement is unreachable  [unreachable]
+posthog/utils.py:0: error: Argument 1 to "join" of "str" has incompatible type "AttributeError"; expected "Iterable[str]"  [arg-type]
+posthog/request.py:0: error: Library stubs not installed for "requests"  [import-untyped]
+posthog/request.py:0: note: Hint: "python3 -m pip install types-requests"
+posthog/request.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
+posthog/request.py:0: error: Incompatible types in assignment (expression has type "bytes", variable has type "str")  [assignment]
+posthog/consumer.py:0: error: Name "Empty" already defined (possibly by an import)  [no-redef]
+posthog/consumer.py:0: error: Need type annotation for "items" (hint: "items: list[<type>] = ...")  [var-annotated]
+posthog/consumer.py:0: error: Unsupported operand types for <= ("int" and "str")  [operator]
+posthog/consumer.py:0: note: Right operand is of type "int | str"
+posthog/consumer.py:0: error: Unsupported operand types for < ("str" and "int")  [operator]
+posthog/consumer.py:0: note: Left operand is of type "int | str"
+posthog/feature_flags.py:0: error: Library stubs not installed for "dateutil"  [import-untyped]
+posthog/feature_flags.py:0: error: Library stubs not installed for "dateutil.relativedelta"  [import-untyped]
+posthog/feature_flags.py:0: error: Unused "type: ignore" comment  [unused-ignore]
+posthog/client.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
+posthog/client.py:0: note: Hint: "python3 -m pip install types-python-dateutil"
+posthog/client.py:0: note: (or run "mypy --install-types" to install all missing stub packages)
+posthog/client.py:0: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports
+posthog/client.py:0: error: Library stubs not installed for "six"  [import-untyped]
+posthog/client.py:0: note: Hint: "python3 -m pip install types-six"
+posthog/client.py:0: error: Name "queue" already defined (by an import)  [no-redef]
+posthog/client.py:0: error: Need type annotation for "queue"  [var-annotated]
+posthog/client.py:0: error: Item "None" of "Any | None" has no attribute "get"  [union-attr]
+simulator.py:0: error: Unexpected keyword argument "anonymous_id" for "capture"  [call-arg]
+posthog/__init__.py:0: note: "capture" defined here
+simulator.py:0: error: Unexpected keyword argument "anonymous_id" for "identify"  [call-arg]
+posthog/__init__.py:0: note: "identify" defined here
+simulator.py:0: error: Unexpected keyword argument "traits" for "identify"  [call-arg]
+posthog/__init__.py:0: note: "identify" defined here
+example.py:0: error: Statement is unreachable  [unreachable]
+posthog/sentry/posthog_integration.py:0: error: Statement is unreachable  [unreachable]
+posthog/ai/utils.py:0: error: Need type annotation for "output" (hint: "output: list[<type>] = ...")  [var-annotated]
+posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
+posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
+posthog/ai/utils.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
+posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
+posthog/ai/utils.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+sentry_django_example/sentry_django_example/settings.py:0: error: Need type annotation for "ALLOWED_HOSTS" (hint: "ALLOWED_HOSTS: list[<type>] = ...")  [var-annotated]
+sentry_django_example/sentry_django_example/settings.py:0: error: Incompatible types in assignment (expression has type "str", variable has type "None")  [assignment]
+posthog/ai/openai/openai_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/openai/openai_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/openai/openai_async.py:0: error: Unpacked dict entry 11 has incompatible type "dict[str, Any] | None"; expected "SupportsKeysAndGetItem[str, Any]"  [dict-item]
+posthog/ai/openai/openai_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/openai/openai_async.py:0: error: Unpacked dict entry 8 has incompatible type "dict[str, Any] | None"; expected "SupportsKeysAndGetItem[str, Any]"  [dict-item]
+posthog/ai/openai/openai.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/openai/openai.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/openai/openai.py:0: error: Unpacked dict entry 11 has incompatible type "dict[str, Any] | None"; expected "SupportsKeysAndGetItem[str, Any]"  [dict-item]
+posthog/ai/openai/openai.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/openai/openai.py:0: error: Unpacked dict entry 8 has incompatible type "dict[str, Any] | None"; expected "SupportsKeysAndGetItem[str, Any]"  [dict-item]
+posthog/ai/anthropic/anthropic_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/anthropic/anthropic_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/anthropic/anthropic_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/anthropic/anthropic.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/anthropic/anthropic.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+posthog/ai/anthropic/anthropic.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+llm_observability_examples.py:0: error: Argument "posthog_client" to "OpenAI" has incompatible type Module; expected "Client"  [arg-type]
+llm_observability_examples.py:0: error: Argument "posthog_client" to "AsyncOpenAI" has incompatible type Module; expected "Client"  [arg-type]

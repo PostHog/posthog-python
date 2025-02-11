@@ -25,10 +25,20 @@ install_requires = [
 extras_require = {
     "dev": [
         "black",
+        "django-stubs",
         "isort",
         "flake8",
         "flake8-print",
+        "lxml",
+        "mypy",
+        "mypy-baseline",
+        "types-mock",
+        "types-python-dateutil",
+        "types-requests",
+        "types-setuptools",
+        "types-six",
         "pre-commit",
+        "pydantic",
     ],
     "test": [
         "mock>=2.0.0",
