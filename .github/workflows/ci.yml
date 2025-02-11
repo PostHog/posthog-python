@@ -16,7 +16,7 @@ jobs:
             - name: Set up Python 3.11
               uses: actions/setup-python@v2
               with:
-                  python-version: 3.11.9
+                  python-version: 3.11.11
 
             - uses: actions/cache@v3
               with:
@@ -42,9 +42,12 @@ jobs:
               run: |
                   isort --check-only .
 
+            - name: Check mypy version
+              run: mypy --version
+
             - name: Check types with mypy
               run: |
-                  mypy . | mypy-baseline filter
+                  mypy --config-file mypy.ini  . | mypy-baseline filter
 
     tests:
         name: Python tests
