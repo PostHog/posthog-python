@@ -48,7 +48,7 @@ jobs:
 
             - name: Echo the baseline file created in the previous step
               run: |
-                  cat .mypy_cache/baseline.txt
+                  cat mypy-baseline.txt
 
             - name: Check types with mypy
               run: |
