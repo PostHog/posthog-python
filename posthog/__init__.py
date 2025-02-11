@@ -1,4 +1,5 @@
 import datetime  # noqa: F401
+import warnings
 from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
@@ -64,6 +65,14 @@ def capture(
     posthog.capture('distinct id', 'purchase', groups={'company': 'id:5'})
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "capture",
         distinct_id=distinct_id,
@@ -102,6 +111,14 @@ def identify(
     })
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "identify",
         distinct_id=distinct_id,
@@ -137,6 +154,14 @@ def set(
      })
      ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "set",
         distinct_id=distinct_id,
@@ -172,6 +197,14 @@ def set_once(
      })
      ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "set_once",
         distinct_id=distinct_id,
@@ -208,6 +241,14 @@ def group_identify(
      })
      ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "group_identify",
         group_type=group_type,
@@ -245,6 +286,14 @@ def alias(
     posthog.alias('anonymous session id', 'distinct id')
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "alias",
         previous_id=previous_id,
@@ -288,6 +337,14 @@ def capture_exception(
 
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "capture_exception",
         exception=exception,

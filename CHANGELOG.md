@@ -1,3 +1,13 @@
+## 3.12.1 - 2025-02-11
+
+1. Fix mypy support for 3.12.0
+2. Deprecate `is_simple_flag`
+
+## 3.12.0 - 2025-02-11
+
+1. Add support for OpenAI beta parse API.
+2. Deprecate `context` parameter
+
 ## 3.11.1 - 2025-02-06
 
 1. Fix LangChain callback handler to capture parent run ID.
@@ -5,6 +15,7 @@
 ## 3.11.0 - 2025-01-28
 
 1. Add the `$ai_span` event to the LangChain callback handler to capture the input and output of intermediary chains.
+
    > LLM observability naming change: event property `$ai_trace_name` is now `$ai_span_name`.
 
 2. Fix serialiazation of Pydantic models in methods.
