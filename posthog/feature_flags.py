@@ -131,7 +131,7 @@ def match_property(property, property_values) -> bool:
         def compute_exact_match(value, override_value):
             if isinstance(value, list):
                 return str(override_value).casefold() in [str(val).casefold() for val in value]
-            return utils.str_icontains(value, override_value)
+            return utils.str_iequals(value, override_value)
 
         if operator == "exact":
             return compute_exact_match(value, override_value)
