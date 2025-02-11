@@ -38,6 +38,7 @@ extras_require = {
         "types-setuptools",
         "types-six",
         "pre-commit",
+        "pydantic",
     ],
     "test": [
         "mock>=2.0.0",
