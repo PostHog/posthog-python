@@ -22,6 +22,7 @@ async_openai_client = AsyncOpenAI(
     posthog_client=posthog,
 )
 
+
 def main_sync():
     trace_id = str(uuid.uuid4())
     print("Trace ID:", trace_id)
@@ -187,12 +188,11 @@ async def embedding_async_openai_call(posthog_distinct_id, posthog_trace_id, pos
     return response
 
 
-# TODO: add beta client
-
 class CalendarEvent(BaseModel):
     name: str
     date: str
     participants: list[str]
+
 
 def beta_openai_call(distinct_id, trace_id, properties, groups):
     response = openai_client.beta.chat.completions.parse(
@@ -209,6 +209,7 @@ def beta_openai_call(distinct_id, trace_id, properties, groups):
     )
     print(response)
     return response
+
 
 # HOW TO RUN:
 # comment out one of these to run the other
