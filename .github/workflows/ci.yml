@@ -47,11 +47,11 @@ jobs:
 
             - name: Verbose mypy output for debugging
               run: |
-                  mypy -v --config-file mypy.ini .
+                  mypy --no-site-packages --config-file mypy.ini .
 
             - name: Check types with mypy
               run: |
-                  mypy --config-file mypy.ini  . | mypy-baseline filter
+                  mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
 
     tests:
         name: Python tests
