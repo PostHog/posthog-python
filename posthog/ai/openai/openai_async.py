@@ -249,6 +249,7 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
 
         return response
 
+
 class WrappedBeta(openai.resources.beta.Beta):
     _client: AsyncOpenAI
 
