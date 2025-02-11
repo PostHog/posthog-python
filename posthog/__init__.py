@@ -44,13 +44,6 @@ def capture(
     send_feature_flags=False,
     disable_geoip=None,  # type: Optional[bool]
 ):
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     # type: (...) -> Tuple[bool, dict]
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
@@ -72,6 +65,14 @@ def capture(
     posthog.capture('distinct id', 'purchase', groups={'company': 'id:5'})
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "capture",
         distinct_id=distinct_id,
@@ -94,13 +95,6 @@ def identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     # type: (...) -> Tuple[bool, dict]
     """
     Identify lets you add metadata on your users so you can more easily identify who they are in PostHog, and even do things like segment users by these properties.
@@ -117,6 +111,14 @@ def identify(
     })
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "identify",
         distinct_id=distinct_id,
@@ -136,13 +138,6 @@ def set(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a user record.
@@ -159,6 +154,14 @@ def set(
      })
      ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "set",
         distinct_id=distinct_id,
@@ -178,13 +181,6 @@ def set_once(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a user record, only if they do not yet exist.
@@ -201,6 +197,14 @@ def set_once(
      })
      ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "set_once",
         distinct_id=distinct_id,
@@ -221,12 +225,6 @@ def group_identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
     # type: (...) -> Tuple[bool, dict]
     """
     Set properties on a group
@@ -243,6 +241,14 @@ def group_identify(
      })
      ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "group_identify",
         group_type=group_type,
@@ -263,12 +269,6 @@ def alias(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
     # type: (...) -> Tuple[bool, dict]
     """
     To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
@@ -286,6 +286,14 @@ def alias(
     posthog.alias('anonymous session id', 'distinct id')
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "alias",
         previous_id=previous_id,
@@ -329,6 +337,14 @@ def capture_exception(
 
     ```
     """
+
+    if context is not None:
+        warnings.warn(
+            "The 'context' parameter is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return _proxy(
         "capture_exception",
         exception=exception,
