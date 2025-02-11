@@ -1,9 +1,10 @@
 import os
 import uuid
 
+from pydantic import BaseModel
+
 import posthog
 from posthog.ai.openai import AsyncOpenAI, OpenAI
-from pydantic import BaseModel
 
 # Example credentials - replace these with your own or use environment variables
 posthog.project_api_key = os.getenv("POSTHOG_PROJECT_API_KEY", "your-project-api-key")
