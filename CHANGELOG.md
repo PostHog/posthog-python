@@ -1,3 +1,7 @@
+## 3.12.0 - 2025-02-11
+
+1. Add support for OpenAI beta parse API.
+
 ## 3.11.1 - 2025-02-06
 
 1. Fix LangChain callback handler to capture parent run ID.
