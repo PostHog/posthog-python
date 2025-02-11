@@ -288,31 +288,19 @@ llm_observability_examples.py:0: error: Function is missing a return type annota
 llm_observability_examples.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Function is missing a type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_distinct_id" for "create" of "Embeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_trace_id" for "create" of "Embeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_properties" for "create" of "Embeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_groups" for "create" of "Embeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "Embeddings" defined here
 llm_observability_examples.py:0: error: Function is missing a type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_distinct_id" for "create" of "AsyncEmbeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_trace_id" for "create" of "AsyncEmbeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_properties" for "create" of "AsyncEmbeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_groups" for "create" of "AsyncEmbeddings"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/embeddings.py:0: note: "create" of "AsyncEmbeddings" defined here
 llm_observability_examples.py:0: error: Function is missing a type annotation  [no-untyped-def]
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_distinct_id" for "parse" of "Completions"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_trace_id" for "parse" of "Completions"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_properties" for "parse" of "Completions"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 llm_observability_examples.py:0: error: Unexpected keyword argument "posthog_groups" for "parse" of "Completions"  [call-arg]
-env/lib/python3.11/site-packages/openai/resources/beta/chat/completions.py:0: note: "parse" of "Completions" defined here
 posthog/ai/langchain/callbacks.py:0: error: Function is missing a return type annotation  [no-untyped-def]
 posthog/ai/langchain/callbacks.py:0: error: Function is missing a type annotation for one or more arguments  [no-untyped-def]
 posthog/ai/langchain/callbacks.py:0: error: Function is missing a return type annotation  [no-untyped-def]
