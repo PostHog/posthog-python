@@ -7,6 +7,7 @@ from typing import Optional
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
 
+from posthog import utils
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
@@ -130,7 +131,7 @@ def match_property(property, property_values) -> bool:
         def compute_exact_match(value, override_value):
             if isinstance(value, list):
                 return str(override_value).casefold() in [str(val).casefold() for val in value]
-            return str(value).casefold() == str(override_value).casefold()
+            return utils.str_icontains(value, override_value)
 
         if operator == "exact":
             return compute_exact_match(value, override_value)
@@ -141,10 +142,10 @@ def match_property(property, property_values) -> bool:
         return key in property_values
 
     if operator == "icontains":
-        return str(value).casefold() in str(override_value).casefold()
+        return utils.str_icontains(override_value, value)
 
     if operator == "not_icontains":
-        return str(value).casefold() not in str(override_value).casefold()
+        return not utils.str_icontains(override_value, value)
 
     if operator == "regex":
         return is_valid_regex(str(value)) and re.compile(str(value)).search(str(override_value)) is not None

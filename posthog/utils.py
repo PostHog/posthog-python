@@ -125,3 +125,43 @@ def convert_to_datetime_aware(date_obj):
     if date_obj.tzinfo is None:
         date_obj = date_obj.replace(tzinfo=timezone.utc)
     return date_obj
+
+
+def str_icontains(source, search):
+    """
+    Check if a string contains another string, ignoring case.
+
+    Args:
+        source: The string to search within
+        search: The substring to search for
+
+    Returns:
+        bool: True if search is a substring of source (case-insensitive), False otherwise
+
+    Examples:
+        >>> str_icontains("Hello World", "WORLD")
+        True
+        >>> str_icontains("Hello World", "python")
+        False
+    """
+    return str(search).casefold() in str(source).casefold()
+
+
+def str_iequals(value, comparand):
+    """
+    Check if a string equals another string, ignoring case.
+
+    Args:
+        value: The string to compare
+        comparand: The string to compare with
+
+    Returns:
+        bool: True if value and comparand are equal (case-insensitive), False otherwise
+
+    Examples:
+        >>> str_iequals("Hello World", "hello world")
+        True
+        >>> str_iequals("Hello World", "hello")
+        False
+    """
+    return str(value).casefold() == str(comparand).casefold()
