@@ -3,10 +3,10 @@ import uuid
 
 import posthog
 from posthog.ai.openai import AsyncOpenAI, OpenAI
+from pydantic import BaseModel
 
 # Example credentials - replace these with your own or use environment variables
 posthog.project_api_key = os.getenv("POSTHOG_PROJECT_API_KEY", "your-project-api-key")
-posthog.personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "your-personal-api-key")
 posthog.host = os.getenv("POSTHOG_HOST", "http://localhost:8000")  # Or https://app.posthog.com
 posthog.debug = True
 # change this to False to see usage events
@@ -22,7 +22,6 @@ async_openai_client = AsyncOpenAI(
     posthog_client=posthog,
 )
 
-
 def main_sync():
     trace_id = str(uuid.uuid4())
     print("Trace ID:", trace_id)
@@ -31,10 +30,11 @@ def main_sync():
     groups = {"company": "test_company"}
 
     try:
-        basic_openai_call(distinct_id, trace_id, properties, groups)
-        streaming_openai_call(distinct_id, trace_id, properties, groups)
-        embedding_openai_call(distinct_id, trace_id, properties, groups)
-        image_openai_call()
+        # basic_openai_call(distinct_id, trace_id, properties, groups)
+        # streaming_openai_call(distinct_id, trace_id, properties, groups)
+        # embedding_openai_call(distinct_id, trace_id, properties, groups)
+        # image_openai_call()
+        beta_openai_call(distinct_id, trace_id, properties, groups)
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -187,10 +187,32 @@ async def embedding_async_openai_call(posthog_distinct_id, posthog_trace_id, pos
     return response
 
 
+# TODO: add beta client
+
+class CalendarEvent(BaseModel):
+    name: str
+    date: str
+    participants: list[str]
+
+def beta_openai_call(distinct_id, trace_id, properties, groups):
+    response = openai_client.beta.chat.completions.parse(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Extract the event information."},
+            {"role": "user", "content": "Alice and Bob are going to a science fair on Friday."},
+        ],
+        response_format=CalendarEvent,
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
+        posthog_groups=groups,
+    )
+    print(response)
+    return response
+
 # HOW TO RUN:
 # comment out one of these to run the other
 
 if __name__ == "__main__":
     main_sync()
-
 # asyncio.run(main_async())
