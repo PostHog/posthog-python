@@ -1,3 +1,7 @@
+## 3.13.0 - 2025-02-12
+
+1. Automatically retry connection errors
+
 ## 3.12.1 - 2025-02-11
 
 1. Fix mypy support for 3.12.0

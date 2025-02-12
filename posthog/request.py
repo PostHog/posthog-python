@@ -11,7 +11,9 @@ from dateutil.tz import tzutc
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
+adapter = requests.adapters.HTTPAdapter(max_retries=2)
 _session = requests.sessions.Session()
+_session.mount("https://", adapter)
 
 US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
 EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
