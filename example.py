@@ -101,6 +101,7 @@ print(
         "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}, only_evaluate_locally=True
     )
 )
+print(posthog.get_decrypted_feature_flag_payload("encrypted_payload_flag_key"))
 
 
 posthog.shutdown()

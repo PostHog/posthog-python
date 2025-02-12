@@ -81,9 +81,9 @@ def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout
     return _process_response(res, success_message="Feature flags decided successfully")
 
 
-def remote_config(api_key: str, host: Optional[str] = None, flag_id: int = 0, timeout: int = 15) -> Any:
+def remote_config(api_key: str, host: Optional[str] = None, key: str = "", timeout: int = 15) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
-    return get(api_key, f"/api/projects/@current/feature_flags/{flag_id}/remote_config/", host, timeout)
+    return get(api_key, f"/api/projects/@current/feature_flags/{key}/remote_config/", host, timeout)
 
 
 def batch_post(
