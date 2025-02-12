@@ -24,7 +24,6 @@ parser.add_argument("--type", help="The posthog message type")
 
 parser.add_argument("--distinct_id", help="the user id to send the event as")
 parser.add_argument("--anonymousId", help="the anonymous user id to send the event as")
-parser.add_argument("--context", help="additional context for the event (JSON-encoded)")
 
 parser.add_argument("--event", help="the event name to send with the event")
 parser.add_argument("--properties", help="the event properties to send (JSON-encoded)")
@@ -48,7 +47,6 @@ def capture():
         options.event,
         anonymous_id=options.anonymousId,
         properties=json_hash(options.properties),
-        context=json_hash(options.context),
     )
 
 
@@ -58,7 +56,6 @@ def page():
         name=options.name,
         anonymous_id=options.anonymousId,
         properties=json_hash(options.properties),
-        context=json_hash(options.context),
     )
 
 
@@ -67,7 +64,6 @@ def identify():
         options.distinct_id,
         anonymous_id=options.anonymousId,
         traits=json_hash(options.traits),
-        context=json_hash(options.context),
     )
 
 
@@ -75,7 +71,6 @@ def set_once():
     posthog.set_once(
         options.distinct_id,
         properties=json_hash(options.traits),
-        context=json_hash(options.context),
     )
 
 
@@ -83,7 +78,6 @@ def set():
     posthog.set(
         options.distinct_id,
         properties=json_hash(options.traits),
-        context=json_hash(options.context),
     )
 
 

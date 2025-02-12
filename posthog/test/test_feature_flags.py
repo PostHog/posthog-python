@@ -38,7 +38,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "person-flag",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -69,6 +68,59 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
 
+    def test_case_insensitive_matching(self):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "person-flag",
+                "is_simple_flag": True,
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "location",
+                                    "operator": "exact",
+                                    "value": ["Straße"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "star",
+                                    "operator": "exact",
+                                    "value": ["ſun"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"location": "straße"})
+        )
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"location": "strasse"})
+        )
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"star": "ſun"})
+        )
+
+        self.assertTrue(
+            self.client.get_feature_flag("person-flag", "some-distinct-id", person_properties={"star": "sun"})
+        )
+
     @mock.patch("posthog.client.decide")
     @mock.patch("posthog.client.get")
     def test_flag_group_properties(self, patch_get, patch_decide):
@@ -77,7 +129,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "group-flag",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "aggregation_group_type_index": 0,
@@ -170,7 +221,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "complex-flag",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -286,7 +336,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -301,7 +350,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "beta-feature2",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -343,7 +391,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -358,7 +405,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "beta-feature2",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -410,7 +456,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -457,7 +502,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -487,7 +531,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -503,7 +546,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "disabled-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -518,7 +560,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 3,
                 "name": "Beta Feature",
                 "key": "beta-feature2",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -551,7 +592,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -570,7 +610,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "disabled-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -588,7 +627,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 3,
                 "name": "Beta Feature",
                 "key": "beta-feature2",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -654,7 +692,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -670,7 +707,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "disabled-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -696,7 +732,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "beta-feature",
-            "is_simple_flag": False,
             "active": True,
             "rollout_percentage": 100,
             "filters": {
@@ -715,7 +750,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 2,
             "name": "Beta Feature",
             "key": "disabled-feature",
-            "is_simple_flag": False,
             "active": True,
             "filters": {
                 "groups": [
@@ -751,7 +785,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -767,7 +800,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "disabled-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -782,7 +814,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 3,
                 "name": "Beta Feature",
                 "key": "beta-feature2",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -814,7 +845,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "beta-feature",
-            "is_simple_flag": False,
             "active": True,
             "rollout_percentage": 100,
             "filters": {
@@ -833,7 +863,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 2,
             "name": "Beta Feature",
             "key": "disabled-feature",
-            "is_simple_flag": False,
             "active": True,
             "filters": {
                 "groups": [
@@ -851,7 +880,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 3,
             "name": "Beta Feature",
             "key": "beta-feature2",
-            "is_simple_flag": False,
             "active": True,
             "filters": {
                 "groups": [
@@ -888,7 +916,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -904,7 +931,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "disabled-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -927,7 +953,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": False,
                 "rollout_percentage": 100,
                 "filters": {
@@ -943,7 +968,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "disabled-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -969,7 +993,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 id: 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -1025,7 +1048,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -1096,7 +1118,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 2,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -1209,7 +1230,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1234,7 +1254,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "rollout_percentage": 0,
                 "filters": {
@@ -1259,7 +1278,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "rollout_percentage": None,
                 "filters": {
@@ -1283,7 +1301,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1307,7 +1324,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1332,7 +1348,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -1354,7 +1369,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1420,7 +1434,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1461,7 +1474,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1513,7 +1525,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1554,7 +1565,6 @@ class TestLocalEvaluation(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "beta-feature",
-                "is_simple_flag": False,
                 "active": True,
                 "rollout_percentage": 100,
                 "filters": {
@@ -1597,7 +1607,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "person-flag",
-            "is_simple_flag": True,
             "active": True,
             "filters": {
                 "groups": [
@@ -1661,7 +1670,6 @@ class TestLocalEvaluation(unittest.TestCase):
             "id": 1,
             "name": "Beta Feature",
             "key": "beta-feature",
-            "is_simple_flag": False,
             "active": True,
             "rollout_percentage": 100,
             "filters": {
@@ -2239,7 +2247,6 @@ class TestCaptureCalls(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "complex-flag",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -2339,6 +2346,55 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=None,
         )
 
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_but_does_not_add_all_flags(self, patch_decide):
+        patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [{"key": "region", "value": "USA"}],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Gamma Feature",
+                "key": "simple-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            },
+        ]
+
+        self.assertTrue(
+            client.get_feature_flag("complex-flag", "some-distinct-id", person_properties={"region": "USA"})
+        )
+
+        # Grab the capture message that was just added to the queue
+        msg = client.queue.get(block=False)
+        assert msg["event"] == "$feature_flag_called"
+        assert msg["properties"]["$feature_flag"] == "complex-flag"
+        assert msg["properties"]["$feature_flag_response"] is True
+        assert msg["properties"]["locally_evaluated"] is True
+        assert msg["properties"]["$feature/complex-flag"] is True
+        assert "$feature/simple-flag" not in msg["properties"]
+        assert "$active_feature_flags" not in msg["properties"]
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_in_get_feature_flag_payload(self, patch_decide, patch_capture):
@@ -2353,7 +2409,6 @@ class TestCaptureCalls(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "person-flag",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -2431,7 +2486,6 @@ class TestCaptureCalls(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "complex-flag",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -2474,7 +2528,6 @@ class TestCaptureCalls(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "complex-flag",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [
@@ -2533,7 +2586,6 @@ class TestConsistency(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "simple-flag",
-                "is_simple_flag": True,
                 "active": True,
                 "filters": {
                     "groups": [{"properties": [], "rollout_percentage": 45}],
@@ -3561,7 +3613,6 @@ class TestConsistency(unittest.TestCase):
                 "id": 1,
                 "name": "Beta Feature",
                 "key": "multivariate-flag",
-                "is_simple_flag": False,
                 "active": True,
                 "filters": {
                     "groups": [{"properties": [], "rollout_percentage": 55}],

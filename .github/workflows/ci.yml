@@ -13,10 +13,10 @@ jobs:
               with:
                   fetch-depth: 1
 
-            - name: Set up Python 3.8
+            - name: Set up Python 3.11
               uses: actions/setup-python@v2
               with:
-                  python-version: 3.8
+                  python-version: 3.11.11
 
             - uses: actions/cache@v3
               with:
@@ -42,19 +42,26 @@ jobs:
               run: |
                   isort --check-only .
 
+            - name: Check types with mypy
+              run: |
+                  mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
+
     tests:
-        name: Python tests
+        name: Python ${{ matrix.python-version }} tests
         runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
 
         steps:
             - uses: actions/checkout@v2
               with:
                   fetch-depth: 1
 
-            - name: Set up Python 3.9
+            - name: Set up Python ${{ matrix.python-version }}
               uses: actions/setup-python@v2
               with:
-                  python-version: 3.9
+                  python-version: ${{ matrix.python-version }}
 
             - name: Install requirements.txt dependencies with pip
               run: |

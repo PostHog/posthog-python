@@ -31,6 +31,7 @@ class OpenAI(openai.OpenAI):
         self._ph_client = posthog_client
         self.chat = WrappedChat(self)
         self.embeddings = WrappedEmbeddings(self)
+        self.beta = WrappedBeta(self)
 
 
 class WrappedChat(openai.resources.chat.Chat):
@@ -249,3 +250,45 @@ class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
             )
 
         return response
+
+
+class WrappedBeta(openai.resources.beta.Beta):
+    _client: OpenAI
+
+    @property
+    def chat(self):
+        return WrappedBetaChat(self._client)
+
+
+class WrappedBetaChat(openai.resources.beta.chat.Chat):
+    _client: OpenAI
+
+    @property
+    def completions(self):
+        return WrappedBetaCompletions(self._client)
+
+
+class WrappedBetaCompletions(openai.resources.beta.chat.completions.Completions):
+    _client: OpenAI
+
+    def parse(
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        return call_llm_and_track_usage(
+            posthog_distinct_id,
+            self._client._ph_client,
+            "openai",
+            posthog_trace_id,
+            posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
+            self._client.base_url,
+            super().parse,
+            **kwargs,
+        )
