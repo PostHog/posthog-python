@@ -212,16 +212,6 @@ class Client(object):
 
         return resp_data
 
-    def get_remote_config_payload(self, key: str):
-        resp_data = remote_config(
-            self.personal_api_key,
-            self.host,
-            key,
-            timeout=self.feature_flags_request_timeout_seconds,
-        )
-
-        return resp_data
-
     def capture(
         self,
         distinct_id=None,
@@ -859,7 +849,7 @@ class Client(object):
 
         return payload
 
-    def get_decrypted_feature_flag_payload(self, key: str):
+    def get_remote_config_payload(self, key: str):
         if self.disabled:
             return None
 
@@ -870,7 +860,12 @@ class Client(object):
             return None
 
         try:
-            return self.get_remote_config_payload(key)
+            return remote_config(
+                self.personal_api_key,
+                self.host,
+                key,
+                timeout=self.feature_flags_request_timeout_seconds,
+            )
         except Exception as e:
             self.log.exception(f"[FEATURE FLAGS] Unable to get decrypted feature flag payload: {e}")
 
