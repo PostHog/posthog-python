@@ -4640,7 +4640,6 @@ class TestConsistency(unittest.TestCase):
                 self.assertEqual(feature_flag_match, results[i])
             else:
                 self.assertFalse(feature_flag_match)
-
     @mock.patch("posthog.client.decide")
     def test_feature_flag_case_insensitive(self, mock_decide):
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -4661,7 +4660,39 @@ class TestConsistency(unittest.TestCase):
         self.assertTrue(client.feature_enabled("BETA-FEATURE", "user1"))
 
     @mock.patch("posthog.client.decide")
+    def test_feature_flag_payload_case_insensitive(self, mock_decide):
+        mock_decide.return_value = {
+            "featureFlags": {"beta-feature": True},
+            "featureFlagPayloads": {"beta-feature": {"some": "value"}}
+        }
+
+        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "Beta-Feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "payloads": {
+                        "true": {"some": "value"},
+                    }
+                },
+            }
+        ]
+
+        # Test that payload retrieval works regardless of case
+        self.assertEqual(client.get_feature_flag_payload("Beta-Feature", "user1"), {"some": "value"})
+        self.assertEqual(client.get_feature_flag_payload("beta-feature", "user1"), {"some": "value"})
+        self.assertEqual(client.get_feature_flag_payload("BETA-FEATURE", "user1"), {"some": "value"})
+
+    @mock.patch("posthog.client.decide")
     def test_feature_flag_mixed_case_consistency(self, mock_decide):
+        mock_decide.return_value = {
+            "featureFlags": {"beta-feature": True},
+            "featureFlagPayloads": {"beta-feature": {"some": "value"}}
+        }
+
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -4679,8 +4710,8 @@ class TestConsistency(unittest.TestCase):
 
         # Test that flag evaluation and payload retrieval are consistent
         # regardless of the case used
-        test_cases = ["Beta-Feature", "beta-feature", "BETA-FEATURE", "bEtA-FeAtUrE"]
-        
+        test_cases = ["Beta-Feature", "beta-feature", "BETA-FEATURE", "bEtA-FeAtUrE"]        
         for case in test_cases:
             # Both the flag evaluation and payload retrieval should work
             self.assertTrue(client.feature_enabled(case, "user1"))
+            self.assertEqual(client.get_feature_flag_payload(case, "user1"), {"some": "value"})
