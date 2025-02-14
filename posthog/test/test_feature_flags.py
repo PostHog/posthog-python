@@ -4640,6 +4640,7 @@ class TestConsistency(unittest.TestCase):
                 self.assertEqual(feature_flag_match, results[i])
             else:
                 self.assertFalse(feature_flag_match)
+
     @mock.patch("posthog.client.decide")
     def test_feature_flag_case_insensitive(self, mock_decide):
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -4663,7 +4664,7 @@ class TestConsistency(unittest.TestCase):
     def test_feature_flag_payload_case_insensitive(self, mock_decide):
         mock_decide.return_value = {
             "featureFlags": {"beta-feature": True},
-            "featureFlagPayloads": {"beta-feature": {"some": "value"}}
+            "featureFlagPayloads": {"beta-feature": {"some": "value"}},
         }
 
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -4676,7 +4677,7 @@ class TestConsistency(unittest.TestCase):
                     "groups": [{"properties": [], "rollout_percentage": 100}],
                     "payloads": {
                         "true": {"some": "value"},
-                    }
+                    },
                 },
             }
         ]
@@ -4690,7 +4691,7 @@ class TestConsistency(unittest.TestCase):
     def test_feature_flag_mixed_case_consistency(self, mock_decide):
         mock_decide.return_value = {
             "featureFlags": {"beta-feature": True},
-            "featureFlagPayloads": {"beta-feature": {"some": "value"}}
+            "featureFlagPayloads": {"beta-feature": {"some": "value"}},
         }
 
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -4703,14 +4704,14 @@ class TestConsistency(unittest.TestCase):
                     "groups": [{"properties": [], "rollout_percentage": 100}],
                     "payloads": {
                         "true": {"some": "value"},
-                    }
+                    },
                 },
             }
         ]
 
         # Test that flag evaluation and payload retrieval are consistent
         # regardless of the case used
-        test_cases = ["Beta-Feature", "beta-feature", "BETA-FEATURE", "bEtA-FeAtUrE"]        
+        test_cases = ["Beta-Feature", "beta-feature", "BETA-FEATURE", "bEtA-FeAtUrE"]
         for case in test_cases:
             # Both the flag evaluation and payload retrieval should work
             self.assertTrue(client.feature_enabled(case, "user1"))
