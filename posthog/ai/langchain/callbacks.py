@@ -603,7 +603,6 @@ def _parse_usage_model(
         # langchain-ibm https://pypi.org/project/langchain-ibm/
         ("input_token_count", "input"),
         ("generated_token_count", "output"),
-
     ]
 
     parsed_usage = {}
@@ -634,7 +633,7 @@ def _parse_usage(response: LLMResult):
             if "usage" in generation:
                 llm_usage = _parse_usage_model(generation["usage"])
                 break
-            
+
             for generation_chunk in generation:
                 if generation_chunk.generation_info and ("usage_metadata" in generation_chunk.generation_info):
                     llm_usage = _parse_usage_model(generation_chunk.generation_info["usage_metadata"])
@@ -659,7 +658,6 @@ def _parse_usage(response: LLMResult):
                 if chunk_usage:
                     llm_usage = _parse_usage_model(chunk_usage)
                     break
-
 
     return llm_usage
 
