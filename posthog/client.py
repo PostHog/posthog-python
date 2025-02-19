@@ -714,9 +714,6 @@ class Client(object):
         if self.disabled:
             return None
 
-        # Normalize key to lowercase
-        key = str(key).lower()
-
         person_properties, group_properties = self._add_local_person_and_group_properties(
             distinct_id, groups, person_properties, group_properties
         )
@@ -727,8 +724,7 @@ class Client(object):
 
         if self.feature_flags:
             for flag in self.feature_flags:
-                # Compare lowercase keys
-                if str(flag["key"]).lower() == key:
+                if flag["key"] == key:
                     try:
                         response = self._compute_flag_locally(
                             flag,
@@ -826,7 +822,7 @@ class Client(object):
                     distinct_id, groups, person_properties, group_properties, disable_geoip
                 )
                 response = responses_and_payloads["featureFlags"].get(key, None)
-                payload = responses_and_payloads["featureFlagPayloads"].get(str(key).lower(), None)
+                payload = responses_and_payloads["featureFlagPayloads"].get(str(key), None)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
@@ -859,19 +855,10 @@ class Client(object):
         if self.feature_flags_by_key is None:
             return payload
 
-        # Normalize key to lowercase when looking up flag definition
-        key = str(key).lower()
-        flag_definition = None
-        for flag_key, flag in self.feature_flags_by_key.items():
-            if str(flag_key).lower() == key:
-                flag_definition = flag
-                break
-
-        if flag_definition:
-            flag_filters = flag_definition.get("filters") or {}
-            flag_payloads = flag_filters.get("payloads") or {}
-            payload = flag_payloads.get(str(match_value).lower(), None)
-        return payload
+        flag_definition = self.feature_flags_by_key.get(key) or {}
+        flag_filters = flag_definition.get("filters") or {}
+        flag_payloads = flag_filters.get("payloads") or {}
+        payload = flag_payloads.get(str(match_value), None)
 
     def get_all_flags(
         self,
