@@ -859,6 +859,7 @@ class Client(object):
         flag_filters = flag_definition.get("filters") or {}
         flag_payloads = flag_filters.get("payloads") or {}
         payload = flag_payloads.get(str(match_value), None)
+        return payload
 
     def get_all_flags(
         self,
