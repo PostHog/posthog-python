@@ -855,10 +855,14 @@ class Client(object):
         if self.feature_flags_by_key is None:
             return payload
 
-        flag_definition = self.feature_flags_by_key.get(key) or {}
-        flag_filters = flag_definition.get("filters") or {}
-        flag_payloads = flag_filters.get("payloads") or {}
-        payload = flag_payloads.get(str(match_value), None)
+        flag_definition = self.feature_flags_by_key.get(key)
+        if flag_definition:
+            flag_filters = flag_definition.get("filters") or {}
+            flag_payloads = flag_filters.get("payloads") or {}
+            # For boolean flags, convert True to "true"
+            # For multivariate flags, use the variant string as-is
+            lookup_value = "true" if isinstance(match_value, bool) and match_value else str(match_value)
+            payload = flag_payloads.get(lookup_value, None)
         return payload
 
     def get_all_flags(

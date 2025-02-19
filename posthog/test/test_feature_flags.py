@@ -4643,6 +4643,8 @@ class TestConsistency(unittest.TestCase):
 
     @mock.patch("posthog.client.decide")
     def test_feature_flag_case_sensitive(self, mock_decide):
+        mock_decide.return_value = {"featureFlags": {}}  # Ensure decide returns empty flags
+
         client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
