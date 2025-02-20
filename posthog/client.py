@@ -15,7 +15,7 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get
+from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config
 from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
 from posthog.version import VERSION
 
@@ -848,6 +848,26 @@ class Client(object):
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
 
         return payload
+
+    def get_remote_config_payload(self, key: str):
+        if self.disabled:
+            return None
+
+        if self.personal_api_key is None:
+            self.log.warning(
+                "[FEATURE FLAGS] You have to specify a personal_api_key to fetch decrypted feature flag payloads."
+            )
+            return None
+
+        try:
+            return remote_config(
+                self.personal_api_key,
+                self.host,
+                key,
+                timeout=self.feature_flags_request_timeout_seconds,
+            )
+        except Exception as e:
+            self.log.exception(f"[FEATURE FLAGS] Unable to get decrypted feature flag payload: {e}")
 
     def _compute_payload_locally(self, key, match_value):
         payload = None

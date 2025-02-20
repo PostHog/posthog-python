@@ -1,6 +1,10 @@
-## 3.14.0 - 2025-02-19
+## 3.14.2 - 2025-02-19
 
 1. Evaluate feature flag payloads with case sensitivity correctly.  Fixes <https://github.com/PostHog/posthog-python/issues/178>
+
+## 3.14.1 - 2025-02-18
+
+1. Add support for Bedrock Anthropic Usage
 
 ## 3.13.0 - 2025-02-12
 
