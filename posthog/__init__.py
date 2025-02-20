@@ -492,6 +492,26 @@ def get_feature_flag_payload(
     )
 
 
+def get_remote_config_payload(
+    key,  # type: str
+):
+    """Get the payload for a remote config feature flag.
+
+    Args:
+        key: The key of the feature flag
+
+    Returns:
+        The payload associated with the feature flag. If payload is encrypted, the return value will decrypted
+
+    Note:
+        Requires personal_api_key to be set for authentication
+    """
+    return _proxy(
+        "get_remote_config_payload",
+        key=key,
+    )
+
+
 def get_all_flags_and_payloads(
     distinct_id,
     groups={},
