@@ -2,11 +2,11 @@ import json
 import unittest
 from datetime import date, datetime
 
+import mock
 import pytest
 import requests
-import mock
 
-from posthog.request import DatetimeSerializer, batch_post, decide, determine_server_host, QuotaLimitError
+from posthog.request import DatetimeSerializer, QuotaLimitError, batch_post, decide, determine_server_host
 from posthog.test.test_utils import TEST_API_KEY
 
 
