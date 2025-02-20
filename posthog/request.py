@@ -70,6 +70,8 @@ def _process_response(
         log.debug(success_message)
         response = res.json() if return_json else res
         # Handle quota limited decide responses by raising a specific error
+        # NB: other services also put entries into the quotaLimited key, but right now we only care about feature flags
+        # since most of the other services handle quota limiting in other places in the application.
         if (
             isinstance(response, dict)
             and "quotaLimited" in response

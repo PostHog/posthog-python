@@ -607,6 +607,12 @@ class Client(object):
                 self.feature_flags_by_key = {}
                 self.group_type_mapping = {}
                 self.cohorts = {}
+                
+                if self.debug:
+                    raise APIError(
+                        status=402,
+                        message="PostHog feature flags quota limited",
+                    )
             else:
                 self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
