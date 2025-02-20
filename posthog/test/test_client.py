@@ -7,6 +7,7 @@ import mock
 import six
 
 from posthog.client import Client
+from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.version import VERSION
 
@@ -383,6 +384,26 @@ class TestClient(unittest.TestCase):
         assert "$feature/beta-feature-local" not in msg["properties"]
         assert "$feature/false-flag" not in msg["properties"]
         assert "$active_feature_flags" not in msg["properties"]
+
+
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_quota_limited(self, patch_get):
+        mock_response = {
+            "type": "quota_limited",
+            "detail": "You have exceeded your feature flag request quota",
+            "code": "payment_required"
+        }
+        patch_get.side_effect = APIError(402, mock_response["detail"])
+        
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            client._load_feature_flags()
+            
+            self.assertEqual(client.feature_flags, [])
+            self.assertEqual(client.feature_flags_by_key, {})
+            self.assertEqual(client.group_type_mapping, {})
+            self.assertEqual(client.cohorts, {})
+            self.assertIn("PostHog feature flags quota limited", logs.output[0])
 
     @mock.patch("posthog.client.decide")
     def test_dont_override_capture_with_local_flags(self, patch_decide):

@@ -600,6 +600,13 @@ class Client(object):
                         "To use feature flags, please set a personal_api_key "
                         "More information: https://posthog.com/docs/api/overview",
                     )
+            elif e.status == 402:
+                self.log.warning("[FEATURE FLAGS] PostHog feature flags quota limited")
+                # Reset all feature flag data when quota limited
+                self.feature_flags = []
+                self.feature_flags_by_key = {}
+                self.group_type_mapping = {}
+                self.cohorts = {}
             else:
                 self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
