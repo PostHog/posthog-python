@@ -1,7 +1,3 @@
-## 3.14.0 - 2025-02-19
-
-1. Evaluate feature flag payloads with case sensitivity correctly.  Fixes <https://github.com/PostHog/posthog-python/issues/178>
-
 ## 3.13.0 - 2025-02-12
 
 1. Automatically retry connection errors
