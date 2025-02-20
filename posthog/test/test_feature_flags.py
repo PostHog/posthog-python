@@ -4640,3 +4640,84 @@ class TestConsistency(unittest.TestCase):
                 self.assertEqual(feature_flag_match, results[i])
             else:
                 self.assertFalse(feature_flag_match)
+
+    @mock.patch("posthog.client.decide")
+    def test_feature_flag_case_sensitive(self, mock_decide):
+        mock_decide.return_value = {"featureFlags": {}}  # Ensure decide returns empty flags
+
+        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "Beta-Feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+
+        # Test that flag evaluation is case-sensitive
+        self.assertTrue(client.feature_enabled("Beta-Feature", "user1"))
+        self.assertFalse(client.feature_enabled("beta-feature", "user1"))
+        self.assertFalse(client.feature_enabled("BETA-FEATURE", "user1"))
+
+    @mock.patch("posthog.client.decide")
+    def test_feature_flag_payload_case_sensitive(self, mock_decide):
+        mock_decide.return_value = {
+            "featureFlags": {"Beta-Feature": True},
+            "featureFlagPayloads": {"Beta-Feature": {"some": "value"}},
+        }
+
+        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "Beta-Feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "payloads": {
+                        "true": {"some": "value"},
+                    },
+                },
+            }
+        ]
+
+        # Test that payload retrieval is case-sensitive
+        self.assertEqual(client.get_feature_flag_payload("Beta-Feature", "user1"), {"some": "value"})
+        self.assertIsNone(client.get_feature_flag_payload("beta-feature", "user1"))
+        self.assertIsNone(client.get_feature_flag_payload("BETA-FEATURE", "user1"))
+
+    @mock.patch("posthog.client.decide")
+    def test_feature_flag_case_sensitive_consistency(self, mock_decide):
+        mock_decide.return_value = {
+            "featureFlags": {"Beta-Feature": True},
+            "featureFlagPayloads": {"Beta-Feature": {"some": "value"}},
+        }
+
+        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "Beta-Feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "payloads": {
+                        "true": {"some": "value"},
+                    },
+                },
+            }
+        ]
+
+        # Test that flag evaluation and payload retrieval are consistently case-sensitive
+        # Only exact match should work
+        self.assertTrue(client.feature_enabled("Beta-Feature", "user1"))
+        self.assertEqual(client.get_feature_flag_payload("Beta-Feature", "user1"), {"some": "value"})
+
+        # Different cases should not match
+        test_cases = ["beta-feature", "BETA-FEATURE", "bEtA-FeAtUrE"]
+        for case in test_cases:
+            self.assertFalse(client.feature_enabled(case, "user1"))
+            self.assertIsNone(client.get_feature_flag_payload(case, "user1"))

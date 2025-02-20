@@ -822,7 +822,7 @@ class Client(object):
                     distinct_id, groups, person_properties, group_properties, disable_geoip
                 )
                 response = responses_and_payloads["featureFlags"].get(key, None)
-                payload = responses_and_payloads["featureFlagPayloads"].get(str(key).lower(), None)
+                payload = responses_and_payloads["featureFlagPayloads"].get(str(key), None)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
@@ -875,10 +875,14 @@ class Client(object):
         if self.feature_flags_by_key is None:
             return payload
 
-        flag_definition = self.feature_flags_by_key.get(key) or {}
-        flag_filters = flag_definition.get("filters") or {}
-        flag_payloads = flag_filters.get("payloads") or {}
-        payload = flag_payloads.get(str(match_value).lower(), None)
+        flag_definition = self.feature_flags_by_key.get(key)
+        if flag_definition:
+            flag_filters = flag_definition.get("filters") or {}
+            flag_payloads = flag_filters.get("payloads") or {}
+            # For boolean flags, convert True to "true"
+            # For multivariate flags, use the variant string as-is
+            lookup_value = "true" if isinstance(match_value, bool) and match_value else str(match_value)
+            payload = flag_payloads.get(lookup_value, None)
         return payload
 
     def get_all_flags(
