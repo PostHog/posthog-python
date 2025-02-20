@@ -1,3 +1,7 @@
+## 3.15.0 - 2025-02-19
+
+1. Support quota-limited feature flags
+
 ## 3.14.2 - 2025-02-19
 
 1. Evaluate feature flag payloads with case sensitivity correctly.  Fixes <https://github.com/PostHog/posthog-python/issues/178>
