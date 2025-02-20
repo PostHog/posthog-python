@@ -70,7 +70,7 @@ def _process_response(
         log.debug(success_message)
         response = res.json() if return_json else res
         # Handle quota limited decide responses by raising a specific error
-        if isinstance(response, dict) and "quotaLimited" in response and "feature_flags" in response["quotaLimited"]:
+        if isinstance(response, dict) and "quotaLimited" in response and isinstance(response["quotaLimited"], list) and "feature_flags" in response["quotaLimited"]:
             log.warning("PostHog feature flags quota limited")
             raise QuotaLimitError(res.status_code, "Feature flags quota limited")
         return response
