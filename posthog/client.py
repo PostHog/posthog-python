@@ -607,7 +607,7 @@ class Client(object):
                 self.feature_flags_by_key = {}
                 self.group_type_mapping = {}
                 self.cohorts = {}
-                
+
                 if self.debug:
                     raise APIError(
                         status=402,
