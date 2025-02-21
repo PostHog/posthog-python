@@ -68,7 +68,19 @@ def _process_response(
     log = logging.getLogger("posthog")
     if res.status_code == 200:
         log.debug(success_message)
-        return res.json() if return_json else res
+        response = res.json() if return_json else res
+        # Handle quota limited decide responses by raising a specific error
+        # NB: other services also put entries into the quotaLimited key, but right now we only care about feature flags
+        # since most of the other services handle quota limiting in other places in the application.
+        if (
+            isinstance(response, dict)
+            and "quotaLimited" in response
+            and isinstance(response["quotaLimited"], list)
+            and "feature_flags" in response["quotaLimited"]
+        ):
+            log.warning("PostHog feature flags quota limited")
+            raise QuotaLimitError(res.status_code, "Feature flags quota limited")
+        return response
     try:
         payload = res.json()
         log.debug("received response: %s", payload)
@@ -110,6 +122,10 @@ class APIError(Exception):
     def __str__(self):
         msg = "[PostHog] {0} ({1})"
         return msg.format(self.message, self.status)
+
+
+class QuotaLimitError(APIError):
+    pass
 
 
 class DatetimeSerializer(json.JSONEncoder):

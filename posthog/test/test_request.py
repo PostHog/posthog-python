@@ -2,10 +2,11 @@ import json
 import unittest
 from datetime import date, datetime
 
+import mock
 import pytest
 import requests
 
-from posthog.request import DatetimeSerializer, batch_post, determine_server_host
+from posthog.request import DatetimeSerializer, QuotaLimitError, batch_post, decide, determine_server_host
 from posthog.test.test_utils import TEST_API_KEY
 
 
@@ -43,6 +44,36 @@ class TestRequests(unittest.TestCase):
             batch_post(
                 "key", batch=[{"distinct_id": "distinct_id", "event": "python event", "type": "track"}], timeout=0.0001
             )
+
+    def test_quota_limited_response(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "quotaLimited": ["feature_flags"],
+                "featureFlags": {},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
+
+        with mock.patch("posthog.request._session.post", return_value=mock_response):
+            with self.assertRaises(QuotaLimitError) as cm:
+                decide("fake_key", "fake_host")
+
+            self.assertEqual(cm.exception.status, 200)
+            self.assertEqual(cm.exception.message, "Feature flags quota limited")
+
+    def test_normal_decide_response(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {"featureFlags": {"flag1": True}, "featureFlagPayloads": {}, "errorsWhileComputingFlags": False}
+        ).encode("utf-8")
+
+        with mock.patch("posthog.request._session.post", return_value=mock_response):
+            response = decide("fake_key", "fake_host")
+            self.assertEqual(response["featureFlags"], {"flag1": True})
 
 
 @pytest.mark.parametrize(
