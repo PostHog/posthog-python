@@ -60,7 +60,8 @@ class GenerationMetadata(SpanMetadata):
     """Model parameters of the run: temperature, max_tokens, etc."""
     base_url: Optional[str] = None
     """Base URL of the provider's API used in the run."""
-
+    tools: Optional[List[Dict[str, Any]]] = None
+    """Tools provided to the model."""
 
 RunMetadata = Union[SpanMetadata, GenerationMetadata]
 RunMetadataStorage = Dict[UUID, RunMetadata]
@@ -377,6 +378,8 @@ class CallbackHandler(BaseCallbackHandler):
         generation = GenerationMetadata(name=run_name, input=messages, start_time=time.time(), end_time=None)
         if isinstance(invocation_params, dict):
             generation.model_params = get_model_params(invocation_params)
+            if tools := invocation_params.get("tools"):
+                generation.tools = tools
         if isinstance(metadata, dict):
             if model := metadata.get("ls_model_name"):
                 generation.model = model
@@ -500,6 +503,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
         }
+        if run.tools:
+            event_properties["$ai_tools"] = run.tools
 
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
