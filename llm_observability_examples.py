@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 
@@ -215,6 +216,6 @@ def beta_openai_call(distinct_id, trace_id, properties, groups):
 # HOW TO RUN:
 # comment out one of these to run the other
 
-if __name__ == "__main__":
-    main_sync()
-# asyncio.run(main_async())
+# if __name__ == "__main__":
+# main_sync()
+asyncio.run(main_async())
