@@ -1,3 +1,7 @@
+## 3.14.3 - 2025-02-23
+
+1. Fix async client support for OpenAI.
+
 ## 3.14.2 - 2025-02-19
 
 1. Evaluate feature flag payloads with case sensitivity correctly.  Fixes <https://github.com/PostHog/posthog-python/issues/178>
