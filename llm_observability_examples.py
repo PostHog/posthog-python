@@ -1,6 +1,6 @@
+import asyncio
 import os
 import uuid
-import asyncio
 
 from pydantic import BaseModel
 
@@ -217,5 +217,5 @@ def beta_openai_call(distinct_id, trace_id, properties, groups):
 # comment out one of these to run the other
 
 # if __name__ == "__main__":
-    # main_sync()
+# main_sync()
 asyncio.run(main_async())
