@@ -78,7 +78,9 @@ def _process_response(
             and isinstance(response["quotaLimited"], list)
             and "feature_flags" in response["quotaLimited"]
         ):
-            log.warning("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
+            log.warning(
+                "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
+            )
             raise QuotaLimitError(res.status_code, "Feature flags quota limited")
         return response
     try:
