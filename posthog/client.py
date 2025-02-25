@@ -601,7 +601,7 @@ class Client(object):
                         "More information: https://posthog.com/docs/api/overview",
                     )
             elif e.status == 402:
-                self.log.warning("[FEATURE FLAGS] PostHog feature flags quota limited")
+                self.log.warning("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
                 # Reset all feature flag data when quota limited
                 self.feature_flags = []
                 self.feature_flags_by_key = {}
