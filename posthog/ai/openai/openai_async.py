@@ -73,6 +73,8 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "openai",
             posthog_trace_id,
             posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
             self._client.base_url,
             super().create,
             **kwargs,
