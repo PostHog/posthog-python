@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
+import distro  # For Linux OS detection
 
 from posthog.consumer import Consumer
 from posthog.exception_capture import ExceptionCapture
@@ -38,7 +39,6 @@ def get_os_info():
     os_name = ""
     os_version = ""
 
-    # Windows
     if sys.platform.startswith("win"):
         os_name = "Windows"
         if hasattr(platform, "win32_ver"):
@@ -46,7 +46,6 @@ def get_os_info():
             if win_version:
                 os_version = win_version
 
-    # macOS/Mac OS X
     elif sys.platform == "darwin":
         os_name = "Mac OS X"
         if hasattr(platform, "mac_ver"):
@@ -54,39 +53,17 @@ def get_os_info():
             if mac_version:
                 os_version = mac_version
 
-    # iOS (unlikely in standard Python but included for completeness)
-    elif sys.platform == "ios":
-        os_name = "iOS"
-        # iOS version would need a specific approach
-
-    # Linux
     elif sys.platform.startswith("linux"):
         os_name = "Linux"
-        if hasattr(platform, "linux_distribution"):
-            # Deprecated in Python 3.8+
-            try:
-                linux_info = platform.linux_distribution()
-                if linux_info[0] and linux_info[1]:
-                    os_version = linux_info[1]
-            except:
-                pass
-        # For newer Python versions
-        try:
-            import distro
+        linux_info = distro.info()
+        if linux_info["version"]:
+            os_version = linux_info["version"]
 
-            linux_info = distro.info()
-            if linux_info["version"]:
-                os_version = linux_info["version"]
-        except ImportError:
-            pass
-
-    # FreeBSD
     elif sys.platform.startswith("freebsd"):
         os_name = "FreeBSD"
         if hasattr(platform, "release"):
             os_version = platform.release()
 
-    # Other platforms
     else:
         os_name = sys.platform
         if hasattr(platform, "release"):
@@ -308,10 +285,12 @@ class Client(object):
                 stacklevel=2,
             )
 
-        properties = properties or {}
+        properties = {**(properties or {}), **system_context()}
+
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
         require("event", event, string_types)
+
 
         msg = {
             "properties": properties,
@@ -347,7 +326,7 @@ class Client(object):
             extra_properties["$active_feature_flags"] = active_feature_flags
 
         if extra_properties:
-            msg["properties"] = {**extra_properties, **msg["properties"], **system_context()}
+            msg["properties"] = {**extra_properties, **msg["properties"]}
 
         return self._enqueue(msg, disable_geoip)
 

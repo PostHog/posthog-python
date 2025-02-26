@@ -20,6 +20,7 @@ install_requires = [
     "monotonic>=1.5",
     "backoff>=1.10.0",
     "python-dateutil>2.1",
+    "distro>=1.5.0",  # Required for Linux OS detection in Python 3.9+
 ]
 
 extras_require = {
