@@ -2,6 +2,7 @@ import atexit
 import logging
 import numbers
 import os
+import platform
 import sys
 import warnings
 from datetime import datetime, timedelta
@@ -27,6 +28,81 @@ except ImportError:
 
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
+
+
+def get_os_info():
+    """
+    Returns standardized OS name and version information.
+    Similar to how user agent parsing works in JS.
+    """
+    os_name = ""
+    os_version = ""
+
+    # Windows
+    if sys.platform.startswith('win'):
+        os_name = "Windows"
+        if hasattr(platform, 'win32_ver'):
+            win_version = platform.win32_ver()[0]
+            if win_version:
+                os_version = win_version
+
+    # macOS/Mac OS X
+    elif sys.platform == 'darwin':
+        os_name = "Mac OS X"
+        if hasattr(platform, 'mac_ver'):
+            mac_version = platform.mac_ver()[0]
+            if mac_version:
+                os_version = mac_version
+
+    # iOS (unlikely in standard Python but included for completeness)
+    elif sys.platform == 'ios':
+        os_name = "iOS"
+        # iOS version would need a specific approach
+
+    # Linux
+    elif sys.platform.startswith('linux'):
+        os_name = "Linux"
+        if hasattr(platform, 'linux_distribution'):
+            # Deprecated in Python 3.8+
+            try:
+                linux_info = platform.linux_distribution()
+                if linux_info[0] and linux_info[1]:
+                    os_version = linux_info[1]
+            except:
+                pass
+        # For newer Python versions
+        try:
+            import distro
+            linux_info = distro.info()
+            if linux_info['version']:
+                os_version = linux_info['version']
+        except ImportError:
+            pass
+
+    # FreeBSD
+    elif sys.platform.startswith('freebsd'):
+        os_name = "FreeBSD"
+        if hasattr(platform, 'release'):
+            os_version = platform.release()
+
+    # Other platforms
+    else:
+        os_name = sys.platform
+        if hasattr(platform, 'release'):
+            os_version = platform.release()
+
+    return os_name, os_version
+
+
+def system_context() -> dict[str, any]:
+    os_name, os_version = get_os_info()
+    
+    return {
+        "$python_runtime": platform.python_implementation(),
+        "$python_version": "%s.%s.%s" % (sys.version_info[:3]),
+        "$os": os_name,
+        "$os_version": os_version,
+    }
 
 
 class Client(object):
@@ -270,7 +346,7 @@ class Client(object):
             extra_properties["$active_feature_flags"] = active_feature_flags
 
         if extra_properties:
-            msg["properties"] = {**extra_properties, **msg["properties"]}
+            msg["properties"] = {**extra_properties, **msg["properties"], **system_context()}
 
         return self._enqueue(msg, disable_geoip)
 
