@@ -1,4 +1,4 @@
-## 3.15.1 - 2025-02-26
+## 3.15.2 - 2025-02-26
 
 1. Improve quota-limited feature flag logs
 
