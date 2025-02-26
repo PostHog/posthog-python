@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import mock
 import six
+from parameterized import parameterized
 
 from posthog.client import Client
 from posthog.request import APIError
@@ -54,6 +55,11 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        # these will change between platforms so just asssert on presence here
+        assert msg["properties"]["$python_runtime"] == mock.ANY
+        assert msg["properties"]["$python_version"] == mock.ANY
+        assert msg["properties"]["$os"] == mock.ANY
+        assert msg["properties"]["$os_version"] == mock.ANY
 
     def test_basic_capture_with_uuid(self):
         client = self.client
@@ -101,7 +107,6 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["source"], "repo-name")
 
     def test_basic_capture_exception(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
@@ -129,7 +134,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_distinct_id(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
@@ -157,7 +161,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_correct_host_generation(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com")
             exception = Exception("test exception")
@@ -185,7 +188,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://app.posthog.com")
             exception = Exception("test exception")
@@ -213,7 +215,6 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_capture_exception_with_no_exception_given(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             try:
@@ -250,10 +251,8 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True)
 
     def test_basic_capture_exception_with_no_exception_happening(self):
-
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             with self.assertLogs("posthog", level="WARNING") as logs:
-
                 client = self.client
                 client.capture_exception()
 
@@ -1124,3 +1123,92 @@ class TestClient(unittest.TestCase):
             group_properties={},
             disable_geoip=False,
         )
+
+    @parameterized.expand(
+        [
+            # name, sys_platform, version_info, expected_runtime, expected_version, expected_os, expected_os_version, platform_method, platform_return, distro_info
+            (
+                "macOS",
+                "darwin",
+                (3, 8, 10),
+                "MockPython",
+                "3.8.10",
+                "Mac OS X",
+                "10.15.7",
+                "mac_ver",
+                ("10.15.7", "", ""),
+                None,
+            ),
+            (
+                "Windows",
+                "win32",
+                (3, 8, 10),
+                "MockPython",
+                "3.8.10",
+                "Windows",
+                "10",
+                "win32_ver",
+                ("10", "", "", ""),
+                None,
+            ),
+            (
+                "Linux",
+                "linux",
+                (3, 8, 10),
+                "MockPython",
+                "3.8.10",
+                "Linux",
+                "20.04",
+                None,
+                None,
+                {"version": "20.04"},
+            ),
+        ]
+    )
+    def test_mock_system_context(
+        self,
+        _name,
+        sys_platform,
+        version_info,
+        expected_runtime,
+        expected_version,
+        expected_os,
+        expected_os_version,
+        platform_method,
+        platform_return,
+        distro_info,
+    ):
+        """Test that we can mock platform and sys for testing system_context"""
+        with mock.patch("posthog.client.platform") as mock_platform:
+            with mock.patch("posthog.client.sys") as mock_sys:
+                # Set up common mocks
+                mock_platform.python_implementation.return_value = expected_runtime
+                mock_sys.version_info = version_info
+                mock_sys.platform = sys_platform
+
+                # Set up platform-specific mocks
+                if platform_method:
+                    getattr(mock_platform, platform_method).return_value = platform_return
+
+                # Special handling for Linux which uses distro module
+                if sys_platform == "linux":
+                    # Directly patch the get_os_info function to return our expected values
+                    with mock.patch("posthog.client.get_os_info", return_value=(expected_os, expected_os_version)):
+                        from posthog.client import system_context
+
+                        context = system_context()
+                else:
+                    # Get system context for non-Linux platforms
+                    from posthog.client import system_context
+
+                    context = system_context()
+
+                # Verify results
+                expected_context = {
+                    "$python_runtime": expected_runtime,
+                    "$python_version": expected_version,
+                    "$os": expected_os,
+                    "$os_version": expected_os_version,
+                }
+
+                assert context == expected_context

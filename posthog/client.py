@@ -2,11 +2,14 @@ import atexit
 import logging
 import numbers
 import os
+import platform
 import sys
 import warnings
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
+import distro  # For Linux OS detection
 from dateutil.tz import tzutc
 from six import string_types
 
@@ -27,6 +30,60 @@ except ImportError:
 
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
+
+
+def get_os_info():
+    """
+    Returns standardized OS name and version information.
+    Similar to how user agent parsing works in JS.
+    """
+    os_name = ""
+    os_version = ""
+
+    platform_name = sys.platform
+
+    if platform_name.startswith("win"):
+        os_name = "Windows"
+        if hasattr(platform, "win32_ver"):
+            win_version = platform.win32_ver()[0]
+            if win_version:
+                os_version = win_version
+
+    elif platform_name == "darwin":
+        os_name = "Mac OS X"
+        if hasattr(platform, "mac_ver"):
+            mac_version = platform.mac_ver()[0]
+            if mac_version:
+                os_version = mac_version
+
+    elif platform_name.startswith("linux"):
+        os_name = "Linux"
+        linux_info = distro.info()
+        if linux_info["version"]:
+            os_version = linux_info["version"]
+
+    elif platform_name.startswith("freebsd"):
+        os_name = "FreeBSD"
+        if hasattr(platform, "release"):
+            os_version = platform.release()
+
+    else:
+        os_name = platform_name
+        if hasattr(platform, "release"):
+            os_version = platform.release()
+
+    return os_name, os_version
+
+
+def system_context() -> dict[str, Any]:
+    os_name, os_version = get_os_info()
+
+    return {
+        "$python_runtime": platform.python_implementation(),
+        "$python_version": "%s.%s.%s" % (sys.version_info[:3]),
+        "$os": os_name,
+        "$os_version": os_version,
+    }
 
 
 class Client(object):
@@ -231,7 +288,8 @@ class Client(object):
                 stacklevel=2,
             )
 
-        properties = properties or {}
+        properties = {**(properties or {}), **system_context()}
+
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
         require("event", event, string_types)
