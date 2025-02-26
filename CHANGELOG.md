@@ -1,3 +1,7 @@
+## 3.16.0 - 2025-02-26
+
+1. feat: add some platform info to events (#198)
+
 ## 3.15.1 - 2025-02-23
 
 1. Fix async client support for OpenAI.
