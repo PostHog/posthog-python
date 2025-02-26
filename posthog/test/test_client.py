@@ -54,6 +54,10 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        assert msg["properties"]["$python_runtime"] == "CPython"
+        assert msg["properties"]["$python_version"] == "3.12.4"
+        assert msg["properties"]["$os"] == "macOS"
+        assert msg["properties"]["$os_version"] == "14.5.0"
 
     def test_basic_capture_with_uuid(self):
         client = self.client
