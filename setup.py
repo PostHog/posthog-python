@@ -58,6 +58,7 @@ extras_require = {
         "langchain-openai>=0.2.0",
         "langchain-anthropic>=0.2.0",
         "pydantic",
+        "parameterized>=0.8.1",
     ],
     "sentry": ["sentry-sdk", "django"],
     "langchain": ["langchain>=0.2.0"],
