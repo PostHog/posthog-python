@@ -10,8 +10,10 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 ### Testing Locally
 
 1. Run `python3 -m venv env` (creates virtual environment called "env")
+    * or `uv venv env`
 2. Run `source env/bin/activate` (activates the virtual environment)
 3. Run `python3 -m pip install -e ".[test]"` (installs the package in develop mode, along with test dependencies)
+    * or `uv pip install -e ".[test]"`
 4. Run `make test`
   1. To run a specific test do `pytest -k test_no_api_key`
 

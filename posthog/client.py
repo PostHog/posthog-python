@@ -39,30 +39,30 @@ def get_os_info():
     os_version = ""
 
     # Windows
-    if sys.platform.startswith('win'):
+    if sys.platform.startswith("win"):
         os_name = "Windows"
-        if hasattr(platform, 'win32_ver'):
+        if hasattr(platform, "win32_ver"):
             win_version = platform.win32_ver()[0]
             if win_version:
                 os_version = win_version
 
     # macOS/Mac OS X
-    elif sys.platform == 'darwin':
+    elif sys.platform == "darwin":
         os_name = "Mac OS X"
-        if hasattr(platform, 'mac_ver'):
+        if hasattr(platform, "mac_ver"):
             mac_version = platform.mac_ver()[0]
             if mac_version:
                 os_version = mac_version
 
     # iOS (unlikely in standard Python but included for completeness)
-    elif sys.platform == 'ios':
+    elif sys.platform == "ios":
         os_name = "iOS"
         # iOS version would need a specific approach
 
     # Linux
-    elif sys.platform.startswith('linux'):
+    elif sys.platform.startswith("linux"):
         os_name = "Linux"
-        if hasattr(platform, 'linux_distribution'):
+        if hasattr(platform, "linux_distribution"):
             # Deprecated in Python 3.8+
             try:
                 linux_info = platform.linux_distribution()
@@ -73,22 +73,23 @@ def get_os_info():
         # For newer Python versions
         try:
             import distro
+
             linux_info = distro.info()
-            if linux_info['version']:
-                os_version = linux_info['version']
+            if linux_info["version"]:
+                os_version = linux_info["version"]
         except ImportError:
             pass
 
     # FreeBSD
-    elif sys.platform.startswith('freebsd'):
+    elif sys.platform.startswith("freebsd"):
         os_name = "FreeBSD"
-        if hasattr(platform, 'release'):
+        if hasattr(platform, "release"):
             os_version = platform.release()
 
     # Other platforms
     else:
         os_name = sys.platform
-        if hasattr(platform, 'release'):
+        if hasattr(platform, "release"):
             os_version = platform.release()
 
     return os_name, os_version
@@ -96,7 +97,7 @@ def get_os_info():
 
 def system_context() -> dict[str, any]:
     os_name, os_version = get_os_info()
-    
+
     return {
         "$python_runtime": platform.python_implementation(),
         "$python_version": "%s.%s.%s" % (sys.version_info[:3]),
