@@ -1207,7 +1207,11 @@ class TestClient(unittest.TestCase):
                     context = system_context()
                 
                 # Verify results
-                assert context["$python_runtime"] == expected_runtime
-                assert context["$python_version"] == expected_version
-                assert context["$os"] == expected_os
-                assert context["$os_version"] == expected_os_version
+                expected_context = {
+                    "$python_runtime": expected_runtime,
+                    "$python_version": expected_version,
+                    "$os": expected_os,
+                    "$os_version": expected_os_version,
+                }
+                
+                assert context == expected_context
