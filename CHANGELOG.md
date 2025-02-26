@@ -1,3 +1,7 @@
+## 3.15.1 - 2025-02-26
+
+1. Improve quota-limited feature flag logs
+
 ## 3.15.1 - 2025-02-23
 
 1. Fix async client support for OpenAI.
