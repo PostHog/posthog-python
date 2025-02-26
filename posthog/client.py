@@ -39,37 +39,39 @@ def get_os_info():
     """
     os_name = ""
     os_version = ""
-
-    if sys.platform.startswith("win"):
+    
+    platform_name = sys.platform
+    
+    if platform_name.startswith("win"):
         os_name = "Windows"
         if hasattr(platform, "win32_ver"):
             win_version = platform.win32_ver()[0]
             if win_version:
                 os_version = win_version
-
-    elif sys.platform == "darwin":
+    
+    elif platform_name == "darwin":
         os_name = "Mac OS X"
         if hasattr(platform, "mac_ver"):
             mac_version = platform.mac_ver()[0]
             if mac_version:
                 os_version = mac_version
-
-    elif sys.platform.startswith("linux"):
+    
+    elif platform_name.startswith("linux"):
         os_name = "Linux"
         linux_info = distro.info()
         if linux_info["version"]:
             os_version = linux_info["version"]
-
-    elif sys.platform.startswith("freebsd"):
+    
+    elif platform_name.startswith("freebsd"):
         os_name = "FreeBSD"
         if hasattr(platform, "release"):
             os_version = platform.release()
-
+    
     else:
-        os_name = sys.platform
+        os_name = platform_name
         if hasattr(platform, "release"):
             os_version = platform.release()
-
+    
     return os_name, os_version
 
 
