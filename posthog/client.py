@@ -291,7 +291,6 @@ class Client(object):
         require("properties", properties, dict)
         require("event", event, string_types)
 
-
         msg = {
             "properties": properties,
             "timestamp": timestamp,
