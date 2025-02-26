@@ -8,9 +8,9 @@ import warnings
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
+import distro  # For Linux OS detection
 from dateutil.tz import tzutc
 from six import string_types
-import distro  # For Linux OS detection
 
 from posthog.consumer import Consumer
 from posthog.exception_capture import ExceptionCapture
