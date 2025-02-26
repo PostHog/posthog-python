@@ -4,6 +4,7 @@ import numbers
 import os
 import platform
 import sys
+from typing import Any
 import warnings
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
@@ -72,7 +73,7 @@ def get_os_info():
     return os_name, os_version
 
 
-def system_context() -> dict[str, any]:
+def system_context() -> dict[str, Any]:
     os_name, os_version = get_os_info()
 
     return {
