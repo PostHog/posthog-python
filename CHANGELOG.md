@@ -1,3 +1,8 @@
+
+## 3.18.0 - 2025-02-28
+
+1. Add support for Azure OpenAI.
+
 ## 3.17.0 - 2025-02-27
 
 1. The LangChain handler now captures tools in `$ai_generation` events, in property `$ai_tools`. This allows for displaying tools provided to the LLM call in PostHog UI. Note that support for `$ai_tools` in OpenAI and Anthropic SDKs is coming soon.
