@@ -33,11 +33,11 @@ def main_sync():
     groups = {"company": "test_company"}
 
     try:
-        # basic_openai_call(distinct_id, trace_id, properties, groups)
+        basic_openai_call(distinct_id, trace_id, properties, groups)
         # streaming_openai_call(distinct_id, trace_id, properties, groups)
         # embedding_openai_call(distinct_id, trace_id, properties, groups)
         # image_openai_call()
-        beta_openai_call(distinct_id, trace_id, properties, groups)
+        # beta_openai_call(distinct_id, trace_id, properties, groups)
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -216,6 +216,6 @@ def beta_openai_call(distinct_id, trace_id, properties, groups):
 # HOW TO RUN:
 # comment out one of these to run the other
 
-# if __name__ == "__main__":
-# main_sync()
-asyncio.run(main_async())
+if __name__ == "__main__":
+    main_sync()
+# asyncio.run(main_async())
