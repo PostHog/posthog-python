@@ -1,7 +1,9 @@
 try:
     import langchain  # noqa: F401
 except ImportError:
-    raise ModuleNotFoundError("Please install LangChain to use this feature: 'pip install langchain'")
+    raise ModuleNotFoundError(
+        "Please install LangChain to use this feature: 'pip install langchain'"
+    )
 
 import logging
 import time
@@ -21,7 +23,14 @@ from uuid import UUID
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema.agent import AgentAction, AgentFinish
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, BaseMessage, FunctionMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
@@ -62,6 +71,7 @@ class GenerationMetadata(SpanMetadata):
     """Base URL of the provider's API used in the run."""
     tools: Optional[List[Dict[str, Any]]] = None
     """Tools provided to the model."""
+
 
 RunMetadata = Union[SpanMetadata, GenerationMetadata]
 RunMetadataStorage = Dict[UUID, RunMetadata]
@@ -142,7 +152,9 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
-        self._set_trace_or_span_metadata(serialized, inputs, run_id, parent_run_id, **kwargs)
+        self._set_trace_or_span_metadata(
+            serialized, inputs, run_id, parent_run_id, **kwargs
+        )
 
     def on_chain_end(
         self,
@@ -175,9 +187,13 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs,
     ):
-        self._log_debug_event("on_chat_model_start", run_id, parent_run_id, messages=messages)
+        self._log_debug_event(
+            "on_chat_model_start", run_id, parent_run_id, messages=messages
+        )
         self._set_parent_of_run(run_id, parent_run_id)
-        input = [_convert_message_to_dict(message) for row in messages for message in row]
+        input = [
+            _convert_message_to_dict(message) for row in messages for message in row
+        ]
         self._set_llm_metadata(serialized, run_id, input, **kwargs)
 
     def on_llm_start(
@@ -215,7 +231,9 @@ class CallbackHandler(BaseCallbackHandler):
         """
         The callback works for both streaming and non-streaming runs. For streaming runs, the chain must set `stream_usage=True` in the LLM.
         """
-        self._log_debug_event("on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs)
+        self._log_debug_event(
+            "on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs
+        )
         self._pop_run_and_capture_generation(run_id, parent_run_id, response)
 
     def on_llm_error(
@@ -239,9 +257,13 @@ class CallbackHandler(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        self._log_debug_event("on_tool_start", run_id, parent_run_id, input_str=input_str)
+        self._log_debug_event(
+            "on_tool_start", run_id, parent_run_id, input_str=input_str
+        )
         self._set_parent_of_run(run_id, parent_run_id)
-        self._set_trace_or_span_metadata(serialized, input_str, run_id, parent_run_id, **kwargs)
+        self._set_trace_or_span_metadata(
+            serialized, input_str, run_id, parent_run_id, **kwargs
+        )
 
     def on_tool_end(
         self,
@@ -278,7 +300,9 @@ class CallbackHandler(BaseCallbackHandler):
     ) -> Any:
         self._log_debug_event("on_retriever_start", run_id, parent_run_id, query=query)
         self._set_parent_of_run(run_id, parent_run_id)
-        self._set_trace_or_span_metadata(serialized, query, run_id, parent_run_id, **kwargs)
+        self._set_trace_or_span_metadata(
+            serialized, query, run_id, parent_run_id, **kwargs
+        )
 
     def on_retriever_end(
         self,
@@ -288,7 +312,9 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
-        self._log_debug_event("on_retriever_end", run_id, parent_run_id, documents=documents)
+        self._log_debug_event(
+            "on_retriever_end", run_id, parent_run_id, documents=documents
+        )
         self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, documents)
 
     def on_retriever_error(
@@ -363,7 +389,9 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         default_name = "trace" if parent_run_id is None else "span"
         run_name = _get_langchain_run_name(serialized, **kwargs) or default_name
-        self._runs[run_id] = SpanMetadata(name=run_name, input=input, start_time=time.time(), end_time=None)
+        self._runs[run_id] = SpanMetadata(
+            name=run_name, input=input, start_time=time.time(), end_time=None
+        )
 
     def _set_llm_metadata(
         self,
@@ -375,7 +403,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs,
     ):
         run_name = _get_langchain_run_name(serialized, **kwargs) or "generation"
-        generation = GenerationMetadata(name=run_name, input=messages, start_time=time.time(), end_time=None)
+        generation = GenerationMetadata(
+            name=run_name, input=messages, start_time=time.time(), end_time=None
+        )
         if isinstance(invocation_params, dict):
             generation.model_params = get_model_params(invocation_params)
             if tools := invocation_params.get("tools"):
@@ -409,7 +439,9 @@ class CallbackHandler(BaseCallbackHandler):
             return run_id
         return trace_id
 
-    def _get_parent_run_id(self, trace_id: Any, run_id: UUID, parent_run_id: Optional[UUID]):
+    def _get_parent_run_id(
+        self, trace_id: Any, run_id: UUID, parent_run_id: Optional[UUID]
+    ):
         """
         Replace the parent run ID with the trace ID for second level runs when a custom trace ID is set.
         """
@@ -417,17 +449,25 @@ class CallbackHandler(BaseCallbackHandler):
             return trace_id
         return parent_run_id
 
-    def _pop_run_and_capture_trace_or_span(self, run_id: UUID, parent_run_id: Optional[UUID], outputs: Any):
+    def _pop_run_and_capture_trace_or_span(
+        self, run_id: UUID, parent_run_id: Optional[UUID], outputs: Any
+    ):
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
             return
         if isinstance(run, GenerationMetadata):
-            log.warning(f"Run {run_id} is a generation, but attempted to be captured as a trace or span.")
+            log.warning(
+                f"Run {run_id} is a generation, but attempted to be captured as a trace or span."
+            )
             return
         self._capture_trace_or_span(
-            trace_id, run_id, run, outputs, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+            trace_id,
+            run_id,
+            run,
+            outputs,
+            self._get_parent_run_id(trace_id, run_id, parent_run_id),
         )
 
     def _capture_trace_or_span(
@@ -441,7 +481,9 @@ class CallbackHandler(BaseCallbackHandler):
         event_name = "$ai_trace" if parent_run_id is None else "$ai_span"
         event_properties = {
             "$ai_trace_id": trace_id,
-            "$ai_input_state": with_privacy_mode(self._client, self._privacy_mode, run.input),
+            "$ai_input_state": with_privacy_mode(
+                self._client, self._privacy_mode, run.input
+            ),
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
             "$ai_span_id": run_id,
@@ -455,7 +497,9 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_error"] = _stringify_exception(outputs)
             event_properties["$ai_is_error"] = True
         elif outputs is not None:
-            event_properties["$ai_output_state"] = with_privacy_mode(self._client, self._privacy_mode, outputs)
+            event_properties["$ai_output_state"] = with_privacy_mode(
+                self._client, self._privacy_mode, outputs
+            )
 
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -468,7 +512,10 @@ class CallbackHandler(BaseCallbackHandler):
         )
 
     def _pop_run_and_capture_generation(
-        self, run_id: UUID, parent_run_id: Optional[UUID], response: Union[LLMResult, BaseException]
+        self,
+        run_id: UUID,
+        parent_run_id: Optional[UUID],
+        response: Union[LLMResult, BaseException],
     ):
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
@@ -476,10 +523,16 @@ class CallbackHandler(BaseCallbackHandler):
         if not run:
             return
         if not isinstance(run, GenerationMetadata):
-            log.warning(f"Run {run_id} is not a generation, but attempted to be captured as a generation.")
+            log.warning(
+                f"Run {run_id} is not a generation, but attempted to be captured as a generation."
+            )
             return
         self._capture_generation(
-            trace_id, run_id, run, response, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+            trace_id,
+            run_id,
+            run,
+            response,
+            self._get_parent_run_id(trace_id, run_id, parent_run_id),
         )
 
     def _capture_generation(
@@ -524,8 +577,12 @@ class CallbackHandler(BaseCallbackHandler):
                     for generation in generation_result
                 ]
             else:
-                completions = [_extract_raw_esponse(generation) for generation in generation_result]
-            event_properties["$ai_output_choices"] = with_privacy_mode(self._client, self._privacy_mode, completions)
+                completions = [
+                    _extract_raw_esponse(generation) for generation in generation_result
+                ]
+            event_properties["$ai_output_choices"] = with_privacy_mode(
+                self._client, self._privacy_mode, completions
+            )
 
         if self._properties:
             event_properties.update(self._properties)
@@ -615,7 +672,9 @@ def _parse_usage_model(
         if model_key in usage:
             captured_count = usage[model_key]
             final_count = (
-                sum(captured_count) if isinstance(captured_count, list) else captured_count
+                sum(captured_count)
+                if isinstance(captured_count, list)
+                else captured_count
             )  # For Bedrock, the token count is a list when streamed
 
             parsed_usage[type_key] = final_count
@@ -640,8 +699,12 @@ def _parse_usage(response: LLMResult):
                 break
 
             for generation_chunk in generation:
-                if generation_chunk.generation_info and ("usage_metadata" in generation_chunk.generation_info):
-                    llm_usage = _parse_usage_model(generation_chunk.generation_info["usage_metadata"])
+                if generation_chunk.generation_info and (
+                    "usage_metadata" in generation_chunk.generation_info
+                ):
+                    llm_usage = _parse_usage_model(
+                        generation_chunk.generation_info["usage_metadata"]
+                    )
                     break
 
                 message_chunk = getattr(generation_chunk, "message", {})
@@ -653,13 +716,19 @@ def _parse_usage(response: LLMResult):
                     else None
                 )
                 bedrock_titan_usage = (
-                    response_metadata.get("amazon-bedrock-invocationMetrics", None)  # for Bedrock-Titan
+                    response_metadata.get(
+                        "amazon-bedrock-invocationMetrics", None
+                    )  # for Bedrock-Titan
                     if isinstance(response_metadata, dict)
                     else None
                 )
-                ollama_usage = getattr(message_chunk, "usage_metadata", None)  # for Ollama
+                ollama_usage = getattr(
+                    message_chunk, "usage_metadata", None
+                )  # for Ollama
 
-                chunk_usage = bedrock_anthropic_usage or bedrock_titan_usage or ollama_usage
+                chunk_usage = (
+                    bedrock_anthropic_usage or bedrock_titan_usage or ollama_usage
+                )
                 if chunk_usage:
                     llm_usage = _parse_usage_model(chunk_usage)
                     break
@@ -675,7 +744,9 @@ def _get_http_status(error: BaseException) -> int:
     return status_code
 
 
-def _get_langchain_run_name(serialized: Optional[Dict[str, Any]], **kwargs: Any) -> Optional[str]:
+def _get_langchain_run_name(
+    serialized: Optional[Dict[str, Any]], **kwargs: Any
+) -> Optional[str]:
     """Retrieve the name of a serialized LangChain runnable.
 
     The prioritization for the determination of the run name is as follows:
