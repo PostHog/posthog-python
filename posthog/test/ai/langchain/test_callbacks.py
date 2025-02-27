@@ -1168,6 +1168,61 @@ async def test_async_anthropic_streaming(mock_client):
     assert isinstance(trace_props["$ai_output_state"], AIMessage)
 
 
+def test_metadata_tools(mock_client):
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    tools = [
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "foo",
+                    "description": "The foo.",
+                    "parameters": {
+                        "properties": {
+                            "bar": {
+                                "description": "The bar of foo.",
+                                "type": "string",
+                            },
+                        },
+                        "required": ["query_description", "query_kind"],
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+            }
+        ]
+    ]
+
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://us.posthog.com"}},
+            run_id,
+            messages=[{"role": "user", "content": "What's the weather like in SF?"}],
+            invocation_params={"temperature": 0.5, "tools": tools},
+            metadata={"ls_model_name": "hog-mini", "ls_provider": "posthog"},
+            name="test",
+        )
+    expected = GenerationMetadata(
+        model="hog-mini",
+        input=[{"role": "user", "content": "What's the weather like in SF?"}],
+        start_time=1234567890,
+        model_params={"temperature": 0.5},
+        provider="posthog",
+        base_url="https://us.posthog.com",
+        name="test",
+        tools=tools,
+        end_time=None,
+    )
+    assert callbacks._runs[run_id] == expected
+    with patch("time.time", return_value=1234567891):
+        run = callbacks._pop_run_metadata(run_id)
+    expected.end_time = 1234567891
+    assert run == expected
+    assert callbacks._runs == {}
+
+
 def test_tool_calls(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     model = FakeMessagesListChatModel(
