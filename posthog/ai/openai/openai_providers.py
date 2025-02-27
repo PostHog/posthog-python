@@ -2,7 +2,7 @@ try:
     import openai
     import openai.resources
 except ImportError:
-    raise ModuleNotFoundError("Please install the Open AI SDK to use this feature: 'pip install anthropic'")
+    raise ModuleNotFoundError("Please install the Open AI SDK to use this feature: 'pip install openai'")
 
 from posthog.ai.openai.openai import WrappedBeta, WrappedChat, WrappedEmbeddings
 from posthog.ai.openai.openai_async import AsyncWrappedBeta, AsyncWrappedChat, AsyncWrappedEmbeddings
