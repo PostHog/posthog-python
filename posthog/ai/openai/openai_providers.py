@@ -23,7 +23,7 @@ class AzureOpenAI(openai.AzureOpenAI):
         self.embeddings = WrappedEmbeddings(self)
         self.beta = WrappedBeta(self)
 
-    
+
 class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
     """
     A wrapper around the Azure OpenAI SDK that automatically sends LLM usage events to PostHog.
