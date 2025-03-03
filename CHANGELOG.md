@@ -1,3 +1,6 @@
+## 3.18.1 – 2025-03-03
+
+1. Improve quota-limited feature flag logs
 
 ## 3.18.0 - 2025-02-28
 
