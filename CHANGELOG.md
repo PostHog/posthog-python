@@ -1,6 +1,18 @@
-## 3.15.2 - 2025-02-26
+## 3.18.1 – 2025-03-03
 
 1. Improve quota-limited feature flag logs
+
+## 3.18.0 - 2025-02-28
+
+1. Add support for Azure OpenAI.
+
+## 3.17.0 - 2025-02-27
+
+1. The LangChain handler now captures tools in `$ai_generation` events, in property `$ai_tools`. This allows for displaying tools provided to the LLM call in PostHog UI. Note that support for `$ai_tools` in OpenAI and Anthropic SDKs is coming soon.
+
+## 3.16.0 - 2025-02-26
+
+1. feat: add some platform info to events (#198)
 
 ## 3.15.1 - 2025-02-23
 

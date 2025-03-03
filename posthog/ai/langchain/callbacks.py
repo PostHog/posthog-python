@@ -60,6 +60,8 @@ class GenerationMetadata(SpanMetadata):
     """Model parameters of the run: temperature, max_tokens, etc."""
     base_url: Optional[str] = None
     """Base URL of the provider's API used in the run."""
+    tools: Optional[List[Dict[str, Any]]] = None
+    """Tools provided to the model."""
 
 
 RunMetadata = Union[SpanMetadata, GenerationMetadata]
@@ -377,6 +379,8 @@ class CallbackHandler(BaseCallbackHandler):
         generation = GenerationMetadata(name=run_name, input=messages, start_time=time.time(), end_time=None)
         if isinstance(invocation_params, dict):
             generation.model_params = get_model_params(invocation_params)
+            if tools := invocation_params.get("tools"):
+                generation.tools = tools
         if isinstance(metadata, dict):
             if model := metadata.get("ls_model_name"):
                 generation.model = model
@@ -424,7 +428,11 @@ class CallbackHandler(BaseCallbackHandler):
             log.warning(f"Run {run_id} is a generation, but attempted to be captured as a trace or span.")
             return
         self._capture_trace_or_span(
-            trace_id, run_id, run, outputs, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+            trace_id,
+            run_id,
+            run,
+            outputs,
+            self._get_parent_run_id(trace_id, run_id, parent_run_id),
         )
 
     def _capture_trace_or_span(
@@ -465,7 +473,10 @@ class CallbackHandler(BaseCallbackHandler):
         )
 
     def _pop_run_and_capture_generation(
-        self, run_id: UUID, parent_run_id: Optional[UUID], response: Union[LLMResult, BaseException]
+        self,
+        run_id: UUID,
+        parent_run_id: Optional[UUID],
+        response: Union[LLMResult, BaseException],
     ):
         trace_id = self._get_trace_id(run_id)
         self._pop_parent_of_run(run_id)
@@ -476,7 +487,11 @@ class CallbackHandler(BaseCallbackHandler):
             log.warning(f"Run {run_id} is not a generation, but attempted to be captured as a generation.")
             return
         self._capture_generation(
-            trace_id, run_id, run, response, self._get_parent_run_id(trace_id, run_id, parent_run_id)
+            trace_id,
+            run_id,
+            run,
+            response,
+            self._get_parent_run_id(trace_id, run_id, parent_run_id),
         )
 
     def _capture_generation(
@@ -500,6 +515,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
         }
+        if run.tools:
+            event_properties["$ai_tools"] = run.tools
 
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
