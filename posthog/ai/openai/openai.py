@@ -92,6 +92,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
+        accumulated_tools = {}
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
@@ -100,6 +101,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         def generator():
             nonlocal usage_stats
             nonlocal accumulated_content
+            nonlocal accumulated_tools
 
             try:
                 for chunk in response:
@@ -122,12 +124,25 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                         if content:
                             accumulated_content.append(content)
 
+                        # Process tool calls
+                        tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None)
+                        if tool_calls:
+                            for tool_call in tool_calls:
+                                index = tool_call.index
+                                if index not in accumulated_tools:
+                                    accumulated_tools[index] = tool_call
+                                else:
+                                    # Append arguments for existing tool calls
+                                    if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                                        accumulated_tools[index].function.arguments += tool_call.function.arguments
+
                     yield chunk
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
+                tools = list(accumulated_tools.values()) if accumulated_tools else None
                 self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -138,6 +153,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                     usage_stats,
                     latency,
                     output,
+                    tools,
                 )
 
         return generator()
@@ -153,6 +169,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         usage_stats: Dict[str, int],
         latency: float,
         output: str,
+        tool_calls=None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = uuid.uuid4()
@@ -176,6 +193,13 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_base_url": str(self._client.base_url),
             **posthog_properties,
         }
+
+        if tool_calls:
+            event_properties["$ai_tools"] = with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                tool_calls,
+            )
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
