@@ -100,6 +100,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         def generator():
             nonlocal usage_stats
             nonlocal accumulated_content
+
             try:
                 for chunk in response:
                     if hasattr(chunk, "usage") and chunk.usage:
@@ -111,6 +112,10 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                                 "total_tokens",
                             ]
                         }
+                        
+                        # Add support for cached tokens
+                        if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(chunk.usage.prompt_tokens_details, "cached_tokens"):
+                            usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
 
                     if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
                         content = chunk.choices[0].delta.content
@@ -165,6 +170,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),

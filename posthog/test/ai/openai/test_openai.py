@@ -62,6 +62,32 @@ def mock_embedding_response():
     )
 
 
+@pytest.fixture
+def mock_openai_response_with_cached_tokens():
+    return ChatCompletion(
+        id="test",
+        model="gpt-4",
+        object="chat.completion",
+        created=int(time.time()),
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=CompletionUsage(
+            completion_tokens=10,
+            prompt_tokens=20,
+            total_tokens=30,
+            prompt_tokens_details={"cached_tokens": 15},
+        ),
+    )
+
+
 def test_basic_completion(mock_client, mock_openai_response):
     with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
@@ -187,3 +213,33 @@ def test_error(mock_client, mock_openai_response):
         props = call_args["properties"]
         assert props["$ai_is_error"] is True
         assert props["$ai_error"] == "Test error"
+
+
+def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_cached_tokens):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_openai_response_with_cached_tokens
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4"
+        assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
+        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_cached_tokens"] == 15
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)

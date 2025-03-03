@@ -54,6 +54,27 @@ def mock_anthropic_stream():
 
     return stream_generator()
 
+@pytest.fixture
+def mock_anthropic_response_with_cached_tokens():
+    # Create a mock Usage object with cached_tokens in input_tokens_details
+    usage = Usage(
+        input_tokens=20,
+        output_tokens=10,
+        cache_read_input_tokens=15,
+        cache_creation_input_tokens=2,
+    )
+    
+    return Message(
+        id="msg_123",
+        type="message",
+        role="assistant",
+        content=[{"type": "text", "text": "Test response"}],
+        model="claude-3-opus-20240229",
+        usage=usage,
+        stop_reason="end_turn",
+        stop_sequence=None,
+    )
+
 
 def test_basic_completion(mock_client, mock_anthropic_response):
     with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
@@ -339,3 +360,34 @@ def test_error(mock_client, mock_anthropic_response):
         props = call_args["properties"]
         assert props["$ai_is_error"] is True
         assert props["$ai_error"] == "Test error"
+
+
+def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
+    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response_with_cached_tokens):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_anthropic_response_with_cached_tokens
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "anthropic"
+        assert props["$ai_model"] == "claude-3-opus-20240229"
+        assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
+        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_cache_read_input_tokens"] == 15
+        assert props["$ai_cache_creation_input_tokens"] == 2
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
