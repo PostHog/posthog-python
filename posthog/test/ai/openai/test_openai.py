@@ -7,6 +7,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import (
     ChatCompletionChunk,
+    Choice as ChoiceChunk,
     ChoiceDelta,
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
@@ -284,7 +285,7 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
-        assert props["$ai_cached_tokens"] == 15
+        assert props["$ai_cache_read_input_tokens"] == 15
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
@@ -351,7 +352,7 @@ def test_streaming_with_tool_calls(mock_client):
             object="chat.completion.chunk",
             created=1234567890,
             choices=[
-                Choice(
+                ChoiceChunk(
                     index=0,
                     delta=ChoiceDelta(
                         role="assistant",
@@ -377,7 +378,7 @@ def test_streaming_with_tool_calls(mock_client):
             object="chat.completion.chunk",
             created=1234567891,
             choices=[
-                Choice(
+                ChoiceChunk(
                     index=0,
                     delta=ChoiceDelta(
                         tool_calls=[
@@ -401,7 +402,7 @@ def test_streaming_with_tool_calls(mock_client):
             object="chat.completion.chunk",
             created=1234567892,
             choices=[
-                Choice(
+                ChoiceChunk(
                     index=0,
                     delta=ChoiceDelta(
                         tool_calls=[
@@ -425,7 +426,7 @@ def test_streaming_with_tool_calls(mock_client):
             object="chat.completion.chunk",
             created=1234567893,
             choices=[
-                Choice(
+                ChoiceChunk(
                     index=0,
                     delta=ChoiceDelta(
                         content="The weather in San Francisco is 15°C.",

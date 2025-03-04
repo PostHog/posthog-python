@@ -186,6 +186,8 @@ class WrappedMessages(Messages):
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
             "$ai_output_tokens": usage_stats.get("output_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
+            "$ai_cache_creation_input_tokens": usage_stats.get("cache_creation_input_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
