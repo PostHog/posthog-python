@@ -186,10 +186,10 @@ def call_llm_and_track_usage(
         if tool_calls:
             event_properties["$ai_tools"] = with_privacy_mode(ph_client, posthog_privacy_mode, tool_calls)
 
-        if usage.get("cache_read_input_tokens", 0) > 0:
+        if usage.get("cache_read_input_tokens") is not None and usage.get("cache_read_input_tokens", 0) > 0:
             event_properties["$ai_cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
 
-        if usage.get("cache_creation_input_tokens", 0) > 0:
+        if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
             event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
 
         if posthog_distinct_id is None:
@@ -272,10 +272,10 @@ async def call_llm_and_track_usage_async(
         if tool_calls:
             event_properties["$ai_tools"] = with_privacy_mode(ph_client, posthog_privacy_mode, tool_calls)
 
-        if usage.get("cache_read_input_tokens", 0) > 0:
+        if usage.get("cache_read_input_tokens") is not None and usage.get("cache_read_input_tokens", 0) > 0:
             event_properties["$ai_cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
 
-        if usage.get("cache_creation_input_tokens", 0) > 0:
+        if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
             event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
 
         if posthog_distinct_id is None:
