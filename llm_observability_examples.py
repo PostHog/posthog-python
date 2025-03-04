@@ -33,11 +33,13 @@ def main_sync():
     groups = {"company": "test_company"}
 
     try:
-        basic_openai_call(distinct_id, trace_id, properties, groups)
+        # basic_openai_call(distinct_id, trace_id, properties, groups)
         # streaming_openai_call(distinct_id, trace_id, properties, groups)
         # embedding_openai_call(distinct_id, trace_id, properties, groups)
         # image_openai_call()
         # beta_openai_call(distinct_id, trace_id, properties, groups)
+        # tool_call_openai_call(distinct_id, trace_id, properties, groups)
+        streaming_tool_call_openai_call(distinct_id, trace_id, properties, groups)
     except Exception as e:
         print("Error during OpenAI call:", str(e))
 
@@ -212,6 +214,45 @@ def beta_openai_call(distinct_id, trace_id, properties, groups):
     print(response)
     return response
 
+
+def tool_call_openai_call(distinct_id, trace_id, properties, groups):
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "The location to get the weather for"},
+                "unit": {"type": "string", "description": "The unit of temperature to return the weather in", "enum": ["celsius", "fahrenheit"]}
+            },
+            "required": ["location", "unit"]
+        }}}],
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
+        posthog_groups=groups,
+    )
+    print(response)
+    return response
+
+
+def streaming_tool_call_openai_call(distinct_id, trace_id, properties, groups):
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}],
+        stream=True,
+        posthog_distinct_id=distinct_id,
+        posthog_trace_id=trace_id,
+        posthog_properties=properties,
+        posthog_groups=groups,
+    )
+
+    for chunk in response:
+        if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
+            print(chunk.choices[0].delta.content or "", end="")
+
+    return response
 
 # HOW TO RUN:
 # comment out one of these to run the other
