@@ -39,7 +39,9 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
         }
     elif provider == "openai":
         cached_tokens = 0
-        if hasattr(response.usage, "prompt_tokens_details") and hasattr(response.usage.prompt_tokens_details, "cached_tokens"):
+        if hasattr(response.usage, "prompt_tokens_details") and hasattr(
+            response.usage.prompt_tokens_details, "cached_tokens"
+        ):
             cached_tokens = response.usage.prompt_tokens_details.cached_tokens
         return {
             "input_tokens": response.usage.prompt_tokens,
@@ -99,7 +101,12 @@ def format_tool_calls(response, provider: str):
         if hasattr(response, "tools") and response.tools and len(response.tools) > 0:
             return response.tools
     elif provider == "openai":
-        if (hasattr(response, "choices") and response.choices and hasattr(response.choices[0].message, "tool_calls") and response.choices[0].message.tool_calls):
+        if (
+            hasattr(response, "choices")
+            and response.choices
+            and hasattr(response.choices[0].message, "tool_calls")
+            and response.choices[0].message.tool_calls
+        ):
             return response.choices[0].message.tool_calls
     return None
 

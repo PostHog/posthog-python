@@ -114,7 +114,9 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                         }
 
                         # Add support for cached tokens
-                        if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(chunk.usage.prompt_tokens_details, "cached_tokens"):
+                        if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
+                            chunk.usage.prompt_tokens_details, "cached_tokens"
+                        ):
                             usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
 
                     if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:

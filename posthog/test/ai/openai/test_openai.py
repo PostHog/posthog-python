@@ -1,16 +1,16 @@
-import time
 import json
-from unittest.mock import patch, MagicMock
+import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 from openai.types.chat import ChatCompletion, ChatCompletionMessage, ToolCall, ToolCallFunction
 from openai.types.chat.chat_completion import Choice
-from openai.types.completion_usage import CompletionUsage
-from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
-from openai.types.embedding import Embedding
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, ChoiceDelta
 from openai.types.chat.chat_completion_chunk import ToolCall as ChunkToolCall
 from openai.types.chat.chat_completion_chunk import ToolCallFunction as ChunkToolCallFunction
+from openai.types.completion_usage import CompletionUsage
+from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
+from openai.types.embedding import Embedding
 
 from posthog.ai.openai import OpenAI
 
@@ -255,7 +255,9 @@ def test_error(mock_client, mock_openai_response):
 
 
 def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
-    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_cached_tokens):
+    with patch(
+        "openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_cached_tokens
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
@@ -285,12 +287,19 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
 
 
 def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
-    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_tool_calls):
+    with patch(
+        "openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_tool_calls
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-            tools=[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "description": "Get weather", "parameters": {}},
+                }
+            ],
             posthog_distinct_id="test-id",
         )
 
@@ -306,23 +315,23 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "What's the weather in San Francisco?"}]
         assert props["$ai_output_choices"] == [{"role": "assistant", "content": "I'll check the weather for you."}]
-        
+
         # Check that tool calls are properly captured
         assert "$ai_tools" in props
         tool_calls = props["$ai_tools"]
         assert len(tool_calls) == 1
-        
+
         # Verify the tool call details
         tool_call = tool_calls[0]
         assert tool_call.id == "call_abc123"
         assert tool_call.type == "function"
         assert tool_call.function.name == "get_weather"
-        
+
         # Verify the arguments
         arguments = tool_call.function.arguments
         parsed_args = json.loads(arguments)
         assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
-        
+
         # Check token usage
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 15
@@ -434,53 +443,58 @@ def test_streaming_with_tool_calls(mock_client):
         mock_create.return_value = tool_call_chunks
 
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
-        
+
         # Call the streaming method
         response_generator = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-            tools=[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "description": "Get weather", "parameters": {}},
+                }
+            ],
             stream=True,
             posthog_distinct_id="test-id",
         )
-        
+
         # Consume the generator to trigger the event capture
         chunks = list(response_generator)
-        
+
         # Verify the chunks were returned correctly
         assert len(chunks) == 4
         assert chunks == tool_call_chunks
-        
+
         # Verify the capture was called with the right arguments
         assert mock_client.capture.call_count == 1
-        
+
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
-        
+
         assert call_args["distinct_id"] == "test-id"
         assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
-        
+
         # Check that the tool calls were properly accumulated
         assert "$ai_tools" in props
         tool_calls = props["$ai_tools"]
         assert len(tool_calls) == 1
-        
+
         # Verify the complete tool call was properly assembled
         tool_call = tool_calls[0]
         assert tool_call.id == "call_abc123"
         assert tool_call.type == "function"
         assert tool_call.function.name == "get_weather"
-        
+
         # Verify the arguments were concatenated correctly
         arguments = tool_call.function.arguments
         parsed_args = json.loads(arguments)
         assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
-        
+
         # Check that the content was also accumulated
         assert props["$ai_output_choices"][0]["content"] == "The weather in San Francisco is 15°C."
-        
+
         # Check token usage
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 15

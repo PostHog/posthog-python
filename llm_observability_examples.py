@@ -219,14 +219,27 @@ def tool_call_openai_call(distinct_id, trace_id, properties, groups):
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-        tools=[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {
-            "type": "object",
-            "properties": {
-                "location": {"type": "string", "description": "The location to get the weather for"},
-                "unit": {"type": "string", "description": "The unit of temperature to return the weather in", "enum": ["celsius", "fahrenheit"]}
-            },
-            "required": ["location", "unit"]
-        }}}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string", "description": "The location to get the weather for"},
+                            "unit": {
+                                "type": "string",
+                                "description": "The unit of temperature to return the weather in",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location", "unit"],
+                    },
+                },
+            }
+        ],
         posthog_distinct_id=distinct_id,
         posthog_trace_id=trace_id,
         posthog_properties=properties,
@@ -240,7 +253,9 @@ def streaming_tool_call_openai_call(distinct_id, trace_id, properties, groups):
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-        tools=[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}],
+        tools=[
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}
+        ],
         stream=True,
         posthog_distinct_id=distinct_id,
         posthog_trace_id=trace_id,
@@ -253,6 +268,7 @@ def streaming_tool_call_openai_call(distinct_id, trace_id, properties, groups):
             print(chunk.choices[0].delta.content or "", end="")
 
     return response
+
 
 # HOW TO RUN:
 # comment out one of these to run the other

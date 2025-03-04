@@ -54,6 +54,7 @@ def mock_anthropic_stream():
 
     return stream_generator()
 
+
 @pytest.fixture
 def mock_anthropic_response_with_cached_tokens():
     # Create a mock Usage object with cached_tokens in input_tokens_details
@@ -63,7 +64,7 @@ def mock_anthropic_response_with_cached_tokens():
         cache_read_input_tokens=15,
         cache_creation_input_tokens=2,
     )
-    
+
     return Message(
         id="msg_123",
         type="message",
