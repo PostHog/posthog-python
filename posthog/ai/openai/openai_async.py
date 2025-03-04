@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     import openai
@@ -169,7 +169,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         usage_stats: Dict[str, int],
         latency: float,
         output: str,
-        tool_calls=None,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = uuid.uuid4()
