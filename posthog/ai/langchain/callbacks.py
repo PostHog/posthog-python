@@ -516,7 +516,11 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_base_url": run.base_url,
         }
         if run.tools:
-            event_properties["$ai_tools"] = run.tools
+            event_properties["$ai_tools"] = with_privacy_mode(
+                self._client,
+                self._privacy_mode,
+                run.tools,
+            )
 
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)

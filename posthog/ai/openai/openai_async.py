@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     import openai
@@ -93,13 +93,14 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
+        accumulated_tools = {}
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
         response = await super().create(**kwargs)
 
         async def async_generator():
-            nonlocal usage_stats, accumulated_content
+            nonlocal usage_stats, accumulated_content, accumulated_tools
             try:
                 async for chunk in response:
                     if hasattr(chunk, "usage") and chunk.usage:
@@ -111,10 +112,29 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                                 "total_tokens",
                             ]
                         }
+
+                        # Add support for cached tokens
+                        if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
+                            chunk.usage.prompt_tokens_details, "cached_tokens"
+                        ):
+                            usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
+
                     if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
                         content = chunk.choices[0].delta.content
                         if content:
                             accumulated_content.append(content)
+
+                        # Process tool calls
+                        tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None)
+                        if tool_calls:
+                            for tool_call in tool_calls:
+                                index = tool_call.index
+                                if index not in accumulated_tools:
+                                    accumulated_tools[index] = tool_call
+                                else:
+                                    # Append arguments for existing tool calls
+                                    if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                                        accumulated_tools[index].function.arguments += tool_call.function.arguments
 
                     yield chunk
 
@@ -122,6 +142,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
+                tools = list(accumulated_tools.values()) if accumulated_tools else None
                 await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -132,6 +153,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                     usage_stats,
                     latency,
                     output,
+                    tools,
                 )
 
         return async_generator()
@@ -147,6 +169,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         usage_stats: Dict[str, int],
         latency: float,
         output: str,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = uuid.uuid4()
@@ -164,11 +187,19 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
-            **posthog_properties,
+            **(posthog_properties or {}),
         }
+
+        if tool_calls:
+            event_properties["$ai_tools"] = with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                tool_calls,
+            )
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -235,7 +266,7 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
-            **posthog_properties,
+            **(posthog_properties or {}),
         }
 
         if posthog_distinct_id is None:
