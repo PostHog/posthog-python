@@ -193,7 +193,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
-            **posthog_properties,
+            **(posthog_properties or {}),
         }
 
         if tool_calls:
@@ -266,7 +266,7 @@ class WrappedEmbeddings(openai.resources.embeddings.Embeddings):
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
-            **posthog_properties,
+            **(posthog_properties or {}),
         }
 
         if posthog_distinct_id is None:
