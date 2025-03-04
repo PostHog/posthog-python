@@ -1,3 +1,8 @@
+## 3.19.0 – 2025-03-04
+
+1. Add support for tool calls in OpenAI and Anthropic.
+2. Add support for cached tokens.
+
 ## 3.18.1 – 2025-03-03
 
 1. Improve quota-limited feature flag logs
