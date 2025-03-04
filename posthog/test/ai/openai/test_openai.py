@@ -3,11 +3,10 @@ import time
 from unittest.mock import patch
 
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage, ToolCall, ToolCallFunction
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, ChoiceDelta
-from openai.types.chat.chat_completion_chunk import ToolCall as ChunkToolCall
-from openai.types.chat.chat_completion_chunk import ToolCallFunction as ChunkToolCallFunction
+from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, ChoiceDelta, ChoiceDeltaToolCall, ChoiceDeltaToolCallFunction
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
 from openai.types.completion_usage import CompletionUsage
 from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
 from openai.types.embedding import Embedding
@@ -107,10 +106,10 @@ def mock_openai_response_with_tool_calls():
                     content="I'll check the weather for you.",
                     role="assistant",
                     tool_calls=[
-                        ToolCall(
+                        ChatCompletionMessageToolCall(
                             id="call_abc123",
                             type="function",
-                            function=ToolCallFunction(
+                            function=Function(
                                 name="get_weather",
                                 arguments='{"location": "San Francisco", "unit": "celsius"}',
                             ),
@@ -352,11 +351,11 @@ def test_streaming_with_tool_calls(mock_client):
                     delta=ChoiceDelta(
                         role="assistant",
                         tool_calls=[
-                            ChunkToolCall(
+                            ChoiceDeltaToolCall(
                                 index=0,
                                 id="call_abc123",
                                 type="function",
-                                function=ChunkToolCallFunction(
+                                function=ChoiceDeltaToolCallFunction(
                                     name="get_weather",
                                     arguments='{"location": "',
                                 ),
@@ -377,11 +376,11 @@ def test_streaming_with_tool_calls(mock_client):
                     index=0,
                     delta=ChoiceDelta(
                         tool_calls=[
-                            ChunkToolCall(
+                            ChoiceDeltaToolCall(
                                 index=0,
                                 id="call_abc123",
                                 type="function",
-                                function=ChunkToolCallFunction(
+                                function=ChoiceDeltaToolCallFunction(
                                     arguments='San Francisco"',
                                 ),
                             )
@@ -401,11 +400,11 @@ def test_streaming_with_tool_calls(mock_client):
                     index=0,
                     delta=ChoiceDelta(
                         tool_calls=[
-                            ChunkToolCall(
+                            ChoiceDeltaToolCall(
                                 index=0,
                                 id="call_abc123",
                                 type="function",
-                                function=ChunkToolCallFunction(
+                                function=ChoiceDeltaToolCallFunction(
                                     arguments=', "unit": "celsius"}',
                                 ),
                             )
