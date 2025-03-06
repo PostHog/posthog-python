@@ -34,15 +34,25 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
         return {
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
+            "cache_read_input_tokens": response.usage.cache_read_input_tokens,
+            "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
         }
     elif provider == "openai":
+        cached_tokens = 0
+        if hasattr(response.usage, "prompt_tokens_details") and hasattr(
+            response.usage.prompt_tokens_details, "cached_tokens"
+        ):
+            cached_tokens = response.usage.prompt_tokens_details.cached_tokens
         return {
             "input_tokens": response.usage.prompt_tokens,
             "output_tokens": response.usage.completion_tokens,
+            "cache_read_input_tokens": cached_tokens,
         }
     return {
         "input_tokens": 0,
         "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
     }
 
 
@@ -84,6 +94,21 @@ def format_response_openai(response):
                 }
             )
     return output
+
+
+def format_tool_calls(response, provider: str):
+    if provider == "anthropic":
+        if hasattr(response, "tools") and response.tools and len(response.tools) > 0:
+            return response.tools
+    elif provider == "openai":
+        if (
+            hasattr(response, "choices")
+            and response.choices
+            and hasattr(response.choices[0].message, "tool_calls")
+            and response.choices[0].message.tool_calls
+        ):
+            return response.choices[0].message.tool_calls
+    return None
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
@@ -156,6 +181,16 @@ def call_llm_and_track_usage(
             **(posthog_properties or {}),
             **(error_params or {}),
         }
+
+        tool_calls = format_tool_calls(response, provider)
+        if tool_calls:
+            event_properties["$ai_tools"] = with_privacy_mode(ph_client, posthog_privacy_mode, tool_calls)
+
+        if usage.get("cache_read_input_tokens") is not None and usage.get("cache_read_input_tokens", 0) > 0:
+            event_properties["$ai_cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+
+        if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
+            event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -232,6 +267,16 @@ async def call_llm_and_track_usage_async(
             **(posthog_properties or {}),
             **(error_params or {}),
         }
+
+        tool_calls = format_tool_calls(response, provider)
+        if tool_calls:
+            event_properties["$ai_tools"] = with_privacy_mode(ph_client, posthog_privacy_mode, tool_calls)
+
+        if usage.get("cache_read_input_tokens") is not None and usage.get("cache_read_input_tokens", 0) > 0:
+            event_properties["$ai_cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+
+        if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
+            event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
