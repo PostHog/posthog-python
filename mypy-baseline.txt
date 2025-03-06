@@ -32,8 +32,6 @@ simulator.py:0: error: Unexpected keyword argument "traits" for "identify"  [cal
 posthog/__init__.py:0: note: "identify" defined here
 example.py:0: error: Statement is unreachable  [unreachable]
 posthog/sentry/posthog_integration.py:0: error: Statement is unreachable  [unreachable]
-sentry_django_example/sentry_django_example/settings.py:0: error: Need type annotation for "ALLOWED_HOSTS" (hint: "ALLOWED_HOSTS: list[<type>] = ...")  [var-annotated]
-sentry_django_example/sentry_django_example/settings.py:0: error: Incompatible types in assignment (expression has type "str", variable has type "None")  [assignment]
 posthog/ai/utils.py:0: error: Need type annotation for "output" (hint: "output: list[<type>] = ...")  [var-annotated]
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
@@ -41,6 +39,8 @@ posthog/ai/utils.py:0: error: Incompatible types in assignment (expression has t
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
 posthog/ai/utils.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
+sentry_django_example/sentry_django_example/settings.py:0: error: Need type annotation for "ALLOWED_HOSTS" (hint: "ALLOWED_HOSTS: list[<type>] = ...")  [var-annotated]
+sentry_django_example/sentry_django_example/settings.py:0: error: Incompatible types in assignment (expression has type "str", variable has type "None")  [assignment]
 posthog/ai/openai/openai_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
 posthog/ai/openai/openai_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
 posthog/ai/openai/openai_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
@@ -48,11 +48,6 @@ posthog/ai/openai/openai.py:0: error: Incompatible types in assignment (expressi
 posthog/ai/openai/openai.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
 posthog/ai/openai/openai.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
 posthog/ai/anthropic/anthropic_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
-posthog/ai/anthropic/anthropic_async.py:0: error: Signature of "stream" incompatible with supertype "AsyncMessages"  [override]
-posthog/ai/anthropic/anthropic_async.py:0: note: Superclass:
-posthog/ai/anthropic/anthropic_async.py:0: note: def stream(self, *, max_tokens: int, messages: Iterable[MessageParam], model: Literal['claude-3-5-haiku-latest', 'claude-3-5-haiku-20241022', 'claude-3-5-sonnet-latest', 'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-20240620', 'claude-3-opus-latest', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307', 'claude-2.1', 'claude-2.0'] | str, metadata: MetadataParam | NotGiven = ..., stop_sequences: list[str] | NotGiven = ..., system: str | Iterable[TextBlockParam] | NotGiven = ..., temperature: float | NotGiven = ..., top_k: int | NotGiven = ..., top_p: float | NotGiven = ..., tool_choice: ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam | NotGiven = ..., tools: Iterable[ToolParam] | NotGiven = ..., extra_headers: Mapping[str, str | Omit] | None = ..., extra_query: Mapping[str, object] | None = ..., extra_body: object | None = ..., timeout: float | Timeout | NotGiven | None = ...) -> AsyncMessageStreamManager
-posthog/ai/anthropic/anthropic_async.py:0: note: Subclass:
-posthog/ai/anthropic/anthropic_async.py:0: note: def stream(self, posthog_distinct_id: str | None = ..., posthog_trace_id: str | None = ..., posthog_properties: dict[str, Any] | None = ..., posthog_privacy_mode: bool = ..., posthog_groups: dict[str, Any] | None = ..., **kwargs: Any) -> Coroutine[Any, Any, Any]
 posthog/ai/anthropic/anthropic_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
 posthog/ai/anthropic/anthropic_async.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
 posthog/ai/anthropic/anthropic.py:0: error: Incompatible types in assignment (expression has type "UUID", variable has type "str | None")  [assignment]
