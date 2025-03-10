@@ -1,3 +1,8 @@
+
+## 3.19.1 – 2025-03-11
+
+1. Fix bug where None is sent as delta in azure
+
 ## 3.19.0 – 2025-03-04
 
 1. Add support for tool calls in OpenAI and Anthropic.

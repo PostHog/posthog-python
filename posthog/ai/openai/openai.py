@@ -122,9 +122,10 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                             usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
 
                     if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
-                        content = chunk.choices[0].delta.content
-                        if content:
-                            accumulated_content.append(content)
+                        if chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            if content:
+                                accumulated_content.append(content)
 
                         # Process tool calls
                         tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None)
