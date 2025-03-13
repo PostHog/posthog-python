@@ -10,6 +10,7 @@ except ImportError:
 
 from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
 from posthog.client import Client as PostHogClient
+from openai.resources.responses import Responses
 
 
 class OpenAI(openai.OpenAI):

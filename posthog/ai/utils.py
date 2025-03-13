@@ -123,14 +123,50 @@ def format_response_openai(response):
                 )
     # Handle Responses API format
     if hasattr(response, "output"):
-        for message in response.output:
-
-            output.append(
-                {
-                    "content": message.content,
-                    "role": message.role,
-                }
-            )
+        for item in response.output:
+            if item.type == "message":
+                # Extract text content from the content list
+                if hasattr(item, "content") and isinstance(item.content, list):
+                    for content_item in item.content:
+                        if (
+                            hasattr(content_item, "type")
+                            and content_item.type == "input_text"
+                            and hasattr(content_item, "text")
+                        ):
+                            output.append(
+                                {
+                                    "content": content_item.text,
+                                    "role": item.role,
+                                }
+                            )
+                        elif hasattr(content_item, "text"):
+                            output.append(
+                                {
+                                    "content": content_item.text,
+                                    "role": item.role,
+                                }
+                            )
+                        elif (
+                            hasattr(content_item, "type")
+                            and content_item.type == "input_image"
+                            and hasattr(content_item, "image_url")
+                        ):
+                            output.append(
+                                {
+                                    "content": {
+                                        "type": "image",
+                                        "image": content_item.image_url,
+                                    },
+                                    "role": item.role,
+                                }
+                            )
+                else:
+                    output.append(
+                        {
+                            "content": item.content,
+                            "role": item.role,
+                        }
+                    )
     return output
 
 

@@ -64,7 +64,7 @@ def mock_openai_response_with_responses_api():
                 role="assistant",
                 content=[
                     ResponseOutputMessage(
-                        type="text",
+                        type="input_text",
                         text="Test response",
                     )
                 ],
@@ -532,16 +532,23 @@ def test_streaming_with_tool_calls(mock_client):
 
 
 # test responses api
-def test_responses_api(mock_client):
-    with patch("openai.resources.responses.Responses.create") as mock_create:
-        mock_create.return_value = mock_openai_response_with_responses_api
+def test_responses_api(mock_client, mock_openai_response_with_responses_api):
+    with patch("openai.resources.responses.Responses.create", return_value=mock_openai_response_with_responses_api):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
-        response = client.responses.create(model="gpt-4o-mini", input=[{"role": "user", "content": "Hello"}])
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
         assert response == mock_openai_response_with_responses_api
         assert mock_client.capture.call_count == 1
 
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
@@ -549,4 +556,5 @@ def test_responses_api(mock_client):
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
