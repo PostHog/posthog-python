@@ -12,7 +12,7 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from openai.types.completion_usage import CompletionUsage
 from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
 from openai.types.embedding import Embedding
-from openai.types.responses import Response, ResponseUsage, ResponseOutputMessage, ResponseOutputText
+from openai.types.responses import Response, ResponseOutputMessage, ResponseOutputText, ResponseUsage
 
 from posthog.ai.openai import OpenAI
 
