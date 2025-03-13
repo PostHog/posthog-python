@@ -50,7 +50,7 @@ class WrappedResponses(openai.resources.responses.Responses):
             posthog_trace_id = uuid.uuid4()
 
         if kwargs.get("stream", False):
-            return self._create_streaming(
+            return await self._create_streaming(
                 posthog_distinct_id,
                 posthog_trace_id,
                 posthog_properties,
@@ -84,14 +84,14 @@ class WrappedResponses(openai.resources.responses.Responses):
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         final_content = []
-        response = super().create(**kwargs)
+        response = await super().create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
             nonlocal final_content
 
             try:
-                for chunk in response:
+                async for chunk in response:
                     if hasattr(chunk, "type") and chunk.type == "response.completed":
                         res = chunk.response
                         if res.output and len(res.output) > 0:

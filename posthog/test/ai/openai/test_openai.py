@@ -541,7 +541,6 @@ def test_responses_api(mock_client):
 
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
-        print(props)
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
