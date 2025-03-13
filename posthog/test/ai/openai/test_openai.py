@@ -12,7 +12,7 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from openai.types.completion_usage import CompletionUsage
 from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
 from openai.types.embedding import Embedding
-from openai.types.responses import Response, ResponseOutputItem, ResponseOutputMessage, ResponseUsage
+from openai.types.responses import Response, ResponseUsage, ResponseOutputMessage, ResponseOutputText
 
 from posthog.ai.openai import OpenAI
 
@@ -36,10 +36,7 @@ def mock_openai_response():
                 finish_reason="stop",
                 index=0,
                 message=ChatCompletionMessage(
-                    content={
-                        "type": "text",
-                        "text": "Test response",
-                    },
+                    content="Test response",
                     role="assistant",
                 ),
             )
@@ -58,23 +55,39 @@ def mock_openai_response_with_responses_api():
         id="test",
         model="gpt-4o-mini",
         object="response",
+        created_at=1741476542,
+        status="completed",
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        max_output_tokens=None,
+        tools=[],
+        tool_choice="auto",
         output=[
-            ResponseOutputItem(
+            ResponseOutputMessage(
+                id="msg_123",
                 type="message",
                 role="assistant",
+                status="completed",
                 content=[
-                    ResponseOutputMessage(
-                        type="input_text",
+                    ResponseOutputText(
+                        type="output_text",
                         text="Test response",
+                        annotations=[],
                     )
                 ],
             )
         ],
+        parallel_tool_calls=True,
+        previous_response_id=None,
         usage=ResponseUsage(
             input_tokens=10,
             output_tokens=10,
+            output_tokens_details={"reasoning_tokens": 15},
             total_tokens=20,
         ),
+        user=None,
+        metadata={},
     )
 
 
@@ -537,7 +550,7 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.responses.create(
             model="gpt-4o-mini",
-            input=[{"role": "user", "content": "Hello"}],
+            input="Hello",
             posthog_distinct_id="test-id",
             posthog_properties={"foo": "bar"},
         )
@@ -555,6 +568,7 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
+        assert props["$ai_reasoning_tokens"] == 15
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)

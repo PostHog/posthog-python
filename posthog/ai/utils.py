@@ -130,7 +130,7 @@ def format_response_openai(response):
                     for content_item in item.content:
                         if (
                             hasattr(content_item, "type")
-                            and content_item.type == "input_text"
+                            and content_item.type == "output_text"
                             and hasattr(content_item, "text")
                         ):
                             output.append(
