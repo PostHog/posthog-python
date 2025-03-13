@@ -52,7 +52,7 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
             response.usage.input_tokens_details, "cached_tokens"
         ):
             cached_tokens = response.usage.input_tokens_details.cached_tokens
-        if hasattr(response.usage, "output_tokens_details" ) and hasattr(
+        if hasattr(response.usage, "output_tokens_details") and hasattr(
             response.usage.output_tokens_details, "reasoning_tokens"
         ):
             reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
@@ -142,14 +142,15 @@ def format_tool_calls(response, provider: str):
         # Handle both Chat Completions and Responses API
         if hasattr(response, "choices") and response.choices:
             # Check for tool_calls in message (Chat Completions format)
-            if (hasattr(response.choices[0], "message") and 
-                hasattr(response.choices[0].message, "tool_calls") and 
-                response.choices[0].message.tool_calls):
+            if (
+                hasattr(response.choices[0], "message")
+                and hasattr(response.choices[0].message, "tool_calls")
+                and response.choices[0].message.tool_calls
+            ):
                 return response.choices[0].message.tool_calls
-            
+
             # Check for tool_calls directly in response (Responses API format)
-            if (hasattr(response.choices[0], "tool_calls") and 
-                response.choices[0].tool_calls):
+            if hasattr(response.choices[0], "tool_calls") and response.choices[0].tool_calls:
                 return response.choices[0].tool_calls
     return None
 
@@ -160,10 +161,10 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         if kwargs.get("system") is None:
             return messages
         return [{"role": "system", "content": kwargs.get("system")}] + messages
-    
+
     # For OpenAI, handle both Chat Completions and Responses API
     messages = []
-    
+
     if kwargs.get("messages"):
         messages = kwargs.get("messages")
 
@@ -172,18 +173,18 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
             messages.extend(kwargs.get("input"))
         else:
             messages.append({"role": "user", "content": kwargs.get("input")})
-    
+
     # Check if system prompt is provided as a separate parameter
     if kwargs.get("system") is not None:
         has_system = any(msg.get("role") == "system" for msg in messages)
         if not has_system:
             messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-    
+
     # For Responses API, add instructions to the system prompt if provided
     if kwargs.get("instructions") is not None:
         # Find the system message if it exists
         system_idx = next((i for i, msg in enumerate(messages) if msg.get("role") == "system"), None)
-        
+
         if system_idx is not None:
             # Append instructions to existing system message
             system_content = messages[system_idx].get("content", "")
@@ -191,7 +192,7 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         else:
             # Create a new system message with instructions
             messages = [{"role": "system", "content": kwargs.get("instructions")}] + messages
-    
+
     return messages
 
 
@@ -275,7 +276,9 @@ def call_llm_and_track_usage(
 
         # Process instructions for Responses API
         if provider == "openai" and kwargs.get("instructions") is not None:
-            event_properties["$ai_instructions"] = with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("instructions"))
+            event_properties["$ai_instructions"] = with_privacy_mode(
+                ph_client, posthog_privacy_mode, kwargs.get("instructions")
+            )
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
@@ -365,7 +368,9 @@ async def call_llm_and_track_usage_async(
 
         # Process instructions for Responses API
         if provider == "openai" and kwargs.get("instructions") is not None:
-            event_properties["$ai_instructions"] = with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("instructions"))
+            event_properties["$ai_instructions"] = with_privacy_mode(
+                ph_client, posthog_privacy_mode, kwargs.get("instructions")
+            )
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):

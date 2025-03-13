@@ -36,15 +36,15 @@ class AsyncOpenAI(openai.AsyncOpenAI):
 
 class WrappedResponses(openai.resources.responses.Responses):
     _client: AsyncOpenAI
-    
+
     async def create(
-            self,
-            posthog_distinct_id: Optional[str] = None,
-            posthog_trace_id: Optional[str] = None,
-            posthog_properties: Optional[Dict[str, Any]] = None,
-            posthog_privacy_mode: bool = False,
-            posthog_groups: Optional[Dict[str, Any]] = None,
-            **kwargs: Any,
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = uuid.uuid4()
@@ -71,7 +71,7 @@ class WrappedResponses(openai.resources.responses.Responses):
             super().create,
             **kwargs,
         )
-        
+
     async def _create_streaming(
         self,
         posthog_distinct_id: Optional[str],
@@ -192,8 +192,6 @@ class WrappedResponses(openai.resources.responses.Responses):
                 properties=event_properties,
                 groups=posthog_groups,
             )
-
-
 
 
 class WrappedChat(openai.resources.chat.AsyncChat):

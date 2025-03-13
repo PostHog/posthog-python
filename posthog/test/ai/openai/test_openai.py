@@ -12,7 +12,7 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from openai.types.completion_usage import CompletionUsage
 from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
 from openai.types.embedding import Embedding
-from openai.types.responses import Response, ResponseOutputItem, ResponseUsage, ResponseOutputMessage
+from openai.types.responses import Response, ResponseOutputItem, ResponseOutputMessage, ResponseUsage
 
 from posthog.ai.openai import OpenAI
 
@@ -76,6 +76,7 @@ def mock_openai_response_with_responses_api():
             total_tokens=20,
         ),
     )
+
 
 @pytest.fixture
 def mock_embedding_response():
