@@ -32,6 +32,167 @@ class OpenAI(openai.OpenAI):
         self.chat = WrappedChat(self)
         self.embeddings = WrappedEmbeddings(self)
         self.beta = WrappedBeta(self)
+        self.responses = WrappedResponses(self)
+
+
+class WrappedResponses(openai.resources.responses.Responses):
+    _client: OpenAI
+    
+    def create(
+            self,
+            posthog_distinct_id: Optional[str] = None,
+            posthog_trace_id: Optional[str] = None,
+            posthog_properties: Optional[Dict[str, Any]] = None,
+            posthog_privacy_mode: bool = False,
+            posthog_groups: Optional[Dict[str, Any]] = None,
+            **kwargs: Any,
+    ):
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
+
+        if kwargs.get("stream", False):
+            return self._create_streaming(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+                **kwargs,
+            )
+
+        return call_llm_and_track_usage(
+            posthog_distinct_id,
+            self._client._ph_client,
+            "openai",
+            posthog_trace_id,
+            posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
+            self._client.base_url,
+            super().create,
+            **kwargs,
+        )
+        
+    def _create_streaming(
+        self,
+        posthog_distinct_id: Optional[str],
+        posthog_trace_id: Optional[str],
+        posthog_properties: Optional[Dict[str, Any]],
+        posthog_privacy_mode: bool,
+        posthog_groups: Optional[Dict[str, Any]],
+        **kwargs: Any,
+    ):
+        start_time = time.time()
+        usage_stats: Dict[str, int] = {}
+        final_content = []
+        response = super().create(**kwargs)
+
+        def generator():
+            nonlocal usage_stats
+            nonlocal final_content
+
+            try:
+                for chunk in response:
+                    if hasattr(chunk, "type") and chunk.type == "response.completed":
+                        res = chunk.response
+                        if res.output and len(res.output) > 0:
+                            final_content.append(res.output[0])
+
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage_stats = {
+                            k: getattr(chunk.usage, k, 0)
+                            for k in [
+                                "input_tokens",
+                                "output_tokens",
+                                "total_tokens",
+                            ]
+                        }
+
+                        # Add support for cached tokens
+                        if hasattr(chunk.usage, "output_tokens_details") and hasattr(
+                            chunk.usage.output_tokens_details, "reasoning_tokens"
+                        ):
+                            usage_stats["reasoning_tokens"] = chunk.usage.output_tokens_details.reasoning_tokens
+
+                        if hasattr(chunk.usage, "input_tokens_details") and hasattr(
+                            chunk.usage.input_tokens_details, "cached_tokens"
+                        ):
+                            usage_stats["cache_read_input_tokens"] = chunk.usage.input_tokens_details.cached_tokens
+
+                    yield chunk
+
+            finally:
+                end_time = time.time()
+                latency = end_time - start_time
+                output = final_content
+                self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    usage_stats,
+                    latency,
+                    output,
+                )
+
+        return generator()
+
+    def _capture_streaming_event(
+        self,
+        posthog_distinct_id: Optional[str],
+        posthog_trace_id: Optional[str],
+        posthog_properties: Optional[Dict[str, Any]],
+        posthog_privacy_mode: bool,
+        posthog_groups: Optional[Dict[str, Any]],
+        kwargs: Dict[str, Any],
+        usage_stats: Dict[str, int],
+        latency: float,
+        output: str,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
+    ):
+        if posthog_trace_id is None:
+            posthog_trace_id = uuid.uuid4()
+
+        event_properties = {
+            "$ai_provider": "openai",
+            "$ai_model": kwargs.get("model"),
+            "$ai_model_parameters": get_model_params(kwargs),
+            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("input")),
+            "$ai_output_choices": with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                output,
+            ),
+            "$ai_http_status": 200,
+            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
+            "$ai_output_tokens": usage_stats.get("output_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
+            "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
+            "$ai_latency": latency,
+            "$ai_trace_id": posthog_trace_id,
+            "$ai_base_url": str(self._client.base_url),
+            **(posthog_properties or {}),
+        }
+
+        if tool_calls:
+            event_properties["$ai_tools"] = with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                tool_calls,
+            )
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
+        if hasattr(self._client._ph_client, "capture"):
+            self._client._ph_client.capture(
+                distinct_id=posthog_distinct_id or posthog_trace_id,
+                event="$ai_generation",
+                properties=event_properties,
+                groups=posthog_groups,
+            )
 
 
 class WrappedChat(openai.resources.chat.Chat):
@@ -121,6 +282,11 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
                         ):
                             usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
 
+                        if hasattr(chunk.usage, "output_tokens_details") and hasattr(
+                            chunk.usage.output_tokens_details, "reasoning_tokens"
+                        ):
+                            usage_stats["reasoning_tokens"] = chunk.usage.output_tokens_details.reasoning_tokens
+
                     if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
                         if chunk.choices[0].delta and chunk.choices[0].delta.content:
                             content = chunk.choices[0].delta.content
@@ -191,6 +357,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
             "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
+            "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),

@@ -1,3 +1,9 @@
+
+
+## 3.20.0 – 2025-03-13
+
+1. Add support for OpenAI Responses API.
+
 ## 3.19.2 – 2025-03-11
 
 1. Fix install requirements for analytics package

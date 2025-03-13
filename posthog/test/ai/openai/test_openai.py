@@ -12,6 +12,7 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from openai.types.completion_usage import CompletionUsage
 from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
 from openai.types.embedding import Embedding
+from openai.types.responses import Response, ResponseOutputItem, ResponseUsage, ResponseOutputMessage
 
 from posthog.ai.openai import OpenAI
 
@@ -35,7 +36,10 @@ def mock_openai_response():
                 finish_reason="stop",
                 index=0,
                 message=ChatCompletionMessage(
-                    content="Test response",
+                    content={
+                        "type": "text",
+                        "text": "Test response",
+                    },
                     role="assistant",
                 ),
             )
@@ -47,6 +51,31 @@ def mock_openai_response():
         ),
     )
 
+
+@pytest.fixture
+def mock_openai_response_with_responses_api():
+    return Response(
+        id="test",
+        model="gpt-4o-mini",
+        object="response",
+        output=[
+            ResponseOutputItem(
+                type="message",
+                role="assistant",
+                content=[
+                    ResponseOutputMessage(
+                        type="text",
+                        text="Test response",
+                    )
+                ],
+            )
+        ],
+        usage=ResponseUsage(
+            input_tokens=10,
+            output_tokens=10,
+            total_tokens=20,
+        ),
+    )
 
 @pytest.fixture
 def mock_embedding_response():
@@ -499,3 +528,25 @@ def test_streaming_with_tool_calls(mock_client):
         # Check token usage
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 15
+
+
+# test responses api
+def test_responses_api(mock_client):
+    with patch("openai.resources.responses.Responses.create") as mock_create:
+        mock_create.return_value = mock_openai_response_with_responses_api
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.responses.create(model="gpt-4o-mini", input=[{"role": "user", "content": "Hello"}])
+        assert response == mock_openai_response_with_responses_api
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        print(props)
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4o-mini"
+        assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
+        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_input_tokens"] == 10
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_http_status"] == 200
+        assert isinstance(props["$ai_latency"], float)

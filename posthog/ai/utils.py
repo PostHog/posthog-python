@@ -39,20 +39,46 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
         }
     elif provider == "openai":
         cached_tokens = 0
+        input_tokens = 0
+        output_tokens = 0
+        reasoning_tokens = 0
+
+        # responses api
+        if hasattr(response.usage, "input_tokens"):
+            input_tokens = response.usage.input_tokens
+        if hasattr(response.usage, "output_tokens"):
+            output_tokens = response.usage.output_tokens
+        if hasattr(response.usage, "input_tokens_details") and hasattr(
+            response.usage.input_tokens_details, "cached_tokens"
+        ):
+            cached_tokens = response.usage.input_tokens_details.cached_tokens
+        if hasattr(response.usage, "output_tokens_details" ) and hasattr(
+            response.usage.output_tokens_details, "reasoning_tokens"
+        ):
+            reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
+
+        # chat completions
+        if hasattr(response.usage, "prompt_tokens"):
+            input_tokens = response.usage.prompt_tokens
+        if hasattr(response.usage, "completion_tokens"):
+            output_tokens = response.usage.completion_tokens
         if hasattr(response.usage, "prompt_tokens_details") and hasattr(
             response.usage.prompt_tokens_details, "cached_tokens"
         ):
             cached_tokens = response.usage.prompt_tokens_details.cached_tokens
+
         return {
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "cache_read_input_tokens": cached_tokens,
+            "reasoning_tokens": reasoning_tokens,
         }
     return {
         "input_tokens": 0,
         "output_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0,
     }
 
 
@@ -85,12 +111,24 @@ def format_response_anthropic(response):
 
 def format_response_openai(response):
     output = []
-    for choice in response.choices:
-        if choice.message.content:
+    if hasattr(response, "choices"):
+        for choice in response.choices:
+            # Handle Chat Completions response format
+            if hasattr(choice, "message") and choice.message and choice.message.content:
+                output.append(
+                    {
+                        "content": choice.message.content,
+                        "role": choice.message.role,
+                    }
+                )
+    # Handle Responses API format
+    if hasattr(response, "output"):
+        for message in response.output:
+
             output.append(
                 {
-                    "content": choice.message.content,
-                    "role": choice.message.role,
+                    "content": message.content,
+                    "role": message.role,
                 }
             )
     return output
@@ -101,23 +139,60 @@ def format_tool_calls(response, provider: str):
         if hasattr(response, "tools") and response.tools and len(response.tools) > 0:
             return response.tools
     elif provider == "openai":
-        if (
-            hasattr(response, "choices")
-            and response.choices
-            and hasattr(response.choices[0].message, "tool_calls")
-            and response.choices[0].message.tool_calls
-        ):
-            return response.choices[0].message.tool_calls
+        # Handle both Chat Completions and Responses API
+        if hasattr(response, "choices") and response.choices:
+            # Check for tool_calls in message (Chat Completions format)
+            if (hasattr(response.choices[0], "message") and 
+                hasattr(response.choices[0].message, "tool_calls") and 
+                response.choices[0].message.tool_calls):
+                return response.choices[0].message.tool_calls
+            
+            # Check for tool_calls directly in response (Responses API format)
+            if (hasattr(response.choices[0], "tool_calls") and 
+                response.choices[0].tool_calls):
+                return response.choices[0].tool_calls
     return None
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
-    if provider != "anthropic":
-        return kwargs.get("messages")
-    messages = kwargs.get("messages") or []
-    if kwargs.get("system") is None:
-        return messages
-    return [{"role": "system", "content": kwargs.get("system")}] + messages
+    if provider == "anthropic":
+        messages = kwargs.get("messages") or []
+        if kwargs.get("system") is None:
+            return messages
+        return [{"role": "system", "content": kwargs.get("system")}] + messages
+    
+    # For OpenAI, handle both Chat Completions and Responses API
+    messages = []
+    
+    if kwargs.get("messages"):
+        messages = kwargs.get("messages")
+
+    if kwargs.get("input"):
+        if isinstance(kwargs.get("input"), list):
+            messages.extend(kwargs.get("input"))
+        else:
+            messages.append({"role": "user", "content": kwargs.get("input")})
+    
+    # Check if system prompt is provided as a separate parameter
+    if kwargs.get("system") is not None:
+        has_system = any(msg.get("role") == "system" for msg in messages)
+        if not has_system:
+            messages = [{"role": "system", "content": kwargs.get("system")}] + messages
+    
+    # For Responses API, add instructions to the system prompt if provided
+    if kwargs.get("instructions") is not None:
+        # Find the system message if it exists
+        system_idx = next((i for i, msg in enumerate(messages) if msg.get("role") == "system"), None)
+        
+        if system_idx is not None:
+            # Append instructions to existing system message
+            system_content = messages[system_idx].get("content", "")
+            messages[system_idx]["content"] = f"{system_content}\n\n{kwargs.get('instructions')}"
+        else:
+            # Create a new system message with instructions
+            messages = [{"role": "system", "content": kwargs.get("instructions")}] + messages
+    
+    return messages
 
 
 def call_llm_and_track_usage(
@@ -192,8 +267,15 @@ def call_llm_and_track_usage(
         if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
             event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
 
+        if usage.get("reasoning_tokens") is not None and usage.get("reasoning_tokens", 0) > 0:
+            event_properties["$ai_reasoning_tokens"] = usage.get("reasoning_tokens", 0)
+
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
+
+        # Process instructions for Responses API
+        if provider == "openai" and kwargs.get("instructions") is not None:
+            event_properties["$ai_instructions"] = with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("instructions"))
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
@@ -280,6 +362,10 @@ async def call_llm_and_track_usage_async(
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
+
+        # Process instructions for Responses API
+        if provider == "openai" and kwargs.get("instructions") is not None:
+            event_properties["$ai_instructions"] = with_privacy_mode(ph_client, posthog_privacy_mode, kwargs.get("instructions"))
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
