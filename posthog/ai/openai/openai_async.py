@@ -124,7 +124,7 @@ class WrappedResponses(openai.resources.responses.Responses):
                 end_time = time.time()
                 latency = end_time - start_time
                 output = final_content
-                self._capture_streaming_event(
+                await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
                     posthog_properties,
