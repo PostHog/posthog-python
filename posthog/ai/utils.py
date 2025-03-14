@@ -192,6 +192,7 @@ def format_tool_calls(response, provider: str):
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
+    messages: List[Dict[str, Any]] = []
     if provider == "anthropic":
         messages = kwargs.get("messages") or []
         if kwargs.get("system") is None:
@@ -199,8 +200,6 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         return [{"role": "system", "content": kwargs.get("system")}] + messages
 
     # For OpenAI, handle both Chat Completions and Responses API
-    messages: List[Dict[str, Any]] = []
-
     if kwargs.get("messages") is not None:
         messages = list(kwargs.get("messages", []))
 
