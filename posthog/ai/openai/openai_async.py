@@ -47,7 +47,7 @@ class WrappedResponses(openai.resources.responses.Responses):
         **kwargs: Any,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         if kwargs.get("stream", False):
             return await self._create_streaming(
@@ -402,7 +402,7 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
             The response from OpenAI's embeddings.create call.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         start_time = time.time()
         response = await super().create(**kwargs)

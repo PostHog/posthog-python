@@ -269,7 +269,7 @@ def call_llm_and_track_usage(
         latency = end_time - start_time
 
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         if response and hasattr(response, "usage"):
             usage = get_usage(response, provider)
@@ -364,7 +364,7 @@ async def call_llm_and_track_usage_async(
         latency = end_time - start_time
 
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         if response and hasattr(response, "usage"):
             usage = get_usage(response, provider)
