@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, List
 
 from httpx import URL
 
@@ -199,16 +199,17 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         return [{"role": "system", "content": kwargs.get("system")}] + messages
 
     # For OpenAI, handle both Chat Completions and Responses API
-    messages = []
+    messages: List[Dict[str, Any]] = []
 
-    if kwargs.get("messages"):
-        messages = kwargs.get("messages")
+    if kwargs.get("messages") is not None:
+        messages = list(kwargs.get("messages", []))
 
-    if kwargs.get("input"):
-        if isinstance(kwargs.get("input"), list):
-            messages.extend(kwargs.get("input"))
+    if kwargs.get("input") is not None:
+        input_data = kwargs.get("input")
+        if isinstance(input_data, list):
+            messages.extend(input_data)
         else:
-            messages.append({"role": "user", "content": kwargs.get("input")})
+            messages.append({"role": "user", "content": input_data})
 
     # Check if system prompt is provided as a separate parameter
     if kwargs.get("system") is not None:

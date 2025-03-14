@@ -149,11 +149,11 @@ class WrappedResponses(openai.resources.responses.Responses):
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
-        output: str,
+        output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         event_properties = {
             "$ai_provider": "openai",
@@ -216,7 +216,7 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         **kwargs: Any,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         if kwargs.get("stream", False):
             return self._create_streaming(
@@ -337,11 +337,11 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
-        output: str,
+        output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         event_properties = {
             "$ai_provider": "openai",
