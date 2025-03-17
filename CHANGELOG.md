@@ -1,4 +1,6 @@
+## 3.21.0 – 2025-03-17
 
+1. Support serializing dataclasses.
 
 ## 3.20.0 – 2025-03-13
 
