@@ -85,12 +85,8 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(cleaned["fn"], None)
 
     def test_remove_slash(self):
-        self.assertEqual(
-            "http://posthog.io", utils.remove_trailing_slash("http://posthog.io/")
-        )
-        self.assertEqual(
-            "http://posthog.io", utils.remove_trailing_slash("http://posthog.io")
-        )
+        self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io/"))
+        self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io"))
 
     def test_clean_pydantic(self):
         class ModelV2(BaseModel):
@@ -105,9 +101,7 @@ class TestUtils(unittest.TestCase):
         class NestedModel(BaseModel):
             foo: ModelV2
 
-        self.assertEqual(
-            utils.clean(ModelV2(foo="1", bar=2)), {"foo": "1", "bar": 2, "baz": None}
-        )
+        self.assertEqual(utils.clean(ModelV2(foo="1", bar=2)), {"foo": "1", "bar": 2, "baz": None})
         self.assertEqual(utils.clean(ModelV1(foo=1, bar="2")), {"foo": 1, "bar": "2"})
         self.assertEqual(
             utils.clean(NestedModel(foo=ModelV2(foo="1", bar=2, baz="3"))),
@@ -128,6 +122,7 @@ class TestUtils(unittest.TestCase):
             inner_bar: int
             inner_uuid: UUID
             inner_date: datetime
+            inner_optional: str | None = None
 
         @dataclass
         class TestDataClass:
@@ -156,6 +151,7 @@ class TestUtils(unittest.TestCase):
                     "inner_bar": 4,
                     "inner_uuid": "12345678-1234-5678-1234-567812345678",
                     "inner_date": datetime(2025, 1, 1),
+                    "inner_optional": None,
                 },
             },
         )

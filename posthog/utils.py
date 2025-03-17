@@ -52,9 +52,7 @@ def clean(item):
         return float(item)
     if isinstance(item, UUID):
         return str(item)
-    if isinstance(
-        item, (six.string_types, bool, numbers.Number, datetime, date, type(None))
-    ):
+    if isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
         return item
     if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
