@@ -122,7 +122,7 @@ class TestUtils(unittest.TestCase):
             inner_bar: int
             inner_uuid: UUID
             inner_date: datetime
-            inner_optional: str | None = None
+            inner_optional: Optional[str] = None
 
         @dataclass
         class TestDataClass:
