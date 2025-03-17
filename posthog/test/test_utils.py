@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
@@ -56,7 +57,10 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(combined.keys(), pre_clean_keys)
 
         # test UUID separately, as the UUID object doesn't equal its string representation according to Python
-        self.assertEqual(utils.clean(UUID("12345678123456781234567812345678")), "12345678-1234-5678-1234-567812345678")
+        self.assertEqual(
+            utils.clean(UUID("12345678123456781234567812345678")),
+            "12345678-1234-5678-1234-567812345678",
+        )
 
     def test_clean_with_dates(self):
         dict_with_dates = {
@@ -81,8 +85,12 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(cleaned["fn"], None)
 
     def test_remove_slash(self):
-        self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io/"))
-        self.assertEqual("http://posthog.io", utils.remove_trailing_slash("http://posthog.io"))
+        self.assertEqual(
+            "http://posthog.io", utils.remove_trailing_slash("http://posthog.io/")
+        )
+        self.assertEqual(
+            "http://posthog.io", utils.remove_trailing_slash("http://posthog.io")
+        )
 
     def test_clean_pydantic(self):
         class ModelV2(BaseModel):
@@ -97,10 +105,13 @@ class TestUtils(unittest.TestCase):
         class NestedModel(BaseModel):
             foo: ModelV2
 
-        self.assertEqual(utils.clean(ModelV2(foo="1", bar=2)), {"foo": "1", "bar": 2, "baz": None})
+        self.assertEqual(
+            utils.clean(ModelV2(foo="1", bar=2)), {"foo": "1", "bar": 2, "baz": None}
+        )
         self.assertEqual(utils.clean(ModelV1(foo=1, bar="2")), {"foo": 1, "bar": "2"})
         self.assertEqual(
-            utils.clean(NestedModel(foo=ModelV2(foo="1", bar=2, baz="3"))), {"foo": {"foo": "1", "bar": 2, "baz": "3"}}
+            utils.clean(NestedModel(foo=ModelV2(foo="1", bar=2, baz="3"))),
+            {"foo": {"foo": "1", "bar": 2, "baz": "3"}},
         )
 
         class Dummy:
@@ -109,6 +120,45 @@ class TestUtils(unittest.TestCase):
 
         # Skips a class with a defined non-Pydantic `model_dump` method.
         self.assertEqual(utils.clean({"test": Dummy()}), {})
+
+    def test_clean_dataclass(self):
+        @dataclass
+        class InnerDataClass:
+            inner_foo: str
+            inner_bar: int
+            inner_uuid: UUID
+            inner_date: datetime
+
+        @dataclass
+        class TestDataClass:
+            foo: str
+            bar: int
+            nested: InnerDataClass
+
+        self.assertEqual(
+            utils.clean(
+                TestDataClass(
+                    foo="1",
+                    bar=2,
+                    nested=InnerDataClass(
+                        inner_foo="3",
+                        inner_bar=4,
+                        inner_uuid=UUID("12345678123456781234567812345678"),
+                        inner_date=datetime(2025, 1, 1),
+                    ),
+                )
+            ),
+            {
+                "foo": "1",
+                "bar": 2,
+                "nested": {
+                    "inner_foo": "3",
+                    "inner_bar": 4,
+                    "inner_uuid": "12345678-1234-5678-1234-567812345678",
+                    "inner_date": datetime(2025, 1, 1),
+                },
+            },
+        )
 
 
 class TestSizeLimitedDict(unittest.TestCase):
