@@ -1,13 +1,23 @@
 import json
 import unittest
 from datetime import date, datetime
+from unittest.mock import patch, MagicMock
+from parameterized import parameterized
 
 import mock
 import pytest
 import requests
 
-from posthog.request import DatetimeSerializer, QuotaLimitError, batch_post, decide, determine_server_host
+from posthog.request import (
+    DatetimeSerializer,
+    QuotaLimitError,
+    batch_post,
+    decide,
+    determine_server_host,
+    normalize_decide_response,
+)
 from posthog.test.test_utils import TEST_API_KEY
+from posthog.types import FeatureFlag, FlagMetadata, FlagReason, LegacyFlagMetadata
 
 
 class TestRequests(unittest.TestCase):
@@ -74,6 +84,90 @@ class TestRequests(unittest.TestCase):
         with mock.patch("posthog.request._session.post", return_value=mock_response):
             response = decide("fake_key", "fake_host")
             self.assertEqual(response["featureFlags"], {"flag1": True})
+
+    @parameterized.expand([(True,), (False,)])
+    def test_normalize_decide_response_v4(self, has_errors: bool):
+        resp = {
+            "flags": {
+                "my-flag": FeatureFlag(
+                    key="my-flag",
+                    enabled=True,
+                    variant="test-variant",
+                    reason=FlagReason(
+                        code="matched_condition", condition_index=0, description="Matched condition set 1"
+                    ),
+                    metadata=FlagMetadata(id=1, payload='{"some": "json"}', version=2, description="test-description"),
+                )
+            },
+            "errorsWhileComputingFlags": has_errors,
+            "requestId": "test-id",
+        }
+
+        result = normalize_decide_response(resp)
+        
+        flag = result["flags"]["my-flag"]
+        self.assertEqual(flag.key, "my-flag")
+        self.assertTrue(flag.enabled)
+        self.assertEqual(flag.variant, "test-variant")
+        self.assertEqual(flag.get_value(), "test-variant")
+        self.assertEqual(
+            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
+        )
+        self.assertEqual(
+            flag.metadata, FlagMetadata(id=1, payload='{"some": "json"}', version=2, description="test-description")
+        )
+        self.assertEqual(result["errorsWhileComputingFlags"], has_errors)
+        self.assertEqual(result["requestId"], "test-id")
+
+    def test_normalize_decide_response_legacy(self):
+        # Test legacy response format with "featureFlags" and "featureFlagPayloads"
+        resp = {
+            "featureFlags": {"my-flag": "test-variant"},
+            "featureFlagPayloads": {"my-flag": "{\"some\": \"json-payload\"}"},
+            "errorsWhileComputingFlags": False,
+            "requestId": "test-id",
+        }
+
+        result = normalize_decide_response(resp)
+
+        flag = result["flags"]["my-flag"]
+        self.assertEqual(flag.key, "my-flag")
+        self.assertTrue(flag.enabled)
+        self.assertEqual(flag.variant, "test-variant")
+        self.assertEqual(flag.get_value(), "test-variant")
+        self.assertIsNone(flag.reason)
+        self.assertEqual(
+            flag.metadata, LegacyFlagMetadata(payload='{"some": "json-payload"}')
+        )
+        self.assertFalse(result["errorsWhileComputingFlags"])
+        self.assertEqual(result["requestId"], "test-id")
+        # Verify legacy fields are removed
+        self.assertNotIn("featureFlags", result)
+        self.assertNotIn("featureFlagPayloads", result)
+
+    def test_normalize_decide_response_boolean_flag(self):
+        # Test legacy response with boolean flag
+        resp = {
+            "featureFlags": {"my-flag": True},
+            "errorsWhileComputingFlags": False
+        }
+
+        result = normalize_decide_response(resp)
+
+        self.assertIn("requestId", result)
+        self.assertIsNone(result["requestId"])
+
+        flag = result["flags"]["my-flag"]
+        self.assertEqual(flag.key, "my-flag")
+        self.assertTrue(flag.enabled)
+        self.assertIsNone(flag.variant)
+        self.assertIsNone(flag.reason)
+        self.assertEqual(
+            flag.metadata, LegacyFlagMetadata(payload=None)
+        )
+        self.assertFalse(result["errorsWhileComputingFlags"])
+        self.assertNotIn("featureFlags", result)
+        self.assertNotIn("featureFlagPayloads", result)
 
 
 @pytest.mark.parametrize(

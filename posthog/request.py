@@ -3,11 +3,12 @@ import logging
 from datetime import date, datetime
 from gzip import GzipFile
 from io import BytesIO
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 import requests
 from dateutil.tz import tzutc
 
+from posthog.types import DecideResponse, FeatureFlag
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
@@ -96,6 +97,20 @@ def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout
     res = post(api_key, host, "/decide/?v=3", gzip, timeout, **kwargs)
     return _process_response(res, success_message="Feature flags decided successfully")
 
+def normalize_decide_response(resp: any) -> DecideResponse:
+    if "requestId" not in resp:
+        resp["requestId"] = None
+    if "flags" not in resp:
+        featureFlags = resp.get("featureFlags", {})
+        featureFlagPayloads = resp.get("featureFlagPayloads", {})
+        resp.pop("featureFlags", None)
+        resp.pop("featureFlagPayloads", None)
+        # look at each key in featureFlags and create a FeatureFlag object
+        flags = {}
+        for key, value in featureFlags.items():
+            flags[key] = FeatureFlag.from_value_and_payload(key, value, featureFlagPayloads.get(key, None))
+        resp["flags"] = flags
+    return cast(DecideResponse, resp)
 
 def remote_config(personal_api_key: str, host: Optional[str] = None, key: str = "", timeout: int = 15) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
