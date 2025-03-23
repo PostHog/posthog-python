@@ -642,9 +642,8 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         ]
         # beta-feature value overridden by /decide
-        flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
-            client.to_payloads(flags_and_payloads),
+            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
             {
                 "beta-feature": 100,
                 "beta-feature2": 300,
@@ -676,9 +675,8 @@ class TestLocalEvaluation(unittest.TestCase):
         client = self.client
         client.feature_flags = []
         # beta-feature value overridden by /decide
-        flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
-            client.to_payloads(flags_and_payloads),
+            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
             {"beta-feature": 100, "beta-feature2": 300},
         )
         self.assertEqual(patch_decide.call_count, 1)
@@ -768,9 +766,9 @@ class TestLocalEvaluation(unittest.TestCase):
             basic_flag,
             disabled_flag,
         ]
-        all_flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
-            client.to_payloads(all_flags_and_payloads), {"beta-feature": "new"}
+            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
+            {"beta-feature": "new"}
         )
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
@@ -900,9 +898,8 @@ class TestLocalEvaluation(unittest.TestCase):
             flag_3,
         ]
         # beta-feature2 has no value
-        flags_and_payloads = client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)
         self.assertEqual(
-            client.to_payloads(flags_and_payloads),
+            client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)["featureFlagPayloads"],
             {"beta-feature": "some-payload"},
         )
         self.assertEqual(patch_decide.call_count, 0)
