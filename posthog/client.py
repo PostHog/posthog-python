@@ -818,28 +818,7 @@ class Client(object):
             distinct_id, groups, person_properties, group_properties
         )
 
-        if self.feature_flags is None and self.personal_api_key:
-            self.load_feature_flags()
-        response = None
-
-        if self.feature_flags:
-            assert self.feature_flags_by_key is not None, "feature_flags_by_key should be initialized when feature_flags is set"
-            # Local evaluation
-            flag = self.feature_flags_by_key.get(key)
-            if flag:
-                try:
-                    response = self._compute_flag_locally(
-                        flag,
-                        distinct_id,
-                        groups=groups,
-                        person_properties=person_properties,
-                        group_properties=group_properties,
-                    )
-                    self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
-                except InconclusiveMatchError as e:
-                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
-                except Exception as e:
-                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
+        response = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
 
         flag_was_locally_evaluated = response is not None
         if not flag_was_locally_evaluated and not only_evaluate_locally:
@@ -878,6 +857,31 @@ class Client(object):
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
         return response
 
+    def _locally_evaluate_flag(self, key: str, distinct_id: str, groups: dict[str, str], person_properties: dict[str, str], group_properties: dict[str, str]) -> FlagValue | None:
+        if self.feature_flags is None and self.personal_api_key:
+            self.load_feature_flags()
+        response = None
+
+        if self.feature_flags:
+            assert self.feature_flags_by_key is not None, "feature_flags_by_key should be initialized when feature_flags is set"
+            # Local evaluation
+            flag = self.feature_flags_by_key.get(key)
+            if flag:
+                try:
+                    response = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                    self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
+                except InconclusiveMatchError as e:
+                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
+        return response
+
     def get_feature_flag_payload(
         self,
         key,
@@ -895,18 +899,10 @@ class Client(object):
             return None
 
         if match_value is None:
-            match_value = self.get_feature_flag(
-                key,
-                distinct_id,
-                groups=groups,
-                person_properties=person_properties,
-                group_properties=group_properties,
-                send_feature_flag_events=False,
-                # Disable automatic sending of feature flag events because we're manually handling event dispatch.
-                # This prevents sending events with empty data when `get_feature_flag` cannot be evaluated locally.
-                only_evaluate_locally=True,  # Enable local evaluation of feature flags to avoid making multiple requests to `/decide`.
-                disable_geoip=disable_geoip,
+            person_properties, group_properties = self._add_local_person_and_group_properties(
+                distinct_id, groups, person_properties, group_properties
             )
+            match_value = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
 
         response = None
         payload = None
