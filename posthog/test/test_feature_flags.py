@@ -642,8 +642,9 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         ]
         # beta-feature value overridden by /decide
+        flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
-            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
+            client.to_payloads(flags_and_payloads),
             {
                 "beta-feature": 100,
                 "beta-feature2": 300,
@@ -675,8 +676,9 @@ class TestLocalEvaluation(unittest.TestCase):
         client = self.client
         client.feature_flags = []
         # beta-feature value overridden by /decide
+        flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
-            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
+            client.to_payloads(flags_and_payloads),
             {"beta-feature": 100, "beta-feature2": 300},
         )
         self.assertEqual(patch_decide.call_count, 1)
@@ -726,7 +728,6 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_get_all_flags_and_payloads_with_no_fallback(self, patch_decide, patch_capture):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
         client = self.client
         basic_flag = {
             "id": 1,
@@ -768,8 +769,9 @@ class TestLocalEvaluation(unittest.TestCase):
             disabled_flag,
         ]
         client.feature_flags_by_key = {"beta-feature": basic_flag, "disabled-feature": disabled_flag}
+        all_flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
-            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"], {"beta-feature": "new"}
+            client.to_payloads(all_flags_and_payloads), {"beta-feature": "new"}
         )
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
@@ -900,8 +902,9 @@ class TestLocalEvaluation(unittest.TestCase):
         ]
         client.feature_flags_by_key = {"beta-feature": flag_1, "disabled-feature": flag_2, "beta-feature2": flag_3}
         # beta-feature2 has no value
+        flags_and_payloads = client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)
         self.assertEqual(
-            client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)["featureFlagPayloads"],
+            client.to_payloads(flags_and_payloads),
             {"beta-feature": "some-payload"},
         )
         self.assertEqual(patch_decide.call_count, 0)

@@ -36,10 +36,11 @@ class FeatureFlag:
 
     @classmethod
     def from_value_and_payload(cls, key: str, value: any, payload: any) -> "FeatureFlag":
+        enabled, variant = (True, value) if isinstance(value, str) else (value, None)
         return cls(
             key=key,
-            enabled=True if isinstance(value, str) else value,
-            variant=value if isinstance(value, str) else None,
+            enabled=enabled,
+            variant=variant,
             reason=None,
             metadata=LegacyFlagMetadata(
                 payload=payload,

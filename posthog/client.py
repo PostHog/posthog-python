@@ -18,7 +18,7 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config
+from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config, normalize_decide_response, DecideResponse
 from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
 from posthog.version import VERSION
 
@@ -230,21 +230,21 @@ class Client(object):
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
-        return resp_data["featureFlags"]
+        return self.to_variants(resp_data)
 
     def get_feature_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
-        return resp_data["featureFlagPayloads"]
+        return self.to_payloads(resp_data)
 
     def get_feature_flags_and_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ):
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return {
-            "featureFlags": resp_data["featureFlags"],
-            "featureFlagPayloads": resp_data["featureFlagPayloads"],
+            "featureFlags": self.to_variants(resp_data),
+            "featureFlagPayloads": self.to_payloads(resp_data),
         }
 
     def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None):
@@ -267,7 +267,7 @@ class Client(object):
         }
         resp_data = decide(self.api_key, self.host, timeout=self.feature_flags_request_timeout_seconds, **request_data)
 
-        return resp_data
+        return normalize_decide_response(resp_data)
 
     def capture(
         self,
@@ -967,8 +967,8 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         disable_geoip=None,
-    ):
-        flags = self.get_all_flags_and_payloads(
+    ) -> dict[str, bool | str]:
+        response = self.get_all_flags_and_payloads(
             distinct_id,
             groups=groups,
             person_properties=person_properties,
@@ -976,7 +976,8 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             disable_geoip=disable_geoip,
         )
-        return flags["featureFlags"]
+
+        return self.to_variants(response)
 
     def get_all_flags_and_payloads(
         self,
@@ -987,7 +988,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         disable_geoip=None,
-    ):
+    ) -> DecideResponse:
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}
 
@@ -998,7 +999,8 @@ class Client(object):
         flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
-        response = {"featureFlags": flags, "featureFlagPayloads": payloads}
+        
+        response = normalize_decide_response({"featureFlags": flags, "featureFlagPayloads": payloads})
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
@@ -1068,6 +1070,18 @@ class Client(object):
                 }
 
         return all_person_properties, all_group_properties
+
+    def to_variants(self, response: any) -> dict[str, bool | str]:
+        if "flags" not in response:
+            return None
+
+        return {key: value.get_value() for key, value in response.get("flags", {}).items()}
+
+    def to_payloads(self, response: any) -> dict[str, str]:
+        if "flags" not in response:
+            return None
+
+        return {key: value.metadata.payload for key, value in response.get("flags", {}).items() if value.enabled}
 
 
 def require(name, field, data_type):
