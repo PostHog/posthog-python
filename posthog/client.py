@@ -206,14 +206,21 @@ class Client(object):
 
     @property
     def feature_flags(self):
+        """
+        Get the local evaluation feature flags.
+        """
         return self._feature_flags
 
     @feature_flags.setter
     def feature_flags(self, flags):
+        """
+        Set the local evaluation feature flags.
+        """
         self._feature_flags = flags or []
         self.feature_flags_by_key = {
             flag["key"]: flag for flag in self._feature_flags if flag.get("key") is not None
         }
+        assert self.feature_flags_by_key is not None, "feature_flags_by_key should be initialized when feature_flags is set"
 
     def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         if context is not None:
@@ -240,18 +247,27 @@ class Client(object):
     def get_feature_variants(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ) -> dict[str, str | bool]:
+        """
+        Get feature flag variants for a distinct_id by calling decide.
+        """
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return to_values(resp_data) or {}
 
     def get_feature_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ) -> dict[str, str]:
+        """
+        Get feature flag payloads for a distinct_id by calling decide.
+        """
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return to_payloads(resp_data) or {}
 
     def get_feature_flags_and_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
     ) -> FlagsAndPayloads:
+        """
+        Get feature flags and payloads for a distinct_id by calling decide.
+        """
         resp = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return to_flags_and_payloads(resp)
 
@@ -783,7 +799,14 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
-    ):
+    ) -> FlagValue | None:
+        """
+        Get a feature flag value for a key by evaluating locally or remotely
+        depending on whether local evaluation is enabled and the flag can be 
+        locally evaluated.
+
+        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
+        """
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
@@ -800,24 +823,23 @@ class Client(object):
         response = None
 
         if self.feature_flags:
-            for flag in self.feature_flags:
-                if flag["key"] == key:
-                    try:
-                        response = self._compute_flag_locally(
-                            flag,
-                            distinct_id,
-                            groups=groups,
-                            person_properties=person_properties,
-                            group_properties=group_properties,
-                        )
-                        self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
-                    except InconclusiveMatchError as e:
-                        self.log.debug(f"Failed to compute flag {key} locally: {e}")
-                        continue
-                    except Exception as e:
-                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
-                        continue
-                    break
+            assert self.feature_flags_by_key is not None, "feature_flags_by_key should be initialized when feature_flags is set"
+            # Local evaluation
+            flag = self.feature_flags_by_key.get(key)
+            if flag:
+                try:
+                    response = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                    self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
+                except InconclusiveMatchError as e:
+                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
 
         flag_was_locally_evaluated = response is not None
         if not flag_was_locally_evaluated and not only_evaluate_locally:

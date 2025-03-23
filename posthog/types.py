@@ -84,7 +84,7 @@ def normalize_decide_response(resp: Any) -> DecideResponse:
         resp["flags"] = flags
     return cast(DecideResponse, resp)
 
-def to_flags_and_payloads(resp: DecideResponse) -> tuple[dict[str, FlagValue], dict[str, Any], bool]:
+def to_flags_and_payloads(resp: DecideResponse) -> FlagsAndPayloads:
     """
     Convert a DecideResponse into a FlagsAndPayloads object which is a 
     dict of feature flags and their payloads. This is needed by certain 
@@ -102,7 +102,7 @@ def to_flags_and_payloads(resp: DecideResponse) -> tuple[dict[str, FlagValue], d
         "featureFlagPayloads": to_payloads(resp)
     }
 
-def to_values(response: DecideResponse) -> dict[str, bool | str] | None:
+def to_values(response: DecideResponse) -> dict[str, FlagValue] | None:
     if "flags" not in response:
         return None
 
