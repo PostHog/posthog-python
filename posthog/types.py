@@ -4,10 +4,20 @@ from typing import List, TypedDict, Any, TypeAlias, cast
 FlagValue: TypeAlias = bool | str
 
 @dataclass(frozen=True)
-class FlagReason(TypedDict):
+class FlagReason:
     code: str
     condition_index: int
     description: str
+
+    @classmethod
+    def from_json(cls, resp: Any) -> "FlagReason":
+        if not resp:
+            return None
+        return cls(
+            code=resp.get("code", ""),
+            condition_index=resp.get("condition_index", 0),
+            description=resp.get("description", "")
+        )
 
 
 @dataclass(frozen=True)
@@ -17,6 +27,16 @@ class FlagMetadata:
     version: int
     description: str
 
+    @classmethod
+    def from_json(cls, resp: Any) -> "FlagMetadata":
+        if not resp:
+            return None
+        return cls(
+            id=resp.get("id", 0),
+            payload=resp.get("payload"),
+            version=resp.get("version", 0),
+            description=resp.get("description", "")
+        )
 
 @dataclass(frozen=True)
 class LegacyFlagMetadata:
@@ -34,6 +54,26 @@ class FeatureFlag:
     def get_value(self) -> FlagValue:
         assert self.variant is None or self.enabled
         return self.variant or self.enabled
+
+    @classmethod
+    def from_json(cls, resp: Any) -> "FeatureFlag":
+        reason = None
+        if resp.get("reason"):
+            reason = FlagReason.from_json(resp.get("reason"))
+        
+        metadata = None
+        if resp.get("metadata"):
+            metadata = FlagMetadata.from_json(resp.get("metadata"))
+        else:
+            metadata = LegacyFlagMetadata(payload=None)
+
+        return cls(
+            key=resp.get("key"),
+            enabled=resp.get("enabled"),
+            variant=resp.get("variant"),
+            reason=reason,
+            metadata=metadata
+        )
 
     @classmethod
     def from_value_and_payload(cls, key: str, value: FlagValue, payload: Any) -> "FeatureFlag":
@@ -72,7 +112,16 @@ def normalize_decide_response(resp: Any) -> DecideResponse:
     """
     if "requestId" not in resp:
         resp["requestId"] = None
-    if "flags" not in resp:
+    if "flags" in resp:
+        flags = resp["flags"]
+        # For each flag, create a FeatureFlag object
+        for key, value in flags.items():
+            if isinstance(value, FeatureFlag):
+                continue
+            value["key"] = key
+            flags[key] = FeatureFlag.from_json(value)
+    else:
+        # Handle legacy format
         featureFlags = resp.get("featureFlags", {})
         featureFlagPayloads = resp.get("featureFlagPayloads", {})
         resp.pop("featureFlags", None)
@@ -106,10 +155,11 @@ def to_values(response: DecideResponse) -> dict[str, FlagValue] | None:
     if "flags" not in response:
         return None
 
-    return {key: value.get_value() for key, value in response.get("flags", {}).items()}
+    flags = response.get("flags", {})
+    return {key: value.get_value() for key, value in flags.items() if isinstance(value, FeatureFlag)}
 
 def to_payloads(response: DecideResponse) -> dict[str, str] | None:
     if "flags" not in response:
         return None
 
-    return {key: value.metadata.payload for key, value in response.get("flags", {}).items() if value.enabled}
+    return {key: value.metadata.payload for key, value in response.get("flags", {}).items() if isinstance(value, FeatureFlag) and value.enabled}

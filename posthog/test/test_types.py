@@ -143,3 +143,100 @@ class TestTypes(unittest.TestCase):
         
         self.assertEqual(result["featureFlags"], {})
         self.assertEqual(result["featureFlagPayloads"], {})
+
+    def test_to_flags_and_payloads_with_payload(self):
+        resp = {
+            "flags": {
+                "decide-flag": {
+                    "key": "decide-flag",
+                    "enabled": True,
+                    "variant": "decide-variant",
+                    "reason": {
+                        "code": "matched_condition",
+                        "condition_index": 0,
+                        "description": "Matched condition set 1",
+                    },
+                    "metadata": {
+                        "id": 23,
+                        "version": 42,
+                        "payload": "{\"foo\": \"bar\"}",
+                    },
+                }
+            },
+            "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+        }
+
+        normalized = normalize_decide_response(resp)
+        result = to_flags_and_payloads(normalized)
+
+        self.assertEqual(result["featureFlags"]["decide-flag"], "decide-variant")
+        self.assertEqual(result["featureFlagPayloads"]["decide-flag"], "{\"foo\": \"bar\"}")
+
+    def test_feature_flag_from_json(self):
+        # Test with full metadata
+        resp = {
+            "key": "test-flag",
+            "enabled": True,
+            "variant": "test-variant",
+            "reason": {
+                "code": "matched_condition",
+                "condition_index": 0,
+                "description": "Matched condition set 1"
+            },
+            "metadata": {
+                "id": 1,
+                "payload": '{"some": "json"}',
+                "version": 2,
+                "description": "test-description"
+            }
+        }
+
+        flag = FeatureFlag.from_json(resp)
+        self.assertEqual(flag.key, "test-flag")
+        self.assertTrue(flag.enabled)
+        self.assertEqual(flag.variant, "test-variant")
+        self.assertEqual(flag.get_value(), "test-variant")
+        self.assertEqual(
+            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
+        )
+        self.assertEqual(
+            flag.metadata, FlagMetadata(id=1, payload='{"some": "json"}', version=2, description="test-description")
+        )
+
+    def test_feature_flag_from_json_minimal(self):
+        # Test with minimal required fields
+        resp = {
+            "key": "test-flag",
+            "enabled": True
+        }
+
+        flag = FeatureFlag.from_json(resp)
+        self.assertEqual(flag.key, "test-flag")
+        self.assertTrue(flag.enabled)
+        self.assertIsNone(flag.variant)
+        self.assertEqual(flag.get_value(), True)
+        self.assertIsNone(flag.reason)
+        self.assertEqual(flag.metadata, LegacyFlagMetadata(payload=None))
+
+    def test_feature_flag_from_json_without_metadata(self):
+        # Test with reason but no metadata
+        resp = {
+            "key": "test-flag",
+            "enabled": True,
+            "variant": "test-variant",
+            "reason": {
+                "code": "matched_condition",
+                "condition_index": 0,
+                "description": "Matched condition set 1"
+            }
+        }
+
+        flag = FeatureFlag.from_json(resp)
+        self.assertEqual(flag.key, "test-flag")
+        self.assertTrue(flag.enabled)
+        self.assertEqual(flag.variant, "test-variant")
+        self.assertEqual(flag.get_value(), "test-variant")
+        self.assertEqual(
+            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
+        )
+        self.assertEqual(flag.metadata, LegacyFlagMetadata(payload=None))

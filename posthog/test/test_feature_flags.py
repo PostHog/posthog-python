@@ -2342,6 +2342,93 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=None,
         )
 
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_with_flag_details(self, patch_decide, patch_capture):
+        patch_decide.return_value = {
+            "flags": {
+                "decide-flag": {
+                    "key": "decide-flag",
+                    "enabled": True,
+                    "variant": "decide-variant",
+                    "reason": {
+                        "description": "Matched condition set 1",
+                    },
+                    "metadata": {
+                        "id": 23,
+                        "version": 42,
+                    },
+                }
+            },
+            "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+        }
+        client = Client(FAKE_TEST_API_KEY)        
+
+        self.assertEqual(client.get_feature_flag("decide-flag", "some-distinct-id"), "decide-variant")
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {
+                "$feature_flag": "decide-flag",
+                "$feature_flag_response": "decide-variant",
+                "locally_evaluated": False,
+                "$feature/decide-flag": "decide-variant",
+                "$feature_flag_reason": "Matched condition set 1",
+                "$feature_flag_id": 23,
+                "$feature_flag_version": 42,
+                "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_with_flag_details_and_payload(self, patch_decide, patch_capture):
+        patch_decide.return_value = {
+            "flags": {
+                "decide-flag-with-payload": {
+                    "key": "decide-flag-with-payload",
+                    "enabled": True,
+                    "variant": None,
+                    "reason": {
+                        "code": "matched_condition",
+                        "condition_index": 0,
+                        "description": "Matched condition set 1",
+                    },
+                    "metadata": {
+                        "id": 23,
+                        "version": 42,
+                        "payload": "{\"foo\": \"bar\"}",
+                    },
+                }
+            },
+            "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+        }
+        client = Client(FAKE_TEST_API_KEY)        
+
+        self.assertEqual(client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), "{\"foo\": \"bar\"}")
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {
+                "$feature_flag": "decide-flag-with-payload",
+                "$feature_flag_response": True,
+                "locally_evaluated": False,
+                "$feature/decide-flag-with-payload": True,
+                "$feature_flag_reason": "Matched condition set 1",
+                "$feature_flag_id": 23,
+                "$feature_flag_version": 42,
+                "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+                "$feature_flag_payload": "{\"foo\": \"bar\"}",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_but_does_not_add_all_flags(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"decide-flag": "decide-value"}}
