@@ -135,7 +135,7 @@ class Client(object):
         self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
-        self.feature_flags = None
+        self._feature_flags = None  # private variable to store flags
         self.feature_flags_by_key = None
         self.group_type_mapping = None
         self.cohorts = None
@@ -203,6 +203,17 @@ class Client(object):
                 # if we've disabled sending, just don't start the consumer
                 if send:
                     consumer.start()
+
+    @property
+    def feature_flags(self):
+        return self._feature_flags
+
+    @feature_flags.setter
+    def feature_flags(self, flags):
+        self._feature_flags = flags or []
+        self.feature_flags_by_key = {
+            flag["key"]: flag for flag in self._feature_flags if flag.get("key") is not None
+        }
 
     def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         if context is not None:
@@ -640,9 +651,6 @@ class Client(object):
             )
 
             self.feature_flags = response["flags"] or []
-            self.feature_flags_by_key = {
-                flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
-            }
             self.group_type_mapping = response["group_type_mapping"] or {}
             self.cohorts = response["cohorts"] or {}
 
@@ -664,7 +672,6 @@ class Client(object):
                 )
                 # Reset all feature flag data when quota limited
                 self.feature_flags = []
-                self.feature_flags_by_key = {}
                 self.group_type_mapping = {}
                 self.cohorts = {}
 

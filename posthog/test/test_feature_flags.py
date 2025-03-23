@@ -768,7 +768,6 @@ class TestLocalEvaluation(unittest.TestCase):
             basic_flag,
             disabled_flag,
         ]
-        client.feature_flags_by_key = {"beta-feature": basic_flag, "disabled-feature": disabled_flag}
         all_flags_and_payloads = client.get_all_flags_and_payloads("distinct_id")
         self.assertEqual(
             client.to_payloads(all_flags_and_payloads), {"beta-feature": "new"}
@@ -900,7 +899,6 @@ class TestLocalEvaluation(unittest.TestCase):
             flag_2,
             flag_3,
         ]
-        client.feature_flags_by_key = {"beta-feature": flag_1, "disabled-feature": flag_2, "beta-feature2": flag_3}
         # beta-feature2 has no value
         flags_and_payloads = client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)
         self.assertEqual(
@@ -1629,8 +1627,7 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         }
         self.client.feature_flags = [basic_flag]
-        self.client.feature_flags_by_key = {"person-flag": basic_flag}
-
+        
         self.assertEqual(
             self.client.get_feature_flag_payload(
                 "person-flag", "some-distinct-id", person_properties={"region": "USA"}
@@ -1697,8 +1694,7 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         }
         self.client.feature_flags = [multivariate_flag]
-        self.client.feature_flags_by_key = {"beta-feature": multivariate_flag}
-
+        
         self.assertEqual(
             self.client.get_feature_flag_payload(
                 "beta-feature", "test_id", person_properties={"email": "test@posthog.com"}
