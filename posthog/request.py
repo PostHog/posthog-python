@@ -3,12 +3,11 @@ import logging
 from datetime import date, datetime
 from gzip import GzipFile
 from io import BytesIO
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union
 
 import requests
 from dateutil.tz import tzutc
 
-from posthog.types import DecideResponse, FeatureFlag, FlagValue
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 

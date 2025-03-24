@@ -1,22 +1,13 @@
 import json
 import unittest
 from datetime import date, datetime
-from unittest.mock import patch, MagicMock
-from parameterized import parameterized
 
 import mock
 import pytest
 import requests
 
-from posthog.request import (
-    DatetimeSerializer,
-    QuotaLimitError,
-    batch_post,
-    decide,
-    determine_server_host,
-)
+from posthog.request import DatetimeSerializer, QuotaLimitError, batch_post, decide, determine_server_host
 from posthog.test.test_utils import TEST_API_KEY
-from posthog.types import FeatureFlag, FlagMetadata, FlagReason, LegacyFlagMetadata
 
 
 class TestRequests(unittest.TestCase):
@@ -83,6 +74,7 @@ class TestRequests(unittest.TestCase):
         with mock.patch("posthog.request._session.post", return_value=mock_response):
             response = decide("fake_key", "fake_host")
             self.assertEqual(response["featureFlags"], {"flag1": True})
+
 
 @pytest.mark.parametrize(
     "host, expected",

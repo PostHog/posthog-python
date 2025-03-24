@@ -4,8 +4,9 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
+from posthog.types import FeatureFlag, FlagsAndPayloads
 from posthog.version import VERSION
-from posthog.types import FlagsAndPayloads
+
 __version__ = VERSION
 
 """Settings."""
@@ -403,7 +404,7 @@ def get_feature_flag(
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
-) -> str | bool | None:
+) -> Optional[FeatureFlag]:
     """
     Get feature flag variant for users. Used with experiments.
     Example:
@@ -446,7 +447,7 @@ def get_all_flags(
     group_properties={},  # type: dict
     only_evaluate_locally=False,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
-) -> dict[str, str | bool] | None:
+) -> Optional[dict[str, FeatureFlag]]:
     """
     Get all flags for a given user.
     Example:
@@ -477,7 +478,7 @@ def get_feature_flag_payload(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
-) -> str:
+) -> Optional[str]:
     return _proxy(
         "get_feature_flag_payload",
         key=key,

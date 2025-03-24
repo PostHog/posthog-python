@@ -1,6 +1,16 @@
 import unittest
+
 from parameterized import parameterized
-from posthog.types import FeatureFlag, FlagMetadata, FlagReason, LegacyFlagMetadata, normalize_decide_response, to_flags_and_payloads
+
+from posthog.types import (
+    FeatureFlag,
+    FlagMetadata,
+    FlagReason,
+    LegacyFlagMetadata,
+    normalize_decide_response,
+    to_flags_and_payloads,
+)
+
 
 class TestTypes(unittest.TestCase):
     @parameterized.expand([(True,), (False,)])
@@ -22,7 +32,7 @@ class TestTypes(unittest.TestCase):
         }
 
         result = normalize_decide_response(resp)
-        
+
         flag = result["flags"]["my-flag"]
         self.assertEqual(flag.key, "my-flag")
         self.assertTrue(flag.enabled)
@@ -41,7 +51,7 @@ class TestTypes(unittest.TestCase):
         # Test legacy response format with "featureFlags" and "featureFlagPayloads"
         resp = {
             "featureFlags": {"my-flag": "test-variant"},
-            "featureFlagPayloads": {"my-flag": "{\"some\": \"json-payload\"}"},
+            "featureFlagPayloads": {"my-flag": '{"some": "json-payload"}'},
             "errorsWhileComputingFlags": False,
             "requestId": "test-id",
         }
@@ -54,9 +64,7 @@ class TestTypes(unittest.TestCase):
         self.assertEqual(flag.variant, "test-variant")
         self.assertEqual(flag.get_value(), "test-variant")
         self.assertIsNone(flag.reason)
-        self.assertEqual(
-            flag.metadata, LegacyFlagMetadata(payload='{"some": "json-payload"}')
-        )
+        self.assertEqual(flag.metadata, LegacyFlagMetadata(payload='{"some": "json-payload"}'))
         self.assertFalse(result["errorsWhileComputingFlags"])
         self.assertEqual(result["requestId"], "test-id")
         # Verify legacy fields are removed
@@ -65,10 +73,7 @@ class TestTypes(unittest.TestCase):
 
     def test_normalize_decide_response_boolean_flag(self):
         # Test legacy response with boolean flag
-        resp = {
-            "featureFlags": {"my-flag": True},
-            "errorsWhileComputingFlags": False
-        }
+        resp = {"featureFlags": {"my-flag": True}, "errorsWhileComputingFlags": False}
 
         result = normalize_decide_response(resp)
 
@@ -80,9 +85,7 @@ class TestTypes(unittest.TestCase):
         self.assertTrue(flag.enabled)
         self.assertIsNone(flag.variant)
         self.assertIsNone(flag.reason)
-        self.assertEqual(
-            flag.metadata, LegacyFlagMetadata(payload=None)
-        )
+        self.assertEqual(flag.metadata, LegacyFlagMetadata(payload=None))
         self.assertFalse(result["errorsWhileComputingFlags"])
         self.assertNotIn("featureFlags", result)
         self.assertNotIn("featureFlagPayloads", result)
@@ -115,21 +118,20 @@ class TestTypes(unittest.TestCase):
                     variant=None,
                     reason=None,
                     metadata=LegacyFlagMetadata(payload=None),
-                )
+                ),
             },
             "errorsWhileComputingFlags": False,
             "requestId": "test-id",
         }
 
         result = to_flags_and_payloads(resp)
-        
+
         self.assertEqual(result["featureFlags"]["my-variant-flag"], "test-variant")
         self.assertEqual(result["featureFlags"]["my-boolean-flag"], True)
         self.assertEqual(result["featureFlags"]["disabled-flag"], False)
         self.assertEqual(result["featureFlagPayloads"]["my-variant-flag"], '{"some": "json"}')
-        self.assertEqual(result["featureFlagPayloads"]["my-boolean-flag"], None)
+        self.assertNotIn("my-boolean-flag", result["featureFlagPayloads"])
         self.assertNotIn("disabled-flag", result["featureFlagPayloads"])
-
 
     def test_to_flags_and_payloads_empty(self):
         # Test empty response
@@ -140,7 +142,7 @@ class TestTypes(unittest.TestCase):
         }
 
         result = to_flags_and_payloads(resp)
-        
+
         self.assertEqual(result["featureFlags"], {})
         self.assertEqual(result["featureFlagPayloads"], {})
 
@@ -159,7 +161,7 @@ class TestTypes(unittest.TestCase):
                     "metadata": {
                         "id": 23,
                         "version": 42,
-                        "payload": "{\"foo\": \"bar\"}",
+                        "payload": '{"foo": "bar"}',
                     },
                 }
             },
@@ -170,73 +172,4 @@ class TestTypes(unittest.TestCase):
         result = to_flags_and_payloads(normalized)
 
         self.assertEqual(result["featureFlags"]["decide-flag"], "decide-variant")
-        self.assertEqual(result["featureFlagPayloads"]["decide-flag"], "{\"foo\": \"bar\"}")
-
-    def test_feature_flag_from_json(self):
-        # Test with full metadata
-        resp = {
-            "key": "test-flag",
-            "enabled": True,
-            "variant": "test-variant",
-            "reason": {
-                "code": "matched_condition",
-                "condition_index": 0,
-                "description": "Matched condition set 1"
-            },
-            "metadata": {
-                "id": 1,
-                "payload": '{"some": "json"}',
-                "version": 2,
-                "description": "test-description"
-            }
-        }
-
-        flag = FeatureFlag.from_json(resp)
-        self.assertEqual(flag.key, "test-flag")
-        self.assertTrue(flag.enabled)
-        self.assertEqual(flag.variant, "test-variant")
-        self.assertEqual(flag.get_value(), "test-variant")
-        self.assertEqual(
-            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
-        )
-        self.assertEqual(
-            flag.metadata, FlagMetadata(id=1, payload='{"some": "json"}', version=2, description="test-description")
-        )
-
-    def test_feature_flag_from_json_minimal(self):
-        # Test with minimal required fields
-        resp = {
-            "key": "test-flag",
-            "enabled": True
-        }
-
-        flag = FeatureFlag.from_json(resp)
-        self.assertEqual(flag.key, "test-flag")
-        self.assertTrue(flag.enabled)
-        self.assertIsNone(flag.variant)
-        self.assertEqual(flag.get_value(), True)
-        self.assertIsNone(flag.reason)
-        self.assertEqual(flag.metadata, LegacyFlagMetadata(payload=None))
-
-    def test_feature_flag_from_json_without_metadata(self):
-        # Test with reason but no metadata
-        resp = {
-            "key": "test-flag",
-            "enabled": True,
-            "variant": "test-variant",
-            "reason": {
-                "code": "matched_condition",
-                "condition_index": 0,
-                "description": "Matched condition set 1"
-            }
-        }
-
-        flag = FeatureFlag.from_json(resp)
-        self.assertEqual(flag.key, "test-flag")
-        self.assertTrue(flag.enabled)
-        self.assertEqual(flag.variant, "test-variant")
-        self.assertEqual(flag.get_value(), "test-variant")
-        self.assertEqual(
-            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
-        )
-        self.assertEqual(flag.metadata, LegacyFlagMetadata(payload=None))
+        self.assertEqual(result["featureFlagPayloads"]["decide-flag"], '{"foo": "bar"}')

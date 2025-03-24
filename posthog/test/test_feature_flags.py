@@ -767,8 +767,7 @@ class TestLocalEvaluation(unittest.TestCase):
             disabled_flag,
         ]
         self.assertEqual(
-            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
-            {"beta-feature": "new"}
+            client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"], {"beta-feature": "new"}
         )
         # decide not called because this can be evaluated locally
         self.assertEqual(patch_decide.call_count, 0)
@@ -1624,7 +1623,7 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         }
         self.client.feature_flags = [basic_flag]
-        
+
         self.assertEqual(
             self.client.get_feature_flag_payload(
                 "person-flag", "some-distinct-id", person_properties={"region": "USA"}
@@ -1691,7 +1690,7 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         }
         self.client.feature_flags = [multivariate_flag]
-        
+
         self.assertEqual(
             self.client.get_feature_flag_payload(
                 "beta-feature", "test_id", person_properties={"email": "test@posthog.com"}
@@ -2362,7 +2361,7 @@ class TestCaptureCalls(unittest.TestCase):
             },
             "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
         }
-        client = Client(FAKE_TEST_API_KEY)        
+        client = Client(FAKE_TEST_API_KEY)
 
         self.assertEqual(client.get_feature_flag("decide-flag", "some-distinct-id"), "decide-variant")
         self.assertEqual(patch_capture.call_count, 1)
@@ -2400,15 +2399,17 @@ class TestCaptureCalls(unittest.TestCase):
                     "metadata": {
                         "id": 23,
                         "version": 42,
-                        "payload": "{\"foo\": \"bar\"}",
+                        "payload": '{"foo": "bar"}',
                     },
                 }
             },
             "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
         }
-        client = Client(FAKE_TEST_API_KEY)        
+        client = Client(FAKE_TEST_API_KEY)
 
-        self.assertEqual(client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), "{\"foo\": \"bar\"}")
+        self.assertEqual(
+            client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), '{"foo": "bar"}'
+        )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
             "some-distinct-id",
@@ -2422,12 +2423,11 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
                 "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
-                "$feature_flag_payload": "{\"foo\": \"bar\"}",
+                "$feature_flag_payload": '{"foo": "bar"}',
             },
             groups={},
             disable_geoip=None,
         )
-
 
     @mock.patch("posthog.client.decide")
     def test_capture_is_called_but_does_not_add_all_flags(self, patch_decide):

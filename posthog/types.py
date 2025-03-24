@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import List, TypedDict, Any, TypeAlias, cast
+from typing import Any, List, Optional, TypedDict, Union, cast
 
-FlagValue: TypeAlias = bool | str
+FlagValue = Union[bool, str]
+
 
 @dataclass(frozen=True)
 class FlagReason:
@@ -10,33 +11,15 @@ class FlagReason:
     description: str
 
     @classmethod
-    def from_json(cls, resp: Any) -> "FlagReason":
+    def from_json(cls, resp: Any) -> Optional["FlagReason"]:
         if not resp:
             return None
         return cls(
             code=resp.get("code", ""),
             condition_index=resp.get("condition_index", 0),
-            description=resp.get("description", "")
+            description=resp.get("description", ""),
         )
 
-
-@dataclass(frozen=True)
-class FlagMetadata:
-    id: int
-    payload: Any
-    version: int
-    description: str
-
-    @classmethod
-    def from_json(cls, resp: Any) -> "FlagMetadata":
-        if not resp:
-            return None
-        return cls(
-            id=resp.get("id", 0),
-            payload=resp.get("payload"),
-            version=resp.get("version", 0),
-            description=resp.get("description", "")
-        )
 
 @dataclass(frozen=True)
 class LegacyFlagMetadata:
@@ -44,15 +27,33 @@ class LegacyFlagMetadata:
 
 
 @dataclass(frozen=True)
+class FlagMetadata:
+    id: int
+    payload: Optional[str]
+    version: int
+    description: str
+
+    @classmethod
+    def from_json(cls, resp: Any) -> Union["FlagMetadata", LegacyFlagMetadata]:
+        if not resp:
+            return LegacyFlagMetadata(payload=None)
+        return cls(
+            id=resp.get("id", 0),
+            payload=resp.get("payload"),
+            version=resp.get("version", 0),
+            description=resp.get("description", ""),
+        )
+
+
+@dataclass(frozen=True)
 class FeatureFlag:
     key: str
     enabled: bool
-    variant: str | None
-    reason: FlagReason | None
-    metadata: FlagMetadata | LegacyFlagMetadata
+    variant: Optional[str]
+    reason: Optional[FlagReason]
+    metadata: Union[FlagMetadata, LegacyFlagMetadata]
 
     def get_value(self) -> FlagValue:
-        assert self.variant is None or self.enabled
         return self.variant or self.enabled
 
     @classmethod
@@ -60,7 +61,7 @@ class FeatureFlag:
         reason = None
         if resp.get("reason"):
             reason = FlagReason.from_json(resp.get("reason"))
-        
+
         metadata = None
         if resp.get("metadata"):
             metadata = FlagMetadata.from_json(resp.get("metadata"))
@@ -72,7 +73,7 @@ class FeatureFlag:
             enabled=resp.get("enabled"),
             variant=resp.get("variant"),
             reason=reason,
-            metadata=metadata
+            metadata=metadata,
         )
 
     @classmethod
@@ -93,12 +94,13 @@ class DecideResponse(TypedDict, total=False):
     flags: dict[str, FeatureFlag]
     errorsWhileComputingFlags: bool
     requestId: str
-    quotaLimit: List[str] | None
+    quotaLimit: Optional[List[str]]
 
 
 class FlagsAndPayloads(TypedDict, total=True):
-    featureFlags: dict[str, FlagValue] | None
-    featureFlagPayloads: dict[str, Any] | None
+    featureFlags: Optional[dict[str, FlagValue]]
+    featureFlagPayloads: Optional[dict[str, Any]]
+
 
 def normalize_decide_response(resp: Any) -> DecideResponse:
     """
@@ -133,10 +135,11 @@ def normalize_decide_response(resp: Any) -> DecideResponse:
         resp["flags"] = flags
     return cast(DecideResponse, resp)
 
+
 def to_flags_and_payloads(resp: DecideResponse) -> FlagsAndPayloads:
     """
-    Convert a DecideResponse into a FlagsAndPayloads object which is a 
-    dict of feature flags and their payloads. This is needed by certain 
+    Convert a DecideResponse into a FlagsAndPayloads object which is a
+    dict of feature flags and their payloads. This is needed by certain
     functions in the client.
     Args:
         resp: A DecideResponse containing feature flags and their payloads.
@@ -146,20 +149,23 @@ def to_flags_and_payloads(resp: DecideResponse) -> FlagsAndPayloads:
             - A dictionary mapping flag keys to their values (bool or str)
             - A dictionary mapping flag keys to their payloads
     """
-    return {
-        "featureFlags": to_values(resp),
-        "featureFlagPayloads": to_payloads(resp)
-    }
+    return {"featureFlags": to_values(resp), "featureFlagPayloads": to_payloads(resp)}
 
-def to_values(response: DecideResponse) -> dict[str, FlagValue] | None:
+
+def to_values(response: DecideResponse) -> Optional[dict[str, FlagValue]]:
     if "flags" not in response:
         return None
 
     flags = response.get("flags", {})
     return {key: value.get_value() for key, value in flags.items() if isinstance(value, FeatureFlag)}
 
-def to_payloads(response: DecideResponse) -> dict[str, str] | None:
+
+def to_payloads(response: DecideResponse) -> Optional[dict[str, str]]:
     if "flags" not in response:
         return None
 
-    return {key: value.metadata.payload for key, value in response.get("flags", {}).items() if isinstance(value, FeatureFlag) and value.enabled}
+    return {
+        key: value.metadata.payload
+        for key, value in response.get("flags", {}).items()
+        if isinstance(value, FeatureFlag) and value.enabled and value.metadata.payload
+    }

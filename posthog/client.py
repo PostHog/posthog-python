@@ -6,7 +6,7 @@ import platform
 import sys
 import warnings
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional, Union
 from uuid import UUID, uuid4
 
 import distro  # For Linux OS detection
@@ -18,28 +18,20 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import (
-    DEFAULT_HOST,
-    APIError,
-    batch_post,
-    decide,
-    determine_server_host,
-    get,
-    remote_config,
+from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config
+from posthog.types import (
     DecideResponse,
+    FeatureFlag,
+    FlagMetadata,
+    FlagsAndPayloads,
+    FlagValue,
+    normalize_decide_response,
+    to_flags_and_payloads,
+    to_payloads,
+    to_values,
 )
 from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
 from posthog.version import VERSION
-from posthog.types import (
-    FlagsAndPayloads,
-    FeatureFlag,
-    FlagValue,
-    FlagMetadata,
-    to_values,
-    to_payloads,
-    to_flags_and_payloads,
-    normalize_decide_response,
-)
 
 try:
     import queue
@@ -265,7 +257,7 @@ class Client(object):
 
     def get_feature_variants(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
-    ) -> dict[str, str | bool]:
+    ) -> dict[str, Union[bool, str]]:
         """
         Get feature flag variants for a distinct_id by calling decide.
         """
@@ -352,7 +344,7 @@ class Client(object):
             msg["properties"]["$groups"] = groups
 
         extra_properties: dict[str, Any] = {}
-        feature_variants: dict[str, bool | str] | None = {}
+        feature_variants: Optional[dict[str, Union[bool, str]]] = {}
         if send_feature_flags:
             try:
                 feature_variants = self.get_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
@@ -820,7 +812,7 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
-    ) -> FlagValue | None:
+    ) -> Optional[FlagValue]:
         """
         Get a feature flag value for a key by evaluating locally or remotely
         depending on whether local evaluation is enabled and the flag can be
@@ -859,7 +851,7 @@ class Client(object):
             self._capture_feature_flag_called(
                 distinct_id,
                 key,
-                response,
+                response or False,
                 None,
                 flag_was_locally_evaluated,
                 groups,
@@ -877,7 +869,7 @@ class Client(object):
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
-    ) -> FlagValue | None:
+    ) -> Optional[FlagValue]:
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
@@ -949,7 +941,7 @@ class Client(object):
             self._capture_feature_flag_called(
                 distinct_id,
                 key,
-                response,
+                response or False,
                 payload,
                 flag_was_locally_evaluated,
                 groups,
@@ -967,15 +959,15 @@ class Client(object):
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
-        disable_geoip: bool | None,
-    ) -> tuple[FeatureFlag | None, str]:
+        disable_geoip: Optional[bool],
+    ) -> tuple[Optional[FeatureFlag], Optional[str]]:
         """
         Calls /decide and returns the flag details and request id
         """
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
         request_id = resp_data.get("requestId")
         flags = resp_data.get("flags")
-        flag_details = flags.get(key)
+        flag_details = flags.get(key) if flags else None
         return flag_details, request_id
 
     def _capture_feature_flag_called(
@@ -983,17 +975,17 @@ class Client(object):
         distinct_id: str,
         key: str,
         response: FlagValue,
-        payload: str | None,
+        payload: Optional[str],
         flag_was_locally_evaluated: bool,
         groups: dict[str, str],
-        disable_geoip: bool | None,
-        request_id: str | None,
-        flag_details: FeatureFlag | None,
+        disable_geoip: Optional[bool],
+        request_id: Optional[str],
+        flag_details: Optional[FeatureFlag],
     ):
         feature_flag_reported_key = f"{key}_{str(response)}"
 
         if feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]:
-            properties = {
+            properties: dict[str, Any] = {
                 "$feature_flag": key,
                 "$feature_flag_response": response,
                 "locally_evaluated": flag_was_locally_evaluated,
@@ -1043,7 +1035,7 @@ class Client(object):
         except Exception as e:
             self.log.exception(f"[FEATURE FLAGS] Unable to get decrypted feature flag payload: {e}")
 
-    def _compute_payload_locally(self, key: str, match_value: FlagValue) -> str | None:
+    def _compute_payload_locally(self, key: str, match_value: FlagValue) -> Optional[str]:
         payload = None
 
         if self.feature_flags_by_key is None:
@@ -1068,7 +1060,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         disable_geoip=None,
-    ) -> dict[str, bool | str] | None:
+    ) -> Optional[dict[str, Union[bool, str]]]:
         response = self.get_all_flags_and_payloads(
             distinct_id,
             groups=groups,
