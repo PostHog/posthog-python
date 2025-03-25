@@ -10,6 +10,7 @@ from parameterized import parameterized
 from posthog.client import Client
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
 
 
@@ -1212,3 +1213,53 @@ class TestClient(unittest.TestCase):
                 }
 
                 assert context == expected_context
+
+    @mock.patch("posthog.client.decide")
+    def test_get_decide_returns_normalized_decide_response(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False},
+            "featureFlagPayloads": {"beta-feature": '{"some": "data"}'},
+            "errorsWhileComputingFlags": False,
+            "requestId": "test-id",
+        }
+
+        client = Client(FAKE_TEST_API_KEY)
+        distinct_id = "test_distinct_id"
+        groups = {"test_group_type": "test_group_id"}
+        person_properties = {"test_property": "test_value"}
+
+        response = client.get_decide(distinct_id, groups, person_properties)
+
+        assert response == {
+            "flags": {
+                "beta-feature": FeatureFlag(
+                    key="beta-feature",
+                    enabled=True,
+                    variant="random-variant",
+                    reason=None,
+                    metadata=LegacyFlagMetadata(
+                        payload='{"some": "data"}',
+                    ),
+                ),
+                "alpha-feature": FeatureFlag(
+                    key="alpha-feature",
+                    enabled=True,
+                    variant=None,
+                    reason=None,
+                    metadata=LegacyFlagMetadata(
+                        payload=None,
+                    ),
+                ),
+                "off-feature": FeatureFlag(
+                    key="off-feature",
+                    enabled=False,
+                    variant=None,
+                    reason=None,
+                    metadata=LegacyFlagMetadata(
+                        payload=None,
+                    ),
+                ),
+            },
+            "errorsWhileComputingFlags": False,
+            "requestId": "test-id",
+        }

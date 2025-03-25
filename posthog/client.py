@@ -6,7 +6,7 @@ import platform
 import sys
 import warnings
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional, Union
 from uuid import UUID, uuid4
 
 import distro  # For Linux OS detection
@@ -19,6 +19,17 @@ from posthog.exception_utils import exc_info_from_error, exceptions_from_error_t
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
 from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config
+from posthog.types import (
+    DecideResponse,
+    FeatureFlag,
+    FlagMetadata,
+    FlagsAndPayloads,
+    FlagValue,
+    normalize_decide_response,
+    to_flags_and_payloads,
+    to_payloads,
+    to_values,
+)
 from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
 from posthog.version import VERSION
 
@@ -135,7 +146,7 @@ class Client(object):
         self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
-        self.feature_flags = None
+        self._feature_flags = None  # private variable to store flags
         self.feature_flags_by_key = None
         self.group_type_mapping = None
         self.cohorts = None
@@ -204,6 +215,24 @@ class Client(object):
                 if send:
                     consumer.start()
 
+    @property
+    def feature_flags(self):
+        """
+        Get the local evaluation feature flags.
+        """
+        return self._feature_flags
+
+    @feature_flags.setter
+    def feature_flags(self, flags):
+        """
+        Set the local evaluation feature flags.
+        """
+        self._feature_flags = flags or []
+        self.feature_flags_by_key = {flag["key"]: flag for flag in self._feature_flags if flag.get("key") is not None}
+        assert (
+            self.feature_flags_by_key is not None
+        ), "feature_flags_by_key should be initialized when feature_flags is set"
+
     def identify(self, distinct_id=None, properties=None, context=None, timestamp=None, uuid=None, disable_geoip=None):
         if context is not None:
             warnings.warn(
@@ -228,26 +257,34 @@ class Client(object):
 
     def get_feature_variants(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
-    ):
+    ) -> dict[str, Union[bool, str]]:
+        """
+        Get feature flag variants for a distinct_id by calling decide.
+        """
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
-        return resp_data["featureFlags"]
+        return to_values(resp_data) or {}
 
     def get_feature_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
-    ):
+    ) -> dict[str, str]:
+        """
+        Get feature flag payloads for a distinct_id by calling decide.
+        """
         resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
-        return resp_data["featureFlagPayloads"]
+        return to_payloads(resp_data) or {}
 
     def get_feature_flags_and_payloads(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
-    ):
-        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
-        return {
-            "featureFlags": resp_data["featureFlags"],
-            "featureFlagPayloads": resp_data["featureFlagPayloads"],
-        }
+    ) -> FlagsAndPayloads:
+        """
+        Get feature flags and payloads for a distinct_id by calling decide.
+        """
+        resp = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        return to_flags_and_payloads(resp)
 
-    def get_decide(self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None):
+    def get_decide(
+        self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
+    ) -> DecideResponse:
         require("distinct_id", distinct_id, ID_TYPES)
 
         if disable_geoip is None:
@@ -267,7 +304,7 @@ class Client(object):
         }
         resp_data = decide(self.api_key, self.host, timeout=self.feature_flags_request_timeout_seconds, **request_data)
 
-        return resp_data
+        return normalize_decide_response(resp_data)
 
     def capture(
         self,
@@ -306,8 +343,8 @@ class Client(object):
             require("groups", groups, dict)
             msg["properties"]["$groups"] = groups
 
-        extra_properties = {}
-        feature_variants = {}
+        extra_properties: dict[str, Any] = {}
+        feature_variants: Optional[dict[str, Union[bool, str]]] = {}
         if send_feature_flags:
             try:
                 feature_variants = self.get_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
@@ -320,10 +357,10 @@ class Client(object):
                 distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=True
             )
 
-        for feature, variant in feature_variants.items():
+        for feature, variant in (feature_variants or {}).items():
             extra_properties[f"$feature/{feature}"] = variant
 
-        active_feature_flags = [key for (key, value) in feature_variants.items() if value is not False]
+        active_feature_flags = [key for (key, value) in (feature_variants or {}).items() if value is not False]
         if active_feature_flags:
             extra_properties["$active_feature_flags"] = active_feature_flags
 
@@ -640,9 +677,6 @@ class Client(object):
             )
 
             self.feature_flags = response["flags"] or []
-            self.feature_flags_by_key = {
-                flag["key"]: flag for flag in self.feature_flags if flag.get("key") is not None
-            }
             self.group_type_mapping = response["group_type_mapping"] or {}
             self.cohorts = response["cohorts"] or {}
 
@@ -664,7 +698,6 @@ class Client(object):
                 )
                 # Reset all feature flag data when quota limited
                 self.feature_flags = []
-                self.feature_flags_by_key = {}
                 self.group_type_mapping = {}
                 self.cohorts = {}
 
@@ -704,7 +737,7 @@ class Client(object):
         person_properties={},
         group_properties={},
         warn_on_unknown_groups=True,
-    ):
+    ) -> FlagValue:
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
@@ -779,7 +812,14 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
-    ):
+    ) -> Optional[FlagValue]:
+        """
+        Get a feature flag value for a key by evaluating locally or remotely
+        depending on whether local evaluation is enabled and the flag can be
+        locally evaluated.
+
+        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
+        """
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
@@ -791,65 +831,69 @@ class Client(object):
             distinct_id, groups, person_properties, group_properties
         )
 
+        response = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
+
+        flag_details = None
+        request_id = None
+
+        flag_was_locally_evaluated = response is not None
+        if not flag_was_locally_evaluated and not only_evaluate_locally:
+            try:
+                flag_details, request_id = self._get_feature_flag_details_from_decide(
+                    key, distinct_id, groups, person_properties, group_properties, disable_geoip
+                )
+                response = flag_details.get_value() if flag_details else False
+                self.log.debug(f"Successfully computed flag remotely: #{key} -> #{response}")
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+
+        if send_feature_flag_events:
+            self._capture_feature_flag_called(
+                distinct_id,
+                key,
+                response or False,
+                None,
+                flag_was_locally_evaluated,
+                groups,
+                disable_geoip,
+                request_id,
+                flag_details,
+            )
+
+        return response
+
+    def _locally_evaluate_flag(
+        self,
+        key: str,
+        distinct_id: str,
+        groups: dict[str, str],
+        person_properties: dict[str, str],
+        group_properties: dict[str, str],
+    ) -> Optional[FlagValue]:
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
 
         if self.feature_flags:
-            for flag in self.feature_flags:
-                if flag["key"] == key:
-                    try:
-                        response = self._compute_flag_locally(
-                            flag,
-                            distinct_id,
-                            groups=groups,
-                            person_properties=person_properties,
-                            group_properties=group_properties,
-                        )
-                        self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
-                    except InconclusiveMatchError as e:
-                        self.log.debug(f"Failed to compute flag {key} locally: {e}")
-                        continue
-                    except Exception as e:
-                        self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
-                        continue
-                    break
-
-        flag_was_locally_evaluated = response is not None
-        if not flag_was_locally_evaluated and not only_evaluate_locally:
-            try:
-                feature_flags = self.get_feature_variants(
-                    distinct_id,
-                    groups=groups,
-                    person_properties=person_properties,
-                    group_properties=group_properties,
-                    disable_geoip=disable_geoip,
-                )
-                response = feature_flags.get(key)
-                if response is None:
-                    response = False
-                self.log.debug(f"Successfully computed flag remotely: #{key} -> #{response}")
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
-
-        feature_flag_reported_key = f"{key}_{str(response)}"
-        if (
-            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
-            and send_feature_flag_events  # noqa: W503
-        ):
-            self.capture(
-                distinct_id,
-                "$feature_flag_called",
-                {
-                    "$feature_flag": key,
-                    "$feature_flag_response": response,
-                    "locally_evaluated": flag_was_locally_evaluated,
-                    f"$feature/{key}": response,
-                },
-                groups=groups,
-                disable_geoip=disable_geoip,
-            )
-            self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
+            assert (
+                self.feature_flags_by_key is not None
+            ), "feature_flags_by_key should be initialized when feature_flags is set"
+            # Local evaluation
+            flag = self.feature_flags_by_key.get(key)
+            if flag:
+                try:
+                    response = self._compute_flag_locally(
+                        flag,
+                        distinct_id,
+                        groups=groups,
+                        person_properties=person_properties,
+                        group_properties=group_properties,
+                    )
+                    self.log.debug(f"Successfully computed flag locally: {key} -> {response}")
+                except InconclusiveMatchError as e:
+                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
+                except Exception as e:
+                    self.log.exception(f"[FEATURE FLAGS] Error while computing variant locally: {e}")
         return response
 
     def get_feature_flag_payload(
@@ -869,21 +913,15 @@ class Client(object):
             return None
 
         if match_value is None:
-            match_value = self.get_feature_flag(
-                key,
-                distinct_id,
-                groups=groups,
-                person_properties=person_properties,
-                group_properties=group_properties,
-                send_feature_flag_events=False,
-                # Disable automatic sending of feature flag events because we're manually handling event dispatch.
-                # This prevents sending events with empty data when `get_feature_flag` cannot be evaluated locally.
-                only_evaluate_locally=True,  # Enable local evaluation of feature flags to avoid making multiple requests to `/decide`.
-                disable_geoip=disable_geoip,
+            person_properties, group_properties = self._add_local_person_and_group_properties(
+                distinct_id, groups, person_properties, group_properties
             )
+            match_value = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
 
         response = None
         payload = None
+        flag_details = None
+        request_id = None
 
         if match_value is not None:
             payload = self._compute_payload_locally(key, match_value)
@@ -891,36 +929,91 @@ class Client(object):
         flag_was_locally_evaluated = payload is not None
         if not flag_was_locally_evaluated and not only_evaluate_locally:
             try:
-                responses_and_payloads = self.get_feature_flags_and_payloads(
-                    distinct_id, groups, person_properties, group_properties, disable_geoip
+                flag_details, request_id = self._get_feature_flag_details_from_decide(
+                    key, distinct_id, groups, person_properties, group_properties, disable_geoip
                 )
-                response = responses_and_payloads["featureFlags"].get(key, None)
-                payload = responses_and_payloads["featureFlagPayloads"].get(str(key), None)
+                payload = flag_details.metadata.payload if flag_details else None
+                response = flag_details.get_value() if flag_details else False
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
+        if send_feature_flag_events:
+            self._capture_feature_flag_called(
+                distinct_id,
+                key,
+                response or False,
+                payload,
+                flag_was_locally_evaluated,
+                groups,
+                disable_geoip,
+                request_id,
+                flag_details,
+            )
+
+        return payload
+
+    def _get_feature_flag_details_from_decide(
+        self,
+        key: str,
+        distinct_id: str,
+        groups: dict[str, str],
+        person_properties: dict[str, str],
+        group_properties: dict[str, str],
+        disable_geoip: Optional[bool],
+    ) -> tuple[Optional[FeatureFlag], Optional[str]]:
+        """
+        Calls /decide and returns the flag details and request id
+        """
+        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        request_id = resp_data.get("requestId")
+        flags = resp_data.get("flags")
+        flag_details = flags.get(key) if flags else None
+        return flag_details, request_id
+
+    def _capture_feature_flag_called(
+        self,
+        distinct_id: str,
+        key: str,
+        response: FlagValue,
+        payload: Optional[str],
+        flag_was_locally_evaluated: bool,
+        groups: dict[str, str],
+        disable_geoip: Optional[bool],
+        request_id: Optional[str],
+        flag_details: Optional[FeatureFlag],
+    ):
         feature_flag_reported_key = f"{key}_{str(response)}"
 
-        if (
-            feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]
-            and send_feature_flag_events  # noqa: W503
-        ):
+        if feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]:
+            properties: dict[str, Any] = {
+                "$feature_flag": key,
+                "$feature_flag_response": response,
+                "locally_evaluated": flag_was_locally_evaluated,
+                f"$feature/{key}": response,
+            }
+
+            if payload:
+                properties["$feature_flag_payload"] = payload
+
+            if request_id:
+                properties["$feature_flag_request_id"] = request_id
+            if isinstance(flag_details, FeatureFlag):
+                if flag_details.reason and flag_details.reason.description:
+                    properties["$feature_flag_reason"] = flag_details.reason.description
+                if isinstance(flag_details.metadata, FlagMetadata):
+                    if flag_details.metadata.version:
+                        properties["$feature_flag_version"] = flag_details.metadata.version
+                    if flag_details.metadata.id:
+                        properties["$feature_flag_id"] = flag_details.metadata.id
+
             self.capture(
                 distinct_id,
                 "$feature_flag_called",
-                {
-                    "$feature_flag": key,
-                    "$feature_flag_response": response,
-                    "$feature_flag_payload": payload,
-                    "locally_evaluated": flag_was_locally_evaluated,
-                    f"$feature/{key}": response,
-                },
+                properties,
                 groups=groups,
                 disable_geoip=disable_geoip,
             )
             self.distinct_ids_feature_flags_reported[distinct_id].add(feature_flag_reported_key)
-
-        return payload
 
     def get_remote_config_payload(self, key: str):
         if self.disabled:
@@ -942,7 +1035,7 @@ class Client(object):
         except Exception as e:
             self.log.exception(f"[FEATURE FLAGS] Unable to get decrypted feature flag payload: {e}")
 
-    def _compute_payload_locally(self, key, match_value):
+    def _compute_payload_locally(self, key: str, match_value: FlagValue) -> Optional[str]:
         payload = None
 
         if self.feature_flags_by_key is None:
@@ -967,8 +1060,8 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         disable_geoip=None,
-    ):
-        flags = self.get_all_flags_and_payloads(
+    ) -> Optional[dict[str, Union[bool, str]]]:
+        response = self.get_all_flags_and_payloads(
             distinct_id,
             groups=groups,
             person_properties=person_properties,
@@ -976,7 +1069,8 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             disable_geoip=disable_geoip,
         )
-        return flags["featureFlags"]
+
+        return response["featureFlags"]
 
     def get_all_flags_and_payloads(
         self,
@@ -987,7 +1081,7 @@ class Client(object):
         group_properties={},
         only_evaluate_locally=False,
         disable_geoip=None,
-    ):
+    ) -> FlagsAndPayloads:
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}
 
@@ -995,21 +1089,20 @@ class Client(object):
             distinct_id, groups, person_properties, group_properties
         )
 
-        flags, payloads, fallback_to_decide = self._get_all_flags_and_payloads_locally(
+        response, fallback_to_decide = self._get_all_flags_and_payloads_locally(
             distinct_id, groups=groups, person_properties=person_properties, group_properties=group_properties
         )
-        response = {"featureFlags": flags, "featureFlagPayloads": payloads}
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
-                flags_and_payloads = self.get_decide(
+                decide_response = self.get_decide(
                     distinct_id,
                     groups=groups,
                     person_properties=person_properties,
                     group_properties=group_properties,
                     disable_geoip=disable_geoip,
                 )
-                response = flags_and_payloads
+                return to_flags_and_payloads(decide_response)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
 
@@ -1017,15 +1110,15 @@ class Client(object):
 
     def _get_all_flags_and_payloads_locally(
         self, distinct_id, *, groups={}, person_properties={}, group_properties={}, warn_on_unknown_groups=False
-    ):
+    ) -> tuple[FlagsAndPayloads, bool]:
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
 
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
 
-        flags = {}
-        payloads = {}
+        flags: dict[str, FlagValue] = {}
+        payloads: dict[str, str] = {}
         fallback_to_decide = False
         # If loading in previous line failed
         if self.feature_flags:
@@ -1051,7 +1144,7 @@ class Client(object):
         else:
             fallback_to_decide = True
 
-        return flags, payloads, fallback_to_decide
+        return {"featureFlags": flags, "featureFlagPayloads": payloads}, fallback_to_decide
 
     def feature_flag_definitions(self):
         return self.feature_flags

@@ -83,6 +83,7 @@ def mock_openai_response_with_responses_api():
         usage=ResponseUsage(
             input_tokens=10,
             output_tokens=10,
+            input_tokens_details={"prompt_tokens": 10, "cached_tokens": 0},
             output_tokens_details={"reasoning_tokens": 15},
             total_tokens=20,
         ),

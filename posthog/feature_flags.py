@@ -8,6 +8,7 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 
 from posthog import utils
+from posthog.types import FlagValue
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
@@ -25,7 +26,7 @@ class InconclusiveMatchError(Exception):
 # Given the same distinct_id and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
 # we can do _hash(key, distinct_id) < 0.2
-def _hash(key, distinct_id, salt=""):
+def _hash(key: str, distinct_id: str, salt: str = "") -> float:
     hash_key = f"{key}.{distinct_id}{salt}"
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
@@ -50,7 +51,7 @@ def variant_lookup_table(feature_flag):
     return lookup_table
 
 
-def match_feature_flag_properties(flag, distinct_id, properties, cohort_properties=None):
+def match_feature_flag_properties(flag, distinct_id, properties, cohort_properties=None) -> FlagValue:
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
@@ -87,7 +88,7 @@ def match_feature_flag_properties(flag, distinct_id, properties, cohort_properti
     return False
 
 
-def is_condition_match(feature_flag, distinct_id, condition, properties, cohort_properties):
+def is_condition_match(feature_flag, distinct_id, condition, properties, cohort_properties) -> bool:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
         for prop in condition.get("properties"):

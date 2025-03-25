@@ -726,7 +726,6 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.decide")
     def test_get_all_flags_and_payloads_with_no_fallback(self, patch_decide, patch_capture):
-        patch_decide.return_value = {"featureFlags": {"beta-feature": "variant-1", "beta-feature2": "variant-2"}}
         client = self.client
         basic_flag = {
             "id": 1,
@@ -767,7 +766,6 @@ class TestLocalEvaluation(unittest.TestCase):
             basic_flag,
             disabled_flag,
         ]
-        client.feature_flags_by_key = {"beta-feature": basic_flag, "disabled-feature": disabled_flag}
         self.assertEqual(
             client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"], {"beta-feature": "new"}
         )
@@ -898,7 +896,6 @@ class TestLocalEvaluation(unittest.TestCase):
             flag_2,
             flag_3,
         ]
-        client.feature_flags_by_key = {"beta-feature": flag_1, "disabled-feature": flag_2, "beta-feature2": flag_3}
         # beta-feature2 has no value
         self.assertEqual(
             client.get_all_flags_and_payloads("distinct_id", only_evaluate_locally=True)["featureFlagPayloads"],
@@ -1626,7 +1623,6 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         }
         self.client.feature_flags = [basic_flag]
-        self.client.feature_flags_by_key = {"person-flag": basic_flag}
 
         self.assertEqual(
             self.client.get_feature_flag_payload(
@@ -1694,7 +1690,6 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         }
         self.client.feature_flags = [multivariate_flag]
-        self.client.feature_flags_by_key = {"beta-feature": multivariate_flag}
 
         self.assertEqual(
             self.client.get_feature_flag_payload(
@@ -2343,6 +2338,94 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature/decide-flag": "decide-value",
             },
             groups={"organization": "org1"},
+            disable_geoip=None,
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_with_flag_details(self, patch_decide, patch_capture):
+        patch_decide.return_value = {
+            "flags": {
+                "decide-flag": {
+                    "key": "decide-flag",
+                    "enabled": True,
+                    "variant": "decide-variant",
+                    "reason": {
+                        "description": "Matched condition set 1",
+                    },
+                    "metadata": {
+                        "id": 23,
+                        "version": 42,
+                    },
+                }
+            },
+            "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+        }
+        client = Client(FAKE_TEST_API_KEY)
+
+        self.assertEqual(client.get_feature_flag("decide-flag", "some-distinct-id"), "decide-variant")
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {
+                "$feature_flag": "decide-flag",
+                "$feature_flag_response": "decide-variant",
+                "locally_evaluated": False,
+                "$feature/decide-flag": "decide-variant",
+                "$feature_flag_reason": "Matched condition set 1",
+                "$feature_flag_id": 23,
+                "$feature_flag_version": 42,
+                "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.decide")
+    def test_capture_is_called_with_flag_details_and_payload(self, patch_decide, patch_capture):
+        patch_decide.return_value = {
+            "flags": {
+                "decide-flag-with-payload": {
+                    "key": "decide-flag-with-payload",
+                    "enabled": True,
+                    "variant": None,
+                    "reason": {
+                        "code": "matched_condition",
+                        "condition_index": 0,
+                        "description": "Matched condition set 1",
+                    },
+                    "metadata": {
+                        "id": 23,
+                        "version": 42,
+                        "payload": '{"foo": "bar"}',
+                    },
+                }
+            },
+            "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+        }
+        client = Client(FAKE_TEST_API_KEY)
+
+        self.assertEqual(
+            client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), '{"foo": "bar"}'
+        )
+        self.assertEqual(patch_capture.call_count, 1)
+        patch_capture.assert_called_with(
+            "some-distinct-id",
+            "$feature_flag_called",
+            {
+                "$feature_flag": "decide-flag-with-payload",
+                "$feature_flag_response": True,
+                "locally_evaluated": False,
+                "$feature/decide-flag-with-payload": True,
+                "$feature_flag_reason": "Matched condition set 1",
+                "$feature_flag_id": 23,
+                "$feature_flag_version": 42,
+                "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+                "$feature_flag_payload": '{"foo": "bar"}',
+            },
+            groups={},
             disable_geoip=None,
         )
 

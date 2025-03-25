@@ -1,3 +1,8 @@
+## 3.22.0 – 2025-03-26
+
+1. Add more information to `$feature_flag_called` events.
+2. Support for the `/decide?v=3` endpoint which contains more information about feature flags.
+
 ## 3.21.0 – 2025-03-17
 
 1. Support serializing dataclasses.
@@ -193,6 +198,7 @@
 ## 3.3.4 - 2024-01-30
 
 1. Update type hints for module variables to work with newer versions of mypy
+
 
 ## 3.3.3 - 2024-01-26
 
