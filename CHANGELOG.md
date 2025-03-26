@@ -1,3 +1,7 @@
+## 3.23.0 – 2025-03-26
+
+1. Expand automatic retries to include read errors (e.g. RemoteDisconnected)
+
 ## 3.22.0 – 2025-03-26
 
 1. Add more information to `$feature_flag_called` events.
