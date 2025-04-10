@@ -515,7 +515,7 @@ class Client(object):
         timestamp=None,
         uuid=None,
         groups=None,
-        **kwargs
+        **kwargs,
     ):
         if context is not None:
             warnings.warn(
