@@ -314,6 +314,7 @@ def capture_exception(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
+    **kwargs
 ):
     # type: (...) -> Tuple[bool, dict]
     """
@@ -327,6 +328,7 @@ def capture_exception(
     Optionally you can submit
     - `properties`, which can be a dict with any information you'd like to add
     - `groups`, which is a dict of group type -> group key mappings
+    - remaining `kwargs` will be logged if `log_captured_exceptions` is enabled
 
     For example:
     ```python
@@ -355,6 +357,7 @@ def capture_exception(
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
+        **kwargs
     )
 
 
