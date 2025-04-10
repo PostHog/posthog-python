@@ -1,3 +1,7 @@
+## 3.24.0 – 2025-04-10
+
+1. Add config option to `log_captured_exceptions`
+
 ## 3.23.0 – 2025-03-26
 
 1. Expand automatic retries to include read errors (e.g. RemoteDisconnected)
@@ -202,7 +206,6 @@
 ## 3.3.4 - 2024-01-30
 
 1. Update type hints for module variables to work with newer versions of mypy
-
 
 ## 3.3.3 - 2024-01-26
 

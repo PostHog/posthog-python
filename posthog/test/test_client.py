@@ -263,6 +263,13 @@ class TestClient(unittest.TestCase):
                     "WARNING:posthog:No exception information available",
                 )
 
+    def test_capture_exception_logs_when_enabled(self):
+        client = Client(FAKE_TEST_API_KEY, log_captured_exceptions=True)
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            client.capture_exception(Exception("test exception"), "distinct_id", path="one/two/three")
+            self.assertEqual(logs.output[0], "ERROR:posthog:test exception\nNoneType: None")
+            self.assertEqual(getattr(logs.records[0], "path"), "one/two/three")
+
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags(self, patch_decide):
         patch_decide.return_value = {"featureFlags": {"beta-feature": "random-variant"}}

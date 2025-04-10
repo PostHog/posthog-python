@@ -126,6 +126,7 @@ class Client(object):
         feature_flags_request_timeout_seconds=3,
         super_properties=None,
         enable_exception_autocapture=False,
+        log_captured_exceptions=False,
         exception_autocapture_integrations=None,
         project_root=None,
         privacy_mode=False,
@@ -159,6 +160,7 @@ class Client(object):
         self.historical_migration = historical_migration
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
+        self.log_captured_exceptions = log_captured_exceptions
         self.exception_autocapture_integrations = exception_autocapture_integrations
         self.exception_capture = None
         self.privacy_mode = privacy_mode
@@ -513,6 +515,7 @@ class Client(object):
         timestamp=None,
         uuid=None,
         groups=None,
+        **kwargs,
     ):
         if context is not None:
             warnings.warn(
@@ -565,6 +568,9 @@ class Client(object):
                 "$exception_personURL": f"{remove_trailing_slash(self.raw_host)}/project/{self.api_key}/person/{distinct_id}",
                 **properties,
             }
+
+            if self.log_captured_exceptions:
+                self.log.exception(exception, extra=kwargs)
 
             return self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
         except Exception as e:
