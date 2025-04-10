@@ -89,7 +89,7 @@ class WrappedResponses(openai.resources.responses.Responses):
 
         def generator():
             nonlocal usage_stats
-            nonlocal final_content
+            nonlocal final_content  # noqa: F824
 
             try:
                 for chunk in response:
@@ -261,8 +261,8 @@ class WrappedCompletions(openai.resources.chat.completions.Completions):
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content
-            nonlocal accumulated_tools
+            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_tools  # noqa: F824
 
             try:
                 for chunk in response:

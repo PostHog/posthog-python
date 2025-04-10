@@ -116,7 +116,7 @@ class WrappedMessages(Messages):
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content
+            nonlocal accumulated_content  # noqa: F824
             try:
                 for event in response:
                     if hasattr(event, "usage") and event.usage:
