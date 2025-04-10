@@ -54,7 +54,7 @@ class AsyncWrappedMessages(AsyncMessages):
             **kwargs: Arguments passed to Anthropic's messages.create
         """
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         if kwargs.get("stream", False):
             return await self._create_streaming(
@@ -89,7 +89,7 @@ class AsyncWrappedMessages(AsyncMessages):
         **kwargs: Any,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         return await self._create_streaming(
             posthog_distinct_id,
@@ -116,7 +116,7 @@ class AsyncWrappedMessages(AsyncMessages):
 
         async def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content
+            nonlocal accumulated_content  # noqa: F824
             try:
                 async for event in response:
                     if hasattr(event, "usage") and event.usage:
@@ -167,7 +167,7 @@ class AsyncWrappedMessages(AsyncMessages):
         output: str,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = uuid.uuid4()
+            posthog_trace_id = str(uuid.uuid4())
 
         event_properties = {
             "$ai_provider": "anthropic",

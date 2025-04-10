@@ -2,6 +2,7 @@ import logging
 import numbers
 import re
 from collections import defaultdict
+from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -68,6 +69,8 @@ def clean(item):
         pass
     if isinstance(item, dict):
         return _clean_dict(item)
+    if is_dataclass(item) and not isinstance(item, type):
+        return _clean_dataclass(item)
     return _coerce_unicode(item)
 
 
@@ -87,6 +90,12 @@ def _clean_dict(dict_):
                 v,
                 type(v),
             )
+    return data
+
+
+def _clean_dataclass(dataclass_):
+    data = asdict(dataclass_)
+    data = _clean_dict(data)
     return data
 
 

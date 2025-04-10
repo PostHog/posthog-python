@@ -7,11 +7,20 @@ from typing import Any, Optional, Union
 
 import requests
 from dateutil.tz import tzutc
+from urllib3.util.retry import Retry
 
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
-adapter = requests.adapters.HTTPAdapter(max_retries=2)
+# Retry on both connect and read errors
+# by default read errors will only retry idempotent HTTP methods (so not POST)
+adapter = requests.adapters.HTTPAdapter(
+    max_retries=Retry(
+        total=2,
+        connect=2,
+        read=2,
+    )
+)
 _session = requests.sessions.Session()
 _session.mount("https://", adapter)
 
@@ -93,7 +102,7 @@ def _process_response(
 
 def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
     """Post the `kwargs to the decide API endpoint"""
-    res = post(api_key, host, "/decide/?v=3", gzip, timeout, **kwargs)
+    res = post(api_key, host, "/decide/?v=4", gzip, timeout, **kwargs)
     return _process_response(res, success_message="Feature flags decided successfully")
 
 

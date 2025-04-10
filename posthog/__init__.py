@@ -4,6 +4,7 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
+from posthog.types import FeatureFlag, FlagsAndPayloads
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -313,6 +314,7 @@ def capture_exception(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
+    **kwargs
 ):
     # type: (...) -> Tuple[bool, dict]
     """
@@ -326,6 +328,7 @@ def capture_exception(
     Optionally you can submit
     - `properties`, which can be a dict with any information you'd like to add
     - `groups`, which is a dict of group type -> group key mappings
+    - remaining `kwargs` will be logged if `log_captured_exceptions` is enabled
 
     For example:
     ```python
@@ -354,6 +357,7 @@ def capture_exception(
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
+        **kwargs
     )
 
 
@@ -403,7 +407,7 @@ def get_feature_flag(
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
-):
+) -> Optional[FeatureFlag]:
     """
     Get feature flag variant for users. Used with experiments.
     Example:
@@ -446,7 +450,7 @@ def get_all_flags(
     group_properties={},  # type: dict
     only_evaluate_locally=False,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
-):
+) -> Optional[dict[str, FeatureFlag]]:
     """
     Get all flags for a given user.
     Example:
@@ -477,7 +481,7 @@ def get_feature_flag_payload(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
-):
+) -> Optional[str]:
     return _proxy(
         "get_feature_flag_payload",
         key=key,
@@ -519,7 +523,7 @@ def get_all_flags_and_payloads(
     group_properties={},
     only_evaluate_locally=False,
     disable_geoip=None,  # type: Optional[bool]
-):
+) -> FlagsAndPayloads:
     return _proxy(
         "get_all_flags_and_payloads",
         distinct_id=distinct_id,

@@ -1,3 +1,24 @@
+## 3.24.0 – 2025-04-10
+
+1. Add config option to `log_captured_exceptions`
+
+## 3.23.0 – 2025-03-26
+
+1. Expand automatic retries to include read errors (e.g. RemoteDisconnected)
+
+## 3.22.0 – 2025-03-26
+
+1. Add more information to `$feature_flag_called` events.
+2. Support for the `/decide?v=3` endpoint which contains more information about feature flags.
+
+## 3.21.0 – 2025-03-17
+
+1. Support serializing dataclasses.
+
+## 3.20.0 – 2025-03-13
+
+1. Add support for OpenAI Responses API.
+
 ## 3.19.2 – 2025-03-11
 
 1. Fix install requirements for analytics package

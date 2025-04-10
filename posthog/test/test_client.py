@@ -10,6 +10,7 @@ from parameterized import parameterized
 from posthog.client import Client
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
 
 
@@ -261,6 +262,13 @@ class TestClient(unittest.TestCase):
                     logs.output[0],
                     "WARNING:posthog:No exception information available",
                 )
+
+    def test_capture_exception_logs_when_enabled(self):
+        client = Client(FAKE_TEST_API_KEY, log_captured_exceptions=True)
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            client.capture_exception(Exception("test exception"), "distinct_id", path="one/two/three")
+            self.assertEqual(logs.output[0], "ERROR:posthog:test exception\nNoneType: None")
+            self.assertEqual(getattr(logs.records[0], "path"), "one/two/three")
 
     @mock.patch("posthog.client.decide")
     def test_basic_capture_with_feature_flags(self, patch_decide):
@@ -1212,3 +1220,53 @@ class TestClient(unittest.TestCase):
                 }
 
                 assert context == expected_context
+
+    @mock.patch("posthog.client.decide")
+    def test_get_decide_returns_normalized_decide_response(self, patch_decide):
+        patch_decide.return_value = {
+            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False},
+            "featureFlagPayloads": {"beta-feature": '{"some": "data"}'},
+            "errorsWhileComputingFlags": False,
+            "requestId": "test-id",
+        }
+
+        client = Client(FAKE_TEST_API_KEY)
+        distinct_id = "test_distinct_id"
+        groups = {"test_group_type": "test_group_id"}
+        person_properties = {"test_property": "test_value"}
+
+        response = client.get_decide(distinct_id, groups, person_properties)
+
+        assert response == {
+            "flags": {
+                "beta-feature": FeatureFlag(
+                    key="beta-feature",
+                    enabled=True,
+                    variant="random-variant",
+                    reason=None,
+                    metadata=LegacyFlagMetadata(
+                        payload='{"some": "data"}',
+                    ),
+                ),
+                "alpha-feature": FeatureFlag(
+                    key="alpha-feature",
+                    enabled=True,
+                    variant=None,
+                    reason=None,
+                    metadata=LegacyFlagMetadata(
+                        payload=None,
+                    ),
+                ),
+                "off-feature": FeatureFlag(
+                    key="off-feature",
+                    enabled=False,
+                    variant=None,
+                    reason=None,
+                    metadata=LegacyFlagMetadata(
+                        payload=None,
+                    ),
+                ),
+            },
+            "errorsWhileComputingFlags": False,
+            "requestId": "test-id",
+        }
