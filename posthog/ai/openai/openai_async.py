@@ -88,7 +88,7 @@ class WrappedResponses(openai.resources.responses.Responses):
 
         async def async_generator():
             nonlocal usage_stats
-            nonlocal final_content
+            nonlocal final_content  # noqa: F824
 
             try:
                 async for chunk in response:
@@ -261,7 +261,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         response = await super().create(**kwargs)
 
         async def async_generator():
-            nonlocal usage_stats, accumulated_content, accumulated_tools
+            nonlocal usage_stats, accumulated_content, accumulated_tools  # noqa: F824
             try:
                 async for chunk in response:
                     if hasattr(chunk, "usage") and chunk.usage:
