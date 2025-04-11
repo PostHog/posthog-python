@@ -26,6 +26,7 @@ super_properties = None  # type: Optional[Dict]
 # Currently alpha, use at your own risk
 enable_exception_autocapture = False  # type: bool
 exception_autocapture_integrations = []  # type: List[Integrations]
+log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
 project_root = None  # type: Optional[str]
 # Used for our AI observability feature to not capture any prompt or output just usage + metadata
@@ -593,6 +594,7 @@ def _proxy(method, *args, **kwargs):
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
             enable_exception_autocapture=enable_exception_autocapture,
+            log_captured_exceptions=log_captured_exceptions,
             exception_autocapture_integrations=exception_autocapture_integrations,
         )
 
