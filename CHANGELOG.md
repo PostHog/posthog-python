@@ -1,3 +1,7 @@
+## 3.24.1 – 2025-04-11
+
+1. Add `log_captured_exceptions` option to proxy setup
+
 ## 3.24.0 – 2025-04-10
 
 1. Add config option to `log_captured_exceptions`
