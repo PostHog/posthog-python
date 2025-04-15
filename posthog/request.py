@@ -109,7 +109,7 @@ def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout
 def flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
     """Post the `kwargs to the flags API endpoint"""
     res = post(api_key, host, "/flags/?v=2", gzip, timeout, **kwargs)
-    return _process_response(res, success_message="Feature flags decided successfully")
+    return _process_response(res, success_message="Feature flags evaluated successfully")
 
 
 def remote_config(personal_api_key: str, host: Optional[str] = None, key: str = "", timeout: int = 15) -> Any:
