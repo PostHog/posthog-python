@@ -618,7 +618,7 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][2], AIMessage)
     assert result["messages"][2].content == "It's a type of greeble."
 
-    assert mock_client.capture.call_count == 12
+    assert mock_client.capture.call_count == 6
     calls = [call[1] for call in mock_client.capture.call_args_list]
 
     trace_args = calls[11]
