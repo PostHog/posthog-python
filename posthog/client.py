@@ -1,4 +1,5 @@
 import atexit
+import hashlib
 import logging
 import numbers
 import os
@@ -11,7 +12,6 @@ from uuid import UUID, uuid4
 
 import distro  # For Linux OS detection
 from dateutil.tz import tzutc
-import hashlib
 from six import string_types
 
 from posthog.consumer import Consumer
@@ -19,12 +19,21 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, flags, remote_config
+from posthog.request import (
+    DEFAULT_HOST,
+    APIError,
+    batch_post,
+    decide,
+    determine_server_host,
+    flags,
+    get,
+    remote_config,
+)
 from posthog.types import (
-    FlagsResponse,
     FeatureFlag,
     FlagMetadata,
     FlagsAndPayloads,
+    FlagsResponse,
     FlagValue,
     normalize_flags_response,
     to_flags_and_payloads,
@@ -170,7 +179,7 @@ def system_context() -> dict[str, Any]:
 
 
 def is_token_in_rollout(
-    token: str, percentage: float = 0, included_hashes: set[str] = None, excluded_hashes: set[str] = None
+    token: str, percentage: float = 0, included_hashes: Optional[set[str]] = None, excluded_hashes: Optional[set[str]] = None
 ) -> bool:
     """
     Determines if a token should be included in a rollout based on:
