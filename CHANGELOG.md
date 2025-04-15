@@ -1,3 +1,7 @@
+## 3.25.0 – 2025-04-15
+
+1. Roll out new `/flags` endpoint to 100% of `/decide` traffic, excluding the top 10 customers.
+
 ## 3.24.3 – 2025-04-15
 
 1. Fix hash inclusion/exclusion for flag rollout
