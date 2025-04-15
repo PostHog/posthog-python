@@ -138,11 +138,11 @@ def normalize_flags_response(resp: Any) -> FlagsResponse:
 
 def to_flags_and_payloads(resp: FlagsResponse) -> FlagsAndPayloads:
     """
-    Convert a DecideResponse into a FlagsAndPayloads object which is a
+    Convert a FlagsResponse into a FlagsAndPayloads object which is a
     dict of feature flags and their payloads. This is needed by certain
     functions in the client.
     Args:
-        resp: A DecideResponse containing feature flags and their payloads.
+        resp: A FlagsResponse containing feature flags and their payloads.
 
     Returns:
         A tuple containing:
