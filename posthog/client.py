@@ -1,4 +1,5 @@
 import atexit
+import hashlib
 import logging
 import numbers
 import os
@@ -18,14 +19,23 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
-from posthog.request import DEFAULT_HOST, APIError, batch_post, decide, determine_server_host, get, remote_config
+from posthog.request import (
+    DEFAULT_HOST,
+    APIError,
+    batch_post,
+    decide,
+    determine_server_host,
+    flags,
+    get,
+    remote_config,
+)
 from posthog.types import (
-    DecideResponse,
     FeatureFlag,
     FlagMetadata,
     FlagsAndPayloads,
+    FlagsResponse,
     FlagValue,
-    normalize_decide_response,
+    normalize_flags_response,
     to_flags_and_payloads,
     to_payloads,
     to_values,
@@ -41,6 +51,76 @@ except ImportError:
 
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
+
+# TODO: Get rid of these when you're done rolling out `/flags` to all customers
+ROLLOUT_PERCENTAGE = 0.1
+INCLUDED_HASHES = set({"c4c6803067869081a8c4686780f32de979ade862c6af9ff9ebe5b7161e18362f"})  # this is PostHog's API key
+# Explicitly excluding all the API tokens associated with the top 10 customers; we'll get to them soon, but don't want to rollout to them just yet
+EXCLUDED_HASHES = set(
+    {
+        "5fbb169efa185c2a78d43574b01b56c66d7bb594b310f72702e1f167e4e283a9",
+        "374be8e6556709787d472e276ebe3c46c0ab4b868ec99f4c96168a44df8307df",
+        "6c8a2d5e9dbd4c71854aebca3026fe50045b05e19a16780dccea5439625ee1b4",
+        "0f1fa079412bb39b5fce8d96af3539925ede61cbc561ffcd38e27c8e8ae64edb",
+        "e3bdce3350e62638ffbf79872c2fd69ef6cbbd35712d9faf735f874cf77ccbfc",
+        "f96fe01cdf22f1ec75bc7c897e9605e6431fb5d8f6a8bb9d0e8fce2b0a1384a6",
+        "6859b51ac773ea98e146bae47e98759f97ec64c253b9c0524ab56793cc5b6c75",
+        "06b28c04e490ce1c9c017396b8b8e16fce1176a8b5de131a99d9af4df1d0fbc9",
+        "d9c0afa45a34c9f3c1e615bfa77394b79ad7b434ea46856e3503445d5974d640",
+        "320eb50509e2c58a50d80fac848ee0b86290c848a173a0402abdbb760b794595",
+        "7380abb65605420dd6e61534c8eecaa6f14d25a6f90ec2edba811f7383123ded",
+        "3182881fa027d1c8e4eea108df66dcb0387e375d1e4b551c3a3579fdb1e696d1",
+        "d685aeb7d02ec757c4cbe591050a168d34be2f5305d9071d9695ed773057ef16",
+        "875ab92bec4da51cf229145565364e98347fafaa2316a4a8e20f5d852bc95aed",
+        "4a0d726e4b56d6f6d0407faf5396847146084bbabd042ca0dedba2873d8f9236",
+        "a9dc6415c1ccd1874ed1cd303e3d5bf92ddb17ac2af968abed14a51dfb0c53be",
+        "5f10a055c9e379869a159306b1d7242fec25584ce895f677f82a13133741c7f1",
+        "e3e7608bbda7c15bf82fd7e2945ca74052f8b99e2090962318b6ef983c0ddb16",
+        "7f0cbd50e11b475f6c2ed50e620c473e4bfc8df1f4c5174b49ecee1fcec6853e",
+        "03004fb2209e6e4186c4364c71e5abc9cf272caf83cf58fb538c42684fd42fb0",
+        "8721e8bf608c5eb4d74eeaf26fe588b4e5414742e0494ca7e67a89e1a297332b",
+        "ac0d5c7daee8d2f89d5b3861fba0b9a0e560b0eb6944e974f37cdc52274f2d1f",
+        "6581d65cf0c4c536122beb5d581ba2b128ed44b7528c07d4ec7837ea33d0cffe",
+        "d0c2d4e122ecd4520af7bac133b09fde357622f20aa5a0f7a9328d25c9e9f28e",
+        "d09de64bec03c750493b0771c9f2731204bc9a5f0479628848803e2ccded9aca",
+        "a9f483f0cdc028a5e05d03d7ab683738f09a940c0173d9e6b004fbe85738a1f5",
+        "2ffb5817a9fc465b9bb37b9112393cc1a274185f7f18618192421b7511b98830",
+        "a6785a722fdb0f975a1a30302f8312709ae069358c901c609f4898a9ae14bdf2",
+        "3d9ba35cab44358cf47c867f48c95f75b9ad54ca5407ed19576da55a085d3a8f",
+        "ff59d2907ecb66f4d4a1705435460124a390d8cf7762dc7860d4b4171f832976",
+        "aac9e8036d3e0efed49cd5fbea19ea8354c4e1dfc95a1585300c5178189e5bac",
+        "1e7fa74813f733e35ea820f8272c6562b4b0c70429f1b549605cc9e8016f632e",
+        "2cb74b224cb20b8e5a5a52f3fe5ca62672e5c77ce7f30223698bb4d4abff2293",
+        "17a90589bfe29f40f826e2df4753c0bce17a05f4c04b9a0924304e7418aba9e8",
+        "0925e4c5bc65ced02c65aa3afba5eaa98aed288d193f719a8fbaebafdeafc1ce",
+        "a0308973730b505f1d6af7cd2f39c69bd86ea2a35b9d27118910e1c58d9a6a1a",
+        "c780092461636d6d62179723f03cbfe4a7b5808a6b46de749d8b32c3384f1e74",
+        "65d6083548c27387f9381ff2aa37581a41ba1d5e6162afdc18cf8130be528052",
+        "e2241631d1211e15688735ec6d9f56b4839e65d2095f278630c884bd49f00be8",
+        "f2d9e1c10371912c32e9eba18f348782345ff70d383ae8b38bc9e6b12c7841e7",
+        "57411b20e1c406ac4339718287b3eaa83635291fb593c9a4068dd08ec1d03692",
+        "06e91ecd6b2a9a02234951ab3a5a95aeb84ef34499a5001629aaa13d907ba1dc",
+        "4d2f47e99000f6820307e525fcf972421335a86f39b6ada1c93d67410520af49",
+        "538d3b1415c3feccbe68d59b5ad9ed35aa418fc64658ff603855494abf75f647",
+        "68b11387ac9f805bdbea486b9d3e0724856180646f2b12617a81174d5c27833c",
+        "a74797287c3d29f92fc729c2a8b3f17638cb273388e12cb8ffd972bcfbcdfdb8",
+        "b53d2b6551ebd8d68321dbd2727a299b1d23ff15853be02fffb0c54f1f0e1349",
+        "abad9dc57c9cb9a244b89b11f0a9123baf924a6908443dd8527cf6b411bbb33a",
+        "d17b55c7d72052d76d76a039e1ceb613d443401d30eae91ac903a07d5ee0d2d2",
+        "274a08018c6e4609dedc37e31aea589c527cd7b93242d305591c3f5313408ee8",
+        "75ed9cca6d877ea218647d6021b89c5959156eed2ce4ccad29d4e497d9cd0119",
+        "4862317bab4b4efc876a810b92a6841bcf6ba69ac7aa7ff792358862528e7fa8",
+        "f0498fff4318e52729573a8bf451d7b978c5242af51ec8b1699798090bc00d32",
+        "a6a3435402f66a94eefd07b16297f6b4a61e26992e8ed7742de2e49d7ea71104",
+        "72d8ede07d3ef0fd8eb0cd7261d29f4f33b3554e06a726db151138a25a01b539",
+        "937c4aae120326c861eb3ec23371e029d3cea21f5849e4d52d75e47e06473e5c",
+        "e0138f35502faac574232bbbaab7ad769e2dcd449b596e32454368cb3cc035f9",
+        "084e32dc89830d7bb120492ed55cc543de0405c7ae3d0c16c8f64ab07c44506d",
+        "d59f0ce1670146019b2c77b56ff8faca6346adfcc93443712a613a89298e3fb9",
+        "b99bd54a29c2e9adc17527f9df539415a1c0a83293f72e3e0c8744c5677ea1a1",
+        "c252a61d3c19f58062ca9fe2b13dfe378bc11380705cec703d9d8d0a0e167995",
+    }
+)
 
 
 def get_os_info():
@@ -95,6 +175,43 @@ def system_context() -> dict[str, Any]:
         "$os": os_name,
         "$os_version": os_version,
     }
+
+
+def is_token_in_rollout(
+    token: str,
+    percentage: float = 0,
+    included_hashes: Optional[set[str]] = None,
+    excluded_hashes: Optional[set[str]] = None,
+) -> bool:
+    """
+    Determines if a token should be included in a rollout based on:
+    1. If its hash matches any included_hashes provided
+    2. If its hash falls within the percentage rollout
+
+    Args:
+        token: String to hash (usually API key)
+        percentage: Float between 0 and 1 representing rollout percentage
+        included_hashes: Optional set of specific SHA1 hashes to match against
+        excluded_hashes: Optional set of specific SHA1 hashes to exclude from rollout
+    Returns:
+        bool: True if token should be included in rollout
+    """
+    # First generate SHA1 hash of token
+    token_hash = hashlib.sha1(token.encode("utf-8")).hexdigest()
+
+    # Check if hash matches any included hashes
+    if included_hashes and token_hash in included_hashes:
+        return True
+
+    # Check if hash matches any excluded hashes
+    if excluded_hashes and token_hash in excluded_hashes:
+        return False
+
+    # Convert first 8 chars of hash to int and divide by max value to get number between 0-1
+    hash_int = int(token_hash[:8], 16)
+    hash_float = hash_int / 0xFFFFFFFF
+
+    return hash_float < percentage
 
 
 class Client(object):
@@ -263,7 +380,7 @@ class Client(object):
         """
         Get feature flag variants for a distinct_id by calling decide.
         """
-        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        resp_data = self.get_flags_decision(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return to_values(resp_data) or {}
 
     def get_feature_payloads(
@@ -272,7 +389,7 @@ class Client(object):
         """
         Get feature flag payloads for a distinct_id by calling decide.
         """
-        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        resp_data = self.get_flags_decision(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return to_payloads(resp_data) or {}
 
     def get_feature_flags_and_payloads(
@@ -281,12 +398,15 @@ class Client(object):
         """
         Get feature flags and payloads for a distinct_id by calling decide.
         """
-        resp = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        resp = self.get_flags_decision(distinct_id, groups, person_properties, group_properties, disable_geoip)
         return to_flags_and_payloads(resp)
 
-    def get_decide(
+    def get_flags_decision(
         self, distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None
-    ) -> DecideResponse:
+    ) -> FlagsResponse:
+        """
+        Get feature flags decision, using either flags() or decide() API based on rollout.
+        """
         require("distinct_id", distinct_id, ID_TYPES)
 
         if disable_geoip is None:
@@ -304,9 +424,21 @@ class Client(object):
             "group_properties": group_properties,
             "disable_geoip": disable_geoip,
         }
-        resp_data = decide(self.api_key, self.host, timeout=self.feature_flags_request_timeout_seconds, **request_data)
 
-        return normalize_decide_response(resp_data)
+        use_flags = is_token_in_rollout(
+            self.api_key, ROLLOUT_PERCENTAGE, included_hashes=INCLUDED_HASHES, excluded_hashes=EXCLUDED_HASHES
+        )
+
+        if use_flags:
+            resp_data = flags(
+                self.api_key, self.host, timeout=self.feature_flags_request_timeout_seconds, **request_data
+            )
+        else:
+            resp_data = decide(
+                self.api_key, self.host, timeout=self.feature_flags_request_timeout_seconds, **request_data
+            )
+
+        return normalize_flags_response(resp_data)
 
     def capture(
         self,
@@ -970,7 +1102,7 @@ class Client(object):
         """
         Calls /decide and returns the flag details and request id
         """
-        resp_data = self.get_decide(distinct_id, groups, person_properties, group_properties, disable_geoip)
+        resp_data = self.get_flags_decision(distinct_id, groups, person_properties, group_properties, disable_geoip)
         request_id = resp_data.get("requestId")
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
@@ -1101,7 +1233,7 @@ class Client(object):
 
         if fallback_to_decide and not only_evaluate_locally:
             try:
-                decide_response = self.get_decide(
+                decide_response = self.get_flags_decision(
                     distinct_id,
                     groups=groups,
                     person_properties=person_properties,

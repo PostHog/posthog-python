@@ -90,7 +90,7 @@ class FeatureFlag:
         )
 
 
-class DecideResponse(TypedDict, total=False):
+class FlagsResponse(TypedDict, total=False):
     flags: dict[str, FeatureFlag]
     errorsWhileComputingFlags: bool
     requestId: str
@@ -102,15 +102,15 @@ class FlagsAndPayloads(TypedDict, total=True):
     featureFlagPayloads: Optional[dict[str, Any]]
 
 
-def normalize_decide_response(resp: Any) -> DecideResponse:
+def normalize_flags_response(resp: Any) -> FlagsResponse:
     """
-    Normalize the response from the decide API endpoint into a v4 DecideResponse.
+    Normalize the response from the decide or flags API endpoint into a FlagsResponse.
 
     Args:
-        resp: A v3 or v4 response from the decide API endpoint.
+        resp: A v3 or v4 response from the decide (or a v1 or v2 response from the flags) API endpoint.
 
     Returns:
-        A DecideResponse containing feature flags and their details.
+        A FlagsResponse containing feature flags and their details.
     """
     if "requestId" not in resp:
         resp["requestId"] = None
@@ -133,16 +133,16 @@ def normalize_decide_response(resp: Any) -> DecideResponse:
         for key, value in featureFlags.items():
             flags[key] = FeatureFlag.from_value_and_payload(key, value, featureFlagPayloads.get(key, None))
         resp["flags"] = flags
-    return cast(DecideResponse, resp)
+    return cast(FlagsResponse, resp)
 
 
-def to_flags_and_payloads(resp: DecideResponse) -> FlagsAndPayloads:
+def to_flags_and_payloads(resp: FlagsResponse) -> FlagsAndPayloads:
     """
-    Convert a DecideResponse into a FlagsAndPayloads object which is a
+    Convert a FlagsResponse into a FlagsAndPayloads object which is a
     dict of feature flags and their payloads. This is needed by certain
     functions in the client.
     Args:
-        resp: A DecideResponse containing feature flags and their payloads.
+        resp: A FlagsResponse containing feature flags and their payloads.
 
     Returns:
         A tuple containing:
@@ -152,7 +152,7 @@ def to_flags_and_payloads(resp: DecideResponse) -> FlagsAndPayloads:
     return {"featureFlags": to_values(resp), "featureFlagPayloads": to_payloads(resp)}
 
 
-def to_values(response: DecideResponse) -> Optional[dict[str, FlagValue]]:
+def to_values(response: FlagsResponse) -> Optional[dict[str, FlagValue]]:
     if "flags" not in response:
         return None
 
@@ -160,7 +160,7 @@ def to_values(response: DecideResponse) -> Optional[dict[str, FlagValue]]:
     return {key: value.get_value() for key, value in flags.items() if isinstance(value, FeatureFlag)}
 
 
-def to_payloads(response: DecideResponse) -> Optional[dict[str, str]]:
+def to_payloads(response: FlagsResponse) -> Optional[dict[str, str]]:
     if "flags" not in response:
         return None
 
