@@ -1,6 +1,6 @@
 ## 3.24.2 – 2025-04-15
 
-1. Roll out new flags endpoint to 10% of /decide traffic
+1. Roll out new /flags endpoint to 10% of /decide traffic
 
 ## 3.24.1 – 2025-04-11
 
