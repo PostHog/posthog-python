@@ -1336,3 +1336,7 @@ class TestClient(unittest.TestCase):
 
         # Test that the token exclusion works correctly
         self.assertFalse(is_token_in_rollout(token, percentage=1.0, excluded_hashes={token_hash}))
+
+        # Should work for other specific token hashes
+        # Include our API key
+        self.assertTrue(is_token_in_rollout("sTMFPsFhdP1Ssg", percentage=0.1, included_hashes=INCLUDED_HASHES))
