@@ -636,7 +636,6 @@ def test_graph_state(mock_client):
         "xyz": "abc",
     }
 
-
     # 1. Span - the fake_plain node, which doesn't do anything
     assert calls[0]["event"] == "$ai_span"
     assert calls[0]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
@@ -651,7 +650,7 @@ def test_graph_state(mock_client):
     assert "$ai_span_id" in calls[1]["properties"]
     assert calls[1]["properties"]["$ai_span_name"] == "ChatPromptTemplate"
 
-    # 3. Generation - the FakeMessagesListChatModel within fake_llm's RunnableSequence 
+    # 3. Generation - the FakeMessagesListChatModel within fake_llm's RunnableSequence
     assert calls[2]["event"] == "$ai_generation"
     assert calls[2]["properties"]["$ai_parent_id"] == calls[3]["properties"]["$ai_span_id"]
     assert "$ai_span_id" in calls[2]["properties"]
