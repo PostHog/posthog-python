@@ -179,7 +179,10 @@ def system_context() -> dict[str, Any]:
 
 
 def is_token_in_rollout(
-    token: str, percentage: float = 0, included_hashes: Optional[set[str]] = None, excluded_hashes: Optional[set[str]] = None
+    token: str,
+    percentage: float = 0,
+    included_hashes: Optional[set[str]] = None,
+    excluded_hashes: Optional[set[str]] = None,
 ) -> bool:
     """
     Determines if a token should be included in a rollout based on:
