@@ -1335,4 +1335,4 @@ class TestClient(unittest.TestCase):
         self.assertFalse(is_token_in_rollout(token, percentage - 0.2))  # Just below the hash value
 
         # Test that the token exclusion works correctly
-        self.assertFalse(is_token_in_rollout(token, percentage=100.0, excluded_hashes=token_hash))
+        self.assertFalse(is_token_in_rollout(token, percentage=1.0, excluded_hashes={token_hash}))
