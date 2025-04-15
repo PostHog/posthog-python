@@ -1,3 +1,7 @@
+## 3.24.2 – 2025-04-15
+
+1. Roll out new flags endpoint to 10% of /decide traffic
+
 ## 3.24.1 – 2025-04-11
 
 1. Add `log_captured_exceptions` option to proxy setup
@@ -13,7 +17,7 @@
 ## 3.22.0 – 2025-03-26
 
 1. Add more information to `$feature_flag_called` events.
-2. Support for the `/decide?v=3` endpoint which contains more information about feature flags.
+2. Support for the `/decide?v=4` endpoint which contains more information about feature flags.
 
 ## 3.21.0 – 2025-03-17
 

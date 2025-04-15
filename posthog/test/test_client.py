@@ -2,12 +2,13 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
+import hashlib
 
 import mock
 import six
 from parameterized import parameterized
 
-from posthog.client import Client
+from posthog.client import Client, is_token_in_rollout, INCLUDED_HASHES, EXCLUDED_HASHES
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
@@ -1235,7 +1236,7 @@ class TestClient(unittest.TestCase):
         groups = {"test_group_type": "test_group_id"}
         person_properties = {"test_property": "test_value"}
 
-        response = client.get_decide(distinct_id, groups, person_properties)
+        response = client.get_flags_decision(distinct_id, groups, person_properties)
 
         assert response == {
             "flags": {
@@ -1270,3 +1271,64 @@ class TestClient(unittest.TestCase):
             "errorsWhileComputingFlags": False,
             "requestId": "test-id",
         }
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.decide")
+    def test_get_flags_decision_rollout(self, patch_decide, patch_flags):
+        # Set up mock responses
+        decide_response = {
+            "featureFlags": {"flag1": True},
+            "featureFlagPayloads": {},
+            "errorsWhileComputingFlags": False,
+        }
+        flags_response = {
+            "featureFlags": {"flag2": True},
+            "featureFlagPayloads": {},
+            "errorsWhileComputingFlags": False,
+        }
+        patch_decide.return_value = decide_response
+        patch_flags.return_value = flags_response
+
+        client = Client(FAKE_TEST_API_KEY)
+        
+        # Test 0% rollout - should use decide
+        with mock.patch("posthog.client.is_token_in_rollout", return_value=False) as mock_rollout:
+            client.get_flags_decision("distinct_id")
+            mock_rollout.assert_called_with(FAKE_TEST_API_KEY, 0.1, included_hashes=INCLUDED_HASHES, excluded_hashes=EXCLUDED_HASHES)
+            patch_decide.assert_called_once()
+            patch_flags.assert_not_called()
+            patch_decide.reset_mock()
+            patch_flags.reset_mock()
+
+        # Test 100% rollout - should use flags
+        with mock.patch("posthog.client.is_token_in_rollout", return_value=True) as mock_rollout:
+            client.get_flags_decision("distinct_id")
+            mock_rollout.assert_called_with(FAKE_TEST_API_KEY, 0.1, included_hashes=INCLUDED_HASHES, excluded_hashes=EXCLUDED_HASHES)
+            patch_flags.assert_called_once()
+            patch_decide.assert_not_called()
+
+    def test_token_rollout_calculation(self):
+        # Test specific hash inclusion
+        token = "test_token"
+        token_hash = hashlib.sha1(token.encode('utf-8')).hexdigest()
+        included_hashes = {token_hash}
+        
+        # Should be included due to specific hash, even with 0% rollout
+        self.assertTrue(expr=is_token_in_rollout(token, percentage=0.0, included_hashes=included_hashes))
+        
+        # Should not be included with 0% rollout and no specific hash
+        self.assertFalse(is_token_in_rollout(token, percentage=0.0))
+        
+        # Should be included with 100% rollout regardless of specific hash
+        self.assertTrue(is_token_in_rollout(token, percentage=1.0))
+        self.assertTrue(is_token_in_rollout(token, percentage=1.0, included_hashes=included_hashes))
+        
+        # Test deterministic behavior - same token should always give same result
+        hash_float = int(token_hash[:8], 16) / 0xffffffff
+        percentage = hash_float + 0.1  # Just above the hash value
+        
+        self.assertTrue(is_token_in_rollout(token, percentage))
+        self.assertFalse(is_token_in_rollout(token, percentage - 0.2))  # Just below the hash value
+
+        # Test that the token exclusion works correctly
+        self.assertFalse(is_token_in_rollout(token, percentage=100.0, excluded_hashes=token_hash))

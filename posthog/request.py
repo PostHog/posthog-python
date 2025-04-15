@@ -52,7 +52,7 @@ def post(
     url = remove_trailing_slash(host or DEFAULT_HOST) + path
     body["api_key"] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
-    log.debug("making request: %s", data)
+    log.debug("making request: %s to url: %s", data, url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
         headers["Content-Encoding"] = "gzip"
@@ -103,6 +103,11 @@ def _process_response(
 def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
     """Post the `kwargs to the decide API endpoint"""
     res = post(api_key, host, "/decide/?v=4", gzip, timeout, **kwargs)
+    return _process_response(res, success_message="Feature flags decided successfully")
+
+def flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
+    """Post the `kwargs to the flags API endpoint"""
+    res = post(api_key, host, "/flags/?v=2", gzip, timeout, **kwargs)
     return _process_response(res, success_message="Feature flags decided successfully")
 
 
