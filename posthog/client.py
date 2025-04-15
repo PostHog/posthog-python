@@ -53,8 +53,8 @@ ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
 
 # TODO: Get rid of these when you're done rolling out `/flags` to all customers
-ROLLOUT_PERCENTAGE = 0
-INCLUDED_HASHES = set()  # this is PostHog's API key
+ROLLOUT_PERCENTAGE = 1
+INCLUDED_HASHES = set({"bc94e67150c97dbcbf52549d50a7b80814841dbf"})  # this is PostHog's API key
 # Explicitly excluding all the API tokens associated with the top 10 customers; we'll get to them soon, but don't want to rollout to them just yet
 EXCLUDED_HASHES = set(
     {
