@@ -7,7 +7,7 @@ FlagValue = Union[bool, str]
 @dataclass(frozen=True)
 class FlagReason:
     code: str
-    condition_index: int
+    condition_index: Optional[int]
     description: str
 
     @classmethod
@@ -16,7 +16,7 @@ class FlagReason:
             return None
         return cls(
             code=resp.get("code", ""),
-            condition_index=resp.get("condition_index", 0),
+            condition_index=resp.get("condition_index"),
             description=resp.get("description", ""),
         )
 
