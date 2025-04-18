@@ -186,7 +186,7 @@ class WrappedResponses(openai.resources.responses.Responses):
             event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
-            await self._client._ph_client.capture(
+            self._client._ph_client.capture(
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
