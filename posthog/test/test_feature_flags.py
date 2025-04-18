@@ -2357,7 +2357,21 @@ class TestCaptureCalls(unittest.TestCase):
                         "id": 23,
                         "version": 42,
                     },
-                }
+                },
+                "false-flag": {
+                    "key": "false-flag",
+                    "enabled": False,
+                    "variant": None,
+                    "reason": {
+                        "code": "no_matching_condition",
+                        "description": "No matching condition",
+                        "condition_index": None,
+                    },
+                    "metadata": {
+                        "id": 1,
+                        "version": 2,
+                    },
+                },
             },
             "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
         }
