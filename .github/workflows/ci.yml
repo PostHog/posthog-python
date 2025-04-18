@@ -9,16 +9,16 @@ jobs:
         runs-on: ubuntu-latest
 
         steps:
-            - uses: actions/checkout@v2
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
               with:
                   fetch-depth: 1
 
             - name: Set up Python 3.11
-              uses: actions/setup-python@v2
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
                   python-version: 3.11.11
 
-            - uses: actions/cache@v3
+            - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
               with:
                   path: ~/.cache/pip
                   key: ${{ runner.os }}-pip-${{ hashFiles('setup.py') }}
@@ -54,12 +54,12 @@ jobs:
                 python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
 
         steps:
-            - uses: actions/checkout@v2
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
               with:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
-              uses: actions/setup-python@v2
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
                   python-version: ${{ matrix.python-version }}
 
