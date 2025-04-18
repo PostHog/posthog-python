@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#/ Usage: bin/fmt
+#/ Description: Formats and lints the code
+source bin/helpers/_utils.sh
+set_source_and_root_dir
+
+if [[ "$1" == "--check" ]]; then
+  black --check .
+  isort --check-only .
+else
+  black .
+  isort .
+fi
