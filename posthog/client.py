@@ -31,6 +31,7 @@ from posthog.request import (
 )
 from posthog.types import (
     FeatureFlag,
+    FeatureFlagResult,
     FlagMetadata,
     FlagsAndPayloads,
     FlagsResponse,
@@ -938,6 +939,70 @@ class Client(object):
         if response is None:
             return None
         return bool(response)
+
+    def get_feature_flag_result(
+        self,
+        key,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+        disable_geoip=None,
+    ) -> Optional[FeatureFlagResult]:
+        """
+        Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
+        depending on whether local evaluation is enabled and the flag can be locally evaluated.
+
+        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
+        """
+        require("key", key, string_types)
+        require("distinct_id", distinct_id, ID_TYPES)
+        require("groups", groups, dict)
+
+        if self.disabled:
+            return None
+
+        person_properties, group_properties = self._add_local_person_and_group_properties(
+            distinct_id, groups, person_properties, group_properties
+        )
+
+        flag_result = None
+        flag_details = None
+        request_id = None
+
+        flag_value = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
+        flag_was_locally_evaluated = flag_value is not None
+
+        if flag_was_locally_evaluated:
+            payload = self._compute_payload_locally(key, flag_value)
+            flag_result = FeatureFlagResult.from_value_and_payload(key, flag_value, payload)
+        elif not only_evaluate_locally:
+            try:
+                flag_details, request_id = self._get_feature_flag_details_from_decide(
+                    key, distinct_id, groups, person_properties, group_properties, disable_geoip
+                )
+                flag_result = FeatureFlagResult.from_flag_details(flag_details)
+                self.log.debug(f"Successfully computed flag remotely: #{key} -> #{flag_result}")
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+
+        if send_feature_flag_events:
+            self._capture_feature_flag_called(
+                distinct_id,
+                key,
+                flag_result.get_value() if flag_result else None,
+                None,
+                flag_was_locally_evaluated,
+                groups,
+                disable_geoip,
+                request_id,
+                flag_details,
+            )
+
+        return flag_result
 
     def get_feature_flag(
         self,
