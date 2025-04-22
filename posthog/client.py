@@ -939,12 +939,13 @@ class Client(object):
         if response is None:
             return None
         return bool(response)
-
-    def get_feature_flag_result(
+    
+    def _get_feature_flag_result(
         self,
         key,
         distinct_id,
         *,
+        override_match_value=None,
         groups={},
         person_properties={},
         group_properties={},
@@ -952,12 +953,6 @@ class Client(object):
         send_feature_flag_events=True,
         disable_geoip=None,
     ) -> Optional[FeatureFlagResult]:
-        """
-        Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
-        depending on whether local evaluation is enabled and the flag can be locally evaluated.
-
-        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
-        """
         require("key", key, string_types)
         require("distinct_id", distinct_id, ID_TYPES)
         require("groups", groups, dict)
@@ -994,7 +989,7 @@ class Client(object):
                 distinct_id,
                 key,
                 flag_result.get_value() if flag_result else None,
-                None,
+                flag_result.payload if flag_result else None,
                 flag_was_locally_evaluated,
                 groups,
                 disable_geoip,
@@ -1003,6 +998,35 @@ class Client(object):
             )
 
         return flag_result
+
+    def get_feature_flag_result(
+        self,
+        key,
+        distinct_id,
+        *,
+        groups={},
+        person_properties={},
+        group_properties={},
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+        disable_geoip=None,
+    ) -> Optional[FeatureFlagResult]:
+        """
+        Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
+        depending on whether local evaluation is enabled and the flag can be locally evaluated.
+
+        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
+        """
+        return self._get_feature_flag_result(
+            key,
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
+        )
 
     def get_feature_flag(
         self,
