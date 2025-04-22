@@ -101,6 +101,45 @@ class FlagsAndPayloads(TypedDict, total=True):
     featureFlags: Optional[dict[str, FlagValue]]
     featureFlagPayloads: Optional[dict[str, Any]]
 
+@dataclass(frozen=True)
+class FeatureFlagResult:
+    """
+    The result of calling a feature flag which includes the flag result, variant, and payload.
+    """
+    key: str
+    enabled: bool
+    variant: Optional[str]
+    payload: Optional[Any]
+
+    def get_value(self) -> FlagValue:
+        """
+        Returns the value of the flag. This is the variant if it exists, otherwise the enabled value.
+        This is the value we report as `$feature_flag_response` in the `$feature_flag_called` event.
+        """
+        return self.variant or self.enabled
+    
+    @classmethod
+    def from_value_and_payload(cls, key: str, value: FlagValue | None, payload: Any) -> "FeatureFlagResult | None":
+        if value is None:
+            return None
+        enabled, variant = (True, value) if isinstance(value, str) else (value, None)
+        return cls(
+            key=key,
+            enabled=enabled,
+            variant=variant,
+            payload=payload,
+        )
+    
+    @classmethod
+    def from_flag_details(cls, details: FeatureFlag | None) -> "FeatureFlagResult | None":
+        if details is None:
+            return None
+        return cls(
+            key=details.key,
+            enabled=details.enabled,
+            variant=details.variant,
+            payload=details.metadata.payload,
+        )
 
 def normalize_flags_response(resp: Any) -> FlagsResponse:
     """
