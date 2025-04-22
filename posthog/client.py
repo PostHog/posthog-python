@@ -1023,47 +1023,17 @@ class Client(object):
 
         This also captures the $feature_flag_called event unless send_feature_flag_events is False.
         """
-        require("key", key, string_types)
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
-        if self.disabled:
-            return None
-
-        person_properties, group_properties = self._add_local_person_and_group_properties(
-            distinct_id, groups, person_properties, group_properties
+        feature_flag_result = self.get_feature_flag_result(
+            key, 
+            distinct_id, 
+            groups=groups, 
+            person_properties=person_properties, 
+            group_properties=group_properties, 
+            only_evaluate_locally=only_evaluate_locally, 
+            send_feature_flag_events=send_feature_flag_events, 
+            disable_geoip=disable_geoip
         )
-
-        response = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
-
-        flag_details = None
-        request_id = None
-
-        flag_was_locally_evaluated = response is not None
-        if not flag_was_locally_evaluated and not only_evaluate_locally:
-            try:
-                flag_details, request_id = self._get_feature_flag_details_from_decide(
-                    key, distinct_id, groups, person_properties, group_properties, disable_geoip
-                )
-                response = flag_details.get_value() if flag_details else False
-                self.log.debug(f"Successfully computed flag remotely: #{key} -> #{response}")
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
-
-        if send_feature_flag_events:
-            self._capture_feature_flag_called(
-                distinct_id,
-                key,
-                response or False,
-                None,
-                flag_was_locally_evaluated,
-                groups,
-                disable_geoip,
-                request_id,
-                flag_details,
-            )
-
-        return response
+        return feature_flag_result.get_value() if feature_flag_result else None
 
     def _locally_evaluate_flag(
         self,
