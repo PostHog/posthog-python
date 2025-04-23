@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, List, Optional, TypedDict, Union, cast
+import json
 
 FlagValue = Union[bool, str]
 
@@ -127,7 +128,7 @@ class FeatureFlagResult:
             key=key,
             enabled=enabled,
             variant=variant,
-            payload=payload,
+            payload=json.loads(payload) if isinstance(payload, str) else payload,
         )
     
     @classmethod
@@ -150,7 +151,7 @@ class FeatureFlagResult:
             key=details.key,
             enabled=enabled,
             variant=variant,
-            payload=details.metadata.payload,
+            payload=json.loads(details.metadata.payload) if isinstance(details.metadata.payload, str) else details.metadata.payload,
         )
 
 def normalize_flags_response(resp: Any) -> FlagsResponse:

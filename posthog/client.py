@@ -9,6 +9,7 @@ import warnings
 from datetime import datetime, timedelta
 from typing import Any, Optional, Union
 from uuid import UUID, uuid4
+import json
 
 import distro  # For Linux OS detection
 from dateutil.tz import tzutc
@@ -1160,6 +1161,7 @@ class Client(object):
             }
 
             if payload:
+                # if payload is not a string, json serialize it to a string
                 properties["$feature_flag_payload"] = payload
 
             if request_id:

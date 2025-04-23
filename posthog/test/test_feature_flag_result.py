@@ -7,12 +7,12 @@ from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 class TestFeatureFlagResult(unittest.TestCase):
     def test_from_bool_value_and_payload(self):
-        result = FeatureFlagResult.from_value_and_payload("test-flag", True, '{"some": "value"}')
+        result = FeatureFlagResult.from_value_and_payload("test-flag", True, '[1, 2, 3]')
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
         self.assertEqual(result.variant, None)
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, [1, 2, 3])
 
     def test_from_bool_value_and_payload(self):
         result = FeatureFlagResult.from_value_and_payload("test-flag", False, '{"some": "value"}')
@@ -20,15 +20,15 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, False)
         self.assertEqual(result.variant, None)
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, {"some": "value"})
     
     def test_from_variant_value_and_payload(self):
-        result = FeatureFlagResult.from_value_and_payload("test-flag", "control", '{"some": "value"}')
+        result = FeatureFlagResult.from_value_and_payload("test-flag", "control", 'true')
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
         self.assertEqual(result.variant, "control")
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, True)
 
     def test_from_none_value_and_payload(self):
         result = FeatureFlagResult.from_value_and_payload("test-flag", None, '{"some": "value"}')
@@ -43,7 +43,7 @@ class TestFeatureFlagResult(unittest.TestCase):
                 id=1,
                 version=1,
                 description="test-flag",
-                payload='{"some": "value"}'
+                payload='"Some string"'
             ),
             reason=FlagReason(
                 code="test-reason",
@@ -57,7 +57,7 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
         self.assertEqual(result.variant, None)
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, "Some string")
 
     def test_from_boolean_flag_details_with_override_variant_match_value(self):
         flag_details = FeatureFlag(
@@ -68,7 +68,7 @@ class TestFeatureFlagResult(unittest.TestCase):
                 id=1,
                 version=1,
                 description="test-flag",
-                payload='{"some": "value"}'
+                payload='"Some string"'
             ),
             reason=FlagReason(
                 code="test-reason",
@@ -82,7 +82,7 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
         self.assertEqual(result.variant, "control")
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, "Some string")
 
     def test_from_boolean_flag_details_with_override_boolean_match_value(self):
         flag_details = FeatureFlag(
@@ -107,7 +107,7 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
         self.assertEqual(result.variant, None)
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, {"some": "value"})
 
     def test_from_boolean_flag_details_with_override_false_match_value(self):
         flag_details = FeatureFlag(
@@ -132,7 +132,7 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, False)
         self.assertEqual(result.variant, None)
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, {"some": "value"})
 
     def test_from_variant_flag_details(self):
         flag_details = FeatureFlag(
@@ -157,7 +157,7 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
         self.assertEqual(result.variant, "control")
-        self.assertEqual(result.payload, '{"some": "value"}')
+        self.assertEqual(result.payload, {"some": "value"})
 
     def test_from_none_flag_details(self):
         result = FeatureFlagResult.from_flag_details(None)
@@ -230,7 +230,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                         "rollout_percentage": 100,
                     }
                 ],
-                "payloads": {"true": 300},
+                "payloads": {"true": '300'},
             },
         }
         self.client.feature_flags = [basic_flag]
@@ -289,7 +289,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertEqual(flag_result.enabled, True)
         self.assertEqual(flag_result.variant, 'variant-1')
         self.assertEqual(flag_result.get_value(), 'variant-1')
-        self.assertEqual(flag_result.payload, '{"some": "value"}')
+        self.assertEqual(flag_result.payload, {"some": "value"})
 
         patch_capture.assert_called_with(
             "distinct_id",
@@ -299,7 +299,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                 "$feature_flag_response": 'variant-1',
                 "locally_evaluated": True,
                 "$feature/person-flag": 'variant-1',
-                "$feature_flag_payload": '{"some": "value"}',
+                "$feature_flag_payload": {"some": "value"},
             },
             groups={},
             disable_geoip=None,
@@ -349,7 +349,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         flag_result = self.client.get_feature_flag_result("person-flag", "some-distinct-id")
         self.assertEqual(flag_result.enabled, True)
         self.assertEqual(flag_result.variant, None)
-        self.assertEqual(flag_result.payload, '300')
+        self.assertEqual(flag_result.payload, 300)
         patch_capture.assert_called_with(
             "some-distinct-id",
             "$feature_flag_called",
@@ -361,7 +361,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                 "$feature_flag_reason": "Matched condition set 1",
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
-                "$feature_flag_payload": '300',
+                "$feature_flag_payload": 300,
             },
             groups={},
             disable_geoip=None,
@@ -382,7 +382,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                     "metadata": {
                         "id": 1,
                         "version": 2,
-                        "payload": '{"some": "value"}',
+                        "payload": '[1, 2, 3]',
                     },
                 },
             },
@@ -392,7 +392,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertEqual(flag_result.enabled, True)
         self.assertEqual(flag_result.variant, 'variant-1')
         self.assertEqual(flag_result.get_value(), 'variant-1')
-        self.assertEqual(flag_result.payload, '{"some": "value"}')
+        self.assertEqual(flag_result.payload, [1, 2, 3])
         patch_capture.assert_called_with(
             "distinct_id",
             "$feature_flag_called",
@@ -404,7 +404,7 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                 "$feature_flag_reason": "Matched condition set 1",
                 "$feature_flag_id": 1,
                 "$feature_flag_version": 2,
-                "$feature_flag_payload": '{"some": "value"}',
+                "$feature_flag_payload": [1, 2, 3],
             },
             groups={},
             disable_geoip=None,
