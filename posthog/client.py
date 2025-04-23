@@ -940,7 +940,7 @@ class Client(object):
         if response is None:
             return None
         return bool(response)
-    
+
     def _get_feature_flag_result(
         self,
         key,
@@ -1049,14 +1049,14 @@ class Client(object):
         This also captures the $feature_flag_called event unless send_feature_flag_events is False.
         """
         feature_flag_result = self.get_feature_flag_result(
-            key, 
-            distinct_id, 
-            groups=groups, 
-            person_properties=person_properties, 
-            group_properties=group_properties, 
-            only_evaluate_locally=only_evaluate_locally, 
-            send_feature_flag_events=send_feature_flag_events, 
-            disable_geoip=disable_geoip
+            key,
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
         )
         return feature_flag_result.get_value() if feature_flag_result else None
 
@@ -1108,15 +1108,15 @@ class Client(object):
         disable_geoip=None,
     ):
         feature_flag_result = self._get_feature_flag_result(
-            key, 
+            key,
             distinct_id,
             override_match_value=match_value,
-            groups=groups, 
-            person_properties=person_properties, 
-            group_properties=group_properties, 
-            only_evaluate_locally=only_evaluate_locally, 
-            send_feature_flag_events=send_feature_flag_events, 
-            disable_geoip=disable_geoip
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
         )
         return feature_flag_result.payload if feature_flag_result else None
 

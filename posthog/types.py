@@ -102,11 +102,13 @@ class FlagsAndPayloads(TypedDict, total=True):
     featureFlags: Optional[dict[str, FlagValue]]
     featureFlagPayloads: Optional[dict[str, Any]]
 
+
 @dataclass(frozen=True)
 class FeatureFlagResult:
     """
     The result of calling a feature flag which includes the flag result, variant, and payload.
     """
+
     key: str
     enabled: bool
     variant: Optional[str]
@@ -118,7 +120,7 @@ class FeatureFlagResult:
         This is the value we report as `$feature_flag_response` in the `$feature_flag_called` event.
         """
         return self.variant or self.enabled
-    
+
     @classmethod
     def from_value_and_payload(cls, key: str, value: FlagValue | None, payload: Any) -> "FeatureFlagResult | None":
         if value is None:
@@ -130,9 +132,11 @@ class FeatureFlagResult:
             variant=variant,
             payload=json.loads(payload) if isinstance(payload, str) else payload,
         )
-    
+
     @classmethod
-    def from_flag_details(cls, details: FeatureFlag | None, override_match_value: Optional[FlagValue] = None) -> "FeatureFlagResult | None":
+    def from_flag_details(
+        cls, details: FeatureFlag | None, override_match_value: Optional[FlagValue] = None
+    ) -> "FeatureFlagResult | None":
         """
         Create a FeatureFlagResult from a FeatureFlag object.
 
@@ -141,9 +145,11 @@ class FeatureFlagResult:
 
         if details is None:
             return None
-        
+
         if override_match_value is not None:
-            enabled, variant = (True, override_match_value) if isinstance(override_match_value, str) else (override_match_value, None)
+            enabled, variant = (
+                (True, override_match_value) if isinstance(override_match_value, str) else (override_match_value, None)
+            )
         else:
             enabled, variant = (details.enabled, details.variant)
 
@@ -151,8 +157,13 @@ class FeatureFlagResult:
             key=details.key,
             enabled=enabled,
             variant=variant,
-            payload=json.loads(details.metadata.payload) if isinstance(details.metadata.payload, str) else details.metadata.payload,
+            payload=(
+                json.loads(details.metadata.payload)
+                if isinstance(details.metadata.payload, str)
+                else details.metadata.payload
+            ),
         )
+
 
 def normalize_flags_response(resp: Any) -> FlagsResponse:
     """

@@ -2423,8 +2423,7 @@ class TestCaptureCalls(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY)
 
         self.assertEqual(
-            client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"),
-            {"foo": "bar"}
+            client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), {"foo": "bar"}
         )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
