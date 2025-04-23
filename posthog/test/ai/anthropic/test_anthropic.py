@@ -3,11 +3,18 @@ import time
 from unittest.mock import patch
 
 import pytest
-from anthropic.types import Message, Usage
 
-from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+try:
+    from anthropic.types import Message, Usage
+    from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# Skip all tests if Anthropic is not available
+pytestmark = pytest.mark.skipif(not ANTHROPIC_AVAILABLE, reason="Anthropic package is not available")
 
 
 @pytest.fixture
