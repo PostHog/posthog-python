@@ -16,6 +16,18 @@ Breaking change:
 
 1. `get_feature_flag_payload` now deserializes payloads from JSON strings to `Any`. Previously, it returned the payload as a JSON encoded string.
 
+Before:
+
+```python
+payload = get_feature_flag_payload('key', 'distinct_id') # "{\"some\": \"payload\"}"
+```
+
+After:
+
+```python
+payload = get_feature_flag_payload('key', 'distinct_id') # {"some": "payload"}
+```
+
 ## 3.25.0 – 2025-04-15
 
 1. Roll out new `/flags` endpoint to 100% of `/decide` traffic, excluding the top 10 customers.
