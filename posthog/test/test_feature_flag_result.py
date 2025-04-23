@@ -59,6 +59,81 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.variant, None)
         self.assertEqual(result.payload, '{"some": "value"}')
 
+    def test_from_boolean_flag_details_with_override_variant_match_value(self):
+        flag_details = FeatureFlag(
+            key="test-flag",
+            enabled=True,
+            variant=None,
+            metadata=FlagMetadata(
+                id=1,
+                version=1,
+                description="test-flag",
+                payload='{"some": "value"}'
+            ),
+            reason=FlagReason(
+                code="test-reason",
+                description="test-reason",
+                condition_index=0
+            )
+        )
+
+        result = FeatureFlagResult.from_flag_details(flag_details, override_match_value="control")
+
+        self.assertEqual(result.key, "test-flag")
+        self.assertEqual(result.enabled, True)
+        self.assertEqual(result.variant, "control")
+        self.assertEqual(result.payload, '{"some": "value"}')
+
+    def test_from_boolean_flag_details_with_override_boolean_match_value(self):
+        flag_details = FeatureFlag(
+            key="test-flag",
+            enabled=True,
+            variant="control",
+            metadata=FlagMetadata(
+                id=1,
+                version=1,
+                description="test-flag",
+                payload='{"some": "value"}'
+            ),
+            reason=FlagReason(
+                code="test-reason",
+                description="test-reason",
+                condition_index=0
+            )
+        )
+
+        result = FeatureFlagResult.from_flag_details(flag_details, override_match_value=True)
+
+        self.assertEqual(result.key, "test-flag")
+        self.assertEqual(result.enabled, True)
+        self.assertEqual(result.variant, None)
+        self.assertEqual(result.payload, '{"some": "value"}')
+
+    def test_from_boolean_flag_details_with_override_false_match_value(self):
+        flag_details = FeatureFlag(
+            key="test-flag",
+            enabled=True,
+            variant="control",
+            metadata=FlagMetadata(
+                id=1,
+                version=1,
+                description="test-flag",
+                payload='{"some": "value"}'
+            ),
+            reason=FlagReason(
+                code="test-reason",
+                description="test-reason",
+                condition_index=0
+            )
+        )
+
+        result = FeatureFlagResult.from_flag_details(flag_details, override_match_value=False)
+
+        self.assertEqual(result.key, "test-flag")
+        self.assertEqual(result.enabled, False)
+        self.assertEqual(result.variant, None)
+        self.assertEqual(result.payload, '{"some": "value"}')
+
     def test_from_variant_flag_details(self):
         flag_details = FeatureFlag(
             key="test-flag",

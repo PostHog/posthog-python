@@ -131,13 +131,25 @@ class FeatureFlagResult:
         )
     
     @classmethod
-    def from_flag_details(cls, details: FeatureFlag | None) -> "FeatureFlagResult | None":
+    def from_flag_details(cls, details: FeatureFlag | None, override_match_value: Optional[FlagValue] = None) -> "FeatureFlagResult | None":
+        """
+        Create a FeatureFlagResult from a FeatureFlag object.
+
+        If override_match_value is provided, it will be used to populate the enabled and variant fields.
+        """
+
         if details is None:
             return None
+        
+        if override_match_value is not None:
+            enabled, variant = (True, override_match_value) if isinstance(override_match_value, str) else (override_match_value, None)
+        else:
+            enabled, variant = (details.enabled, details.variant)
+
         return cls(
             key=details.key,
-            enabled=details.enabled,
-            variant=details.variant,
+            enabled=enabled,
+            variant=variant,
             payload=details.metadata.payload,
         )
 
