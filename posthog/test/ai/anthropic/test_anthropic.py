@@ -6,7 +6,9 @@ import pytest
 
 try:
     from anthropic.types import Message, Usage
+
     from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False

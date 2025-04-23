@@ -15,7 +15,9 @@ try:
     from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
     from openai.types.embedding import Embedding
     from openai.types.responses import Response, ResponseOutputMessage, ResponseOutputText, ResponseUsage
+
     from posthog.ai.openai import OpenAI
+
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False

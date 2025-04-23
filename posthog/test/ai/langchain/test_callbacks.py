@@ -8,19 +8,42 @@ from typing import List, Literal, Optional, TypedDict, Union
 from unittest.mock import patch
 
 import pytest
-from langchain_anthropic.chat_models import ChatAnthropic
-from langchain_community.chat_models.fake import FakeMessagesListChatModel
-from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableLambda
-from langchain_core.tools import tool
-from langchain_openai.chat_models import ChatOpenAI
-from langgraph.graph.state import END, START, StateGraph
-from langgraph.prebuilt import create_react_agent
 
-from posthog.ai.langchain import CallbackHandler
-from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
+try:
+    from langchain_anthropic.chat_models import ChatAnthropic
+    from langchain_community.chat_models.fake import FakeMessagesListChatModel
+    from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.tools import tool
+    from langchain_openai.chat_models import ChatOpenAI
+    from langgraph.graph.state import END, START, StateGraph
+    from langgraph.prebuilt import create_react_agent
+
+    from posthog.ai.langchain import CallbackHandler
+    from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
+
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+
+    class FakeListLLM:
+        pass
+
+    class FakeStreamingListLLM:
+        pass
+
+    class HumanMessage:
+        pass
+
+    class AIMessage:
+        pass
+
+    LANGCHAIN_AVAILABLE = False
+
+
+# Skip all tests if LangChain is not available
+pytestmark = pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain package is not available")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
