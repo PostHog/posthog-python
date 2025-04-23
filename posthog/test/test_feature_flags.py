@@ -2532,8 +2532,7 @@ class TestCaptureCalls(unittest.TestCase):
             {
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_payload": 300,
-                "locally_evaluated": False,
+                "locally_evaluated": True,
                 "$feature/person-flag": True,
             },
             groups={},
@@ -2564,8 +2563,7 @@ class TestCaptureCalls(unittest.TestCase):
             {
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_payload": 300,
-                "locally_evaluated": False,
+                "locally_evaluated": True,
                 "$feature/person-flag": True,
             },
             groups={},

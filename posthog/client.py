@@ -972,14 +972,14 @@ class Client(object):
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_was_locally_evaluated:
-            payload = self._compute_payload_locally(key, flag_value)
-            flag_result = FeatureFlagResult.from_value_and_payload(key, flag_value, payload)
+            payload = self._compute_payload_locally(key, override_match_value or flag_value)
+            flag_result = FeatureFlagResult.from_value_and_payload(key, override_match_value or flag_value, payload)
         elif not only_evaluate_locally:
             try:
                 flag_details, request_id = self._get_feature_flag_details_from_decide(
                     key, distinct_id, groups, person_properties, group_properties, disable_geoip
                 )
-                flag_result = FeatureFlagResult.from_flag_details(flag_details)
+                flag_result = FeatureFlagResult.from_flag_details(flag_details, override_match_value)
                 self.log.debug(f"Successfully computed flag remotely: #{key} -> #{flag_result}")
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
@@ -1106,48 +1106,18 @@ class Client(object):
         send_feature_flag_events=True,
         disable_geoip=None,
     ):
-        if self.disabled:
-            return None
-
-        if match_value is None:
-            person_properties, group_properties = self._add_local_person_and_group_properties(
-                distinct_id, groups, person_properties, group_properties
-            )
-            match_value = self._locally_evaluate_flag(key, distinct_id, groups, person_properties, group_properties)
-
-        response = None
-        payload = None
-        flag_details = None
-        request_id = None
-
-        if match_value is not None:
-            payload = self._compute_payload_locally(key, match_value)
-
-        flag_was_locally_evaluated = payload is not None
-        if not flag_was_locally_evaluated and not only_evaluate_locally:
-            try:
-                flag_details, request_id = self._get_feature_flag_details_from_decide(
-                    key, distinct_id, groups, person_properties, group_properties, disable_geoip
-                )
-                payload = flag_details.metadata.payload if flag_details else None
-                response = flag_details.get_value() if flag_details else False
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}")
-
-        if send_feature_flag_events:
-            self._capture_feature_flag_called(
-                distinct_id,
-                key,
-                response or False,
-                payload,
-                flag_was_locally_evaluated,
-                groups,
-                disable_geoip,
-                request_id,
-                flag_details,
-            )
-
-        return payload
+        feature_flag_result = self._get_feature_flag_result(
+            key, 
+            distinct_id,
+            override_match_value=match_value,
+            groups=groups, 
+            person_properties=person_properties, 
+            group_properties=group_properties, 
+            only_evaluate_locally=only_evaluate_locally, 
+            send_feature_flag_events=send_feature_flag_events, 
+            disable_geoip=disable_geoip
+        )
+        return feature_flag_result.payload if feature_flag_result else None
 
     def _get_feature_flag_details_from_decide(
         self,
