@@ -14,7 +14,7 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.variant, None)
         self.assertEqual(result.payload, [1, 2, 3])
 
-    def test_from_bool_value_and_payload(self):
+    def test_from_false_value_and_payload(self):
         result = FeatureFlagResult.from_value_and_payload("test-flag", False, '{"some": "value"}')
 
         self.assertEqual(result.key, "test-flag")
