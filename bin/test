@@ -4,4 +4,7 @@
 source bin/helpers/_utils.sh
 set_source_and_root_dir
 
-pytest
+ensure_virtual_env
+
+# Pass through all arguments to pytest
+pytest "$@"

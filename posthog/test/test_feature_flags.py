@@ -1801,15 +1801,16 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_b, {"key": "three"}))
 
     def test_match_properties_regex(self):
-        property_a = self.property(key="key", value="\.com$", operator="regex")  # noqa: W605
+        property_a = self.property(key="key", value=r"\.com$", operator="regex")
         self.assertTrue(match_property(property_a, {"key": "value.com"}))
         self.assertTrue(match_property(property_a, {"key": "value2.com"}))
+        self.assertFalse(match_property(property_a, {"key": "value2com"}))
 
         self.assertFalse(match_property(property_a, {"key": ".com343tfvalue5"}))
         self.assertFalse(match_property(property_a, {"key": "Alakazam"}))
         self.assertFalse(match_property(property_a, {"key": 123}))
         self.assertFalse(match_property(property_a, {"key": "valuecom"}))
-        self.assertFalse(match_property(property_a, {"key": "value\com"}))  # noqa: W605
+        self.assertFalse(match_property(property_a, {"key": r"value\com"}))
 
         property_b = self.property(key="key", value="3", operator="regex")
         self.assertTrue(match_property(property_b, {"key": "3"}))
