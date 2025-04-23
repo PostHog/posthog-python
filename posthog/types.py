@@ -122,7 +122,7 @@ class FeatureFlagResult:
         return self.variant or self.enabled
 
     @classmethod
-    def from_value_and_payload(cls, key: str, value: FlagValue | None, payload: Any) -> "FeatureFlagResult | None":
+    def from_value_and_payload(cls, key: str, value: Union[FlagValue, None], payload: Any) -> Union["FeatureFlagResult", None]:
         if value is None:
             return None
         enabled, variant = (True, value) if isinstance(value, str) else (value, None)
