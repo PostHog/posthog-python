@@ -107,6 +107,13 @@ class FlagsAndPayloads(TypedDict, total=True):
 class FeatureFlagResult:
     """
     The result of calling a feature flag which includes the flag result, variant, and payload.
+    
+    Attributes:
+        key (str): The unique identifier of the feature flag.
+        enabled (bool): Whether the feature flag is enabled for the current context.
+        variant (Optional[str]): The variant value if the flag is enabled and has variants, None otherwise.
+        payload (Optional[Any]): Additional data associated with the feature flag, if any.
+        reason (Optional[str]): A description of why the flag was enabled or disabled, if available.
     """
 
     key: str
@@ -119,11 +126,25 @@ class FeatureFlagResult:
         """
         Returns the value of the flag. This is the variant if it exists, otherwise the enabled value.
         This is the value we report as `$feature_flag_response` in the `$feature_flag_called` event.
+        
+        Returns:
+            FlagValue: Either a string variant or boolean value representing the flag's state.
         """
         return self.variant or self.enabled
 
     @classmethod
     def from_value_and_payload(cls, key: str, value: Union[FlagValue, None], payload: Any) -> Union["FeatureFlagResult", None]:
+        """
+        Creates a FeatureFlagResult from a flag value and payload.
+        
+        Args:
+            key (str): The unique identifier of the feature flag.
+            value (Union[FlagValue, None]): The value of the flag (string variant or boolean).
+            payload (Any): Additional data associated with the feature flag.
+            
+        Returns:
+            Union[FeatureFlagResult, None]: A new FeatureFlagResult instance, or None if value is None.
+        """
         if value is None:
             return None
         enabled, variant = (True, value) if isinstance(value, str) else (value, None)
@@ -142,7 +163,13 @@ class FeatureFlagResult:
         """
         Create a FeatureFlagResult from a FeatureFlag object.
 
-        If override_match_value is provided, it will be used to populate the enabled and variant fields.
+        Args:
+            details (FeatureFlag | None): The FeatureFlag object to convert.
+            override_match_value (Optional[FlagValue]): If provided, this value will be used to populate 
+                the enabled and variant fields instead of the values from the FeatureFlag.
+
+        Returns:
+            FeatureFlagResult | None: A new FeatureFlagResult instance, or None if details is None.
         """
 
         if details is None:

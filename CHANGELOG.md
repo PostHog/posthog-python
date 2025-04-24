@@ -10,6 +10,7 @@ print(result.enabled)     # True or False
 print(result.variant)     # 'the-variant-value' or None
 print(result.payload)     # {'foo': 'bar'}
 print(result.get_value()) # 'the-variant-value' or True or False
+print(result.reason)      # 'matched condition set 2' (Not available for local evaluation)
 ```
 
 Breaking change:
