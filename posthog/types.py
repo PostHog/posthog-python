@@ -113,6 +113,7 @@ class FeatureFlagResult:
     enabled: bool
     variant: Optional[str]
     payload: Optional[Any]
+    reason: Optional[str]
 
     def get_value(self) -> FlagValue:
         """
@@ -131,6 +132,7 @@ class FeatureFlagResult:
             enabled=enabled,
             variant=variant,
             payload=json.loads(payload) if isinstance(payload, str) else payload,
+            reason=None,
         )
 
     @classmethod
@@ -162,6 +164,7 @@ class FeatureFlagResult:
                 if isinstance(details.metadata.payload, str)
                 else details.metadata.payload
             ),
+            reason=details.reason.description if details.reason else None,
         )
 
 
