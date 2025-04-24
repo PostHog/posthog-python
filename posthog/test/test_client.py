@@ -393,6 +393,107 @@ class TestClient(unittest.TestCase):
         assert "$feature/false-flag" not in msg["properties"]
         assert "$active_feature_flags" not in msg["properties"]
 
+    @mock.patch("posthog.client.flags")
+    def test_basic_capture_with_local_evaluation_and_send_feature_flags(self, patch_flags):
+        patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+
+        multivariate_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature-local",
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                        ],
+                        "rollout_percentage": 100,
+                    },
+                    {
+                        "rollout_percentage": 50,
+                    },
+                ],
+                "multivariate": {
+                    "variants": [
+                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
+                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
+                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                    ]
+                },
+                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+            },
+        }
+        basic_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "person-flag",
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "region",
+                                "operator": "exact",
+                                "value": ["USA"],
+                                "type": "person",
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        false_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "false-flag",
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 0,
+                    }
+                ],
+                "payloads": {"true": 300},
+            },
+        }
+        client.feature_flags = [multivariate_flag, basic_flag, false_flag]
+
+        # test that flags are evaluated locally without calling /flags or /decide
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+
+        self.assertEqual(msg["event"], "python test event")
+        self.assertTrue(isinstance(msg["timestamp"], str))
+        self.assertIsNone(msg.get("uuid"))
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+        self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "third-variant")
+        self.assertEqual(msg["properties"]["$feature/false-flag"], False)
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
+        assert "$feature/beta-feature" not in msg["properties"]
+
+        self.assertEqual(patch_flags.call_count, 0)
+
+        # test that flags are evaluated with fallback call to /flags or /decide
+        client.feature_flags = []
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+        self.assertEqual(patch_flags.call_count, 1)
+
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_quota_limited(self, patch_get):
         mock_response = {
@@ -519,8 +620,8 @@ class TestClient(unittest.TestCase):
             timeout=3,
             distinct_id="distinct_id",
             groups={},
-            person_properties=None,
-            group_properties=None,
+            person_properties={"distinct_id": "distinct_id"},
+            group_properties={},
             disable_geoip=True,
         )
 
@@ -561,8 +662,8 @@ class TestClient(unittest.TestCase):
             timeout=12,
             distinct_id="distinct_id",
             groups={},
-            person_properties=None,
-            group_properties=None,
+            person_properties={"distinct_id": "distinct_id"},
+            group_properties={},
             disable_geoip=False,
         )
 

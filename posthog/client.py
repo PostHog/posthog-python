@@ -479,16 +479,14 @@ class Client(object):
 
         extra_properties: dict[str, Any] = {}
         feature_variants: Optional[dict[str, Union[bool, str]]] = {}
-        if send_feature_flags:
-            try:
-                feature_variants = self.get_feature_variants(distinct_id, groups, disable_geoip=disable_geoip)
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
-
-        elif self.feature_flags and event != "$feature_flag_called":
+        if self.feature_flags and event != "$feature_flag_called":
             # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to the server
             feature_variants = self.get_all_flags(
                 distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=True
+            )
+        elif send_feature_flags:
+            feature_variants = self.get_all_flags(
+                distinct_id, groups=(groups or {}), disable_geoip=disable_geoip, only_evaluate_locally=False
             )
 
         for feature, variant in (feature_variants or {}).items():
