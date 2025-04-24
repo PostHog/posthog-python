@@ -1,3 +1,34 @@
+## 4.0.0 - 2025-04-24
+
+1. Added new method `get_feature_flag_result` which returns a `FeatureFlagResult` object. This object breaks down the result of a feature flag into its enabled state, variant, and payload. The benefit of this method is it allows you to retrieve the result of a feature flag and its payload in a single API call. You can call `get_value` on the result to get the value of the feature flag, which is the same value returned by `get_feature_flag` (aka the string `variant` if the flag is a multivariate flag or the `boolean` value if the flag is a boolean flag).
+
+Example:
+
+```python
+result = posthog.get_feature_flag_result("my-flag", "distinct_id")
+print(result.enabled)     # True or False
+print(result.variant)     # 'the-variant-value' or None
+print(result.payload)     # {'foo': 'bar'}
+print(result.get_value()) # 'the-variant-value' or True or False
+print(result.reason)      # 'matched condition set 2' (Not available for local evaluation)
+```
+
+Breaking change:
+
+1. `get_feature_flag_payload` now deserializes payloads from JSON strings to `Any`. Previously, it returned the payload as a JSON encoded string.
+
+Before:
+
+```python
+payload = get_feature_flag_payload('key', 'distinct_id') # "{\"some\": \"payload\"}"
+```
+
+After:
+
+```python
+payload = get_feature_flag_payload('key', 'distinct_id') # {"some": "payload"}
+```
+
 ## 3.25.0 – 2025-04-15
 
 1. Roll out new `/flags` endpoint to 100% of `/decide` traffic, excluding the top 10 customers.

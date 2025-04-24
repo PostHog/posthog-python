@@ -1686,7 +1686,7 @@ class TestLocalEvaluation(unittest.TestCase):
                         {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
                     ]
                 },
-                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+                "payloads": {"first-variant": '"some-payload"', "third-variant": '{"a": "json"}'},
             },
         }
         self.client.feature_flags = [multivariate_flag]
@@ -2423,7 +2423,7 @@ class TestCaptureCalls(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY)
 
         self.assertEqual(
-            client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), '{"foo": "bar"}'
+            client.get_feature_flag_payload("decide-flag-with-payload", "some-distinct-id"), {"foo": "bar"}
         )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
@@ -2438,7 +2438,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
                 "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
-                "$feature_flag_payload": '{"foo": "bar"}',
+                "$feature_flag_payload": {"foo": "bar"},
             },
             groups={},
             disable_geoip=None,
@@ -2532,8 +2532,7 @@ class TestCaptureCalls(unittest.TestCase):
             {
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_payload": 300,
-                "locally_evaluated": False,
+                "locally_evaluated": True,
                 "$feature/person-flag": True,
             },
             groups={},
@@ -2564,8 +2563,7 @@ class TestCaptureCalls(unittest.TestCase):
             {
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_payload": 300,
-                "locally_evaluated": False,
+                "locally_evaluated": True,
                 "$feature/person-flag": True,
             },
             groups={},
