@@ -945,7 +945,7 @@ class Client(object):
         key,
         distinct_id,
         *,
-        override_match_value=None,
+        override_match_value: Optional[FlagValue] = None,
         groups={},
         person_properties={},
         group_properties={},
@@ -972,8 +972,9 @@ class Client(object):
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_was_locally_evaluated:
-            payload = self._compute_payload_locally(key, override_match_value or flag_value)
-            flag_result = FeatureFlagResult.from_value_and_payload(key, override_match_value or flag_value, payload)
+            lookup_match_value = override_match_value or flag_value
+            payload = self._compute_payload_locally(key, lookup_match_value) if lookup_match_value else None
+            flag_result = FeatureFlagResult.from_value_and_payload(key, lookup_match_value, payload)
         elif not only_evaluate_locally:
             try:
                 flag_details, request_id = self._get_feature_flag_details_from_decide(
@@ -1098,7 +1099,7 @@ class Client(object):
         key,
         distinct_id,
         *,
-        match_value=None,
+        match_value: Optional[FlagValue] = None,
         groups={},
         person_properties={},
         group_properties={},
@@ -1141,7 +1142,7 @@ class Client(object):
         self,
         distinct_id: str,
         key: str,
-        response: FlagValue,
+        response: Optional[FlagValue],
         payload: Optional[str],
         flag_was_locally_evaluated: bool,
         groups: dict[str, str],
@@ -1149,7 +1150,7 @@ class Client(object):
         request_id: Optional[str],
         flag_details: Optional[FeatureFlag],
     ):
-        feature_flag_reported_key = f"{key}_{str(response)}"
+        feature_flag_reported_key = f"{key}_{'::null::' if response is None else str(response)}"
 
         if feature_flag_reported_key not in self.distinct_ids_feature_flags_reported[distinct_id]:
             properties: dict[str, Any] = {
