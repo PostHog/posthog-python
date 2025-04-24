@@ -9,7 +9,6 @@ import warnings
 from datetime import datetime, timedelta
 from typing import Any, Optional, Union
 from uuid import UUID, uuid4
-import json
 
 import distro  # For Linux OS detection
 from dateutil.tz import tzutc

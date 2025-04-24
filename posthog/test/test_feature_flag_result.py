@@ -1,9 +1,10 @@
 import unittest
+
 import mock
 
 from posthog.client import Client
-from posthog.types import FeatureFlagResult, FeatureFlag, FlagMetadata, FlagReason
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.types import FeatureFlag, FeatureFlagResult, FlagMetadata, FlagReason
 
 
 class TestFeatureFlagResult(unittest.TestCase):
