@@ -271,12 +271,56 @@ class TestClient(unittest.TestCase):
             self.assertEqual(logs.output[0], "ERROR:posthog:test exception\nNoneType: None")
             self.assertEqual(getattr(logs.records[0], "path"), "one/two/three")
 
+    @mock.patch("posthog.client.get")
     @mock.patch("posthog.client.flags")
-    def test_basic_capture_with_feature_flags(self, patch_flags):
+    def test_basic_capture_with_feature_flags(self, patch_flags, patch_get):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        patch_get.return_value = {
+            "flags": [
+                {
+                    "id": 2,
+                    "team_id": 1,
+                    "name": "Beta Feature",
+                    "key": "beta-feature",
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": None
+                            }
+                        ],
+                        "payloads": {},
+                        "multivariate": {
+                            "variants": [
+                                {
+                                    "key": "random-variant",
+                                    "rollout_percentage": 100
+                                },
+                                {
+                                    "key": "test",
+                                    "rollout_percentage": 0
+                                }
+                            ]
+                        }
+                    },
+                    "deleted": False,
+                    "active": True,
+                    "ensure_experience_continuity": False,
+                    "has_encrypted_payloads": False,
+                    "version": 2
+                }
+            ],
+            "group_type_mapping": {
+                "0": "account",
+                "1": "organization",
+                "2": "instance",
+                "3": "project"
+            },
+            "cohorts": {}
+        }
 
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        success, msg = client.capture("distinct_id", "python test event")
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -287,14 +331,19 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
-        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
 
-        self.assertEqual(patch_flags.call_count, 1)
+        # Feature flag is not sent, because client.feature_flags is unset and send_feature_flags=False
+        assert "$feature/beta-feature" not in msg["properties"]
+        assert "$active_feature_flags" not in msg["properties"]
+        self.assertEqual(patch_flags.call_count, 0)
+        self.assertEqual(patch_get.call_count, 0)
 
+    @mock.patch("posthog.client.get")
     @mock.patch("posthog.client.flags")
-    def test_basic_capture_with_locally_evaluated_feature_flags(self, patch_flags):
+    def test_basic_capture_with_locally_evaluated_feature_flags(self, patch_flags, patch_get):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        patch_get.return_value = {"flags": []}
+
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
 
         multivariate_flag = {
@@ -375,27 +424,66 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+        # Feature flag is sent despite send_feature_flags=False
+        # because client.feature_flags is set
         self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "third-variant")
         self.assertEqual(msg["properties"]["$feature/false-flag"], False)
         self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
         assert "$feature/beta-feature" not in msg["properties"]
 
+        # There are no calls to (/flags, /decide) or /api/feature_flag/local_evaluation
         self.assertEqual(patch_flags.call_count, 0)
+        self.assertEqual(patch_get.call_count, 0)
 
-        # test that flags are not evaluated without local evaluation
-        client.feature_flags = []
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        assert "$feature/beta-feature" not in msg["properties"]
-        assert "$feature/beta-feature-local" not in msg["properties"]
-        assert "$feature/false-flag" not in msg["properties"]
-        assert "$active_feature_flags" not in msg["properties"]
-
+    @mock.patch("posthog.client.get")
     @mock.patch("posthog.client.flags")
-    def test_basic_capture_with_local_evaluation_and_send_feature_flags(self, patch_flags):
+    def test_basic_capture_with_local_evaluation_and_send_feature_flags(self, patch_flags, patch_get):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        patch_get.return_value = {
+            "flags": [
+                {
+                    "id": 2,
+                    "team_id": 1,
+                    "name": "Beta Feature",
+                    "key": "beta-feature",
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": None
+                            }
+                        ],
+                        "payloads": {},
+                        "multivariate": {
+                            "variants": [
+                                {
+                                    "key": "random-variant",
+                                    "rollout_percentage": 100
+                                },
+                                {
+                                    "key": "test",
+                                    "rollout_percentage": 0
+                                }
+                            ]
+                        }
+                    },
+                    "deleted": False,
+                    "active": True,
+                    "ensure_experience_continuity": False,
+                    "has_encrypted_payloads": False,
+                    "version": 2
+                }
+            ],
+            "group_type_mapping": {
+                "0": "account",
+                "1": "organization",
+                "2": "instance",
+                "3": "project"
+            },
+            "cohorts": {}
+        }
+
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
 
         multivariate_flag = {
@@ -482,17 +570,59 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
         assert "$feature/beta-feature" not in msg["properties"]
 
+        # There are no calls to (/flags, /decide) or /api/feature_flag/local_evaluation
+        # because client.feature_flags is set.
         self.assertEqual(patch_flags.call_count, 0)
+        self.assertEqual(patch_get.call_count, 0)
 
-        # test that flags are evaluated with fallback call to /flags or /decide
-        client.feature_flags = []
+        # Test that flags are evaluated with only call to local evaluation (/api/feature_flag/local_evaluation)
+        # Create a new client, so that client.feature_flags is None
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
         success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
         self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
         self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+        self.assertEqual(patch_get.call_count, 1)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.get")
+    @mock.patch("posthog.client.flags")
+    def test_basic_capture_with_local_evaluation_and_fallback_to_decide(self, patch_flags, patch_get):
+        patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        patch_get.return_value = {"flags": []}
+
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+
+        # Both (/flags, /decide) and /api/feature_flag/local_evaluation are called
+        self.assertEqual(patch_get.call_count, 1)
         self.assertEqual(patch_flags.call_count, 1)
+
+    @mock.patch("posthog.client.get")
+    @mock.patch("posthog.client.flags")
+    def test_basic_capture_with_local_evaluation_disabled(self, patch_flags, patch_get):
+        patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
+        patch_get.return_value = {"flags": []}
+
+        # Creating client without personal_api_key disables local evaluation 
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client.flush()
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
+        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+
+        # Only (/flags, /decide) is called. /api/feature_flag/local_evaluation is not called
+        self.assertEqual(patch_flags.call_count, 1)
+        self.assertEqual(patch_get.call_count, 0)
 
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_quota_limited(self, patch_get):
