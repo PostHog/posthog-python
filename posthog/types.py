@@ -160,13 +160,13 @@ class FeatureFlagResult:
 
     @classmethod
     def from_flag_details(
-        cls, details: FeatureFlag | None, override_match_value: Optional[FlagValue] = None
+        cls, details: Union[FeatureFlag, None], override_match_value: Optional[FlagValue] = None
     ) -> "FeatureFlagResult | None":
         """
         Create a FeatureFlagResult from a FeatureFlag object.
 
         Args:
-            details (FeatureFlag | None): The FeatureFlag object to convert.
+            details (Union[FeatureFlag, None]): The FeatureFlag object to convert.
             override_match_value (Optional[FlagValue]): If provided, this value will be used to populate
                 the enabled and variant fields instead of the values from the FeatureFlag.
 
