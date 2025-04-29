@@ -17,9 +17,8 @@ PostHog is developer-friendly, self-hosted product analytics. posthog-python is 
 install_requires = [
     "requests>=2.7,<3.0",
     "six>=1.5",
-    "monotonic>=1.5",
+    "python-dateutil>=2.2",
     "backoff>=1.10.0",
-    "python-dateutil>2.1",
     "distro>=1.5.0",  # Required for Linux OS detection in Python 3.9+
 ]
 
