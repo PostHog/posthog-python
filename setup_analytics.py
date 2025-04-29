@@ -12,14 +12,15 @@ from version import VERSION
 
 long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
+
+This package requires Python 3.9 or higher.
 """
 
 install_requires = [
     "requests>=2.7,<3.0",
     "six>=1.5",
-    "monotonic>=1.5",
+    "python-dateutil>=2.2",
     "backoff>=1.10.0",
-    "python-dateutil>2.1",
     "distro>=1.5.0",  # Required for Linux OS detection in Python 3.9+
 ]
 
@@ -58,19 +59,10 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python",
-        "Programming Language :: Python :: 2",
-        "Programming Language :: Python :: 2.6",
-        "Programming Language :: Python :: 2.7",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.2",
-        "Programming Language :: Python :: 3.3",
-        "Programming Language :: Python :: 3.4",
-        "Programming Language :: Python :: 3.5",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
     ],
 )
