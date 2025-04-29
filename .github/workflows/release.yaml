@@ -1,38 +1,43 @@
-name: 'Release'
+name: "Release"
 
 on:
-  - workflow_dispatch
+  push:
+    branches:
+      - master
+    paths:
+      - "posthog/version.py"
+  workflow_dispatch:
 
 jobs:
-    release:
-        name: Publish release
-        runs-on: ubuntu-latest
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    env:
+      TWINE_USERNAME: __token__
+      TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+
+      - name: Detect version
+        run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
+
+      - name: Prepare for building release
+        run: pip install -U pip setuptools wheel twine
+
+      - name: Push release to PyPI
+        run: make release && make release_analytics
+
+      - name: Create GitHub release
+        uses: actions/create-release@v1
         env:
-            TWINE_USERNAME: __token__
-            TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        steps:
-            - name: Checkout the repository
-              uses: actions/checkout@v2
-              with:
-                  fetch-depth: 0
-                  token: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
-
-            - name: Set up Python
-              uses: actions/setup-python@v2
-
-            - name: Detect version
-              run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
-
-            - name: Prepare for building release
-              run: pip install -U pip setuptools wheel twine
-
-            - name: Push release to PyPI
-              run: make release && make release_analytics
-
-            - name: Create GitHub release
-              uses: actions/create-release@v1
-              env:
-                  GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
-              with:
-                  tag_name: v${{ env.REPO_VERSION }}
-                  release_name: ${{ env.REPO_VERSION }}
+          GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.REPO_VERSION }}
+          release_name: ${{ env.REPO_VERSION }}
