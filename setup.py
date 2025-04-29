@@ -12,6 +12,8 @@ from version import VERSION
 
 long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
+
+This package requires Python 3.9 or higher.
 """
 
 install_requires = [

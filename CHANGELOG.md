@@ -1,6 +1,7 @@
 ## 4.0.1 – 2025-04-29
 
 1. Remove deprecated `monotonic` library. Use Python's core `time.monotonic` function instead
+2. Clarify Python 3.9+ is required
 
 ## 4.0.0 - 2025-04-24
 
