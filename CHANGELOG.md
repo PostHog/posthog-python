@@ -1,3 +1,7 @@
+## 4.2.0 - 2025-05-22
+
+Add support for google gemini
+
 ## 4.1.0 - 2025-05-22
 
 Moved ai openai package to a composition approach over inheritance.
