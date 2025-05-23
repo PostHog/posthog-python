@@ -193,7 +193,7 @@ class Models:
     ):
         start_time = time.time()
         usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
-        accumulated_content = [] # noqa: F824
+        accumulated_content = []  # noqa: F824
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
         response = self._client.models.generate_content_stream(**kwargs_without_stream)
