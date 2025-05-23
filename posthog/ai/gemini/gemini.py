@@ -128,6 +128,9 @@ class Models:
         if call_properties:
             properties.update(call_properties)
 
+        if call_trace_id is None:
+            call_trace_id = str(uuid.uuid4())
+
         return distinct_id, call_trace_id, properties, privacy_mode, groups
 
     def generate_content(
@@ -161,9 +164,6 @@ class Models:
         distinct_id, trace_id, properties, privacy_mode, groups = self._merge_posthog_params(
             posthog_distinct_id, posthog_trace_id, posthog_properties, posthog_privacy_mode, posthog_groups
         )
-
-        if trace_id is None:
-            trace_id = str(uuid.uuid4())
 
         kwargs_with_contents = {"model": model, "contents": contents, **kwargs}
 
@@ -318,9 +318,6 @@ class Models:
         distinct_id, trace_id, properties, privacy_mode, groups = self._merge_posthog_params(
             posthog_distinct_id, posthog_trace_id, posthog_properties, posthog_privacy_mode, posthog_groups
         )
-
-        if trace_id is None:
-            trace_id = str(uuid.uuid4())
 
         return self._generate_content_streaming(
             model,
