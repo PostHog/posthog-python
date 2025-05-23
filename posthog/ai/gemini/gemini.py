@@ -69,6 +69,8 @@ class Models:
     Models interface that mimics genai.Client().models with PostHog tracking.
     """
 
+    _ph_client: PostHogClient  # Not None after __init__ validation
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -89,6 +91,9 @@ class Models:
             posthog_groups: Default groups for all calls
             **kwargs: Additional arguments (for future compatibility)
         """
+        if posthog_client is None:
+            raise ValueError("posthog_client is required for PostHog tracking")
+
         self._ph_client = posthog_client
 
         # Store default PostHog settings
