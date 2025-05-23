@@ -1,3 +1,7 @@
+## 4.1.0 - 2025-05-22
+
+Moved ai openai package to a composition approach over inheritance.
+
 ## 4.0.1 – 2025-04-29
 
 1. Remove deprecated `monotonic` library. Use Python's core `time.monotonic` function instead
