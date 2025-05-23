@@ -1,7 +1,7 @@
+import importlib
 import time
 import uuid
 from typing import Any, Dict, List, Optional
-import importlib
 
 try:
     import openai
@@ -10,6 +10,7 @@ except ImportError:
 
 from posthog.ai.utils import call_llm_and_track_usage_async, get_model_params, with_privacy_mode
 from posthog.client import Client as PostHogClient
+
 
 class AsyncOpenAI(openai.AsyncOpenAI):
     """
@@ -28,23 +29,23 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client
-        
+
         # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, 'chat', None)
-        self._original_embeddings = getattr(self, 'embeddings', None) 
-        self._original_beta = getattr(self, 'beta', None)
-        self._original_responses = getattr(self, 'responses', None)
-            
+        self._original_chat = getattr(self, "chat", None)
+        self._original_embeddings = getattr(self, "embeddings", None)
+        self._original_beta = getattr(self, "beta", None)
+        self._original_responses = getattr(self, "responses", None)
+
         # Replace with wrapped versions (only if originals exist)
         if self._original_chat is not None:
             self.chat = WrappedChat(self, self._original_chat)
-            
+
         if self._original_embeddings is not None:
             self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-            
+
         if self._original_beta is not None:
             self.beta = WrappedBeta(self, self._original_beta)
-        
+
         # Only add responses if available (newer OpenAI versions)
         if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
@@ -52,7 +53,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
 
 class WrappedResponses:
     """Async wrapper for OpenAI responses that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_responses):
         self._client = client
         self._original = original_responses
@@ -220,7 +221,7 @@ class WrappedResponses:
 
 class WrappedChat:
     """Async wrapper for OpenAI chat that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_chat):
         self._client = client
         self._original = original_chat
@@ -236,7 +237,7 @@ class WrappedChat:
 
 class WrappedCompletions:
     """Async wrapper for OpenAI chat completions that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_completions):
         self._client = client
         self._original = original_completions
@@ -427,7 +428,7 @@ class WrappedCompletions:
 
 class WrappedEmbeddings:
     """Async wrapper for OpenAI embeddings that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_embeddings):
         self._client = client
         self._original = original_embeddings
@@ -504,7 +505,7 @@ class WrappedEmbeddings:
 
 class WrappedBeta:
     """Async wrapper for OpenAI beta features that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_beta):
         self._client = client
         self._original = original_beta
@@ -520,7 +521,7 @@ class WrappedBeta:
 
 class WrappedBetaChat:
     """Async wrapper for OpenAI beta chat that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_beta_chat):
         self._client = client
         self._original = original_beta_chat
@@ -536,7 +537,7 @@ class WrappedBetaChat:
 
 class WrappedBetaCompletions:
     """Async wrapper for OpenAI beta chat completions that tracks usage in PostHog."""
-    
+
     def __init__(self, client: AsyncOpenAI, original_beta_completions):
         self._client = client
         self._original = original_beta_completions

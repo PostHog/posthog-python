@@ -28,23 +28,23 @@ class AzureOpenAI(openai.AzureOpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client
-        
+
         # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, 'chat', None)
-        self._original_embeddings = getattr(self, 'embeddings', None) 
-        self._original_beta = getattr(self, 'beta', None)
-        self._original_responses = getattr(self, 'responses', None)
-            
+        self._original_chat = getattr(self, "chat", None)
+        self._original_embeddings = getattr(self, "embeddings", None)
+        self._original_beta = getattr(self, "beta", None)
+        self._original_responses = getattr(self, "responses", None)
+
         # Replace with wrapped versions (only if originals exist)
         if self._original_chat is not None:
             self.chat = WrappedChat(self, self._original_chat)
-            
+
         if self._original_embeddings is not None:
             self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-            
+
         if self._original_beta is not None:
             self.beta = WrappedBeta(self, self._original_beta)
-        
+
         # Only add responses if available (newer OpenAI versions)
         if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
@@ -67,23 +67,23 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client
-        
+
         # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, 'chat', None)
-        self._original_embeddings = getattr(self, 'embeddings', None) 
-        self._original_beta = getattr(self, 'beta', None)
-        self._original_responses = getattr(self, 'responses', None)
-            
+        self._original_chat = getattr(self, "chat", None)
+        self._original_embeddings = getattr(self, "embeddings", None)
+        self._original_beta = getattr(self, "beta", None)
+        self._original_responses = getattr(self, "responses", None)
+
         # Replace with wrapped versions (only if originals exist)
         if self._original_chat is not None:
             self.chat = AsyncWrappedChat(self, self._original_chat)
-            
+
         if self._original_embeddings is not None:
             self.embeddings = AsyncWrappedEmbeddings(self, self._original_embeddings)
-            
+
         if self._original_beta is not None:
             self.beta = AsyncWrappedBeta(self, self._original_beta)
-        
+
         # Only add responses if available (newer OpenAI versions)
         if self._original_responses is not None:
             self.responses = AsyncWrappedResponses(self, self._original_responses)

@@ -28,23 +28,23 @@ class OpenAI(openai.OpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client
-        
+
         # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, 'chat', None)
-        self._original_embeddings = getattr(self, 'embeddings', None) 
-        self._original_beta = getattr(self, 'beta', None)
-        self._original_responses = getattr(self, 'responses', None)
-            
+        self._original_chat = getattr(self, "chat", None)
+        self._original_embeddings = getattr(self, "embeddings", None)
+        self._original_beta = getattr(self, "beta", None)
+        self._original_responses = getattr(self, "responses", None)
+
         # Replace with wrapped versions (only if originals exist)
         if self._original_chat is not None:
             self.chat = WrappedChat(self, self._original_chat)
-            
+
         if self._original_embeddings is not None:
             self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-            
+
         if self._original_beta is not None:
             self.beta = WrappedBeta(self, self._original_beta)
-        
+
         # Only add responses if available (newer OpenAI versions)
         if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
@@ -52,7 +52,7 @@ class OpenAI(openai.OpenAI):
 
 class WrappedResponses:
     """Wrapper for OpenAI responses that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_responses):
         self._client = client
         self._original = original_responses
@@ -220,7 +220,7 @@ class WrappedResponses:
 
 class WrappedChat:
     """Wrapper for OpenAI chat that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_chat):
         self._client = client
         self._original = original_chat
@@ -236,7 +236,7 @@ class WrappedChat:
 
 class WrappedCompletions:
     """Wrapper for OpenAI chat completions that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_completions):
         self._client = client
         self._original = original_completions
@@ -424,7 +424,7 @@ class WrappedCompletions:
 
 class WrappedEmbeddings:
     """Wrapper for OpenAI embeddings that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_embeddings):
         self._client = client
         self._original = original_embeddings
@@ -501,7 +501,7 @@ class WrappedEmbeddings:
 
 class WrappedBeta:
     """Wrapper for OpenAI beta features that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_beta):
         self._client = client
         self._original = original_beta
@@ -517,7 +517,7 @@ class WrappedBeta:
 
 class WrappedBetaChat:
     """Wrapper for OpenAI beta chat that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_beta_chat):
         self._client = client
         self._original = original_beta_chat
@@ -533,7 +533,7 @@ class WrappedBetaChat:
 
 class WrappedBetaCompletions:
     """Wrapper for OpenAI beta chat completions that tracks usage in PostHog."""
-    
+
     def __init__(self, client: OpenAI, original_beta_completions):
         self._client = client
         self._original = original_beta_completions
