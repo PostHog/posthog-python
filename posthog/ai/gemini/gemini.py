@@ -193,14 +193,14 @@ class Models:
     ):
         start_time = time.time()
         usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
-        accumulated_content = []  # noqa: F824
+        accumulated_content = []
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
         response = self._client.models.generate_content_stream(**kwargs_without_stream)
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content
+            nonlocal accumulated_content  # noqa: F824
             try:
                 for chunk in response:
                     if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
