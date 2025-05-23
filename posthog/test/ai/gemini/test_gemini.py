@@ -1,12 +1,10 @@
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 try:
-    from google import genai as google_genai
-
     from posthog.ai.gemini import Client
+    from google import genai as google_genai
 
     GEMINI_AVAILABLE = True
 except ImportError:
