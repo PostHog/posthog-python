@@ -45,7 +45,6 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         if self._original_beta is not None:
             self.beta = WrappedBeta(self, self._original_beta)
 
-        # Only add responses if available (newer OpenAI versions)
         if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
 
@@ -452,6 +451,8 @@ class WrappedEmbeddings:
             posthog_distinct_id: Optional ID to associate with the usage event.
             posthog_trace_id: Optional trace UUID for linking events.
             posthog_properties: Optional dictionary of extra properties to include in the event.
+            posthog_privacy_mode: Whether to anonymize the input and output.
+            posthog_groups: Optional dictionary of groups to associate with the event.
             **kwargs: Any additional parameters for the OpenAI Embeddings API.
 
         Returns:

@@ -45,7 +45,6 @@ class AzureOpenAI(openai.AzureOpenAI):
         if self._original_beta is not None:
             self.beta = WrappedBeta(self, self._original_beta)
 
-        # Only add responses if available (newer OpenAI versions)
         if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
 
