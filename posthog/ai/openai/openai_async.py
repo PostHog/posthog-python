@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 
 try:
     import openai
-    import openai.resources
 except ImportError:
     raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
 
@@ -23,19 +22,43 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         """
         Args:
             api_key: OpenAI API key.
-            posthog_client: If provided, events will be captured via this client instance.
-            **openai_config: Additional keyword args (e.g. organization="xxx").
+            posthog_client: If provided, events will be captured via this client instead
+                            of the global posthog.
+            **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client
-        self.chat = WrappedChat(self)
-        self.embeddings = WrappedEmbeddings(self)
-        self.beta = WrappedBeta(self)
-        self.responses = WrappedResponses(self)
+
+        # Store original objects after parent initialization (only if they exist)
+        self._original_chat = getattr(self, "chat", None)
+        self._original_embeddings = getattr(self, "embeddings", None)
+        self._original_beta = getattr(self, "beta", None)
+        self._original_responses = getattr(self, "responses", None)
+
+        # Replace with wrapped versions (only if originals exist)
+        if self._original_chat is not None:
+            self.chat = WrappedChat(self, self._original_chat)
+
+        if self._original_embeddings is not None:
+            self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
+
+        if self._original_beta is not None:
+            self.beta = WrappedBeta(self, self._original_beta)
+
+        if self._original_responses is not None:
+            self.responses = WrappedResponses(self, self._original_responses)
 
 
-class WrappedResponses(openai.resources.responses.Responses):
-    _client: AsyncOpenAI
+class WrappedResponses:
+    """Async wrapper for OpenAI responses that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_responses):
+        self._client = client
+        self._original = original_responses
+
+    def __getattr__(self, name):
+        """Fallback to original responses object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     async def create(
         self,
@@ -68,7 +91,7 @@ class WrappedResponses(openai.resources.responses.Responses):
             posthog_privacy_mode,
             posthog_groups,
             self._client.base_url,
-            super().create,
+            self._original.create,
             **kwargs,
         )
 
@@ -84,7 +107,7 @@ class WrappedResponses(openai.resources.responses.Responses):
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         final_content = []
-        response = await super().create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
@@ -186,7 +209,7 @@ class WrappedResponses(openai.resources.responses.Responses):
             event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
-            await self._client._ph_client.capture(
+            self._client._ph_client.capture(
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
@@ -194,16 +217,32 @@ class WrappedResponses(openai.resources.responses.Responses):
             )
 
 
-class WrappedChat(openai.resources.chat.AsyncChat):
-    _client: AsyncOpenAI
+class WrappedChat:
+    """Async wrapper for OpenAI chat that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_chat):
+        self._client = client
+        self._original = original_chat
+
+    def __getattr__(self, name):
+        """Fallback to original chat object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     @property
     def completions(self):
-        return WrappedCompletions(self._client)
+        return WrappedCompletions(self._client, self._original.completions)
 
 
-class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
-    _client: AsyncOpenAI
+class WrappedCompletions:
+    """Async wrapper for OpenAI chat completions that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_completions):
+        self._client = client
+        self._original = original_completions
+
+    def __getattr__(self, name):
+        """Fallback to original completions object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     async def create(
         self,
@@ -237,7 +276,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             posthog_privacy_mode,
             posthog_groups,
             self._client.base_url,
-            super().create,
+            self._original.create,
             **kwargs,
         )
         return response
@@ -247,21 +286,25 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
         posthog_distinct_id: Optional[str],
         posthog_trace_id: Optional[str],
         posthog_properties: Optional[Dict[str, Any]],
-        posthog_privacy_mode: bool = False,
-        posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool,
+        posthog_groups: Optional[Dict[str, Any]],
         **kwargs: Any,
     ):
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
         accumulated_tools = {}
+
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
-        response = await super().create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
-            nonlocal usage_stats, accumulated_content, accumulated_tools  # noqa: F824
+            nonlocal usage_stats
+            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_tools  # noqa: F824
+
             try:
                 async for chunk in response:
                     if hasattr(chunk, "usage") and chunk.usage:
@@ -279,6 +322,11 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
                             chunk.usage.prompt_tokens_details, "cached_tokens"
                         ):
                             usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
+
+                        if hasattr(chunk.usage, "output_tokens_details") and hasattr(
+                            chunk.usage.output_tokens_details, "reasoning_tokens"
+                        ):
+                            usage_stats["reasoning_tokens"] = chunk.usage.output_tokens_details.reasoning_tokens
 
                     if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
                         if chunk.choices[0].delta and chunk.choices[0].delta.content:
@@ -350,6 +398,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
             "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
+            "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
@@ -367,7 +416,7 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
-            await self._client._ph_client.capture(
+            self._client._ph_client.capture(
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_generation",
                 properties=event_properties,
@@ -375,8 +424,16 @@ class WrappedCompletions(openai.resources.chat.completions.AsyncCompletions):
             )
 
 
-class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
-    _client: AsyncOpenAI
+class WrappedEmbeddings:
+    """Async wrapper for OpenAI embeddings that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_embeddings):
+        self._client = client
+        self._original = original_embeddings
+
+    def __getattr__(self, name):
+        """Fallback to original embeddings object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     async def create(
         self,
@@ -394,8 +451,8 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
             posthog_distinct_id: Optional ID to associate with the usage event.
             posthog_trace_id: Optional trace UUID for linking events.
             posthog_properties: Optional dictionary of extra properties to include in the event.
-            posthog_privacy_mode: Whether to store input and output in PostHog.
-            posthog_groups: Optional dictionary of groups to include in the event.
+            posthog_privacy_mode: Whether to anonymize the input and output.
+            posthog_groups: Optional dictionary of groups to associate with the event.
             **kwargs: Any additional parameters for the OpenAI Embeddings API.
 
         Returns:
@@ -405,7 +462,7 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
             posthog_trace_id = str(uuid.uuid4())
 
         start_time = time.time()
-        response = await super().create(**kwargs)
+        response = await self._original.create(**kwargs)
         end_time = time.time()
 
         # Extract usage statistics if available
@@ -446,24 +503,48 @@ class WrappedEmbeddings(openai.resources.embeddings.AsyncEmbeddings):
         return response
 
 
-class WrappedBeta(openai.resources.beta.AsyncBeta):
-    _client: AsyncOpenAI
+class WrappedBeta:
+    """Async wrapper for OpenAI beta features that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_beta):
+        self._client = client
+        self._original = original_beta
+
+    def __getattr__(self, name):
+        """Fallback to original beta object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     @property
     def chat(self):
-        return WrappedBetaChat(self._client)
+        return WrappedBetaChat(self._client, self._original.chat)
 
 
-class WrappedBetaChat(openai.resources.beta.chat.AsyncChat):
-    _client: AsyncOpenAI
+class WrappedBetaChat:
+    """Async wrapper for OpenAI beta chat that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_beta_chat):
+        self._client = client
+        self._original = original_beta_chat
+
+    def __getattr__(self, name):
+        """Fallback to original beta chat object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     @property
     def completions(self):
-        return WrappedBetaCompletions(self._client)
+        return WrappedBetaCompletions(self._client, self._original.completions)
 
 
-class WrappedBetaCompletions(openai.resources.beta.chat.completions.AsyncCompletions):
-    _client: AsyncOpenAI
+class WrappedBetaCompletions:
+    """Async wrapper for OpenAI beta chat completions that tracks usage in PostHog."""
+
+    def __init__(self, client: AsyncOpenAI, original_beta_completions):
+        self._client = client
+        self._original = original_beta_completions
+
+    def __getattr__(self, name):
+        """Fallback to original beta completions object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
 
     async def parse(
         self,
@@ -483,6 +564,6 @@ class WrappedBetaCompletions(openai.resources.beta.chat.completions.AsyncComplet
             posthog_privacy_mode,
             posthog_groups,
             self._client.base_url,
-            super().parse,
+            self._original.parse,
             **kwargs,
         )
