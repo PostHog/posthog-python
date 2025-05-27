@@ -8,19 +8,42 @@ from typing import List, Literal, Optional, TypedDict, Union
 from unittest.mock import patch
 
 import pytest
-from langchain_anthropic.chat_models import ChatAnthropic
-from langchain_community.chat_models.fake import FakeMessagesListChatModel
-from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableLambda
-from langchain_core.tools import tool
-from langchain_openai.chat_models import ChatOpenAI
-from langgraph.graph.state import END, START, StateGraph
-from langgraph.prebuilt import create_react_agent
 
-from posthog.ai.langchain import CallbackHandler
-from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
+try:
+    from langchain_anthropic.chat_models import ChatAnthropic
+    from langchain_community.chat_models.fake import FakeMessagesListChatModel
+    from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.tools import tool
+    from langchain_openai.chat_models import ChatOpenAI
+    from langgraph.graph.state import END, START, StateGraph
+    from langgraph.prebuilt import create_react_agent
+
+    from posthog.ai.langchain import CallbackHandler
+    from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
+
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+
+    class FakeListLLM:
+        pass
+
+    class FakeStreamingListLLM:
+        pass
+
+    class HumanMessage:
+        pass
+
+    class AIMessage:
+        pass
+
+    LANGCHAIN_AVAILABLE = False
+
+
+# Skip all tests if LangChain is not available
+pytestmark = pytest.mark.skipif(not LANGCHAIN_AVAILABLE, reason="LangChain package is not available")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -618,88 +641,57 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][2], AIMessage)
     assert result["messages"][2].content == "It's a type of greeble."
 
-    assert mock_client.capture.call_count == 11
+    assert mock_client.capture.call_count == 6
     calls = [call[1] for call in mock_client.capture.call_args_list]
 
-    trace_args = calls[10]
-    trace_props = calls[10]["properties"]
+    # The trace event is captured at the end
+    trace_args = calls[-1]
+    trace_props = calls[-1]["properties"]
 
     # Events are captured in the reverse order.
     # Check all trace_ids
     for call in calls:
         assert call["properties"]["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
-    # First span, write the state
-    assert calls[0]["event"] == "$ai_span"
-    assert calls[0]["properties"]["$ai_parent_id"] == calls[2]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[0]["properties"]
-    assert calls[0]["properties"]["$ai_input_state"] == initial_state
-    assert calls[0]["properties"]["$ai_output_state"] == initial_state
-
-    # Second span, set the START node
-    assert calls[1]["event"] == "$ai_span"
-    assert calls[1]["properties"]["$ai_parent_id"] == calls[2]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[1]["properties"]
-    assert calls[1]["properties"]["$ai_input_state"] == initial_state
-    assert calls[1]["properties"]["$ai_output_state"] == initial_state
-
-    # Third span, finish initialization
-    assert calls[2]["event"] == "$ai_span"
-    assert "$ai_span_id" in calls[2]["properties"]
-    assert calls[2]["properties"]["$ai_span_name"] == START
-    assert calls[2]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
-    assert calls[2]["properties"]["$ai_input_state"] == initial_state
-    assert calls[2]["properties"]["$ai_output_state"] == initial_state
-
-    # Fourth span, save the value of fake_plain during its execution
+    # 1. Span, finish initialization
     second_state = {
         "messages": [HumanMessage(content="What's a bar?"), AIMessage(content="Let's explore bar.")],
         "xyz": "abc",
     }
+
+    # 1. Span - the fake_plain node, which doesn't do anything
+    assert calls[0]["event"] == "$ai_span"
+    assert calls[0]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in calls[0]["properties"]
+    assert calls[0]["properties"]["$ai_span_name"] == "fake_plain"
+    assert calls[0]["properties"]["$ai_input_state"] == initial_state
+    assert calls[0]["properties"]["$ai_output_state"] == second_state
+
+    # 2. Span - the ChatPromptTemplate within fake_llm's FakeMessagesListChatModel
+    assert calls[1]["event"] == "$ai_span"
+    assert calls[1]["properties"]["$ai_parent_id"] == calls[3]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[1]["properties"]
+    assert calls[1]["properties"]["$ai_span_name"] == "ChatPromptTemplate"
+
+    # 3. Generation - the FakeMessagesListChatModel within fake_llm's RunnableSequence
+    assert calls[2]["event"] == "$ai_generation"
+    assert calls[2]["properties"]["$ai_parent_id"] == calls[3]["properties"]["$ai_span_id"]
+    assert "$ai_span_id" in calls[2]["properties"]
+    assert calls[2]["properties"]["$ai_span_name"] == "FakeMessagesListChatModel"
+
+    # 4. Span - RunnableSequence within fake_llm
     assert calls[3]["event"] == "$ai_span"
     assert calls[3]["properties"]["$ai_parent_id"] == calls[4]["properties"]["$ai_span_id"]
     assert "$ai_span_id" in calls[3]["properties"]
-    assert calls[3]["properties"]["$ai_input_state"] == second_state
-    assert calls[3]["properties"]["$ai_output_state"] == second_state
+    assert calls[3]["properties"]["$ai_span_name"] == "RunnableSequence"
 
-    # Fifth span, run the fake_plain node
+    # 5. Span - the fake_llm node
     assert calls[4]["event"] == "$ai_span"
-    assert "$ai_span_id" in calls[4]["properties"]
-    assert calls[4]["properties"]["$ai_span_name"] == "fake_plain"
     assert calls[4]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
-    assert calls[4]["properties"]["$ai_input_state"] == initial_state
-    assert calls[4]["properties"]["$ai_output_state"] == second_state
+    assert "$ai_span_id" in calls[4]["properties"]
+    assert calls[4]["properties"]["$ai_span_name"] == "fake_llm"
 
-    # Sixth span, chat prompt template
-    assert calls[5]["event"] == "$ai_span"
-    assert calls[5]["properties"]["$ai_parent_id"] == calls[7]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[5]["properties"]
-    assert calls[5]["properties"]["$ai_span_name"] == "ChatPromptTemplate"
-
-    # 7. Generation, fake_llm
-    assert calls[6]["event"] == "$ai_generation"
-    assert calls[6]["properties"]["$ai_parent_id"] == calls[7]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[6]["properties"]
-    assert calls[6]["properties"]["$ai_span_name"] == "FakeMessagesListChatModel"
-
-    # 8. Span, RunnableSequence
-    assert calls[7]["event"] == "$ai_span"
-    assert calls[7]["properties"]["$ai_parent_id"] == calls[9]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[7]["properties"]
-    assert calls[7]["properties"]["$ai_span_name"] == "RunnableSequence"
-
-    # 9. Span, fake_llm write
-    assert calls[8]["event"] == "$ai_span"
-    assert calls[8]["properties"]["$ai_parent_id"] == calls[9]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[8]["properties"]
-
-    # 10. Span, fake_llm node
-    assert calls[9]["event"] == "$ai_span"
-    assert calls[9]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
-    assert "$ai_span_id" in calls[9]["properties"]
-    assert calls[9]["properties"]["$ai_span_name"] == "fake_llm"
-
-    # 11. Trace
+    # 6. Trace
     assert trace_args["event"] == "$ai_trace"
     assert trace_props["$ai_span_name"] == "LangGraph"
 

@@ -1,9 +1,9 @@
 import json
 import logging
+import time
 from threading import Thread
 
 import backoff
-import monotonic
 
 from posthog.request import APIError, DatetimeSerializer, batch_post
 
@@ -96,11 +96,11 @@ class Consumer(Thread):
         queue = self.queue
         items = []
 
-        start_time = monotonic.monotonic()
+        start_time = time.monotonic()
         total_size = 0
 
         while len(items) < self.flush_at:
-            elapsed = monotonic.monotonic() - start_time
+            elapsed = time.monotonic() - start_time
             if elapsed >= self.flush_interval:
                 break
             try:

@@ -3,18 +3,27 @@ import time
 from unittest.mock import patch
 
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
-from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
-from openai.types.chat.chat_completion_chunk import ChoiceDelta, ChoiceDeltaToolCall, ChoiceDeltaToolCallFunction
-from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
-from openai.types.completion_usage import CompletionUsage
-from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
-from openai.types.embedding import Embedding
-from openai.types.responses import Response, ResponseOutputMessage, ResponseOutputText, ResponseUsage
 
-from posthog.ai.openai import OpenAI
+try:
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+    from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
+    from openai.types.chat.chat_completion_chunk import ChoiceDelta, ChoiceDeltaToolCall, ChoiceDeltaToolCallFunction
+    from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
+    from openai.types.completion_usage import CompletionUsage
+    from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
+    from openai.types.embedding import Embedding
+    from openai.types.responses import Response, ResponseOutputMessage, ResponseOutputText, ResponseUsage
+
+    from posthog.ai.openai import OpenAI
+
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+# Skip all tests if OpenAI is not available
+pytestmark = pytest.mark.skipif(not OPENAI_AVAILABLE, reason="OpenAI package is not available")
 
 
 @pytest.fixture

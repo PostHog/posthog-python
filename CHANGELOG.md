@@ -1,3 +1,67 @@
+## 4.2.0 - 2025-05-22
+
+Add support for google gemini
+
+## 4.1.0 - 2025-05-22
+
+Moved ai openai package to a composition approach over inheritance.
+
+## 4.0.1 – 2025-04-29
+
+1. Remove deprecated `monotonic` library. Use Python's core `time.monotonic` function instead
+2. Clarify Python 3.9+ is required
+
+## 4.0.0 - 2025-04-24
+
+1. Added new method `get_feature_flag_result` which returns a `FeatureFlagResult` object. This object breaks down the result of a feature flag into its enabled state, variant, and payload. The benefit of this method is it allows you to retrieve the result of a feature flag and its payload in a single API call. You can call `get_value` on the result to get the value of the feature flag, which is the same value returned by `get_feature_flag` (aka the string `variant` if the flag is a multivariate flag or the `boolean` value if the flag is a boolean flag).
+
+Example:
+
+```python
+result = posthog.get_feature_flag_result("my-flag", "distinct_id")
+print(result.enabled)     # True or False
+print(result.variant)     # 'the-variant-value' or None
+print(result.payload)     # {'foo': 'bar'}
+print(result.get_value()) # 'the-variant-value' or True or False
+print(result.reason)      # 'matched condition set 2' (Not available for local evaluation)
+```
+
+Breaking change:
+
+1. `get_feature_flag_payload` now deserializes payloads from JSON strings to `Any`. Previously, it returned the payload as a JSON encoded string.
+
+Before:
+
+```python
+payload = get_feature_flag_payload('key', 'distinct_id') # "{\"some\": \"payload\"}"
+```
+
+After:
+
+```python
+payload = get_feature_flag_payload('key', 'distinct_id') # {"some": "payload"}
+```
+
+## 3.25.0 – 2025-04-15
+
+1. Roll out new `/flags` endpoint to 100% of `/decide` traffic, excluding the top 10 customers.
+
+## 3.24.3 – 2025-04-15
+
+1. Fix hash inclusion/exclusion for flag rollout
+
+## 3.24.2 – 2025-04-15
+
+1. Roll out new /flags endpoint to 10% of /decide traffic
+
+## 3.24.1 – 2025-04-11
+
+1. Add `log_captured_exceptions` option to proxy setup
+
+## 3.24.0 – 2025-04-10
+
+1. Add config option to `log_captured_exceptions`
+
 ## 3.23.0 – 2025-03-26
 
 1. Expand automatic retries to include read errors (e.g. RemoteDisconnected)
@@ -5,7 +69,7 @@
 ## 3.22.0 – 2025-03-26
 
 1. Add more information to `$feature_flag_called` events.
-2. Support for the `/decide?v=3` endpoint which contains more information about feature flags.
+2. Support for the `/decide?v=4` endpoint which contains more information about feature flags.
 
 ## 3.21.0 – 2025-03-17
 
@@ -202,7 +266,6 @@
 ## 3.3.4 - 2024-01-30
 
 1. Update type hints for module variables to work with newer versions of mypy
-
 
 ## 3.3.3 - 2024-01-26
 

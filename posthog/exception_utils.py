@@ -1,3 +1,6 @@
+# Portions of this file are derived from getsentry/sentry-javascript by Software, Inc. dba Sentry
+# Licensed under the MIT License
+
 # copied and adapted from https://github.com/getsentry/sentry-python/blob/269d96d6e9821122fbff280e6a26956e5ed03c0b/sentry_sdk/utils.py#L689
 # 💖open source (under MIT License)
 # We want to keep payloads as similar to Sentry as possible for easy interoperability

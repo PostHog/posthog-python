@@ -7,7 +7,7 @@ from posthog.types import (
     FlagMetadata,
     FlagReason,
     LegacyFlagMetadata,
-    normalize_decide_response,
+    normalize_flags_response,
     to_flags_and_payloads,
 )
 
@@ -31,7 +31,7 @@ class TestTypes(unittest.TestCase):
             "requestId": "test-id",
         }
 
-        result = normalize_decide_response(resp)
+        result = normalize_flags_response(resp)
 
         flag = result["flags"]["my-flag"]
         self.assertEqual(flag.key, "my-flag")
@@ -56,7 +56,7 @@ class TestTypes(unittest.TestCase):
             "requestId": "test-id",
         }
 
-        result = normalize_decide_response(resp)
+        result = normalize_flags_response(resp)
 
         flag = result["flags"]["my-flag"]
         self.assertEqual(flag.key, "my-flag")
@@ -75,7 +75,7 @@ class TestTypes(unittest.TestCase):
         # Test legacy response with boolean flag
         resp = {"featureFlags": {"my-flag": True}, "errorsWhileComputingFlags": False}
 
-        result = normalize_decide_response(resp)
+        result = normalize_flags_response(resp)
 
         self.assertIn("requestId", result)
         self.assertIsNone(result["requestId"])
@@ -168,7 +168,7 @@ class TestTypes(unittest.TestCase):
             "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
         }
 
-        normalized = normalize_decide_response(resp)
+        normalized = normalize_flags_response(resp)
         result = to_flags_and_payloads(normalized)
 
         self.assertEqual(result["featureFlags"]["decide-flag"], "decide-variant")

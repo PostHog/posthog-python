@@ -69,8 +69,8 @@ class TestFeatureFlag(unittest.TestCase):
         resp = {"code": "user_in_segment"}
         reason = FlagReason.from_json(resp)
         self.assertEqual(reason.code, "user_in_segment")
-        self.assertEqual(reason.condition_index, 0)  # default value
-        self.assertEqual(reason.description, "")  # default value
+        self.assertIsNone(reason.condition_index)  # default value
+        self.assertEqual(reason.description, "")
 
         # Test with None
         self.assertIsNone(FlagReason.from_json(None))

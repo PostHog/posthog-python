@@ -12,14 +12,15 @@ from version import VERSION
 
 long_description = """
 PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
+
+This package requires Python 3.9 or higher.
 """
 
 install_requires = [
     "requests>=2.7,<3.0",
     "six>=1.5",
-    "monotonic>=1.5",
+    "python-dateutil>=2.2",
     "backoff>=1.10.0",
-    "python-dateutil>2.1",
     "distro>=1.5.0",  # Required for Linux OS detection in Python 3.9+
 ]
 
@@ -57,6 +58,7 @@ extras_require = {
         "langchain-community>=0.2.0",
         "langchain-openai>=0.2.0",
         "langchain-anthropic>=0.2.0",
+        "google-genai",
         "pydantic",
         "parameterized>=0.8.1",
     ],
@@ -79,6 +81,7 @@ setup(
         "posthog.ai.langchain",
         "posthog.ai.openai",
         "posthog.ai.anthropic",
+        "posthog.ai.gemini",
         "posthog.test",
         "posthog.sentry",
         "posthog.exception_integrations",
