@@ -423,7 +423,7 @@ class Client(object):
             "groups": groups,
             "person_properties": person_properties,
             "group_properties": group_properties,
-            "disable_geoip": disable_geoip,
+            "geoip_disable": disable_geoip,
         }
 
         use_flags = is_token_in_rollout(
