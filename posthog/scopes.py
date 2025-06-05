@@ -11,8 +11,6 @@ def _get_current_context() -> Dict[str, Any]:
 
 @contextmanager
 def new_context(fresh=False):
-    # TODO - we could extend this context idea to also apply to other event types eventually,
-    # but right now it only applies to exceptions...
     """
      Create a new context scope that will be active for the duration of the with block.
      Any tags set within this scope will be isolated to this context. Any exceptions raised
