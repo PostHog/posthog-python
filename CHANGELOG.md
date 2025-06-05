@@ -1,6 +1,6 @@
 ## 4.3.0
 
-dd exception context management:
+Add exception context management:
  - New context manager with `posthog.new_context()`
  - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
  - Function decorator:
