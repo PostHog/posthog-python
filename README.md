@@ -21,10 +21,10 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 
 ```bash
 uv python install 3.9.19
-uv python pin 3.9 
+uv python pin 3.9.19
 uv venv env
 source env/bin/activate
-uv pip install -e ".[test]"
+uv pip install --editable ".[dev,test]"
 make test
 ```
 
