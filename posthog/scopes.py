@@ -1,7 +1,6 @@
 import contextvars
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, TypeVar, cast
-from posthog import capture_exception
 
 _context_stack: contextvars.ContextVar[list] = contextvars.ContextVar("posthog_context_stack", default=[{}])
 
@@ -26,13 +25,16 @@ def new_context():
             raise ValueError("Something went wrong")
 
     """
+    import posthog
+
     current_stack = _context_stack.get()
     new_stack = current_stack + [{}]
     token = _context_stack.set(new_stack)
+
     try:
         yield
     except Exception as e:
-        capture_exception(e)
+        posthog.capture_exception(e)
         raise
     finally:
         _context_stack.reset(token)
@@ -94,6 +96,5 @@ def scoped(func: F) -> F:
     def wrapper(*args, **kwargs):
         with new_context():
             return func(*args, **kwargs)
-
 
     return cast(F, wrapper)

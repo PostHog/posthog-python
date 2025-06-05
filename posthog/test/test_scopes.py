@@ -84,6 +84,13 @@ class TestScopes(unittest.TestCase):
     def test_scoped_decorator_exception(self, mock_capture):
         test_exception = ValueError("Test exception")
 
+        def check_context_on_capture(exception, **kwargs):
+            # Assert tags are available when capture_exception is called
+            current_tags = get_tags()
+            self.assertEqual(current_tags.get("important_context"), "value")
+
+        mock_capture.side_effect = check_context_on_capture
+
         @scoped
         def failing_function():
             tag("important_context", "value")
@@ -93,15 +100,8 @@ class TestScopes(unittest.TestCase):
         with self.assertRaises(ValueError):
             failing_function()
 
-        # Exception should be captured with context
-        mock_capture.assert_called_once()
-        args, kwargs = mock_capture.call_args
-
-        # Check that the exception was passed
-        self.assertEqual(args[0], test_exception)
-
-        # Check that the context was included in properties
-        self.assertEqual(kwargs.get("properties", {}).get("important_context"), "value")
+        # Verify capture_exception was called
+        mock_capture.assert_called_once_with(test_exception)
 
         # Context should be cleared after function execution
         self.assertEqual(get_tags(), {})
@@ -109,6 +109,13 @@ class TestScopes(unittest.TestCase):
     @patch("posthog.capture_exception")
     def test_new_context_exception_handling(self, mock_capture):
         test_exception = RuntimeError("Context exception")
+
+        def check_context_on_capture(exception, **kwargs):
+            # Assert inner context tags are available when capture_exception is called
+            current_tags = get_tags()
+            self.assertEqual(current_tags.get("inner_context"), "inner_value")
+
+        mock_capture.side_effect = check_context_on_capture
 
         # Set up outer context
         tag("outer_context", "outer_value")
@@ -120,15 +127,8 @@ class TestScopes(unittest.TestCase):
         except RuntimeError:
             pass  # Expected exception
 
-        # Exception should be captured with inner context
-        mock_capture.assert_called_once()
-        args, kwargs = mock_capture.call_args
-
-        # Check that the exception was passed
-        self.assertEqual(args[0], test_exception)
-
-        # Check that the inner context was included in properties
-        self.assertEqual(kwargs.get("properties", {}).get("inner_context"), "inner_value")
+        # Verify capture_exception was called
+        mock_capture.assert_called_once_with(test_exception)
 
         # Outer context should still be intact
         self.assertEqual(get_tags()["outer_context"], "outer_value")
