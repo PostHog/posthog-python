@@ -7,6 +7,7 @@ from uuid import UUID
 
 import six
 from dateutil.tz import tzutc
+from parameterized import parameterized
 from pydantic import BaseModel
 from pydantic.v1 import BaseModel as BaseModelV1
 
@@ -17,11 +18,23 @@ FAKE_TEST_API_KEY = "random_key"
 
 
 class TestUtils(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("naive datetime should be naive", True),
+            ("timezone-aware datetime should not be naive", False),
+        ]
+    )
+    def test_is_naive(self, _name: str, expected_naive: bool):
+        if expected_naive:
+            dt = datetime.now()  # naive datetime
+        else:
+            dt = datetime.now(tz=tzutc())  # timezone-aware datetime
+
+        assert utils.is_naive(dt) is expected_naive
+
     def test_timezone_utils(self):
         now = datetime.now()
         utcnow = datetime.now(tz=tzutc())
-        assert utils.is_naive(now) is True
-        assert utils.is_naive(utcnow) is False
 
         fixed = utils.guess_timezone(now)
         assert utils.is_naive(fixed) is False
@@ -70,20 +83,24 @@ class TestUtils(unittest.TestCase):
         assert dict_with_dates == utils.clean(dict_with_dates)
 
     def test_bytes(self):
-        if six.PY3:
-            item = bytes(10)
-        else:
-            item = bytearray(10)
-
+        item = bytes(10)
         utils.clean(item)
+        assert utils.clean(item) == '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
 
     def test_clean_fn(self):
         cleaned = utils.clean({"fn": lambda x: x, "number": 4})
         assert cleaned == {"fn": None, "number": 4}
 
-    def test_remove_slash(self):
-        assert "http://posthog.io" == utils.remove_trailing_slash("http://posthog.io/")
-        assert "http://posthog.io" == utils.remove_trailing_slash("http://posthog.io")
+    @parameterized.expand(
+        [
+            ("http://posthog.io/", "http://posthog.io"),
+            ("http://posthog.io", "http://posthog.io"),
+            ("https://example.com/path/", "https://example.com/path"),
+            ("https://example.com/path", "https://example.com/path"),
+        ]
+    )
+    def test_remove_slash(self, input_url, expected_url):
+        assert expected_url == utils.remove_trailing_slash(input_url)
 
     def test_clean_pydantic(self):
         class ModelV2(BaseModel):
@@ -108,12 +125,16 @@ class TestUtils(unittest.TestCase):
             "foo": {"foo": "1", "bar": 2, "baz": "3"}
         }
 
+    def test_clean_pydantic_like_class(self) -> None:
         class Dummy:
-            def model_dump(self, required_param):
-                pass
+            def model_dump(self, required_param: str) -> dict:
+                return {}
 
-        # Skips a class with a defined non-Pydantic `model_dump` method.
-        assert utils.clean({"test": Dummy()}) == {}
+        # previously python 2 code would cause an error while cleaning,
+        # and this entire object would be None, and we would log an error
+        # let's allow ourselves to clean `Dummy` as None,
+        # without blatting the `test` key
+        assert utils.clean({"test": Dummy()}) == {"test": None}
 
     def test_clean_dataclass(self):
         @dataclass
@@ -155,6 +176,21 @@ class TestUtils(unittest.TestCase):
 
 
 class TestSizeLimitedDict(unittest.TestCase):
+    @parameterized.expand(
+        [
+            (5, 20),
+            (10, 100),
+            (3, 15),
+        ]
+    )
+    def test_size_limited_dict_with_different_sizes(self, size, iterations):
+        values = utils.SizeLimitedDict(size, lambda _: -1)
+
+        for i in range(iterations):
+            values[i] = i
+            assert values[i] == i
+            assert len(values) == min(i + 1, size)
+
     def test_size_limited_dict(self):
         size = 10
         values = utils.SizeLimitedDict(size, lambda _: -1)
