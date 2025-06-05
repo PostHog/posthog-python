@@ -1,18 +1,17 @@
 import sys
+import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, TypeVar, cast
 
 # Use contextvars if available (Python 3.7+), otherwise fall back to threading.local
 if sys.version_info >= (3, 7):
     import contextvars
-
     _context_stack: contextvars.ContextVar[list] = contextvars.ContextVar("posthog_context_stack", default=[{}])
     _use_contextvars = True
 else:
-    import threading
-
-    _scopes_local = threading.local()
     _use_contextvars = False
+
+_scopes_local = threading.local()
 
 
 def _init_guard() -> None:
