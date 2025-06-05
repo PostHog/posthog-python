@@ -10,7 +10,7 @@ def _get_current_context() -> Dict[str, Any]:
 
 
 @contextmanager
-def new_context():
+def new_context(fresh=False):
     # TODO - we could extend this context idea to also apply to other event types eventually,
     # but right now it only applies to exceptions...
     """
@@ -18,17 +18,28 @@ def new_context():
     Any tags set within this scope will be isolated to this context. Any exceptions raised
     within the context will be captured and tagged with the context tags.
 
-    Example:
+    Args:
+        fresh: Whether to start with a fresh context (default: False).
+               If False, inherits tags from parent context.
+               If True, starts with no tags.
+
+    Examples:
+        # Inherit parent context tags
         with posthog.new_context():
             posthog.tag("user_id", "123")
-            # The exception will be captured and tagged with the context tags
+            raise ValueError("Something went wrong")
+
+        # Start with fresh context (no inherited tags)
+        with posthog.new_context(fresh=True):
+            posthog.tag("user_id", "123")
             raise ValueError("Something went wrong")
 
     """
     import posthog
 
+    current_tags = _get_current_context().copy()
     current_stack = _context_stack.get()
-    new_stack = current_stack + [{}]
+    new_stack = current_stack + [{}] if fresh else current_stack + [current_tags]
     token = _context_stack.set(new_stack)
 
     try:
@@ -73,28 +84,32 @@ def clear_tags() -> None:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(func: F) -> F:
+def scoped(fresh=False):
     """
     Decorator that creates a new context for the function, wraps the function in a
     try/except block, and if an exception occurs, captures it with the current context
     tags before re-raising it.
 
     Args:
-        func: The function to wrap
+        fresh: Whether to start with a fresh context (default: False)
 
     Example:
-        @posthog.scoped
+        @posthog.scoped()
         def process_payment(payment_id):
             posthog.tag("payment_id", payment_id)
             posthog.tag("payment_method", "credit_card")
             # If this raises an exception, it will be captured with tags
             # and then re-raised
     """
-    from functools import wraps
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        with new_context():
-            return func(*args, **kwargs)
+    def decorator(func: F) -> F:
+        from functools import wraps
 
-    return cast(F, wrapper)
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with new_context(fresh=fresh):
+                return func(*args, **kwargs)
+
+        return cast(F, wrapper)
+
+    return decorator

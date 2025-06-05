@@ -28,7 +28,7 @@ class TestScopes(unittest.TestCase):
         # Set tag in outer context
         tag("outer", "value")
 
-        with new_context():
+        with new_context(fresh=True):
             # Inner context should start empty
             self.assertEqual(get_tags(), {})
 
@@ -39,6 +39,10 @@ class TestScopes(unittest.TestCase):
             # Outer tag should not be visible
             self.assertNotIn("outer", get_tags())
 
+        with new_context(fresh=False):
+            # Inner context should start empty
+            self.assertEqual(get_tags(), {"outer": "value"})
+
         # After exiting context, inner tag should be gone
         self.assertNotIn("inner", get_tags())
 
@@ -48,10 +52,10 @@ class TestScopes(unittest.TestCase):
     def test_nested_contexts(self):
         tag("level1", "value1")
 
-        with new_context():
+        with new_context(fresh=True):
             tag("level2", "value2")
 
-            with new_context():
+            with new_context(fresh=True):
                 tag("level3", "value3")
                 self.assertEqual(get_tags(), {"level3": "value3"})
 
@@ -63,7 +67,7 @@ class TestScopes(unittest.TestCase):
 
     @patch("posthog.capture_exception")
     def test_scoped_decorator_success(self, mock_capture):
-        @scoped
+        @scoped()
         def successful_function(x, y):
             tag("x", x)
             tag("y", y)
@@ -91,7 +95,7 @@ class TestScopes(unittest.TestCase):
 
         mock_capture.side_effect = check_context_on_capture
 
-        @scoped
+        @scoped()
         def failing_function():
             tag("important_context", "value")
             raise test_exception
