@@ -14,15 +14,15 @@ class TestScopes(unittest.TestCase):
         tag("key2", 2)
 
         tags = get_tags()
-        self.assertEqual(tags["key1"], "value1")
-        self.assertEqual(tags["key2"], 2)
+        assert tags["key1"] == "value1"
+        assert tags["key2"] == 2
 
     def test_clear_tags(self):
         tag("key1", "value1")
-        self.assertEqual(get_tags()["key1"], "value1")
+        assert get_tags()["key1"] == "value1"
 
         clear_tags()
-        self.assertEqual(get_tags(), {})
+        assert get_tags() == {}
 
     def test_new_context_isolation(self):
         # Set tag in outer context
@@ -30,24 +30,24 @@ class TestScopes(unittest.TestCase):
 
         with new_context(fresh=True):
             # Inner context should start empty
-            self.assertEqual(get_tags(), {})
+            assert get_tags() == {}
 
             # Set tag in inner context
             tag("inner", "value")
-            self.assertEqual(get_tags()["inner"], "value")
+            assert get_tags()["inner"] == "value"
 
             # Outer tag should not be visible
             self.assertNotIn("outer", get_tags())
 
         with new_context(fresh=False):
             # Inner context should start empty
-            self.assertEqual(get_tags(), {"outer": "value"})
+            assert get_tags() == {"outer": "value"}
 
         # After exiting context, inner tag should be gone
         self.assertNotIn("inner", get_tags())
 
         # Outer tag should still be there
-        self.assertEqual(get_tags()["outer"], "value")
+        assert get_tags()["outer"] == "value"
 
     def test_nested_contexts(self):
         tag("level1", "value1")
@@ -57,13 +57,13 @@ class TestScopes(unittest.TestCase):
 
             with new_context(fresh=True):
                 tag("level3", "value3")
-                self.assertEqual(get_tags(), {"level3": "value3"})
+                assert get_tags() == {"level3": "value3"}
 
             # Back to level 2
-            self.assertEqual(get_tags(), {"level2": "value2"})
+            assert get_tags() == {"level2": "value2"}
 
         # Back to level 1
-        self.assertEqual(get_tags(), {"level1": "value1"})
+        assert get_tags() == {"level1": "value1"}
 
     @patch("posthog.capture_exception")
     def test_scoped_decorator_success(self, mock_capture):
@@ -76,13 +76,13 @@ class TestScopes(unittest.TestCase):
         result = successful_function(1, 2)
 
         # Function should execute normally
-        self.assertEqual(result, 3)
+        assert result == 3
 
         # No exception should be captured
         mock_capture.assert_not_called()
 
         # Context should be cleared after function execution
-        self.assertEqual(get_tags(), {})
+        assert get_tags() == {}
 
     @patch("posthog.capture_exception")
     def test_scoped_decorator_exception(self, mock_capture):
@@ -91,7 +91,7 @@ class TestScopes(unittest.TestCase):
         def check_context_on_capture(exception, **kwargs):
             # Assert tags are available when capture_exception is called
             current_tags = get_tags()
-            self.assertEqual(current_tags.get("important_context"), "value")
+            assert current_tags.get("important_context") == "value"
 
         mock_capture.side_effect = check_context_on_capture
 
@@ -108,7 +108,7 @@ class TestScopes(unittest.TestCase):
         mock_capture.assert_called_once_with(test_exception)
 
         # Context should be cleared after function execution
-        self.assertEqual(get_tags(), {})
+        assert get_tags() == {}
 
     @patch("posthog.capture_exception")
     def test_new_context_exception_handling(self, mock_capture):
@@ -117,7 +117,7 @@ class TestScopes(unittest.TestCase):
         def check_context_on_capture(exception, **kwargs):
             # Assert inner context tags are available when capture_exception is called
             current_tags = get_tags()
-            self.assertEqual(current_tags.get("inner_context"), "inner_value")
+            assert current_tags.get("inner_context") == "inner_value"
 
         mock_capture.side_effect = check_context_on_capture
 
@@ -135,4 +135,4 @@ class TestScopes(unittest.TestCase):
         mock_capture.assert_called_once_with(test_exception)
 
         # Outer context should still be intact
-        self.assertEqual(get_tags()["outer_context"], "outer_value")
+        assert get_tags()["outer_context"] == "outer_value"
