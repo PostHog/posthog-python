@@ -4,8 +4,8 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
+from posthog.scopes import clear_tags, get_tags, new_context, tag, tracked
 from posthog.types import FeatureFlag, FlagsAndPayloads
-from posthog.scopes import new_context, tag, get_tags, clear_tags, tracked
 from posthog.version import VERSION
 
 __version__ = VERSION

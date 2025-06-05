@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from posthog.scopes import new_context, tag, get_tags, clear_tags, tracked
+from posthog.scopes import clear_tags, get_tags, new_context, tag, tracked
 
 
 class TestScopes(unittest.TestCase):

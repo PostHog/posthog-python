@@ -14,7 +14,6 @@ import distro  # For Linux OS detection
 from dateutil.tz import tzutc
 from six import string_types
 
-from posthog.scopes import get_tags
 from posthog.consumer import Consumer
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
@@ -30,6 +29,7 @@ from posthog.request import (
     get,
     remote_config,
 )
+from posthog.scopes import get_tags
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,

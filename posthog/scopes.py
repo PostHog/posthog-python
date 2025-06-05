@@ -1,6 +1,6 @@
 import threading
 from contextlib import contextmanager
-from typing import Any, Dict, Callable, TypeVar, cast
+from typing import Any, Callable, Dict, TypeVar, cast
 
 _scopes_local = threading.local()
 
@@ -101,6 +101,7 @@ def tracked(func: F) -> F:
             # and then re-raised
     """
     from functools import wraps
+
     import posthog
 
     @wraps(func)
