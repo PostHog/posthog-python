@@ -15,11 +15,7 @@ from posthog import utils
 
 
 class TestSizeLimitedDict(unittest.TestCase):
-    @parameterized.expand([
-        (10, 100),
-        (5, 20),
-        (20, 200)
-    ])
+    @parameterized.expand([(10, 100), (5, 20), (20, 200)])
     def test_size_limited_dict(self, size: int, iterations: int) -> None:
         values = utils.SizeLimitedDict(size, lambda _: -1)
 
