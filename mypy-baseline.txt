@@ -1,7 +1,6 @@
 posthog/utils.py:0: error: Library stubs not installed for "six"  [import-untyped]
 posthog/utils.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
 posthog/utils.py:0: error: Statement is unreachable  [unreachable]
-posthog/utils.py:0: error: Argument 1 to "join" of "str" has incompatible type "AttributeError"; expected "Iterable[str]"  [arg-type]
 posthog/request.py:0: error: Library stubs not installed for "requests"  [import-untyped]
 posthog/request.py:0: note: Hint: "python3 -m pip install types-requests"
 posthog/request.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]

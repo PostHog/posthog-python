@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Any, Optional
 from uuid import UUID
 
 import six
@@ -99,11 +100,21 @@ def _clean_dataclass(dataclass_):
     return data
 
 
-def _coerce_unicode(cmplx):
+def _coerce_unicode(cmplx: Any) -> Optional[str]:
+    """
+    In theory, this method is only called
+    after many isinstance checks are carried out in `utils.clean`.
+    When we supported Python 2 it was safe to call `decode` on a `str`
+    but in Python 3 that will throw.
+    So, we check if the input is bytes and only call `decode` in that case
+    """
     try:
-        item = cmplx.decode("utf-8", "strict")
-    except AttributeError as exception:
-        item = ":".join(exception)
+        if isinstance(cmplx, bytes):
+            item = cmplx.decode("utf-8", "strict")
+        else:
+            item = str(cmplx)
+    except Exception as exception:
+        item = ":".join(map(str, exception.args))
         log.warning("Error decoding: %s", item)
         return None
     return item
