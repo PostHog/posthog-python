@@ -122,4 +122,5 @@ def process_order(order_id):
     # Exception will be captured and tagged automatically
     raise Exception("Order processing failed")
 
+
 posthog.shutdown()
