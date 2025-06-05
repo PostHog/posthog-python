@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
-from posthog.scopes import clear_tags, get_tags, new_context, tag, scoped
+from posthog.scopes import clear_tags, get_tags, new_context, scoped, tag
 from posthog.types import FeatureFlag, FlagsAndPayloads
 from posthog.version import VERSION
 
