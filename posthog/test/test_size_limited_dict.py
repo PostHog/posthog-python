@@ -1,15 +1,6 @@
 import unittest
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from decimal import Decimal
-from typing import Optional
-from uuid import UUID
 
-import six
-from dateutil.tz import tzutc
 from parameterized import parameterized
-from pydantic import BaseModel
-from pydantic.v1 import BaseModel as BaseModelV1
 
 from posthog import utils
 
