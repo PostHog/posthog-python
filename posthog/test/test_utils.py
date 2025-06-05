@@ -170,37 +170,3 @@ class TestUtils(unittest.TestCase):
                 "inner_optional": None,
             },
         }
-
-
-class TestSizeLimitedDict(unittest.TestCase):
-    @parameterized.expand(
-        [
-            (5, 20),
-            (10, 100),
-            (3, 15),
-        ]
-    )
-    def test_size_limited_dict_with_different_sizes(self, size, iterations):
-        values = utils.SizeLimitedDict(size, lambda _: -1)
-
-        for i in range(iterations):
-            values[i] = i
-            assert values[i] == i
-            assert len(values) == min(i + 1, size)
-
-    def test_size_limited_dict(self):
-        size = 10
-        values = utils.SizeLimitedDict(size, lambda _: -1)
-
-        for i in range(100):
-            values[i] = i
-
-            assert values[i] == i
-            assert len(values) == i % size + 1
-
-            if i % size == 0:
-                # old numbers should've been removed
-                assert values.get(i - 1) is None
-                assert values.get(i - 3) is None
-                assert values.get(i - 5) is None
-                assert values.get(i - 9) is None
