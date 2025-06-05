@@ -1,18 +1,32 @@
-import threading
+import sys
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, TypeVar, cast
 
-_scopes_local = threading.local()
+# Use contextvars if available (Python 3.7+), otherwise fall back to threading.local
+if sys.version_info >= (3, 7):
+    import contextvars
+    _context_stack: contextvars.ContextVar[list] = contextvars.ContextVar(
+        'posthog_context_stack',
+        default=[{}]
+    )
+    _use_contextvars = True
+else:
+    import threading
+    _scopes_local = threading.local()
+    _use_contextvars = False
 
 
 def _init_guard() -> None:
-    if not hasattr(_scopes_local, "context_stack"):
+    if not _use_contextvars and not hasattr(_scopes_local, "context_stack"):
         _scopes_local.context_stack = [{}]
 
 
 def _get_current_context() -> Dict[str, Any]:
-    _init_guard()
-    return _scopes_local.context_stack[-1]
+    if _use_contextvars:
+        return _context_stack.get()[-1]
+    else:
+        _init_guard()
+        return _scopes_local.context_stack[-1]
 
 
 @contextmanager
@@ -40,13 +54,22 @@ def new_context():
                 posthog.capture_exception(e)
                 raise e
     """
-    _init_guard()
-    _scopes_local.context_stack.append({})
-    try:
-        yield
-    finally:
-        if len(_scopes_local.context_stack) > 1:
-            _scopes_local.context_stack.pop()
+    if _use_contextvars:
+        current_stack = _context_stack.get()
+        new_stack = current_stack + [{}]
+        token = _context_stack.set(new_stack)
+        try:
+            yield
+        finally:
+            _context_stack.reset(token)
+    else:
+        _init_guard()
+        _scopes_local.context_stack.append({})
+        try:
+            yield
+        finally:
+            if len(_scopes_local.context_stack) > 1:
+                _scopes_local.context_stack.pop()
 
 
 def tag(key: str, value: Any) -> None:
