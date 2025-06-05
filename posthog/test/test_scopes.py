@@ -105,3 +105,30 @@ class TestScopes(unittest.TestCase):
 
         # Context should be cleared after function execution
         self.assertEqual(get_tags(), {})
+
+    @patch("posthog.capture_exception")
+    def test_new_context_exception_handling(self, mock_capture):
+        test_exception = RuntimeError("Context exception")
+
+        # Set up outer context
+        tag("outer_context", "outer_value")
+
+        try:
+            with new_context():
+                tag("inner_context", "inner_value")
+                raise test_exception
+        except RuntimeError:
+            pass  # Expected exception
+
+        # Exception should be captured with inner context
+        mock_capture.assert_called_once()
+        args, kwargs = mock_capture.call_args
+
+        # Check that the exception was passed
+        self.assertEqual(args[0], test_exception)
+
+        # Check that the inner context was included in properties
+        self.assertEqual(kwargs.get("properties", {}).get("inner_context"), "inner_value")
+
+        # Outer context should still be intact
+        self.assertEqual(get_tags()["outer_context"], "outer_value")

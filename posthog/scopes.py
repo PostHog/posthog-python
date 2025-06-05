@@ -1,6 +1,7 @@
 import contextvars
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, TypeVar, cast
+from posthog import capture_exception
 
 _context_stack: contextvars.ContextVar[list] = contextvars.ContextVar("posthog_context_stack", default=[{}])
 
@@ -15,30 +16,24 @@ def new_context():
     # but right now it only applies to exceptions...
     """
     Create a new context scope that will be active for the duration of the with block.
-    Any tags set within this scope will be isolated to this context. Tags added to a
-    context will be added to exceptions captured within that context.
-
-    NOTE: tags set within a context will only be added to exceptions captured within that
-    context - ensure you call `posthog.capture_exception()` before the end of the with
-    block, or the extra tags will be lost.
-
-    It's strongly recommended to use the `posthog.tracked` decorator to instrument functions, rather
-    than directly using this context manager.
+    Any tags set within this scope will be isolated to this context. Any exceptions raised
+    within the context will be captured and tagged with the context tags.
 
     Example:
         with posthog.new_context():
             posthog.tag("user_id", "123")
-            try:
-                # Do something that might raise an exception
-            except Exception as e:
-                posthog.capture_exception(e)
-                raise e
+            # The exception will be captured and tagged with the context tags
+            raise ValueError("Something went wrong")
+
     """
     current_stack = _context_stack.get()
     new_stack = current_stack + [{}]
     token = _context_stack.set(new_stack)
     try:
         yield
+    except Exception as e:
+        capture_exception(e)
+        raise
     finally:
         _context_stack.reset(token)
 
@@ -80,8 +75,7 @@ def scoped(func: F) -> F:
     """
     Decorator that creates a new context for the function, wraps the function in a
     try/except block, and if an exception occurs, captures it with the current context
-    tags before re-raising it. This is the recommended way to wrap/track functions for
-    posthog error tracking.
+    tags before re-raising it.
 
     Args:
         func: The function to wrap
@@ -96,17 +90,10 @@ def scoped(func: F) -> F:
     """
     from functools import wraps
 
-    import posthog
-
     @wraps(func)
     def wrapper(*args, **kwargs):
         with new_context():
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                # Capture the exception with current context tags
-                # The capture_exception function will handle deduplication
-                posthog.capture_exception(e, properties=get_tags())
-                raise  # Re-raise the exception after capturing it
+            return func(*args, **kwargs)
+
 
     return cast(F, wrapper)
