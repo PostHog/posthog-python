@@ -14,7 +14,8 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 2. Run `source env/bin/activate` (activates the virtual environment)
 3. Run `python3 -m pip install -e ".[test]"` (installs the package in develop mode, along with test dependencies)
     * or `uv pip install -e ".[test]"`
-4. Run `make test`
+4. you have to run `pre-commit install` to have auto linting pre commit
+5. Run `make test`
   1. To run a specific test do `pytest -k test_no_api_key`
 
 ## PostHog recommends `uv` so...
@@ -25,6 +26,7 @@ uv python pin 3.9.19
 uv venv env
 source env/bin/activate
 uv pip install --editable ".[dev,test]"
+pre-commit install
 make test
 ```
 
