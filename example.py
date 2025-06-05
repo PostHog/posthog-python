@@ -112,6 +112,7 @@ def process_order(order_id):
     # Exception will be captured and tagged automatically
     raise Exception("Order processing failed")
 
+
 # You can also use the directly context manager, but you should prefer to use the decorator where possible,
 # because it's tricky to remember to always capture the exception within the context scope.
 with posthog.new_context():

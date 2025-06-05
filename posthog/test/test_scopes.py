@@ -61,7 +61,7 @@ class TestScopes(unittest.TestCase):
         # Back to level 1
         self.assertEqual(get_tags(), {"level1": "value1"})
 
-    @patch('posthog.capture_exception')
+    @patch("posthog.capture_exception")
     def test_tracked_decorator_success(self, mock_capture):
         @tracked
         def successful_function(x, y):
@@ -80,7 +80,7 @@ class TestScopes(unittest.TestCase):
         # Context should be cleared after function execution
         self.assertEqual(get_tags(), {})
 
-    @patch('posthog.capture_exception')
+    @patch("posthog.capture_exception")
     def test_tracked_decorator_exception(self, mock_capture):
         test_exception = ValueError("Test exception")
 
@@ -101,7 +101,7 @@ class TestScopes(unittest.TestCase):
         self.assertEqual(args[0], test_exception)
 
         # Check that the context was included in properties
-        self.assertEqual(kwargs.get('properties', {}).get('important_context'), "value")
+        self.assertEqual(kwargs.get("properties", {}).get("important_context"), "value")
 
         # Context should be cleared after function execution
         self.assertEqual(get_tags(), {})

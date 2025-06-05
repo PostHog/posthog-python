@@ -4,6 +4,7 @@ from typing import Any, Dict, Callable, TypeVar, cast
 
 _scopes_local = threading.local()
 
+
 def _init_guard() -> None:
     if not hasattr(_scopes_local, "context_stack"):
         _scopes_local.context_stack = [{}]
@@ -78,7 +79,9 @@ def clear_tags() -> None:
     _get_current_context().clear()
 
 
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
+
+
 def tracked(func: F) -> F:
     """
     Decorator that creates a new context for the function, wraps the function in a
