@@ -101,11 +101,12 @@ def _clean_dataclass(dataclass_):
 
 def _coerce_unicode(cmplx):
     try:
-        item = cmplx.decode("utf-8", "strict")
-    except AttributeError as exception:
-        item = ":".join(exception)
-        item.decode("utf-8", "strict")
-        log.warning("Error decoding: %s", item)
+        if isinstance(cmplx, bytes):
+            item = cmplx.decode("utf-8", "strict")
+        else:
+            item = str(cmplx)
+    except (AttributeError, UnicodeDecodeError) as exception:
+        log.warning("Error decoding: %s", str(exception))
         return None
     return item
 
