@@ -1,7 +1,14 @@
 # PostHog Python
 
-[![PyPI](https://img.shields.io/pypi/v/posthog)](https://pypi.org/project/posthog/)
-
+<p align="center">
+  <img alt="posthoglogo" src="https://user-images.githubusercontent.com/65415371/205059737-c8a4f836-4889-4654-902e-f302b187b6a0.png">
+</p>
+<p align="center">
+   <a href="https://pypi.org/project/posthog/"><img alt="pypi installs" src="https://img.shields.io/pypi/v/posthog"/></a>
+   <img alt="GitHub contributors" src="https://img.shields.io/github/contributors/posthog/posthog-python">
+  <img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/posthog/posthog-python"/>
+  <img alt="GitHub closed issues" src="https://img.shields.io/github/issues-closed/posthog/posthog-python"/>
+</p>
 
 Please see the [Python integration docs](https://posthog.com/docs/integrations/python-integration) for details.
 
@@ -55,7 +62,3 @@ Then navigate to `http://127.0.0.1:8080/sentry-debug/` and you should get an eve
 ### Releasing Versions
 
 Updated are released using GitHub Actions: after bumping `version.py` in `master` and adding to `CHANGELOG.md`, go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yaml) and dispatch it manually, using workflow from `master`.
-
-## Questions?
-
-### [Join our Slack community.](https://join.slack.com/t/posthogusers/shared_invite/enQtOTY0MzU5NjAwMDY3LTc2MWQ0OTZlNjhkODk3ZDI3NDVjMDE1YjgxY2I4ZjI4MzJhZmVmNjJkN2NmMGJmMzc2N2U3Yjc3ZjI5NGFlZDQ)

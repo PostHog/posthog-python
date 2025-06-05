@@ -8,10 +8,11 @@ except ImportError:
 
 # Don't import module here, since deps may not be installed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "posthoganalytics"))
-from version import VERSION
+from version import VERSION  # noqa: E402
 
 long_description = """
-PostHog is developer-friendly, self-hosted product analytics. posthog-python is the python package.
+PostHog is developer-friendly, self-hosted product analytics.
+posthog-python is the python package.
 
 This package requires Python 3.9 or higher.
 """
@@ -47,6 +48,8 @@ setup(
         "posthoganalytics.exception_integrations",
     ],
     license="MIT License",
+    license_files=["LICENSE"],
+    python_requires=">=3.9",
     install_requires=install_requires,
     tests_require=tests_require,
     extras_require={
