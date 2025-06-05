@@ -1,3 +1,6 @@
+[project]
+license = {text = "MIT"}
+
 [tool.black]
 line-length = 120
 
@@ -8,3 +11,16 @@ force_grid_wrap = 8
 ensure_newline_before_comments = true
 line_length = 120
 virtual_env = "env"
+
+[tool.setuptools.bdist_wheel]
+universal = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.flake8]
+# ignore E501 for line length
+# ignore W503 for line break before binary operator
+ignore = ["E501", "W503"]
+max-line-length = 120
