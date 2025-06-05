@@ -17,7 +17,9 @@ if MYPY:
 class PostHogIntegration(Integration):
     identifier = "posthog-python"
     organization = None  # The Sentry organization, used to send a direct link from PostHog to Sentry
-    project_id = None  # The Sentry project id, used to send a direct link from PostHog to Sentry
+    project_id = (
+        None  # The Sentry project id, used to send a direct link from PostHog to Sentry
+    )
     prefix = "https://sentry.io/organizations/"  # URL of a hosted sentry instance (default: https://sentry.io/organizations/)
 
     @staticmethod
@@ -31,7 +33,9 @@ class PostHogIntegration(Integration):
 
                 if event.get("tags", {}).get(POSTHOG_ID_TAG):
                     posthog_distinct_id = event["tags"][POSTHOG_ID_TAG]
-                    event["tags"]["PostHog URL"] = f"{posthog.host or DEFAULT_HOST}/person/{posthog_distinct_id}"
+                    event["tags"]["PostHog URL"] = (
+                        f"{posthog.host or DEFAULT_HOST}/person/{posthog_distinct_id}"
+                    )
 
                     properties = {
                         "$sentry_event_id": event["event_id"],
@@ -40,7 +44,8 @@ class PostHogIntegration(Integration):
 
                     if PostHogIntegration.organization:
                         project_id = PostHogIntegration.project_id or (
-                            not not Hub.current.client.dsn and Dsn(Hub.current.client.dsn).project_id
+                            not not Hub.current.client.dsn
+                            and Dsn(Hub.current.client.dsn).project_id
                         )
                         if project_id:
                             properties["$sentry_url"] = (

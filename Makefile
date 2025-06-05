@@ -1,6 +1,5 @@
 lint:
-	pylint --rcfile=.pylintrc --reports=y --exit-zero analytics | tee pylint.out
-	flake8 --max-complexity=10 --statistics analytics > flake8.out || true
+	uvx ruff format
 
 test:
 	coverage run -m pytest

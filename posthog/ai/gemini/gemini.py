@@ -6,9 +6,15 @@ from typing import Any, Dict, Optional
 try:
     from google import genai
 except ImportError:
-    raise ModuleNotFoundError("Please install the Google Gemini SDK to use this feature: 'pip install google-genai'")
+    raise ModuleNotFoundError(
+        "Please install the Google Gemini SDK to use this feature: 'pip install google-genai'"
+    )
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
+from posthog.ai.utils import (
+    call_llm_and_track_usage,
+    get_model_params,
+    with_privacy_mode,
+)
 from posthog.client import Client as PostHogClient
 
 
@@ -124,8 +130,16 @@ class Models:
     ):
         """Merge call-level PostHog parameters with client defaults."""
         # Use call-level values if provided, otherwise fall back to defaults
-        distinct_id = call_distinct_id if call_distinct_id is not None else self._default_distinct_id
-        privacy_mode = call_privacy_mode if call_privacy_mode is not None else self._default_privacy_mode
+        distinct_id = (
+            call_distinct_id
+            if call_distinct_id is not None
+            else self._default_distinct_id
+        )
+        privacy_mode = (
+            call_privacy_mode
+            if call_privacy_mode is not None
+            else self._default_privacy_mode
+        )
         groups = call_groups if call_groups is not None else self._default_groups
 
         # Merge properties: default properties + call properties (call properties override)
@@ -166,8 +180,14 @@ class Models:
             **kwargs: Arguments passed to Gemini's generate_content
         """
         # Merge PostHog parameters
-        distinct_id, trace_id, properties, privacy_mode, groups = self._merge_posthog_params(
-            posthog_distinct_id, posthog_trace_id, posthog_properties, posthog_privacy_mode, posthog_groups
+        distinct_id, trace_id, properties, privacy_mode, groups = (
+            self._merge_posthog_params(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+            )
         )
 
         kwargs_with_contents = {"model": model, "contents": contents, **kwargs}
@@ -210,8 +230,12 @@ class Models:
                 for chunk in response:
                     if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
                         usage_stats = {
-                            "input_tokens": getattr(chunk.usage_metadata, "prompt_token_count", 0),
-                            "output_tokens": getattr(chunk.usage_metadata, "candidates_token_count", 0),
+                            "input_tokens": getattr(
+                                chunk.usage_metadata, "prompt_token_count", 0
+                            ),
+                            "output_tokens": getattr(
+                                chunk.usage_metadata, "candidates_token_count", 0
+                            ),
                         }
 
                     if hasattr(chunk, "text") and chunk.text:
@@ -320,8 +344,14 @@ class Models:
         **kwargs: Any,
     ):
         # Merge PostHog parameters
-        distinct_id, trace_id, properties, privacy_mode, groups = self._merge_posthog_params(
-            posthog_distinct_id, posthog_trace_id, posthog_properties, posthog_privacy_mode, posthog_groups
+        distinct_id, trace_id, properties, privacy_mode, groups = (
+            self._merge_posthog_params(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+            )
         )
 
         return self._generate_content_streaming(

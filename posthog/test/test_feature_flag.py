@@ -10,8 +10,17 @@ class TestFeatureFlag(unittest.TestCase):
             "key": "test-flag",
             "enabled": True,
             "variant": "test-variant",
-            "reason": {"code": "matched_condition", "condition_index": 0, "description": "Matched condition set 1"},
-            "metadata": {"id": 1, "payload": '{"some": "json"}', "version": 2, "description": "test-description"},
+            "reason": {
+                "code": "matched_condition",
+                "condition_index": 0,
+                "description": "Matched condition set 1",
+            },
+            "metadata": {
+                "id": 1,
+                "payload": '{"some": "json"}',
+                "version": 2,
+                "description": "test-description",
+            },
         }
 
         flag = FeatureFlag.from_json(resp)
@@ -20,10 +29,21 @@ class TestFeatureFlag(unittest.TestCase):
         self.assertEqual(flag.variant, "test-variant")
         self.assertEqual(flag.get_value(), "test-variant")
         self.assertEqual(
-            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
+            flag.reason,
+            FlagReason(
+                code="matched_condition",
+                condition_index=0,
+                description="Matched condition set 1",
+            ),
         )
         self.assertEqual(
-            flag.metadata, FlagMetadata(id=1, payload='{"some": "json"}', version=2, description="test-description")
+            flag.metadata,
+            FlagMetadata(
+                id=1,
+                payload='{"some": "json"}',
+                version=2,
+                description="test-description",
+            ),
         )
 
     def test_feature_flag_from_json_minimal(self):
@@ -44,7 +64,11 @@ class TestFeatureFlag(unittest.TestCase):
             "key": "test-flag",
             "enabled": True,
             "variant": "test-variant",
-            "reason": {"code": "matched_condition", "condition_index": 0, "description": "Matched condition set 1"},
+            "reason": {
+                "code": "matched_condition",
+                "condition_index": 0,
+                "description": "Matched condition set 1",
+            },
         }
 
         flag = FeatureFlag.from_json(resp)
@@ -53,13 +77,22 @@ class TestFeatureFlag(unittest.TestCase):
         self.assertEqual(flag.variant, "test-variant")
         self.assertEqual(flag.get_value(), "test-variant")
         self.assertEqual(
-            flag.reason, FlagReason(code="matched_condition", condition_index=0, description="Matched condition set 1")
+            flag.reason,
+            FlagReason(
+                code="matched_condition",
+                condition_index=0,
+                description="Matched condition set 1",
+            ),
         )
         self.assertEqual(flag.metadata, LegacyFlagMetadata(payload=None))
 
     def test_flag_reason_from_json(self):
         # Test with complete data
-        resp = {"code": "user_in_segment", "condition_index": 1, "description": "User is in segment 'beta_users'"}
+        resp = {
+            "code": "user_in_segment",
+            "condition_index": 1,
+            "description": "User is in segment 'beta_users'",
+        }
         reason = FlagReason.from_json(resp)
         self.assertEqual(reason.code, "user_in_segment")
         self.assertEqual(reason.condition_index, 1)
@@ -77,7 +110,12 @@ class TestFeatureFlag(unittest.TestCase):
 
     def test_flag_metadata_from_json(self):
         # Test with complete data
-        resp = {"id": 123, "payload": {"key": "value"}, "version": 1, "description": "Test flag"}
+        resp = {
+            "id": 123,
+            "payload": {"key": "value"},
+            "version": 1,
+            "description": "Test flag",
+        }
         metadata = FlagMetadata.from_json(resp)
         self.assertEqual(metadata.id, 123)
         self.assertEqual(metadata.payload, {"key": "value"})
@@ -106,7 +144,12 @@ class TestFeatureFlag(unittest.TestCase):
                 "condition_index": 1,
                 "description": "User is in segment 'beta_users'",
             },
-            "metadata": {"id": 123, "payload": {"key": "value"}, "version": 1, "description": "Test flag"},
+            "metadata": {
+                "id": 123,
+                "payload": {"key": "value"},
+                "version": 1,
+                "description": "Test flag",
+            },
         }
         flag = FeatureFlag.from_json(resp)
         self.assertEqual(flag.key, "test-flag")
@@ -131,7 +174,11 @@ class TestFeatureFlag(unittest.TestCase):
 
     def test_feature_flag_from_json_with_reason(self):
         # Test with reason but no metadata
-        resp = {"key": "test-flag", "enabled": True, "reason": {"code": "user_in_segment"}}
+        resp = {
+            "key": "test-flag",
+            "enabled": True,
+            "reason": {"code": "user_in_segment"},
+        }
         flag = FeatureFlag.from_json(resp)
         self.assertEqual(flag.key, "test-flag")
         self.assertTrue(flag.enabled)

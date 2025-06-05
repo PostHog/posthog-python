@@ -15,7 +15,9 @@ class TestModule(unittest.TestCase):
 
     def setUp(self):
         self.failed = False
-        self.posthog = Posthog("testsecret", host="http://localhost:8000", on_error=self.failed)
+        self.posthog = Posthog(
+            "testsecret", host="http://localhost:8000", on_error=self.failed
+        )
 
     def test_no_api_key(self):
         self.posthog.api_key = None

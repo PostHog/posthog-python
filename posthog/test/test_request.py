@@ -6,20 +6,35 @@ import mock
 import pytest
 import requests
 
-from posthog.request import DatetimeSerializer, QuotaLimitError, batch_post, decide, determine_server_host
+from posthog.request import (
+    DatetimeSerializer,
+    QuotaLimitError,
+    batch_post,
+    decide,
+    determine_server_host,
+)
 from posthog.test.test_utils import TEST_API_KEY
 
 
 class TestRequests(unittest.TestCase):
     def test_valid_request(self):
-        res = batch_post(TEST_API_KEY, batch=[{"distinct_id": "distinct_id", "event": "python event", "type": "track"}])
+        res = batch_post(
+            TEST_API_KEY,
+            batch=[
+                {"distinct_id": "distinct_id", "event": "python event", "type": "track"}
+            ],
+        )
         self.assertEqual(res.status_code, 200)
 
     def test_invalid_request_error(self):
-        self.assertRaises(Exception, batch_post, "testsecret", "https://t.posthog.com", False, "[{]")
+        self.assertRaises(
+            Exception, batch_post, "testsecret", "https://t.posthog.com", False, "[{]"
+        )
 
     def test_invalid_host(self):
-        self.assertRaises(Exception, batch_post, "testsecret", "t.posthog.com/", batch=[])
+        self.assertRaises(
+            Exception, batch_post, "testsecret", "t.posthog.com/", batch=[]
+        )
 
     def test_datetime_serialization(self):
         data = {"created": datetime(2012, 3, 4, 5, 6, 7, 891011)}
@@ -35,14 +50,26 @@ class TestRequests(unittest.TestCase):
 
     def test_should_not_timeout(self):
         res = batch_post(
-            TEST_API_KEY, batch=[{"distinct_id": "distinct_id", "event": "python event", "type": "track"}], timeout=15
+            TEST_API_KEY,
+            batch=[
+                {"distinct_id": "distinct_id", "event": "python event", "type": "track"}
+            ],
+            timeout=15,
         )
         self.assertEqual(res.status_code, 200)
 
     def test_should_timeout(self):
         with self.assertRaises(requests.ReadTimeout):
             batch_post(
-                "key", batch=[{"distinct_id": "distinct_id", "event": "python event", "type": "track"}], timeout=0.0001
+                "key",
+                batch=[
+                    {
+                        "distinct_id": "distinct_id",
+                        "event": "python event",
+                        "type": "track",
+                    }
+                ],
+                timeout=0.0001,
             )
 
     def test_quota_limited_response(self):
@@ -68,7 +95,11 @@ class TestRequests(unittest.TestCase):
         mock_response = requests.Response()
         mock_response.status_code = 200
         mock_response._content = json.dumps(
-            {"featureFlags": {"flag1": True}, "featureFlagPayloads": {}, "errorsWhileComputingFlags": False}
+            {
+                "featureFlags": {"flag1": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
         ).encode("utf-8")
 
         with mock.patch("posthog.request._session.post", return_value=mock_response):

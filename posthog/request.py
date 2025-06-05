@@ -43,7 +43,12 @@ def determine_server_host(host: Optional[str]) -> str:
 
 
 def post(
-    api_key: str, host: Optional[str] = None, path=None, gzip: bool = False, timeout: int = 15, **kwargs
+    api_key: str,
+    host: Optional[str] = None,
+    path=None,
+    gzip: bool = False,
+    timeout: int = 15,
+    **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
@@ -100,34 +105,67 @@ def _process_response(
         raise APIError(res.status_code, res.text)
 
 
-def decide(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
+def decide(
+    api_key: str,
+    host: Optional[str] = None,
+    gzip: bool = False,
+    timeout: int = 15,
+    **kwargs,
+) -> Any:
     """Post the `kwargs to the decide API endpoint"""
     res = post(api_key, host, "/decide/?v=4", gzip, timeout, **kwargs)
     return _process_response(res, success_message="Feature flags decided successfully")
 
 
-def flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any:
+def flags(
+    api_key: str,
+    host: Optional[str] = None,
+    gzip: bool = False,
+    timeout: int = 15,
+    **kwargs,
+) -> Any:
     """Post the `kwargs to the flags API endpoint"""
     res = post(api_key, host, "/flags/?v=2", gzip, timeout, **kwargs)
-    return _process_response(res, success_message="Feature flags evaluated successfully")
+    return _process_response(
+        res, success_message="Feature flags evaluated successfully"
+    )
 
 
-def remote_config(personal_api_key: str, host: Optional[str] = None, key: str = "", timeout: int = 15) -> Any:
+def remote_config(
+    personal_api_key: str, host: Optional[str] = None, key: str = "", timeout: int = 15
+) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
-    return get(personal_api_key, f"/api/projects/@current/feature_flags/{key}/remote_config/", host, timeout)
+    return get(
+        personal_api_key,
+        f"/api/projects/@current/feature_flags/{key}/remote_config/",
+        host,
+        timeout,
+    )
 
 
 def batch_post(
-    api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs
+    api_key: str,
+    host: Optional[str] = None,
+    gzip: bool = False,
+    timeout: int = 15,
+    **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the batch API endpoint for events"""
     res = post(api_key, host, "/batch/", gzip, timeout, **kwargs)
-    return _process_response(res, success_message="data uploaded successfully", return_json=False)
+    return _process_response(
+        res, success_message="data uploaded successfully", return_json=False
+    )
 
 
-def get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None) -> requests.Response:
+def get(
+    api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None
+) -> requests.Response:
     url = remove_trailing_slash(host or DEFAULT_HOST) + url
-    res = requests.get(url, headers={"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}, timeout=timeout)
+    res = requests.get(
+        url,
+        headers={"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT},
+        timeout=timeout,
+    )
     return _process_response(res, success_message=f"GET {url} completed successfully")
 
 

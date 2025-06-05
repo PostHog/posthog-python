@@ -40,11 +40,7 @@ Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
 dev = [
-    "black",
     "django-stubs",
-    "isort",
-    "flake8",
-    "flake8-print",
     "lxml",
     "mypy",
     "mypy-baseline",
@@ -60,7 +56,6 @@ test = [
     "mock>=2.0.0",
     "freezegun==1.5.1",
     "pylint",
-    "flake8",
     "coverage",
     "pytest",
     "pytest-timeout",
@@ -115,3 +110,8 @@ asyncio_default_fixture_loop_scope = "function"
 # ignore W503 for line break before binary operator
 ignore = ["E501", "W503"]
 max-line-length = 120
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.12",
+]

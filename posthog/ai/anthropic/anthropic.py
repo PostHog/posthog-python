@@ -2,13 +2,20 @@ try:
     import anthropic
     from anthropic.resources import Messages
 except ImportError:
-    raise ModuleNotFoundError("Please install the Anthropic SDK to use this feature: 'pip install anthropic'")
+    raise ModuleNotFoundError(
+        "Please install the Anthropic SDK to use this feature: 'pip install anthropic'"
+    )
 
 import time
 import uuid
 from typing import Any, Dict, Optional
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params, merge_system_prompt, with_privacy_mode
+from posthog.ai.utils import (
+    call_llm_and_track_usage,
+    get_model_params,
+    merge_system_prompt,
+    with_privacy_mode,
+)
 from posthog.client import Client as PostHogClient
 
 
@@ -186,8 +193,12 @@ class WrappedMessages(Messages):
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
             "$ai_output_tokens": usage_stats.get("output_tokens", 0),
-            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
-            "$ai_cache_creation_input_tokens": usage_stats.get("cache_creation_input_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get(
+                "cache_read_input_tokens", 0
+            ),
+            "$ai_cache_creation_input_tokens": usage_stats.get(
+                "cache_creation_input_tokens", 0
+            ),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),

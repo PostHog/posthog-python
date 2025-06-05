@@ -58,7 +58,11 @@ class TestConsumer(unittest.TestCase):
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.start()
             for i in range(0, 3):
-                track = {"type": "track", "event": "python event %d" % i, "distinct_id": "distinct_id"}
+                track = {
+                    "type": "track",
+                    "event": "python event %d" % i,
+                    "distinct_id": "distinct_id",
+                }
                 q.put(track)
                 time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 3)
@@ -69,11 +73,17 @@ class TestConsumer(unittest.TestCase):
         q = Queue()
         flush_interval = 0.5
         flush_at = 10
-        consumer = Consumer(q, TEST_API_KEY, flush_at=flush_at, flush_interval=flush_interval)
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=flush_at, flush_interval=flush_interval
+        )
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.start()
             for i in range(0, flush_at * 2):
-                track = {"type": "track", "event": "python event %d" % i, "distinct_id": "distinct_id"}
+                track = {
+                    "type": "track",
+                    "event": "python event %d" % i,
+                    "distinct_id": "distinct_id",
+                }
                 q.put(track)
             time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 2)
@@ -91,8 +101,14 @@ class TestConsumer(unittest.TestCase):
 
         mock_post.call_count = 0
 
-        with mock.patch("posthog.consumer.batch_post", mock.Mock(side_effect=mock_post)):
-            track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
+        with mock.patch(
+            "posthog.consumer.batch_post", mock.Mock(side_effect=mock_post)
+        ):
+            track = {
+                "type": "track",
+                "event": "python event",
+                "distinct_id": "distinct_id",
+            }
             # request() should succeed if the number of exceptions raised is
             # less than the retries paramater.
             if exception_count <= consumer.retries:
@@ -107,7 +123,8 @@ class TestConsumer(unittest.TestCase):
                     self.assertEqual(exc, expected_exception)
                 else:
                     self.fail(
-                        "request() should raise an exception if still failing after %d retries" % consumer.retries
+                        "request() should raise an exception if still failing after %d retries"
+                        % consumer.retries
                     )
 
     def test_request_retry(self):
@@ -148,7 +165,12 @@ class TestConsumer(unittest.TestCase):
         properties = {}
         for n in range(0, 500):
             properties[str(n)] = "one_long_property_value_to_build_a_big_event"
-        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id", "properties": properties}
+        track = {
+            "type": "track",
+            "event": "python event",
+            "distinct_id": "distinct_id",
+            "properties": properties,
+        }
         msg_size = len(json.dumps(track).encode())
         # Let's capture 8MB of data to trigger two batches
         n_msgs = int(8_000_000 / msg_size)
@@ -158,10 +180,15 @@ class TestConsumer(unittest.TestCase):
             res.status_code = 200
             request_size = len(data.encode())
             # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 10% of margin
-            self.assertTrue(request_size < (5 * 1024 * 1024) * 1.1, "batch size (%d) higher than limit" % request_size)
+            self.assertTrue(
+                request_size < (5 * 1024 * 1024) * 1.1,
+                "batch size (%d) higher than limit" % request_size,
+            )
             return res
 
-        with mock.patch("posthog.request._session.post", side_effect=mock_post_fn) as mock_post:
+        with mock.patch(
+            "posthog.request._session.post", side_effect=mock_post_fn
+        ) as mock_post:
             consumer.start()
             for _ in range(0, n_msgs + 2):
                 q.put(track)

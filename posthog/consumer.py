@@ -107,7 +107,9 @@ class Consumer(Thread):
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > MAX_MSG_SIZE:
-                    self.log.error("Item exceeds 900kib limit, dropping. (%s)", str(item))
+                    self.log.error(
+                        "Item exceeds 900kib limit, dropping. (%s)", str(item)
+                    )
                     continue
                 items.append(item)
                 total_size += item_size
@@ -134,7 +136,9 @@ class Consumer(Thread):
                 # retry on all other errors (eg. network)
                 return False
 
-        @backoff.on_exception(backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception)
+        @backoff.on_exception(
+            backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception
+        )
         def send_request():
             batch_post(
                 self.api_key,

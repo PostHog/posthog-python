@@ -9,7 +9,9 @@ from posthog.types import FeatureFlag, FeatureFlagResult, FlagMetadata, FlagReas
 
 class TestFeatureFlagResult(unittest.TestCase):
     def test_from_bool_value_and_payload(self):
-        result = FeatureFlagResult.from_value_and_payload("test-flag", True, "[1, 2, 3]")
+        result = FeatureFlagResult.from_value_and_payload(
+            "test-flag", True, "[1, 2, 3]"
+        )
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
@@ -17,7 +19,9 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.payload, [1, 2, 3])
 
     def test_from_false_value_and_payload(self):
-        result = FeatureFlagResult.from_value_and_payload("test-flag", False, '{"some": "value"}')
+        result = FeatureFlagResult.from_value_and_payload(
+            "test-flag", False, '{"some": "value"}'
+        )
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, False)
@@ -25,7 +29,9 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.payload, {"some": "value"})
 
     def test_from_variant_value_and_payload(self):
-        result = FeatureFlagResult.from_value_and_payload("test-flag", "control", "true")
+        result = FeatureFlagResult.from_value_and_payload(
+            "test-flag", "control", "true"
+        )
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
@@ -33,7 +39,9 @@ class TestFeatureFlagResult(unittest.TestCase):
         self.assertEqual(result.payload, True)
 
     def test_from_none_value_and_payload(self):
-        result = FeatureFlagResult.from_value_and_payload("test-flag", None, '{"some": "value"}')
+        result = FeatureFlagResult.from_value_and_payload(
+            "test-flag", None, '{"some": "value"}'
+        )
         self.assertIsNone(result)
 
     def test_from_boolean_flag_details(self):
@@ -41,8 +49,12 @@ class TestFeatureFlagResult(unittest.TestCase):
             key="test-flag",
             enabled=True,
             variant=None,
-            metadata=FlagMetadata(id=1, version=1, description="test-flag", payload='"Some string"'),
-            reason=FlagReason(code="test-reason", description="test-reason", condition_index=0),
+            metadata=FlagMetadata(
+                id=1, version=1, description="test-flag", payload='"Some string"'
+            ),
+            reason=FlagReason(
+                code="test-reason", description="test-reason", condition_index=0
+            ),
         )
 
         result = FeatureFlagResult.from_flag_details(flag_details)
@@ -57,11 +69,17 @@ class TestFeatureFlagResult(unittest.TestCase):
             key="test-flag",
             enabled=True,
             variant=None,
-            metadata=FlagMetadata(id=1, version=1, description="test-flag", payload='"Some string"'),
-            reason=FlagReason(code="test-reason", description="test-reason", condition_index=0),
+            metadata=FlagMetadata(
+                id=1, version=1, description="test-flag", payload='"Some string"'
+            ),
+            reason=FlagReason(
+                code="test-reason", description="test-reason", condition_index=0
+            ),
         )
 
-        result = FeatureFlagResult.from_flag_details(flag_details, override_match_value="control")
+        result = FeatureFlagResult.from_flag_details(
+            flag_details, override_match_value="control"
+        )
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
@@ -73,11 +91,17 @@ class TestFeatureFlagResult(unittest.TestCase):
             key="test-flag",
             enabled=True,
             variant="control",
-            metadata=FlagMetadata(id=1, version=1, description="test-flag", payload='{"some": "value"}'),
-            reason=FlagReason(code="test-reason", description="test-reason", condition_index=0),
+            metadata=FlagMetadata(
+                id=1, version=1, description="test-flag", payload='{"some": "value"}'
+            ),
+            reason=FlagReason(
+                code="test-reason", description="test-reason", condition_index=0
+            ),
         )
 
-        result = FeatureFlagResult.from_flag_details(flag_details, override_match_value=True)
+        result = FeatureFlagResult.from_flag_details(
+            flag_details, override_match_value=True
+        )
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, True)
@@ -89,11 +113,17 @@ class TestFeatureFlagResult(unittest.TestCase):
             key="test-flag",
             enabled=True,
             variant="control",
-            metadata=FlagMetadata(id=1, version=1, description="test-flag", payload='{"some": "value"}'),
-            reason=FlagReason(code="test-reason", description="test-reason", condition_index=0),
+            metadata=FlagMetadata(
+                id=1, version=1, description="test-flag", payload='{"some": "value"}'
+            ),
+            reason=FlagReason(
+                code="test-reason", description="test-reason", condition_index=0
+            ),
         )
 
-        result = FeatureFlagResult.from_flag_details(flag_details, override_match_value=False)
+        result = FeatureFlagResult.from_flag_details(
+            flag_details, override_match_value=False
+        )
 
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.enabled, False)
@@ -105,8 +135,12 @@ class TestFeatureFlagResult(unittest.TestCase):
             key="test-flag",
             enabled=True,
             variant="control",
-            metadata=FlagMetadata(id=1, version=1, description="test-flag", payload='{"some": "value"}'),
-            reason=FlagReason(code="test-reason", description="test-reason", condition_index=0),
+            metadata=FlagMetadata(
+                id=1, version=1, description="test-flag", payload='{"some": "value"}'
+            ),
+            reason=FlagReason(
+                code="test-reason", description="test-reason", condition_index=0
+            ),
         )
 
         result = FeatureFlagResult.from_flag_details(flag_details)
@@ -126,8 +160,12 @@ class TestFeatureFlagResult(unittest.TestCase):
             key="test-flag",
             enabled=True,
             variant=None,
-            metadata=FlagMetadata(id=1, version=1, description="test-flag", payload=None),
-            reason=FlagReason(code="test-reason", description="test-reason", condition_index=0),
+            metadata=FlagMetadata(
+                id=1, version=1, description="test-flag", payload=None
+            ),
+            reason=FlagReason(
+                code="test-reason", description="test-reason", condition_index=0
+            ),
         )
 
         result = FeatureFlagResult.from_flag_details(flag_details)
@@ -300,7 +338,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             },
         }
 
-        flag_result = self.client.get_feature_flag_result("person-flag", "some-distinct-id")
+        flag_result = self.client.get_feature_flag_result(
+            "person-flag", "some-distinct-id"
+        )
         self.assertEqual(flag_result.enabled, True)
         self.assertEqual(flag_result.variant, None)
         self.assertEqual(flag_result.payload, 300)
@@ -385,7 +425,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             },
         }
 
-        flag_result = self.client.get_feature_flag_result("no-person-flag", "some-distinct-id")
+        flag_result = self.client.get_feature_flag_result(
+            "no-person-flag", "some-distinct-id"
+        )
 
         self.assertIsNone(flag_result)
         patch_capture.assert_called_with(

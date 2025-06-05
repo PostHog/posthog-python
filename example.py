@@ -6,7 +6,9 @@ import posthog
 # Add argument parsing
 parser = argparse.ArgumentParser(description="PostHog Python library example")
 parser.add_argument(
-    "--flag", default="person-on-events-enabled", help="Feature flag key to check (default: person-on-events-enabled)"
+    "--flag",
+    default="person-on-events-enabled",
+    help="Feature flag key to check (default: person-on-events-enabled)",
 )
 args = parser.parse_args()
 
@@ -38,10 +40,19 @@ print(
 
 
 # Capture an event
-posthog.capture("distinct_id", "event", {"property1": "value", "property2": "value"}, send_feature_flags=True)
+posthog.capture(
+    "distinct_id",
+    "event",
+    {"property1": "value", "property2": "value"},
+    send_feature_flags=True,
+)
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))
-print(posthog.feature_enabled("beta-feature-groups", "distinct_id", groups={"company": "id:5"}))
+print(
+    posthog.feature_enabled(
+        "beta-feature-groups", "distinct_id", groups={"company": "id:5"}
+    )
+)
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))
 
@@ -53,9 +64,14 @@ exit()
 
 posthog.alias("distinct_id", "new_distinct_id")
 
-posthog.capture("new_distinct_id", "event2", {"property1": "value", "property2": "value"})
 posthog.capture(
-    "new_distinct_id", "event-with-groups", {"property1": "value", "property2": "value"}, groups={"company": "id:5"}
+    "new_distinct_id", "event2", {"property1": "value", "property2": "value"}
+)
+posthog.capture(
+    "new_distinct_id",
+    "event-with-groups",
+    {"property1": "value", "property2": "value"},
+    groups={"company": "id:5"},
 )
 
 # # Add properties to the person
@@ -82,7 +98,13 @@ posthog.set("new_distinct_id", {"current_browser": "Firefox"})
 # Local Evaluation
 
 # If flag has City=Sydney, this call doesn't go to `/decide`
-print(posthog.feature_enabled("test-flag", "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}))
+print(
+    posthog.feature_enabled(
+        "test-flag",
+        "distinct_id_random_22",
+        person_properties={"$geoip_city_name": "Sydney"},
+    )
+)
 
 print(
     posthog.feature_enabled(
@@ -98,7 +120,9 @@ print(posthog.get_all_flags("distinct_id_random_22"))
 print(posthog.get_all_flags("distinct_id_random_22", only_evaluate_locally=True))
 print(
     posthog.get_all_flags(
-        "distinct_id_random_22", person_properties={"$geoip_city_name": "Sydney"}, only_evaluate_locally=True
+        "distinct_id_random_22",
+        person_properties={"$geoip_city_name": "Sydney"},
+        only_evaluate_locally=True,
     )
 )
 print(posthog.get_remote_config_payload("encrypted_payload_flag_key"))

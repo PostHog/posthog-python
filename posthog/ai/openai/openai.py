@@ -5,9 +5,15 @@ from typing import Any, Dict, List, Optional
 try:
     import openai
 except ImportError:
-    raise ModuleNotFoundError("Please install the OpenAI SDK to use this feature: 'pip install openai'")
+    raise ModuleNotFoundError(
+        "Please install the OpenAI SDK to use this feature: 'pip install openai'"
+    )
 
-from posthog.ai.utils import call_llm_and_track_usage, get_model_params, with_privacy_mode
+from posthog.ai.utils import (
+    call_llm_and_track_usage,
+    get_model_params,
+    with_privacy_mode,
+)
 from posthog.client import Client as PostHogClient
 
 
@@ -134,12 +140,16 @@ class WrappedResponses:
                         if hasattr(chunk.usage, "output_tokens_details") and hasattr(
                             chunk.usage.output_tokens_details, "reasoning_tokens"
                         ):
-                            usage_stats["reasoning_tokens"] = chunk.usage.output_tokens_details.reasoning_tokens
+                            usage_stats["reasoning_tokens"] = (
+                                chunk.usage.output_tokens_details.reasoning_tokens
+                            )
 
                         if hasattr(chunk.usage, "input_tokens_details") and hasattr(
                             chunk.usage.input_tokens_details, "cached_tokens"
                         ):
-                            usage_stats["cache_read_input_tokens"] = chunk.usage.input_tokens_details.cached_tokens
+                            usage_stats["cache_read_input_tokens"] = (
+                                chunk.usage.input_tokens_details.cached_tokens
+                            )
 
                     yield chunk
 
@@ -181,7 +191,9 @@ class WrappedResponses:
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("input")),
+            "$ai_input": with_privacy_mode(
+                self._client._ph_client, posthog_privacy_mode, kwargs.get("input")
+            ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
@@ -190,7 +202,9 @@ class WrappedResponses:
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
             "$ai_output_tokens": usage_stats.get("output_tokens", 0),
-            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get(
+                "cache_read_input_tokens", 0
+            ),
             "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
@@ -318,14 +332,22 @@ class WrappedCompletions:
                         if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
                             chunk.usage.prompt_tokens_details, "cached_tokens"
                         ):
-                            usage_stats["cache_read_input_tokens"] = chunk.usage.prompt_tokens_details.cached_tokens
+                            usage_stats["cache_read_input_tokens"] = (
+                                chunk.usage.prompt_tokens_details.cached_tokens
+                            )
 
                         if hasattr(chunk.usage, "output_tokens_details") and hasattr(
                             chunk.usage.output_tokens_details, "reasoning_tokens"
                         ):
-                            usage_stats["reasoning_tokens"] = chunk.usage.output_tokens_details.reasoning_tokens
+                            usage_stats["reasoning_tokens"] = (
+                                chunk.usage.output_tokens_details.reasoning_tokens
+                            )
 
-                    if hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0:
+                    if (
+                        hasattr(chunk, "choices")
+                        and chunk.choices
+                        and len(chunk.choices) > 0
+                    ):
                         if chunk.choices[0].delta and chunk.choices[0].delta.content:
                             content = chunk.choices[0].delta.content
                             if content:
@@ -340,8 +362,14 @@ class WrappedCompletions:
                                     accumulated_tools[index] = tool_call
                                 else:
                                     # Append arguments for existing tool calls
-                                    if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-                                        accumulated_tools[index].function.arguments += tool_call.function.arguments
+                                    if hasattr(tool_call, "function") and hasattr(
+                                        tool_call.function, "arguments"
+                                    ):
+                                        accumulated_tools[
+                                            index
+                                        ].function.arguments += (
+                                            tool_call.function.arguments
+                                        )
 
                     yield chunk
 
@@ -385,7 +413,9 @@ class WrappedCompletions:
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")),
+            "$ai_input": with_privacy_mode(
+                self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")
+            ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
@@ -394,7 +424,9 @@ class WrappedCompletions:
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
-            "$ai_cache_read_input_tokens": usage_stats.get("cache_read_input_tokens", 0),
+            "$ai_cache_read_input_tokens": usage_stats.get(
+                "cache_read_input_tokens", 0
+            ),
             "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
@@ -476,7 +508,9 @@ class WrappedEmbeddings:
         event_properties = {
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
-            "$ai_input": with_privacy_mode(self._client._ph_client, posthog_privacy_mode, kwargs.get("input")),
+            "$ai_input": with_privacy_mode(
+                self._client._ph_client, posthog_privacy_mode, kwargs.get("input")
+            ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
             "$ai_latency": latency,
