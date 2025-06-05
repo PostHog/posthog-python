@@ -1,5 +1,5 @@
-[project]
-license = {text = "MIT"}
+[tool.setuptools]
+license-files = ["LICENSE"]
 
 [tool.black]
 line-length = 120
