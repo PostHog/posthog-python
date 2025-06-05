@@ -51,6 +51,7 @@ dev = [
     "types-six",
     "pre-commit",
     "pydantic",
+    "ruff",
 ]
 test = [
     "mock>=2.0.0",
