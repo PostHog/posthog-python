@@ -55,7 +55,6 @@ dev = [
 test = [
     "mock>=2.0.0",
     "freezegun==1.5.1",
-    "pylint",
     "coverage",
     "pytest",
     "pytest-timeout",
