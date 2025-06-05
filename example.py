@@ -105,8 +105,8 @@ print(posthog.get_remote_config_payload("encrypted_payload_flag_key"))
 
 
 # You can add tags to a context, and these are automatically added to exceptions captured within that context.
-# Recommended: you can use the `@posthog.tracked` decorator.
-@posthog.tracked
+# Recommended: you can use the `@posthog.scoped` decorator.
+@posthog.scoped
 def process_order(order_id):
     posthog.tag("order_id", order_id)
     # Exception will be captured and tagged automatically

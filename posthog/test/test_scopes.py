@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from posthog.scopes import clear_tags, get_tags, new_context, tag, tracked
+from posthog.scopes import clear_tags, get_tags, new_context, tag, scoped
 
 
 class TestScopes(unittest.TestCase):
@@ -62,8 +62,8 @@ class TestScopes(unittest.TestCase):
         self.assertEqual(get_tags(), {"level1": "value1"})
 
     @patch("posthog.capture_exception")
-    def test_tracked_decorator_success(self, mock_capture):
-        @tracked
+    def test_scoped_decorator_success(self, mock_capture):
+        @scoped
         def successful_function(x, y):
             tag("x", x)
             tag("y", y)
@@ -81,10 +81,10 @@ class TestScopes(unittest.TestCase):
         self.assertEqual(get_tags(), {})
 
     @patch("posthog.capture_exception")
-    def test_tracked_decorator_exception(self, mock_capture):
+    def test_scoped_decorator_exception(self, mock_capture):
         test_exception = ValueError("Test exception")
 
-        @tracked
+        @scoped
         def failing_function():
             tag("important_context", "value")
             raise test_exception

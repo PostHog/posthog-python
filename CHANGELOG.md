@@ -4,7 +4,7 @@ Add exception context management:
  - New context manager with `posthog.new_context()`
  - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
  - Function decorator:
-   - `@posthog.tracked` - Creates context and captures exceptions thrown within the function
+   - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
  - Automatic deduplication of exceptions to ensure each exception is only captured once
 
 ## 4.2.0 - 2025-05-22

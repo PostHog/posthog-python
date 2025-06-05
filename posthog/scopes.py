@@ -76,7 +76,7 @@ def clear_tags() -> None:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def tracked(func: F) -> F:
+def scoped(func: F) -> F:
     """
     Decorator that creates a new context for the function, wraps the function in a
     try/except block, and if an exception occurs, captures it with the current context
@@ -87,7 +87,7 @@ def tracked(func: F) -> F:
         func: The function to wrap
 
     Example:
-        @posthog.tracked
+        @posthog.scoped
         def process_payment(payment_id):
             posthog.tag("payment_id", payment_id)
             posthog.tag("payment_method", "credit_card")

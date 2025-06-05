@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
-from posthog.scopes import clear_tags, get_tags, new_context, tag, tracked
+from posthog.scopes import clear_tags, get_tags, new_context, tag, scoped
 from posthog.types import FeatureFlag, FlagsAndPayloads
 from posthog.version import VERSION
 
@@ -15,7 +15,7 @@ new_context = new_context
 tag = tag
 get_tags = get_tags
 clear_tags = clear_tags
-tracked = tracked
+tracked = scoped
 
 """Settings."""
 api_key = None  # type: Optional[str]
