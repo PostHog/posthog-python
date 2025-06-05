@@ -23,7 +23,7 @@ def new_context():
     Any tags set within this scope will be isolated to this context. Tags added to a
     context will be added to exceptions captured within that context.
 
-    NOTE: tags set within a context will only added to exceptions captured within that
+    NOTE: tags set within a context will only be added to exceptions captured within that
     context - ensure you call `posthog.capture_exception()` before the end of the with
     block, or the extra tags will be lost.
 
