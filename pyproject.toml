@@ -106,9 +106,6 @@ ensure_newline_before_comments = true
 line_length = 120
 virtual_env = "env"
 
-[tool.setuptools.bdist_wheel]
-universal = true
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
