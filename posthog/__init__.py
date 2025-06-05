@@ -10,7 +10,7 @@ from posthog.version import VERSION
 
 __version__ = VERSION
 
-"""Expose context management functions at module level."""
+"""Context management."""
 new_context = new_context
 tag = tag
 get_tags = get_tags
