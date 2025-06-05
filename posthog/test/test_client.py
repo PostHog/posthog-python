@@ -521,7 +521,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties=None,
             group_properties=None,
-            disable_geoip=True,
+            geoip_disable=True,
         )
 
     @mock.patch("posthog.client.flags")
@@ -563,7 +563,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties=None,
             group_properties=None,
-            disable_geoip=False,
+            geoip_disable=False,
         )
 
     @mock.patch("posthog.client.flags")
@@ -1027,7 +1027,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={"distinct_id": "some_id"},
             group_properties={},
-            disable_geoip=True,
+            geoip_disable=True,
         )
         patch_flags.reset_mock()
         client.feature_enabled("random_key", "feature_enabled_distinct_id", disable_geoip=True)
@@ -1039,7 +1039,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={"distinct_id": "feature_enabled_distinct_id"},
             group_properties={},
-            disable_geoip=True,
+            geoip_disable=True,
         )
         patch_flags.reset_mock()
         client.get_all_flags_and_payloads("all_flags_payloads_id")
@@ -1051,7 +1051,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={"distinct_id": "all_flags_payloads_id"},
             group_properties={},
-            disable_geoip=False,
+            geoip_disable=False,
         )
 
     @mock.patch("posthog.client.Poller")
@@ -1090,7 +1090,7 @@ class TestClient(unittest.TestCase):
                 "company": {"$group_key": "id:5", "x": "y"},
                 "instance": {"$group_key": "app.posthog.com"},
             },
-            disable_geoip=False,
+            geoip_disable=False,
         )
 
         patch_flags.reset_mock()
@@ -1116,7 +1116,7 @@ class TestClient(unittest.TestCase):
                 "company": {"$group_key": "group_override"},
                 "instance": {"$group_key": "app.posthog.com"},
             },
-            disable_geoip=False,
+            geoip_disable=False,
         )
 
         patch_flags.reset_mock()
@@ -1130,7 +1130,7 @@ class TestClient(unittest.TestCase):
             groups={},
             person_properties={"distinct_id": "some_id"},
             group_properties={},
-            disable_geoip=False,
+            geoip_disable=False,
         )
 
     @parameterized.expand(

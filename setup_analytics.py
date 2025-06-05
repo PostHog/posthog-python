@@ -41,6 +41,7 @@ setup(
         "posthoganalytics.ai.langchain",
         "posthoganalytics.ai.openai",
         "posthoganalytics.ai.anthropic",
+        "posthoganalytics.ai.gemini",
         "posthoganalytics.test",
         "posthoganalytics.sentry",
         "posthoganalytics.exception_integrations",

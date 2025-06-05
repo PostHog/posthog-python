@@ -1,11 +1,19 @@
-## 4.1.0 - 2025-05-01
+## 4.3.0
 
-1. Add exception context management:
-   - New context manager with `posthog.new_context()`
-   - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
-   - Function decorator:
-     - `@posthog.tracked` - Creates context and captures exceptions thrown within the function
-   - Automatic deduplication of exceptions to ensure each exception is only captured once
+dd exception context management:
+ - New context manager with `posthog.new_context()`
+ - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
+ - Function decorator:
+   - `@posthog.tracked` - Creates context and captures exceptions thrown within the function
+ - Automatic deduplication of exceptions to ensure each exception is only captured once
+
+## 4.2.0 - 2025-05-22
+
+Add support for google gemini
+
+## 4.1.0 - 2025-05-22
+
+Moved ai openai package to a composition approach over inheritance.
 
 ## 4.0.1 – 2025-04-29
 

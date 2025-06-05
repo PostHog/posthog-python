@@ -73,6 +73,21 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
             "cache_read_input_tokens": cached_tokens,
             "reasoning_tokens": reasoning_tokens,
         }
+    elif provider == "gemini":
+        input_tokens = 0
+        output_tokens = 0
+
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
+            output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
+
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "reasoning_tokens": 0,
+        }
     return {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -93,6 +108,8 @@ def format_response(response, provider: str):
         return format_response_anthropic(response)
     elif provider == "openai":
         return format_response_openai(response)
+    elif provider == "gemini":
+        return format_response_gemini(response)
     return output
 
 
@@ -170,6 +187,40 @@ def format_response_openai(response):
     return output
 
 
+def format_response_gemini(response):
+    output = []
+    if hasattr(response, "candidates") and response.candidates:
+        for candidate in response.candidates:
+            if hasattr(candidate, "content") and candidate.content:
+                content_text = ""
+                if hasattr(candidate.content, "parts") and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            content_text += part.text
+                if content_text:
+                    output.append(
+                        {
+                            "role": "assistant",
+                            "content": content_text,
+                        }
+                    )
+            elif hasattr(candidate, "text") and candidate.text:
+                output.append(
+                    {
+                        "role": "assistant",
+                        "content": candidate.text,
+                    }
+                )
+    elif hasattr(response, "text") and response.text:
+        output.append(
+            {
+                "role": "assistant",
+                "content": response.text,
+            }
+        )
+    return output
+
+
 def format_tool_calls(response, provider: str):
     if provider == "anthropic":
         if hasattr(response, "tools") and response.tools and len(response.tools) > 0:
@@ -198,6 +249,22 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         if kwargs.get("system") is None:
             return messages
         return [{"role": "system", "content": kwargs.get("system")}] + messages
+    elif provider == "gemini":
+        contents = kwargs.get("contents", [])
+        if isinstance(contents, str):
+            return [{"role": "user", "content": contents}]
+        elif isinstance(contents, list):
+            formatted = []
+            for item in contents:
+                if isinstance(item, str):
+                    formatted.append({"role": "user", "content": item})
+                elif hasattr(item, "text"):
+                    formatted.append({"role": "user", "content": item.text})
+                else:
+                    formatted.append({"role": "user", "content": str(item)})
+            return formatted
+        else:
+            return [{"role": "user", "content": str(contents)}]
 
     # For OpenAI, handle both Chat Completions and Responses API
     if kwargs.get("messages") is not None:
@@ -271,7 +338,7 @@ def call_llm_and_track_usage(
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        if response and hasattr(response, "usage"):
+        if response and (hasattr(response, "usage") or (provider == "gemini" and hasattr(response, "usage_metadata"))):
             usage = get_usage(response, provider)
 
         messages = merge_system_prompt(kwargs, provider)
@@ -366,7 +433,7 @@ async def call_llm_and_track_usage_async(
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        if response and hasattr(response, "usage"):
+        if response and (hasattr(response, "usage") or (provider == "gemini" and hasattr(response, "usage_metadata"))):
             usage = get_usage(response, provider)
 
         messages = merge_system_prompt(kwargs, provider)
