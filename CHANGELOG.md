@@ -7,6 +7,12 @@ Add exception context management:
    - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
  - Automatic deduplication of exceptions to ensure each exception is only captured once
 
+## 4.2.1 - 2025-6-05
+
+1. fix: feature flag request use geoip_disable (#235)
+2. chore: pin actions versions (#210)
+3. fix: opinionated setup and clean fn fix (#240)
+
 ## 4.2.0 - 2025-05-22
 
 Add support for google gemini
