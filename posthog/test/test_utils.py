@@ -70,10 +70,7 @@ class TestUtils(unittest.TestCase):
         assert combined.keys() == pre_clean_keys
 
         # test UUID separately, as the UUID object doesn't equal its string representation according to Python
-        assert (
-            utils.clean(UUID("12345678123456781234567812345678"))
-            == "12345678-1234-5678-1234-567812345678"
-        )
+        assert utils.clean(UUID("12345678123456781234567812345678")) == "12345678-1234-5678-1234-567812345678"
 
     def test_clean_with_dates(self):
         dict_with_dates = {
@@ -85,7 +82,7 @@ class TestUtils(unittest.TestCase):
     def test_bytes(self):
         item = bytes(10)
         utils.clean(item)
-        assert utils.clean(item) == '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        assert utils.clean(item) == "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
     def test_clean_fn(self):
         cleaned = utils.clean({"fn": lambda x: x, "number": 4})
