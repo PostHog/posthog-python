@@ -14,6 +14,7 @@ import distro  # For Linux OS detection
 from dateutil.tz import tzutc
 from six import string_types
 
+from posthog.scopes import get_tags
 from posthog.consumer import Consumer
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple, handle_in_app
@@ -662,6 +663,16 @@ class Client(object):
         try:
             properties = properties or {}
 
+            # Check if this exception has already been captured
+            if exception is not None and hasattr(exception, "__posthog_exception_captured"):
+                self.log.debug("Exception already captured, skipping")
+                return
+
+            # Grab current context tags, if any exist
+            context_tags = get_tags()
+            if context_tags:
+                properties.update(context_tags)
+
             # if there's no distinct_id, we'll generate one and set personless mode
             # via $process_person_profile = false
             if distinct_id is None:
@@ -705,7 +716,13 @@ class Client(object):
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
 
-            return self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
+            res = self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
+
+            # Mark the exception as captured to prevent duplicate captures
+            if exception is not None:
+                setattr(exception, "__posthog_exception_captured", True)
+
+            return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
 

@@ -5,9 +5,17 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
 from posthog.types import FeatureFlag, FlagsAndPayloads
+from posthog.scopes import new_context, tag, get_tags, clear_tags, tracked
 from posthog.version import VERSION
 
 __version__ = VERSION
+
+"""Expose context management functions at module level."""
+new_context = new_context
+tag = tag
+get_tags = get_tags
+clear_tags = clear_tags
+tracked = tracked
 
 """Settings."""
 api_key = None  # type: Optional[str]

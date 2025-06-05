@@ -1,3 +1,12 @@
+## 4.1.0 - 2025-05-01
+
+1. Add exception context management:
+   - New context manager with `posthog.new_context()`
+   - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
+   - Function decorator:
+     - `@posthog.tracked` - Creates context and captures exceptions thrown within the function
+   - Automatic deduplication of exceptions to ensure each exception is only captured once
+
 ## 4.0.1 – 2025-04-29
 
 1. Remove deprecated `monotonic` library. Use Python's core `time.monotonic` function instead

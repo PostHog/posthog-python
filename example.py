@@ -104,4 +104,26 @@ print(
 print(posthog.get_remote_config_payload("encrypted_payload_flag_key"))
 
 
+# You can add tags to a context, and these are automatically added to exceptions captured within that context.
+# Recommended: you can use the `@posthog.tracked` decorator.
+@posthog.tracked
+def process_order(order_id):
+    posthog.tag("order_id", order_id)
+    # Exception will be captured and tagged automatically
+    raise Exception("Order processing failed")
+
+# You can also use the directly context manager, but you should prefer to use the decorator where possible,
+# because it's tricky to remember to always capture the exception within the context scope.
+with posthog.new_context():
+    posthog.tag("user_id", "123")
+    posthog.tag("transaction_id", "abc123")
+    try:
+        # Any exception within this block will include these tags
+        raise Exception("Order processing failed")
+    except Exception as e:
+        # Note the exception must be captured within the scope for the tags
+        # to be applied
+        posthog.capture_exception(e)
+
+
 posthog.shutdown()
