@@ -46,6 +46,7 @@ class PostHogIntegration(Integration):
                             properties["$sentry_url"] = (
                                 f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
                             )
+
                     posthog.capture(posthog_distinct_id, "$exception", properties)
 
             return event
