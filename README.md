@@ -17,6 +17,17 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 4. Run `make test`
   1. To run a specific test do `pytest -k test_no_api_key`
 
+## PostHog recommends `uv` so...
+
+```bash
+uv python install 3.9.19
+uv python pin 3.9 
+uv venv env
+source env/bin/activate
+uv pip install -e ".[test]"
+make test
+```
+
 ### Running Locally
 
 Assuming you have a [local version of PostHog](https://posthog.com/docs/developing-locally) running, you can run `python3 example.py` to see the library in action.
