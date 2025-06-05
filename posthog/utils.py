@@ -104,7 +104,7 @@ def _coerce_unicode(cmplx):
         item = cmplx.decode("utf-8", "strict")
     except AttributeError as exception:
         item = ":".join(exception)
-        item.decode("utf-8", "strict") # type: ignore
+        item.decode("utf-8", "strict")  # type: ignore
         log.warning("Error decoding: %s", item)
         return None
     return item
