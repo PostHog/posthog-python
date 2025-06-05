@@ -3,6 +3,7 @@
 1. fix: feature flag request use geoip_disable (#235)
 2. chore: pin actions versions (#210)
 3. fix: opinionated setup and clean fn fix (#240)
+4. fix: release action failed (#241)
 
 ## 4.2.0 - 2025-05-22
 
