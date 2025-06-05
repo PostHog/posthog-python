@@ -14,25 +14,29 @@ def new_context(fresh=False):
     # TODO - we could extend this context idea to also apply to other event types eventually,
     # but right now it only applies to exceptions...
     """
-    Create a new context scope that will be active for the duration of the with block.
-    Any tags set within this scope will be isolated to this context. Any exceptions raised
-    within the context will be captured and tagged with the context tags.
+     Create a new context scope that will be active for the duration of the with block.
+     Any tags set within this scope will be isolated to this context. Any exceptions raised
+    or events captured within the context will be tagged with the context tags.
 
-    Args:
-        fresh: Whether to start with a fresh context (default: False).
-               If False, inherits tags from parent context.
-               If True, starts with no tags.
+     Args:
+         fresh: Whether to start with a fresh context (default: False).
+                If False, inherits tags from parent context.
+                If True, starts with no tags.
 
-    Examples:
-        # Inherit parent context tags
-        with posthog.new_context():
-            posthog.tag("user_id", "123")
-            raise ValueError("Something went wrong")
+     Examples:
+         # Inherit parent context tags
+         with posthog.new_context():
+             posthog.tag("request_id", "123")
+             # Both this event and the exception will be tagged with the context tags
+             posthog.capture("event_name", {"property": "value"})
+             raise ValueError("Something went wrong")
 
-        # Start with fresh context (no inherited tags)
-        with posthog.new_context(fresh=True):
-            posthog.tag("user_id", "123")
-            raise ValueError("Something went wrong")
+         # Start with fresh context (no inherited tags)
+         with posthog.new_context(fresh=True):
+             posthog.tag("request_id", "123")
+             # Both this event and the exception will be tagged with the context tags
+             posthog.capture("event_name", {"property": "value"})
+             raise ValueError("Something went wrong")
 
     """
     import posthog
@@ -86,9 +90,8 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 def scoped(fresh=False):
     """
-    Decorator that creates a new context for the function, wraps the function in a
-    try/except block, and if an exception occurs, captures it with the current context
-    tags before re-raising it.
+    Decorator that creates a new context for the function. Simply wraps
+    the function in a with posthog.new_context(): block.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
@@ -98,8 +101,12 @@ def scoped(fresh=False):
         def process_payment(payment_id):
             posthog.tag("payment_id", payment_id)
             posthog.tag("payment_method", "credit_card")
+
+            # This event will be captured with tags
+            posthog.capture("payment_started")
             # If this raises an exception, it will be captured with tags
             # and then re-raised
+            some_risky_function()
     """
 
     def decorator(func: F) -> F:

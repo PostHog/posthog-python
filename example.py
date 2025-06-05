@@ -104,13 +104,18 @@ print(
 print(posthog.get_remote_config_payload("encrypted_payload_flag_key"))
 
 
-# You can add tags to a context, and these are automatically added to exceptions captured within that context.
+# You can add tags to a context, and these are automatically added to exceptions and other events captured
+# within that context.
+
 # You can enter a new context using a with statement. Any exceptions thrown in the context will be captured,
-# and tagged with the context tags. By default, it inherits tags from the parent context.
+# and tagged with the context tags. Other events captured will also be tagged with the context tags. By default,
+# the new context inherits tags from the parent context.
 with posthog.new_context():
-    posthog.tag("user_id", 123)
     posthog.tag("transaction_id", "abc123")
     posthog.tag("some_arbitrary_value", {"tags": "can be dicts"})
+
+    # This event will be captured with the tags set above
+    posthog.capture("order_processed")
     # This exception will be captured with the tags set above
     raise Exception("Order processing failed")
 

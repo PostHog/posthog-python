@@ -467,6 +467,11 @@ class Client(object):
         require("properties", properties, dict)
         require("event", event, string_types)
 
+        # Grab current context tags, if any exist
+        context_tags = get_tags()
+        if context_tags:
+            properties.update(context_tags)
+
         msg = {
             "properties": properties,
             "timestamp": timestamp,
@@ -667,11 +672,6 @@ class Client(object):
             if exception is not None and hasattr(exception, "__posthog_exception_captured"):
                 self.log.debug("Exception already captured, skipping")
                 return
-
-            # Grab current context tags, if any exist
-            context_tags = get_tags()
-            if context_tags:
-                properties.update(context_tags)
 
             # if there's no distinct_id, we'll generate one and set personless mode
             # via $process_person_profile = false
