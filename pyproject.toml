@@ -6,13 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "posthog"
 dynamic = ["version"]
 description = "Integrate PostHog into any python application."
-authors = [
-    {name = "PostHog", email = "hey@posthog.com"}
-]
-maintainers = [
-    {name = "PostHog", email = "hey@posthog.com"}
-]
-license = {text = "MIT License"}
+authors = [{ name = "PostHog", email = "hey@posthog.com" }]
+maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
+license = { text = "MIT License" }
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
@@ -87,8 +83,10 @@ packages = [
     "posthog.exception_integrations",
 ]
 
+license-files = []
+
 [tool.setuptools.dynamic]
-version = {attr = "posthog.version.VERSION"}
+version = { attr = "posthog.version.VERSION" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

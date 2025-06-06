@@ -1,4 +1,4 @@
-## 4.3.1 - 2025-06-06
+## 4.3.2 - 2025-06-06
 
 Add context management:
  - New context manager with `posthog.new_context()`
