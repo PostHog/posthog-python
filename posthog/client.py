@@ -768,7 +768,9 @@ class Client(object):
             properties = properties or {}
 
             # Check if this exception has already been captured
-            if exception is not None and hasattr(exception, "__posthog_exception_captured"):
+            if exception is not None and hasattr(
+                exception, "__posthog_exception_captured"
+            ):
                 self.log.debug("Exception already captured, skipping")
                 return
 
@@ -817,7 +819,9 @@ class Client(object):
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
 
-            res = self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
+            res = self.capture(
+                distinct_id, "$exception", properties, context, timestamp, uuid, groups
+            )
 
             # Mark the exception as captured to prevent duplicate captures
             if exception is not None:
