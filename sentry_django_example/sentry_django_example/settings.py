@@ -30,10 +30,12 @@ ALLOWED_HOSTS = []
 
 
 # PostHog Setup (can be a separate app)
-import posthog
+import posthog  # noqa: E402
 
 # You can find this key on the /setup page in PostHog
-posthog.api_key = "LXP6nQXvo-2TCqGVrWvPah8uJIyVykoMmhnEkEBi5PA"  # TODO: replace with your api key
+posthog.api_key = (
+    "LXP6nQXvo-2TCqGVrWvPah8uJIyVykoMmhnEkEBi5PA"  # TODO: replace with your api key
+)
 
 posthog.personal_api_key = ""
 
@@ -41,7 +43,7 @@ posthog.personal_api_key = ""
 # You can remove this line if you're using posthog.com
 posthog.host = "http://127.0.0.1:8000"
 
-from posthog.sentry.posthog_integration import PostHogIntegration
+from posthog.sentry.posthog_integration import PostHogIntegration  # noqa: E402
 
 PostHogIntegration.organization = "posthog"  # TODO: your sentry organization
 # PostHogIntegration.prefix = # TODO: your self hosted Sentry url. (default: https://sentry.io/organizations/)
@@ -50,8 +52,8 @@ PostHogIntegration.organization = "posthog"  # TODO: your sentry organization
 # we work around this by setting static class variables beforehand
 
 # Sentry Setup
-import sentry_sdk
-from sentry_sdk.integrations.django import DjangoIntegration
+import sentry_sdk  # noqa: E402
+from sentry_sdk.integrations.django import DjangoIntegration  # noqa: E402
 
 sentry_sdk.init(
     dsn="https://27ac54f7f4cf484abf1335436b0c52e5@o344752.ingest.sentry.io/5624115",  # TODO: your Sentry DSN here
@@ -66,7 +68,9 @@ sentry_sdk.init(
 )
 
 POSTHOG_DJANGO = {
-    "distinct_id": lambda request: str(uuid4())  # TODO: your logic for generating unique ID, given the request object
+    "distinct_id": lambda request: str(
+        uuid4()
+    )  # TODO: your logic for generating unique ID, given the request object
 }
 
 # Application definition

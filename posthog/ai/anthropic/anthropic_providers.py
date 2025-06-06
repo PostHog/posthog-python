@@ -1,7 +1,9 @@
 try:
     import anthropic
 except ImportError:
-    raise ModuleNotFoundError("Please install the Anthropic SDK to use this feature: 'pip install anthropic'")
+    raise ModuleNotFoundError(
+        "Please install the Anthropic SDK to use this feature: 'pip install anthropic'"
+    )
 
 from posthog.ai.anthropic.anthropic import WrappedMessages
 from posthog.ai.anthropic.anthropic_async import AsyncWrappedMessages

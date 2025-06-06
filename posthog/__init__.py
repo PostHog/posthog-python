@@ -323,7 +323,7 @@ def capture_exception(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
-    **kwargs
+    **kwargs,
 ):
     # type: (...) -> Tuple[bool, dict]
     """
@@ -366,7 +366,7 @@ def capture_exception(
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
-        **kwargs
+        **kwargs,
     )
 
 

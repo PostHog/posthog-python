@@ -2,7 +2,9 @@ import contextvars
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, TypeVar, cast
 
-_context_stack: contextvars.ContextVar[list] = contextvars.ContextVar("posthog_context_stack", default=[{}])
+_context_stack: contextvars.ContextVar[list] = contextvars.ContextVar(
+    "posthog_context_stack", default=[{}]
+)
 
 
 def _get_current_context() -> Dict[str, Any]:

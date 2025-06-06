@@ -164,7 +164,9 @@ class TestClient(unittest.TestCase):
 
     def test_basic_capture_exception_with_correct_host_generation(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
-            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com")
+            client = Client(
+                FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com"
+            )
             exception = Exception("test exception")
             client.capture_exception(exception, "distinct_id")
 
@@ -189,9 +191,15 @@ class TestClient(unittest.TestCase):
                 },
             )
 
-    def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(self):
+    def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(
+        self,
+    ):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
-            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://app.posthog.com")
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                host="https://app.posthog.com",
+            )
             exception = Exception("test exception")
             client.capture_exception(exception, "distinct_id")
 
@@ -230,27 +238,45 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[1], "$exception")
             self.assertEqual(capture_call[2]["$exception_type"], "Exception")
             self.assertEqual(capture_call[2]["$exception_message"], "test exception")
-            self.assertEqual(capture_call[2]["$exception_list"][0]["mechanism"]["type"], "generic")
-            self.assertEqual(capture_call[2]["$exception_list"][0]["mechanism"]["handled"], True)
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["mechanism"]["type"], "generic"
+            )
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["mechanism"]["handled"], True
+            )
             self.assertEqual(capture_call[2]["$exception_list"][0]["module"], None)
             self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
-            self.assertEqual(capture_call[2]["$exception_list"][0]["value"], "test exception")
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["value"], "test exception"
+            )
             self.assertEqual(
                 capture_call[2]["$exception_list"][0]["stacktrace"]["type"],
                 "raw",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["filename"],
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
+                    "filename"
+                ],
                 "posthog/test/test_client.py",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["function"],
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
+                    "function"
+                ],
                 "test_basic_capture_exception_with_no_exception_given",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["module"], "posthog.test.test_client"
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
+                    "module"
+                ],
+                "posthog.test.test_client",
             )
-            self.assertEqual(capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0]["in_app"], True)
+            self.assertEqual(
+                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
+                    "in_app"
+                ],
+                True,
+            )
 
     def test_basic_capture_exception_with_no_exception_happening(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -267,16 +293,26 @@ class TestClient(unittest.TestCase):
     def test_capture_exception_logs_when_enabled(self):
         client = Client(FAKE_TEST_API_KEY, log_captured_exceptions=True)
         with self.assertLogs("posthog", level="ERROR") as logs:
-            client.capture_exception(Exception("test exception"), "distinct_id", path="one/two/three")
-            self.assertEqual(logs.output[0], "ERROR:posthog:test exception\nNoneType: None")
+            client.capture_exception(
+                Exception("test exception"), "distinct_id", path="one/two/three"
+            )
+            self.assertEqual(
+                logs.output[0], "ERROR:posthog:test exception\nNoneType: None"
+            )
             self.assertEqual(getattr(logs.records[0], "path"), "one/two/three")
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
 
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            personal_api_key=FAKE_TEST_API_KEY,
+        )
+        success, msg = client.capture(
+            "distinct_id", "python test event", send_feature_flags=True
+        )
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -295,7 +331,11 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_locally_evaluated_feature_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            personal_api_key=FAKE_TEST_API_KEY,
+        )
 
         multivariate_flag = {
             "id": 1,
@@ -307,7 +347,12 @@ class TestClient(unittest.TestCase):
                 "groups": [
                     {
                         "properties": [
-                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            {
+                                "key": "email",
+                                "type": "person",
+                                "value": "test@posthog.com",
+                                "operator": "exact",
+                            }
                         ],
                         "rollout_percentage": 100,
                     },
@@ -317,12 +362,27 @@ class TestClient(unittest.TestCase):
                 ],
                 "multivariate": {
                     "variants": [
-                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
-                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
-                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                        {
+                            "key": "first-variant",
+                            "name": "First Variant",
+                            "rollout_percentage": 50,
+                        },
+                        {
+                            "key": "second-variant",
+                            "name": "Second Variant",
+                            "rollout_percentage": 25,
+                        },
+                        {
+                            "key": "third-variant",
+                            "name": "Third Variant",
+                            "rollout_percentage": 25,
+                        },
                     ]
                 },
-                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+                "payloads": {
+                    "first-variant": "some-payload",
+                    "third-variant": {"a": "json"},
+                },
             },
         }
         basic_flag = {
@@ -375,9 +435,13 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "third-variant")
+        self.assertEqual(
+            msg["properties"]["$feature/beta-feature-local"], "third-variant"
+        )
         self.assertEqual(msg["properties"]["$feature/false-flag"], False)
-        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
+        self.assertEqual(
+            msg["properties"]["$active_feature_flags"], ["beta-feature-local"]
+        )
         assert "$feature/beta-feature" not in msg["properties"]
 
         self.assertEqual(patch_flags.call_count, 0)
@@ -415,7 +479,11 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            personal_api_key=FAKE_TEST_API_KEY,
+        )
 
         multivariate_flag = {
             "id": 1,
@@ -427,7 +495,12 @@ class TestClient(unittest.TestCase):
                 "groups": [
                     {
                         "properties": [
-                            {"key": "email", "type": "person", "value": "test@posthog.com", "operator": "exact"}
+                            {
+                                "key": "email",
+                                "type": "person",
+                                "value": "test@posthog.com",
+                                "operator": "exact",
+                            }
                         ],
                         "rollout_percentage": 100,
                     },
@@ -437,12 +510,27 @@ class TestClient(unittest.TestCase):
                 ],
                 "multivariate": {
                     "variants": [
-                        {"key": "first-variant", "name": "First Variant", "rollout_percentage": 50},
-                        {"key": "second-variant", "name": "Second Variant", "rollout_percentage": 25},
-                        {"key": "third-variant", "name": "Third Variant", "rollout_percentage": 25},
+                        {
+                            "key": "first-variant",
+                            "name": "First Variant",
+                            "rollout_percentage": 50,
+                        },
+                        {
+                            "key": "second-variant",
+                            "name": "Second Variant",
+                            "rollout_percentage": 25,
+                        },
+                        {
+                            "key": "third-variant",
+                            "name": "Third Variant",
+                            "rollout_percentage": 25,
+                        },
                     ]
                 },
-                "payloads": {"first-variant": "some-payload", "third-variant": {"a": "json"}},
+                "payloads": {
+                    "first-variant": "some-payload",
+                    "third-variant": {"a": "json"},
+                },
             },
         }
         basic_flag = {
@@ -470,7 +558,9 @@ class TestClient(unittest.TestCase):
         client.feature_flags = [multivariate_flag, basic_flag]
 
         success, msg = client.capture(
-            "distinct_id", "python test event", {"$feature/beta-feature-local": "my-custom-variant"}
+            "distinct_id",
+            "python test event",
+            {"$feature/beta-feature-local": "my-custom-variant"},
         )
         client.flush()
         self.assertTrue(success)
@@ -482,8 +572,12 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["distinct_id"], "distinct_id")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["properties"]["$feature/beta-feature-local"], "my-custom-variant")
-        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature-local"])
+        self.assertEqual(
+            msg["properties"]["$feature/beta-feature-local"], "my-custom-variant"
+        )
+        self.assertEqual(
+            msg["properties"]["$active_feature_flags"], ["beta-feature-local"]
+        )
         assert "$feature/beta-feature" not in msg["properties"]
         assert "$feature/person-flag" not in msg["properties"]
 
@@ -492,11 +586,21 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_returns_active_only(self, patch_flags):
         patch_flags.return_value = {
-            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+            "featureFlags": {
+                "beta-feature": "random-variant",
+                "alpha-feature": True,
+                "off-feature": False,
+            }
         }
 
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True)
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            personal_api_key=FAKE_TEST_API_KEY,
+        )
+        success, msg = client.capture(
+            "distinct_id", "python test event", send_feature_flags=True
+        )
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -510,7 +614,10 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
         self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
-        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature", "alpha-feature"])
+        self.assertEqual(
+            msg["properties"]["$active_feature_flags"],
+            ["beta-feature", "alpha-feature"],
+        )
 
         self.assertEqual(patch_flags.call_count, 1)
         patch_flags.assert_called_with(
@@ -525,9 +632,15 @@ class TestClient(unittest.TestCase):
         )
 
     @mock.patch("posthog.client.flags")
-    def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(self, patch_flags):
+    def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(
+        self, patch_flags
+    ):
         patch_flags.return_value = {
-            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+            "featureFlags": {
+                "beta-feature": "random-variant",
+                "alpha-feature": True,
+                "off-feature": False,
+            }
         }
 
         client = Client(
@@ -538,7 +651,12 @@ class TestClient(unittest.TestCase):
             disable_geoip=True,
             feature_flags_request_timeout_seconds=12,
         )
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=True, disable_geoip=False)
+        success, msg = client.capture(
+            "distinct_id",
+            "python test event",
+            send_feature_flags=True,
+            disable_geoip=False,
+        )
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -552,7 +670,10 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
         self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
         self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
-        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature", "alpha-feature"])
+        self.assertEqual(
+            msg["properties"]["$active_feature_flags"],
+            ["beta-feature", "alpha-feature"],
+        )
 
         self.assertEqual(patch_flags.call_count, 1)
         patch_flags.assert_called_with(
@@ -567,11 +688,19 @@ class TestClient(unittest.TestCase):
         )
 
     @mock.patch("posthog.client.flags")
-    def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(self, patch_flags):
+    def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(
+        self, patch_flags
+    ):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
 
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, personal_api_key=FAKE_TEST_API_KEY)
-        success, msg = client.capture("distinct_id", "python test event", send_feature_flags=False)
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            personal_api_key=FAKE_TEST_API_KEY,
+        )
+        success, msg = client.capture(
+            "distinct_id", "python test event", send_feature_flags=False
+        )
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -591,7 +720,9 @@ class TestClient(unittest.TestCase):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800
         client = self.client
-        success, msg = client.capture(distinct_id=157963456373623802, event="python test event")
+        success, msg = client.capture(
+            distinct_id=157963456373623802, event="python test event"
+        )
         client.flush()
         self.assertTrue(success)
         self.assertFalse(self.failed)
@@ -627,7 +758,10 @@ class TestClient(unittest.TestCase):
         )
 
         self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$groups"], {"company": "id:5", "instance": "app.posthog.com"})
+        self.assertEqual(
+            msg["properties"]["$groups"],
+            {"company": "id:5", "instance": "app.posthog.com"},
+        )
 
     def test_basic_identify(self):
         client = self.client
@@ -644,7 +778,10 @@ class TestClient(unittest.TestCase):
     def test_advanced_identify(self):
         client = self.client
         success, msg = client.identify(
-            "distinct_id", {"trait": "value"}, timestamp=datetime(2014, 9, 3), uuid="new-uuid"
+            "distinct_id",
+            {"trait": "value"},
+            timestamp=datetime(2014, 9, 3),
+            uuid="new-uuid",
         )
 
         self.assertTrue(success)
@@ -671,7 +808,12 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_set(self):
         client = self.client
-        success, msg = client.set("distinct_id", {"trait": "value"}, timestamp=datetime(2014, 9, 3), uuid="new-uuid")
+        success, msg = client.set(
+            "distinct_id",
+            {"trait": "value"},
+            timestamp=datetime(2014, 9, 3),
+            uuid="new-uuid",
+        )
 
         self.assertTrue(success)
 
@@ -698,7 +840,10 @@ class TestClient(unittest.TestCase):
     def test_advanced_set_once(self):
         client = self.client
         success, msg = client.set_once(
-            "distinct_id", {"trait": "value"}, timestamp=datetime(2014, 9, 3), uuid="new-uuid"
+            "distinct_id",
+            {"trait": "value"},
+            timestamp=datetime(2014, 9, 3),
+            uuid="new-uuid",
         )
 
         self.assertTrue(success)
@@ -732,7 +877,9 @@ class TestClient(unittest.TestCase):
         self.assertIsNone(msg.get("uuid"))
 
     def test_basic_group_identify_with_distinct_id(self):
-        success, msg = self.client.group_identify("organization", "id:5", distinct_id="distinct_id")
+        success, msg = self.client.group_identify(
+            "organization", "id:5", distinct_id="distinct_id"
+        )
         self.assertTrue(success)
         self.assertEqual(msg["event"], "$groupidentify")
         self.assertEqual(msg["distinct_id"], "distinct_id")
@@ -752,7 +899,11 @@ class TestClient(unittest.TestCase):
 
     def test_advanced_group_identify(self):
         success, msg = self.client.group_identify(
-            "organization", "id:5", {"trait": "value"}, timestamp=datetime(2014, 9, 3), uuid="new-uuid"
+            "organization",
+            "id:5",
+            {"trait": "value"},
+            timestamp=datetime(2014, 9, 3),
+            uuid="new-uuid",
         )
 
         self.assertTrue(success)
@@ -814,7 +965,9 @@ class TestClient(unittest.TestCase):
         client.flush()
         self.assertTrue(success)
         self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$current_url"], "https://posthog.com/contact")
+        self.assertEqual(
+            msg["properties"]["$current_url"], "https://posthog.com/contact"
+        )
 
     def test_basic_page_distinct_uuid(self):
         client = self.client
@@ -824,7 +977,9 @@ class TestClient(unittest.TestCase):
         client.flush()
         self.assertTrue(success)
         self.assertEqual(msg["distinct_id"], str(distinct_id))
-        self.assertEqual(msg["properties"]["$current_url"], "https://posthog.com/contact")
+        self.assertEqual(
+            msg["properties"]["$current_url"], "https://posthog.com/contact"
+        )
 
     def test_advanced_page(self):
         client = self.client
@@ -839,7 +994,9 @@ class TestClient(unittest.TestCase):
         self.assertTrue(success)
 
         self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["properties"]["$current_url"], "https://posthog.com/contact")
+        self.assertEqual(
+            msg["properties"]["$current_url"], "https://posthog.com/contact"
+        )
         self.assertEqual(msg["properties"]["property"], "value")
         self.assertEqual(msg["properties"]["$lib"], "posthog-python")
         self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -910,14 +1067,18 @@ class TestClient(unittest.TestCase):
         self.assertFalse(self.failed)
 
     def test_user_defined_flush_at(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3)
+        client = Client(
+            FAKE_TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3
+        )
 
         def mock_post_fn(*args, **kwargs):
             self.assertEqual(len(kwargs["batch"]), 10)
 
         # the post function should be called 2 times, with a batch size of 10
         # each time.
-        with mock.patch("posthog.consumer.batch_post", side_effect=mock_post_fn) as mock_post:
+        with mock.patch(
+            "posthog.consumer.batch_post", side_effect=mock_post_fn
+        ) as mock_post:
             for _ in range(20):
                 client.identify("distinct_id", {"trait": "value"})
             time.sleep(1)
@@ -998,11 +1159,15 @@ class TestClient(unittest.TestCase):
 
     def test_disable_geoip_override_on_events(self):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
-        _, capture_msg = client.set("distinct_id", {"a": "b", "c": "d"}, disable_geoip=True)
+        _, capture_msg = client.set(
+            "distinct_id", {"a": "b", "c": "d"}, disable_geoip=True
+        )
         client.flush()
         self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
 
-        _, identify_msg = client.page("distinct_id", "http://a.com", {"trait": "value"}, disable_geoip=False)
+        _, identify_msg = client.page(
+            "distinct_id", "http://a.com", {"trait": "value"}, disable_geoip=False
+        )
         client.flush()
         self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
 
@@ -1015,7 +1180,11 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_disable_geoip_default_on_decide(self, patch_flags):
         patch_flags.return_value = {
-            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+            "featureFlags": {
+                "beta-feature": "random-variant",
+                "alpha-feature": True,
+                "off-feature": False,
+            }
         }
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
         client.get_feature_flag("random_key", "some_id", disable_geoip=True)
@@ -1030,7 +1199,9 @@ class TestClient(unittest.TestCase):
             geoip_disable=True,
         )
         patch_flags.reset_mock()
-        client.feature_enabled("random_key", "feature_enabled_distinct_id", disable_geoip=True)
+        client.feature_enabled(
+            "random_key", "feature_enabled_distinct_id", disable_geoip=True
+        )
         patch_flags.assert_called_with(
             "random_key",
             "https://us.i.posthog.com",
@@ -1069,9 +1240,18 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_default_properties_get_added_properly(self, patch_flags):
         patch_flags.return_value = {
-            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False}
+            "featureFlags": {
+                "beta-feature": "random-variant",
+                "alpha-feature": True,
+                "off-feature": False,
+            }
         }
-        client = Client(FAKE_TEST_API_KEY, host="http://app2.posthog.com", on_error=self.set_fail, disable_geoip=False)
+        client = Client(
+            FAKE_TEST_API_KEY,
+            host="http://app2.posthog.com",
+            on_error=self.set_fail,
+            disable_geoip=False,
+        )
         client.get_feature_flag(
             "random_key",
             "some_id",
@@ -1121,7 +1301,9 @@ class TestClient(unittest.TestCase):
 
         patch_flags.reset_mock()
         # test nones
-        client.get_all_flags_and_payloads("some_id", groups={}, person_properties=None, group_properties=None)
+        client.get_all_flags_and_payloads(
+            "some_id", groups={}, person_properties=None, group_properties=None
+        )
         patch_flags.assert_called_with(
             "random_key",
             "http://app2.posthog.com",
@@ -1197,12 +1379,17 @@ class TestClient(unittest.TestCase):
 
                 # Set up platform-specific mocks
                 if platform_method:
-                    getattr(mock_platform, platform_method).return_value = platform_return
+                    getattr(
+                        mock_platform, platform_method
+                    ).return_value = platform_return
 
                 # Special handling for Linux which uses distro module
                 if sys_platform == "linux":
                     # Directly patch the get_os_info function to return our expected values
-                    with mock.patch("posthog.client.get_os_info", return_value=(expected_os, expected_os_version)):
+                    with mock.patch(
+                        "posthog.client.get_os_info",
+                        return_value=(expected_os, expected_os_version),
+                    ):
                         from posthog.client import system_context
 
                         context = system_context()
@@ -1225,7 +1412,11 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_get_decide_returns_normalized_decide_response(self, patch_flags):
         patch_flags.return_value = {
-            "featureFlags": {"beta-feature": "random-variant", "alpha-feature": True, "off-feature": False},
+            "featureFlags": {
+                "beta-feature": "random-variant",
+                "alpha-feature": True,
+                "off-feature": False,
+            },
             "featureFlagPayloads": {"beta-feature": '{"some": "data"}'},
             "errorsWhileComputingFlags": False,
             "requestId": "test-id",
@@ -1292,10 +1483,15 @@ class TestClient(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY)
 
         # Test 100% rollout - should use flags
-        with mock.patch("posthog.client.is_token_in_rollout", return_value=True) as mock_rollout:
+        with mock.patch(
+            "posthog.client.is_token_in_rollout", return_value=True
+        ) as mock_rollout:
             client.get_flags_decision("distinct_id")
             mock_rollout.assert_called_with(
-                FAKE_TEST_API_KEY, 1, included_hashes=INCLUDED_HASHES, excluded_hashes=EXCLUDED_HASHES
+                FAKE_TEST_API_KEY,
+                1,
+                included_hashes=INCLUDED_HASHES,
+                excluded_hashes=EXCLUDED_HASHES,
             )
             patch_flags.assert_called_once()
             patch_decide.assert_not_called()
@@ -1307,25 +1503,39 @@ class TestClient(unittest.TestCase):
         included_hashes = {token_hash}
 
         # Should be included due to specific hash, even with 0% rollout
-        self.assertTrue(expr=is_token_in_rollout(token, percentage=0.0, included_hashes=included_hashes))
+        self.assertTrue(
+            expr=is_token_in_rollout(
+                token, percentage=0.0, included_hashes=included_hashes
+            )
+        )
 
         # Should not be included with 0% rollout and no specific hash
         self.assertFalse(is_token_in_rollout(token, percentage=0.0))
 
         # Should be included with 100% rollout regardless of specific hash
         self.assertTrue(is_token_in_rollout(token, percentage=1.0))
-        self.assertTrue(is_token_in_rollout(token, percentage=1.0, included_hashes=included_hashes))
+        self.assertTrue(
+            is_token_in_rollout(token, percentage=1.0, included_hashes=included_hashes)
+        )
 
         # Test deterministic behavior - same token should always give same result
         hash_float = int(token_hash[:8], 16) / 0xFFFFFFFF
         percentage = hash_float + 0.1  # Just above the hash value
 
         self.assertTrue(is_token_in_rollout(token, percentage))
-        self.assertFalse(is_token_in_rollout(token, percentage - 0.2))  # Just below the hash value
+        self.assertFalse(
+            is_token_in_rollout(token, percentage - 0.2)
+        )  # Just below the hash value
 
         # Test that the token exclusion works correctly
-        self.assertFalse(is_token_in_rollout(token, percentage=1.0, excluded_hashes={token_hash}))
+        self.assertFalse(
+            is_token_in_rollout(token, percentage=1.0, excluded_hashes={token_hash})
+        )
 
         # Should work for other specific token hashes
         # Include our API key
-        self.assertTrue(is_token_in_rollout("sTMFPsFhdP1Ssg", percentage=0.1, included_hashes=INCLUDED_HASHES))
+        self.assertTrue(
+            is_token_in_rollout(
+                "sTMFPsFhdP1Ssg", percentage=0.1, included_hashes=INCLUDED_HASHES
+            )
+        )

@@ -79,7 +79,9 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
 
         if hasattr(response, "usage_metadata") and response.usage_metadata:
             input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
-            output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
+            output_tokens = getattr(
+                response.usage_metadata, "candidates_token_count", 0
+            )
 
         return {
             "input_tokens": input_tokens,
@@ -237,7 +239,10 @@ def format_tool_calls(response, provider: str):
                 return response.choices[0].message.tool_calls
 
             # Check for tool_calls directly in response (Responses API format)
-            if hasattr(response.choices[0], "tool_calls") and response.choices[0].tool_calls:
+            if (
+                hasattr(response.choices[0], "tool_calls")
+                and response.choices[0].tool_calls
+            ):
                 return response.choices[0].tool_calls
     return None
 
@@ -286,15 +291,21 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
     # For Responses API, add instructions to the system prompt if provided
     if kwargs.get("instructions") is not None:
         # Find the system message if it exists
-        system_idx = next((i for i, msg in enumerate(messages) if msg.get("role") == "system"), None)
+        system_idx = next(
+            (i for i, msg in enumerate(messages) if msg.get("role") == "system"), None
+        )
 
         if system_idx is not None:
             # Append instructions to existing system message
             system_content = messages[system_idx].get("content", "")
-            messages[system_idx]["content"] = f"{system_content}\n\n{kwargs.get('instructions')}"
+            messages[system_idx]["content"] = (
+                f"{system_content}\n\n{kwargs.get('instructions')}"
+            )
         else:
             # Create a new system message with instructions
-            messages = [{"role": "system", "content": kwargs.get("instructions")}] + messages
+            messages = [
+                {"role": "system", "content": kwargs.get("instructions")}
+            ] + messages
 
     return messages
 
@@ -326,7 +337,9 @@ def call_llm_and_track_usage(
         response = call_method(**kwargs)
     except Exception as exc:
         error = exc
-        http_status = getattr(exc, "status_code", 0)  # default to 0 becuase its likely an SDK error
+        http_status = getattr(
+            exc, "status_code", 0
+        )  # default to 0 becuase its likely an SDK error
         error_params = {
             "$ai_is_error": True,
             "$ai_error": exc.__str__(),
@@ -338,7 +351,10 @@ def call_llm_and_track_usage(
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        if response and (hasattr(response, "usage") or (provider == "gemini" and hasattr(response, "usage_metadata"))):
+        if response and (
+            hasattr(response, "usage")
+            or (provider == "gemini" and hasattr(response, "usage_metadata"))
+        ):
             usage = get_usage(response, provider)
 
         messages = merge_system_prompt(kwargs, provider)
@@ -363,15 +379,30 @@ def call_llm_and_track_usage(
 
         tool_calls = format_tool_calls(response, provider)
         if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(ph_client, posthog_privacy_mode, tool_calls)
+            event_properties["$ai_tools"] = with_privacy_mode(
+                ph_client, posthog_privacy_mode, tool_calls
+            )
 
-        if usage.get("cache_read_input_tokens") is not None and usage.get("cache_read_input_tokens", 0) > 0:
-            event_properties["$ai_cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+        if (
+            usage.get("cache_read_input_tokens") is not None
+            and usage.get("cache_read_input_tokens", 0) > 0
+        ):
+            event_properties["$ai_cache_read_input_tokens"] = usage.get(
+                "cache_read_input_tokens", 0
+            )
 
-        if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
-            event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
+        if (
+            usage.get("cache_creation_input_tokens") is not None
+            and usage.get("cache_creation_input_tokens", 0) > 0
+        ):
+            event_properties["$ai_cache_creation_input_tokens"] = usage.get(
+                "cache_creation_input_tokens", 0
+            )
 
-        if usage.get("reasoning_tokens") is not None and usage.get("reasoning_tokens", 0) > 0:
+        if (
+            usage.get("reasoning_tokens") is not None
+            and usage.get("reasoning_tokens", 0) > 0
+        ):
             event_properties["$ai_reasoning_tokens"] = usage.get("reasoning_tokens", 0)
 
         if posthog_distinct_id is None:
@@ -421,7 +452,9 @@ async def call_llm_and_track_usage_async(
         response = await call_async_method(**kwargs)
     except Exception as exc:
         error = exc
-        http_status = getattr(exc, "status_code", 0)  # default to 0 because its likely an SDK error
+        http_status = getattr(
+            exc, "status_code", 0
+        )  # default to 0 because its likely an SDK error
         error_params = {
             "$ai_is_error": True,
             "$ai_error": exc.__str__(),
@@ -433,7 +466,10 @@ async def call_llm_and_track_usage_async(
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        if response and (hasattr(response, "usage") or (provider == "gemini" and hasattr(response, "usage_metadata"))):
+        if response and (
+            hasattr(response, "usage")
+            or (provider == "gemini" and hasattr(response, "usage_metadata"))
+        ):
             usage = get_usage(response, provider)
 
         messages = merge_system_prompt(kwargs, provider)
@@ -458,13 +494,25 @@ async def call_llm_and_track_usage_async(
 
         tool_calls = format_tool_calls(response, provider)
         if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(ph_client, posthog_privacy_mode, tool_calls)
+            event_properties["$ai_tools"] = with_privacy_mode(
+                ph_client, posthog_privacy_mode, tool_calls
+            )
 
-        if usage.get("cache_read_input_tokens") is not None and usage.get("cache_read_input_tokens", 0) > 0:
-            event_properties["$ai_cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+        if (
+            usage.get("cache_read_input_tokens") is not None
+            and usage.get("cache_read_input_tokens", 0) > 0
+        ):
+            event_properties["$ai_cache_read_input_tokens"] = usage.get(
+                "cache_read_input_tokens", 0
+            )
 
-        if usage.get("cache_creation_input_tokens") is not None and usage.get("cache_creation_input_tokens", 0) > 0:
-            event_properties["$ai_cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0)
+        if (
+            usage.get("cache_creation_input_tokens") is not None
+            and usage.get("cache_creation_input_tokens", 0) > 0
+        ):
+            event_properties["$ai_cache_creation_input_tokens"] = usage.get(
+                "cache_creation_input_tokens", 0
+            )
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False

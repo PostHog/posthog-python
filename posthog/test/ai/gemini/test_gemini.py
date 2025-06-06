@@ -11,7 +11,9 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(not GEMINI_AVAILABLE, reason="Google Gemini package is not available")
+pytestmark = pytest.mark.skipif(
+    not GEMINI_AVAILABLE, reason="Google Gemini package is not available"
+)
 
 
 @pytest.fixture
@@ -54,7 +56,9 @@ def mock_google_genai_client():
         yield mock_client_instance
 
 
-def test_new_client_basic_generation(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_basic_generation(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test the new Client/Models API structure"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
@@ -84,7 +88,9 @@ def test_new_client_basic_generation(mock_client, mock_google_genai_client, mock
     assert props["$ai_latency"] > 0
 
 
-def test_new_client_streaming_with_generate_content_stream(mock_client, mock_google_genai_client):
+def test_new_client_streaming_with_generate_content_stream(
+    mock_client, mock_google_genai_client
+):
     """Test the new generate_content_stream method"""
 
     def mock_streaming_response():
@@ -106,7 +112,9 @@ def test_new_client_streaming_with_generate_content_stream(mock_client, mock_goo
         yield mock_chunk2
 
     # Mock the generate_content_stream method
-    mock_google_genai_client.models.generate_content_stream.return_value = mock_streaming_response()
+    mock_google_genai_client.models.generate_content_stream.return_value = (
+        mock_streaming_response()
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
 
@@ -154,7 +162,9 @@ def test_new_client_groups(mock_client, mock_google_genai_client, mock_gemini_re
     assert call_args["groups"] == {"company": "company_123"}
 
 
-def test_new_client_privacy_mode_local(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_privacy_mode_local(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test local privacy mode with new Client API"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
@@ -173,7 +183,9 @@ def test_new_client_privacy_mode_local(mock_client, mock_google_genai_client, mo
     assert props["$ai_output_choices"] is None
 
 
-def test_new_client_privacy_mode_global(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_privacy_mode_global(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test global privacy mode with new Client API"""
     mock_client.privacy_mode = True
 
@@ -193,14 +205,18 @@ def test_new_client_privacy_mode_global(mock_client, mock_google_genai_client, m
     assert props["$ai_output_choices"] is None
 
 
-def test_new_client_different_input_formats(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_different_input_formats(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test different input formats with new Client API"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
     client = Client(api_key="test-key", posthog_client=mock_client)
 
     # Test string input
-    client.models.generate_content(model="gemini-2.0-flash", contents="Hello", posthog_distinct_id="test-id")
+    client.models.generate_content(
+        model="gemini-2.0-flash", contents="Hello", posthog_distinct_id="test-id"
+    )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
@@ -209,13 +225,17 @@ def test_new_client_different_input_formats(mock_client, mock_google_genai_clien
     mock_client.capture.reset_mock()
     mock_part = MagicMock()
     mock_part.text = "List item"
-    client.models.generate_content(model="gemini-2.0-flash", contents=[mock_part], posthog_distinct_id="test-id")
+    client.models.generate_content(
+        model="gemini-2.0-flash", contents=[mock_part], posthog_distinct_id="test-id"
+    )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "List item"}]
 
 
-def test_new_client_model_parameters(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_model_parameters(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test model parameters with new Client API"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
@@ -235,7 +255,9 @@ def test_new_client_model_parameters(mock_client, mock_google_genai_client, mock
     assert props["$ai_model_parameters"]["max_tokens"] == 100
 
 
-def test_new_client_default_settings(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_default_settings(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test client with default PostHog settings"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
@@ -259,7 +281,9 @@ def test_new_client_default_settings(mock_client, mock_google_genai_client, mock
     assert props["team"] == "ai"
 
 
-def test_new_client_override_defaults(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_new_client_override_defaults(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test overriding client defaults per call"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 

@@ -70,7 +70,10 @@ class TestUtils(unittest.TestCase):
         assert combined.keys() == pre_clean_keys
 
         # test UUID separately, as the UUID object doesn't equal its string representation according to Python
-        assert utils.clean(UUID("12345678123456781234567812345678")) == "12345678-1234-5678-1234-567812345678"
+        assert (
+            utils.clean(UUID("12345678123456781234567812345678"))
+            == "12345678-1234-5678-1234-567812345678"
+        )
 
     def test_clean_with_dates(self):
         dict_with_dates = {

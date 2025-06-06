@@ -78,7 +78,9 @@ class FeatureFlag:
         )
 
     @classmethod
-    def from_value_and_payload(cls, key: str, value: FlagValue, payload: Any) -> "FeatureFlag":
+    def from_value_and_payload(
+        cls, key: str, value: FlagValue, payload: Any
+    ) -> "FeatureFlag":
         enabled, variant = (True, value) if isinstance(value, str) else (value, None)
         return cls(
             key=key,
@@ -160,7 +162,9 @@ class FeatureFlagResult:
 
     @classmethod
     def from_flag_details(
-        cls, details: Union[FeatureFlag, None], override_match_value: Optional[FlagValue] = None
+        cls,
+        details: Union[FeatureFlag, None],
+        override_match_value: Optional[FlagValue] = None,
     ) -> "FeatureFlagResult | None":
         """
         Create a FeatureFlagResult from a FeatureFlag object.
@@ -179,7 +183,9 @@ class FeatureFlagResult:
 
         if override_match_value is not None:
             enabled, variant = (
-                (True, override_match_value) if isinstance(override_match_value, str) else (override_match_value, None)
+                (True, override_match_value)
+                if isinstance(override_match_value, str)
+                else (override_match_value, None)
             )
         else:
             enabled, variant = (details.enabled, details.variant)
@@ -226,7 +232,9 @@ def normalize_flags_response(resp: Any) -> FlagsResponse:
         # look at each key in featureFlags and create a FeatureFlag object
         flags = {}
         for key, value in featureFlags.items():
-            flags[key] = FeatureFlag.from_value_and_payload(key, value, featureFlagPayloads.get(key, None))
+            flags[key] = FeatureFlag.from_value_and_payload(
+                key, value, featureFlagPayloads.get(key, None)
+            )
         resp["flags"] = flags
     return cast(FlagsResponse, resp)
 
@@ -252,7 +260,11 @@ def to_values(response: FlagsResponse) -> Optional[dict[str, FlagValue]]:
         return None
 
     flags = response.get("flags", {})
-    return {key: value.get_value() for key, value in flags.items() if isinstance(value, FeatureFlag)}
+    return {
+        key: value.get_value()
+        for key, value in flags.items()
+        if isinstance(value, FeatureFlag)
+    }
 
 
 def to_payloads(response: FlagsResponse) -> Optional[dict[str, str]]:

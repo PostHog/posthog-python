@@ -21,7 +21,7 @@ jobs:
             - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
               with:
                   path: ~/.cache/pip
-                  key: ${{ runner.os }}-pip-${{ hashFiles('setup.py') }}
+                  key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
                   restore-keys: |
                       ${{ runner.os }}-pip-
 
@@ -30,17 +30,9 @@ jobs:
                   python -m pip install -e .[dev]
               if: steps.cache.outputs.cache-hit != 'true'
 
-            - name: Check formatting with black
+            - name: Check formatting with ruff
               run: |
-                  black --check .
-
-            - name: Lint with flake8
-              run: |
-                  flake8 posthog
-
-            - name: Check import order with isort
-              run: |
-                  isort --check-only .
+                  ruff format --check .
 
             - name: Check types with mypy
               run: |

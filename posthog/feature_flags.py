@@ -43,20 +43,28 @@ def get_matching_variant(flag, distinct_id):
 def variant_lookup_table(feature_flag):
     lookup_table = []
     value_min = 0
-    multivariates = ((feature_flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
+    multivariates = ((feature_flag.get("filters") or {}).get("multivariate") or {}).get(
+        "variants"
+    ) or []
     for variant in multivariates:
         value_max = value_min + variant["rollout_percentage"] / 100
-        lookup_table.append({"value_min": value_min, "value_max": value_max, "key": variant["key"]})
+        lookup_table.append(
+            {"value_min": value_min, "value_max": value_max, "key": variant["key"]}
+        )
         value_min = value_max
     return lookup_table
 
 
-def match_feature_flag_properties(flag, distinct_id, properties, cohort_properties=None) -> FlagValue:
+def match_feature_flag_properties(
+    flag, distinct_id, properties, cohort_properties=None
+) -> FlagValue:
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
     # Some filters can be explicitly set to null, which require accessing variants like so
-    flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get("variants") or []
+    flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get(
+        "variants"
+    ) or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
 
     # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
@@ -70,7 +78,9 @@ def match_feature_flag_properties(flag, distinct_id, properties, cohort_properti
         try:
             # if any one condition resolves to True, we can shortcircuit and return
             # the matching variant
-            if is_condition_match(flag, distinct_id, condition, properties, cohort_properties):
+            if is_condition_match(
+                flag, distinct_id, condition, properties, cohort_properties
+            ):
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
                     variant = variant_override
@@ -81,14 +91,18 @@ def match_feature_flag_properties(flag, distinct_id, properties, cohort_properti
             is_inconclusive = True
 
     if is_inconclusive:
-        raise InconclusiveMatchError("Can't determine if feature flag is enabled or not with given properties")
+        raise InconclusiveMatchError(
+            "Can't determine if feature flag is enabled or not with given properties"
+        )
 
     # We can only return False when either all conditions are False, or
     # no condition was inconclusive.
     return False
 
 
-def is_condition_match(feature_flag, distinct_id, condition, properties, cohort_properties) -> bool:
+def is_condition_match(
+    feature_flag, distinct_id, condition, properties, cohort_properties
+) -> bool:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
         for prop in condition.get("properties"):
@@ -103,7 +117,9 @@ def is_condition_match(feature_flag, distinct_id, condition, properties, cohort_
         if rollout_percentage is None:
             return True
 
-    if rollout_percentage is not None and _hash(feature_flag["key"], distinct_id) > (rollout_percentage / 100):
+    if rollout_percentage is not None and _hash(feature_flag["key"], distinct_id) > (
+        rollout_percentage / 100
+    ):
         return False
 
     return True
@@ -117,7 +133,9 @@ def match_property(property, property_values) -> bool:
     value = property.get("value")
 
     if key not in property_values:
-        raise InconclusiveMatchError("can't match properties without a given property value")
+        raise InconclusiveMatchError(
+            "can't match properties without a given property value"
+        )
 
     if operator == "is_not_set":
         raise InconclusiveMatchError("can't match properties with operator is_not_set")
@@ -131,7 +149,9 @@ def match_property(property, property_values) -> bool:
 
         def compute_exact_match(value, override_value):
             if isinstance(value, list):
-                return str(override_value).casefold() in [str(val).casefold() for val in value]
+                return str(override_value).casefold() in [
+                    str(val).casefold() for val in value
+                ]
             return utils.str_iequals(value, override_value)
 
         if operator == "exact":
@@ -149,10 +169,16 @@ def match_property(property, property_values) -> bool:
         return not utils.str_icontains(override_value, value)
 
     if operator == "regex":
-        return is_valid_regex(str(value)) and re.compile(str(value)).search(str(override_value)) is not None
+        return (
+            is_valid_regex(str(value))
+            and re.compile(str(value)).search(str(override_value)) is not None
+        )
 
     if operator == "not_regex":
-        return is_valid_regex(str(value)) and re.compile(str(value)).search(str(override_value)) is None
+        return (
+            is_valid_regex(str(value))
+            and re.compile(str(value)).search(str(override_value)) is None
+        )
 
     if operator in ("gt", "gte", "lt", "lte"):
         # :TRICKY: We adjust comparison based on the override value passed in,
@@ -191,10 +217,14 @@ def match_property(property, property_values) -> bool:
                 parsed_date = parser.parse(str(value))
                 parsed_date = convert_to_datetime_aware(parsed_date)
         except Exception as e:
-            raise InconclusiveMatchError("The date set on the flag is not a valid format") from e
+            raise InconclusiveMatchError(
+                "The date set on the flag is not a valid format"
+            ) from e
 
         if not parsed_date:
-            raise InconclusiveMatchError("The date set on the flag is not a valid format")
+            raise InconclusiveMatchError(
+                "The date set on the flag is not a valid format"
+            )
 
         if isinstance(override_value, datetime.datetime):
             override_date = convert_to_datetime_aware(override_value)
@@ -218,7 +248,9 @@ def match_property(property, property_values) -> bool:
             except Exception:
                 raise InconclusiveMatchError("The date provided is not a valid format")
         else:
-            raise InconclusiveMatchError("The date provided must be a string or date object")
+            raise InconclusiveMatchError(
+                "The date provided must be a string or date object"
+            )
 
     # if we get here, we don't know how to handle the operator
     raise InconclusiveMatchError(f"Unknown operator {operator}")
@@ -236,7 +268,9 @@ def match_cohort(property, property_values, cohort_properties) -> bool:
     # }
     cohort_id = str(property.get("value"))
     if cohort_id not in cohort_properties:
-        raise InconclusiveMatchError("can't match cohort without a given cohort property value")
+        raise InconclusiveMatchError(
+            "can't match cohort without a given cohort property value"
+        )
 
     property_group = cohort_properties[cohort_id]
     return match_property_group(property_group, property_values, cohort_properties)
@@ -272,7 +306,9 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
                 error_matching_locally = True
 
         if error_matching_locally:
-            raise InconclusiveMatchError("Can't match cohort without a given cohort property value")
+            raise InconclusiveMatchError(
+                "Can't match cohort without a given cohort property value"
+            )
         # if we get here, all matched in AND case, or none matched in OR case
         return property_group_type == "AND"
 
@@ -303,13 +339,17 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
                 error_matching_locally = True
 
         if error_matching_locally:
-            raise InconclusiveMatchError("can't match cohort without a given cohort property value")
+            raise InconclusiveMatchError(
+                "can't match cohort without a given cohort property value"
+            )
 
         # if we get here, all matched in AND case, or none matched in OR case
         return property_group_type == "AND"
 
 
-def relative_date_parse_for_feature_flag_matching(value: str) -> Optional[datetime.datetime]:
+def relative_date_parse_for_feature_flag_matching(
+    value: str,
+) -> Optional[datetime.datetime]:
     regex = r"^-?(?P<number>[0-9]+)(?P<interval>[a-z])$"
     match = re.search(regex, value)
     parsed_dt = datetime.datetime.now(datetime.timezone.utc)

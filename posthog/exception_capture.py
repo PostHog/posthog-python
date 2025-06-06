@@ -22,7 +22,9 @@ class ExceptionCapture:
 
     log = logging.getLogger("posthog")
 
-    def __init__(self, client: "Client", integrations: Optional[List[Integrations]] = None):
+    def __init__(
+        self, client: "Client", integrations: Optional[List[Integrations]] = None
+    ):
         self.client = client
         self.original_excepthook = sys.excepthook
         sys.excepthook = self.exception_handler
