@@ -8,7 +8,7 @@ import mock
 import six
 from parameterized import parameterized
 
-from posthog.client import EXCLUDED_HASHES, INCLUDED_HASHES, Client
+from posthog.client import Client
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata

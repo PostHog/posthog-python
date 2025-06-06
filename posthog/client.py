@@ -56,6 +56,7 @@ except ImportError:
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
 
+
 def get_os_info():
     """
     Returns standardized OS name and version information.
@@ -108,6 +109,7 @@ def system_context() -> dict[str, Any]:
         "$os": os_name,
         "$os_version": os_version,
     }
+
 
 class Client(object):
     """Create a new PostHog client."""
@@ -361,14 +363,14 @@ class Client(object):
             "group_properties": group_properties,
             "geoip_disable": disable_geoip,
         }
-        
+
         resp_data = flags(
             self.api_key,
             self.host,
             timeout=self.feature_flags_request_timeout_seconds,
             **request_data,
         )
-        
+
         return normalize_flags_response(resp_data)
 
     def capture(
