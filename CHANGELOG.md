@@ -1,4 +1,4 @@
-## 4.3.0
+## 4.3.0 - 2025-06-06
 
 Add exception context management:
  - New context manager with `posthog.new_context()`
