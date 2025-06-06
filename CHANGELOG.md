@@ -1,11 +1,16 @@
+## 4.3.3 - 2025-06-06
+
+Add `setup()` function to initialise default client
+
 ## 4.3.2 - 2025-06-06
 
 Add context management:
- - New context manager with `posthog.new_context()`
- - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
- - Function decorator:
-   - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
- - Automatic deduplication of exceptions to ensure each exception is only captured once
+
+- New context manager with `posthog.new_context()`
+- Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
+- Function decorator:
+  - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
+- Automatic deduplication of exceptions to ensure each exception is only captured once
 
 ## 4.2.1 - 2025-6-05
 
