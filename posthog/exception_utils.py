@@ -612,8 +612,8 @@ def exceptions_from_error(
     exception_id += 1
 
     should_supress_context = (
-        hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__
-    )  # type: ignore
+        hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__  # type: ignore
+    )
     if should_supress_context:
         # Add direct cause.
         # The field `__cause__` is set when raised with the exception (using the `from` keyword).
