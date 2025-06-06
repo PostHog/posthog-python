@@ -104,7 +104,7 @@ print(
 print(posthog.get_remote_config_payload("encrypted_payload_flag_key"))
 
 
-# You can add tags to a context, and these are automatically added to exceptions and other events captured
+# You can add tags to a context, and these are automatically added to any events (including exceptions) captured
 # within that context.
 
 # You can enter a new context using a with statement. Any exceptions thrown in the context will be captured,
