@@ -580,8 +580,7 @@ def shutdown():
     _proxy("join")
 
 
-def _proxy(method, *args, **kwargs):
-    """Create an analytics client if one doesn't exist and send to it."""
+def setup():
     global default_client
     if not default_client:
         default_client = Client(
@@ -609,6 +608,11 @@ def _proxy(method, *args, **kwargs):
     # always set incase user changes it
     default_client.disabled = disabled
     default_client.debug = debug
+
+
+def _proxy(method, *args, **kwargs):
+    """Create an analytics client if one doesn't exist and send to it."""
+    setup()
 
     fn = getattr(default_client, method)
     return fn(*args, **kwargs)
