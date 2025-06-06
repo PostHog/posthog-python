@@ -1,3 +1,7 @@
+## 4.4.0 - 2025-06-09
+
+- Use the new `/flags` endpoint for all feature flag evaluations (don't fall back to `/decide` at all)
+
 ## 4.3.2 - 2025-06-06
 
 Add context management:
