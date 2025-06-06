@@ -24,7 +24,6 @@ DEFAULT_MAX_VALUE_LENGTH = 1024
 
 
 if TYPE_CHECKING:
-
     from types import FrameType, TracebackType
     from typing import (  # noqa: F401
         Any,

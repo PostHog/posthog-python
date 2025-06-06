@@ -32,7 +32,6 @@ class DjangoIntegration:
     identifier = "django"
 
     def __init__(self, capture_exception_fn=None):
-
         if DJANGO_VERSION < (4, 2):
             raise IntegrationEnablingError("Django 4.2 or newer is required.")
 
@@ -60,7 +59,6 @@ class DjangoIntegration:
 
 
 class DjangoRequestExtractor:
-
     def __init__(self, request):
         # type: (Any) -> None
         self.request = request

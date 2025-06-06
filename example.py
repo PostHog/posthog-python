@@ -104,4 +104,44 @@ print(
 print(posthog.get_remote_config_payload("encrypted_payload_flag_key"))
 
 
+# You can add tags to a context, and these are automatically added to any events (including exceptions) captured
+# within that context.
+
+# You can enter a new context using a with statement. Any exceptions thrown in the context will be captured,
+# and tagged with the context tags. Other events captured will also be tagged with the context tags. By default,
+# the new context inherits tags from the parent context.
+with posthog.new_context():
+    posthog.tag("transaction_id", "abc123")
+    posthog.tag("some_arbitrary_value", {"tags": "can be dicts"})
+
+    # This event will be captured with the tags set above
+    posthog.capture("order_processed")
+    # This exception will be captured with the tags set above
+    raise Exception("Order processing failed")
+
+
+# Use fresh=True to start with a clean context (no inherited tags)
+with posthog.new_context(fresh=True):
+    posthog.tag("session_id", "xyz789")
+    # Only session_id tag will be present, no inherited tags
+    raise Exception("Session handling failed")
+
+
+# You can also use the `@posthog.scoped()` decorator to enter a new context.
+# By default, it inherits tags from the parent context
+@posthog.scoped()
+def process_order(order_id):
+    posthog.tag("order_id", order_id)
+    # Exception will be captured and tagged automatically
+    raise Exception("Order processing failed")
+
+
+# Use fresh=True to start with a clean context (no inherited tags)
+@posthog.scoped(fresh=True)
+def process_payment(payment_id):
+    posthog.tag("payment_id", payment_id)
+    # Only payment_id tag will be present, no inherited tags
+    raise Exception("Payment processing failed")
+
+
 posthog.shutdown()

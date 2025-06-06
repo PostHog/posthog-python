@@ -29,6 +29,7 @@ from posthog.request import (
     get,
     remote_config,
 )
+from posthog.scopes import get_tags
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
@@ -466,6 +467,11 @@ class Client(object):
         require("properties", properties, dict)
         require("event", event, string_types)
 
+        # Grab current context tags, if any exist
+        context_tags = get_tags()
+        if context_tags:
+            properties.update(context_tags)
+
         msg = {
             "properties": properties,
             "timestamp": timestamp,
@@ -662,6 +668,11 @@ class Client(object):
         try:
             properties = properties or {}
 
+            # Check if this exception has already been captured
+            if exception is not None and hasattr(exception, "__posthog_exception_captured"):
+                self.log.debug("Exception already captured, skipping")
+                return
+
             # if there's no distinct_id, we'll generate one and set personless mode
             # via $process_person_profile = false
             if distinct_id is None:
@@ -705,7 +716,13 @@ class Client(object):
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
 
-            return self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
+            res = self.capture(distinct_id, "$exception", properties, context, timestamp, uuid, groups)
+
+            # Mark the exception as captured to prevent duplicate captures
+            if exception is not None:
+                setattr(exception, "__posthog_exception_captured", True)
+
+            return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
 
