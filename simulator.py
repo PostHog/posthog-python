@@ -28,7 +28,9 @@ parser.add_argument("--anonymousId", help="the anonymous user id to send the eve
 parser.add_argument("--event", help="the event name to send with the event")
 parser.add_argument("--properties", help="the event properties to send (JSON-encoded)")
 
-parser.add_argument("--name", help="name of the screen or page to send with the message")
+parser.add_argument(
+    "--name", help="name of the screen or page to send with the message"
+)
 
 parser.add_argument("--traits", help="the identify/group traits to send (JSON-encoded)")
 
@@ -94,7 +96,13 @@ ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 log.addHandler(ch)
 
-switcher = {"capture": capture, "page": page, "identify": identify, "set_once": set_once, "set": set}
+switcher = {
+    "capture": capture,
+    "page": page,
+    "identify": identify,
+    "set_once": set_once,
+    "set": set,
+}
 
 func = switcher.get(options.type)
 if func:

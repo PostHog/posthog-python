@@ -3,18 +3,41 @@ import time
 from unittest.mock import patch
 
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
-from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
-from openai.types.chat.chat_completion_chunk import ChoiceDelta, ChoiceDeltaToolCall, ChoiceDeltaToolCallFunction
-from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
-from openai.types.completion_usage import CompletionUsage
-from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
-from openai.types.embedding import Embedding
-from openai.types.responses import Response, ResponseOutputMessage, ResponseOutputText, ResponseUsage
 
-from posthog.ai.openai import OpenAI
+try:
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+    from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
+    from openai.types.chat.chat_completion_chunk import (
+        ChoiceDelta,
+        ChoiceDeltaToolCall,
+        ChoiceDeltaToolCallFunction,
+    )
+    from openai.types.chat.chat_completion_message_tool_call import (
+        ChatCompletionMessageToolCall,
+        Function,
+    )
+    from openai.types.completion_usage import CompletionUsage
+    from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
+    from openai.types.embedding import Embedding
+    from openai.types.responses import (
+        Response,
+        ResponseOutputMessage,
+        ResponseOutputText,
+        ResponseUsage,
+    )
+
+    from posthog.ai.openai import OpenAI
+
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+# Skip all tests if OpenAI is not available
+pytestmark = pytest.mark.skipif(
+    not OPENAI_AVAILABLE, reason="OpenAI package is not available"
+)
 
 
 @pytest.fixture
@@ -173,7 +196,10 @@ def mock_openai_response_with_tool_calls():
 
 
 def test_basic_completion(mock_client, mock_openai_response):
-    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
@@ -193,7 +219,9 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "Test response"}
+        ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
@@ -202,7 +230,10 @@ def test_basic_completion(mock_client, mock_openai_response):
 
 
 def test_embeddings(mock_client, mock_embedding_response):
-    with patch("openai.resources.embeddings.Embeddings.create", return_value=mock_embedding_response):
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        return_value=mock_embedding_response,
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.embeddings.create(
             model="text-embedding-3-small",
@@ -229,7 +260,10 @@ def test_embeddings(mock_client, mock_embedding_response):
 
 
 def test_groups(mock_client, mock_openai_response):
-    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
@@ -247,7 +281,10 @@ def test_groups(mock_client, mock_openai_response):
 
 
 def test_privacy_mode_local(mock_client, mock_openai_response):
-    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
@@ -266,7 +303,10 @@ def test_privacy_mode_local(mock_client, mock_openai_response):
 
 
 def test_privacy_mode_global(mock_client, mock_openai_response):
-    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
         mock_client.privacy_mode = True
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
@@ -286,10 +326,15 @@ def test_privacy_mode_global(mock_client, mock_openai_response):
 
 
 def test_error(mock_client, mock_openai_response):
-    with patch("openai.resources.chat.completions.Completions.create", side_effect=Exception("Test error")):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=Exception("Test error"),
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         with pytest.raises(Exception):
-            client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": "Hello"}])
+            client.chat.completions.create(
+                model="gpt-4", messages=[{"role": "user", "content": "Hello"}]
+            )
 
         assert mock_client.capture.call_count == 1
 
@@ -301,7 +346,8 @@ def test_error(mock_client, mock_openai_response):
 
 def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
     with patch(
-        "openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_cached_tokens
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response_with_cached_tokens,
     ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
@@ -322,7 +368,9 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "Test response"}
+        ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_cache_read_input_tokens"] == 15
@@ -333,16 +381,23 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
 
 def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
     with patch(
-        "openai.resources.chat.completions.Completions.create", return_value=mock_openai_response_with_tool_calls
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response_with_tool_calls,
     ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+            messages=[
+                {"role": "user", "content": "What's the weather in San Francisco?"}
+            ],
             tools=[
                 {
                     "type": "function",
-                    "function": {"name": "get_weather", "description": "Get weather", "parameters": {}},
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {},
+                    },
                 }
             ],
             posthog_distinct_id="test-id",
@@ -358,8 +413,12 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
-        assert props["$ai_input"] == [{"role": "user", "content": "What's the weather in San Francisco?"}]
-        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "I'll check the weather for you."}]
+        assert props["$ai_input"] == [
+            {"role": "user", "content": "What's the weather in San Francisco?"}
+        ]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "I'll check the weather for you."}
+        ]
 
         # Check that tool calls are properly captured
         assert "$ai_tools" in props
@@ -492,11 +551,17 @@ def test_streaming_with_tool_calls(mock_client):
         # Call the streaming method
         response_generator = client.chat.completions.create(
             model="gpt-4",
-            messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+            messages=[
+                {"role": "user", "content": "What's the weather in San Francisco?"}
+            ],
             tools=[
                 {
                     "type": "function",
-                    "function": {"name": "get_weather", "description": "Get weather", "parameters": {}},
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {},
+                    },
                 }
             ],
             stream=True,
@@ -538,7 +603,10 @@ def test_streaming_with_tool_calls(mock_client):
         assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
 
         # Check that the content was also accumulated
-        assert props["$ai_output_choices"][0]["content"] == "The weather in San Francisco is 15°C."
+        assert (
+            props["$ai_output_choices"][0]["content"]
+            == "The weather in San Francisco is 15°C."
+        )
 
         # Check token usage
         assert props["$ai_input_tokens"] == 20
@@ -547,7 +615,10 @@ def test_streaming_with_tool_calls(mock_client):
 
 # test responses api
 def test_responses_api(mock_client, mock_openai_response_with_responses_api):
-    with patch("openai.resources.responses.Responses.create", return_value=mock_openai_response_with_responses_api):
+    with patch(
+        "openai.resources.responses.Responses.create",
+        return_value=mock_openai_response_with_responses_api,
+    ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.responses.create(
             model="gpt-4o-mini",
@@ -566,7 +637,9 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "Test response"}
+        ]
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_reasoning_tokens"] == 15

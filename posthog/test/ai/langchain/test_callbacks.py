@@ -8,19 +8,44 @@ from typing import List, Literal, Optional, TypedDict, Union
 from unittest.mock import patch
 
 import pytest
-from langchain_anthropic.chat_models import ChatAnthropic
-from langchain_community.chat_models.fake import FakeMessagesListChatModel
-from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableLambda
-from langchain_core.tools import tool
-from langchain_openai.chat_models import ChatOpenAI
-from langgraph.graph.state import END, START, StateGraph
-from langgraph.prebuilt import create_react_agent
 
-from posthog.ai.langchain import CallbackHandler
-from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
+try:
+    from langchain_anthropic.chat_models import ChatAnthropic
+    from langchain_community.chat_models.fake import FakeMessagesListChatModel
+    from langchain_community.llms.fake import FakeListLLM, FakeStreamingListLLM
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.tools import tool
+    from langchain_openai.chat_models import ChatOpenAI
+    from langgraph.graph.state import END, START, StateGraph
+    from langgraph.prebuilt import create_react_agent
+
+    from posthog.ai.langchain import CallbackHandler
+    from posthog.ai.langchain.callbacks import GenerationMetadata, SpanMetadata
+
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+
+    class FakeListLLM:
+        pass
+
+    class FakeStreamingListLLM:
+        pass
+
+    class HumanMessage:
+        pass
+
+    class AIMessage:
+        pass
+
+    LANGCHAIN_AVAILABLE = False
+
+
+# Skip all tests if LangChain is not available
+pytestmark = pytest.mark.skipif(
+    not LANGCHAIN_AVAILABLE, reason="LangChain package is not available"
+)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -229,7 +254,9 @@ async def test_async_basic_chat_chain(mock_client, stream):
     callbacks = [CallbackHandler(mock_client)]
     chain = prompt | model
     if stream:
-        result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][0]
+        result = [m async for m in chain.astream({}, config={"callbacks": callbacks})][
+            0
+        ]
     else:
         result = await chain.ainvoke({}, config={"callbacks": callbacks})
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
@@ -293,10 +320,17 @@ def test_basic_llm_chain(mock_client, Model, stream):
 
     if stream:
         result = "".join(
-            [m for m in model.stream("Who won the world series in 2020?", config={"callbacks": callbacks})]
+            [
+                m
+                for m in model.stream(
+                    "Who won the world series in 2020?", config={"callbacks": callbacks}
+                )
+            ]
         )
     else:
-        result = model.invoke("Who won the world series in 2020?", config={"callbacks": callbacks})
+        result = model.invoke(
+            "Who won the world series in 2020?", config={"callbacks": callbacks}
+        )
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
     assert mock_client.capture.call_count == 1
@@ -308,7 +342,9 @@ def test_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
+    assert props["$ai_output_choices"] == [
+        "The Los Angeles Dodgers won the World Series in 2020."
+    ]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -329,10 +365,17 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
 
     if stream:
         result = "".join(
-            [m async for m in model.astream("Who won the world series in 2020?", config={"callbacks": callbacks})]
+            [
+                m
+                async for m in model.astream(
+                    "Who won the world series in 2020?", config={"callbacks": callbacks}
+                )
+            ]
         )
     else:
-        result = await model.ainvoke("Who won the world series in 2020?", config={"callbacks": callbacks})
+        result = await model.ainvoke(
+            "Who won the world series in 2020?", config={"callbacks": callbacks}
+        )
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
     assert mock_client.capture.call_count == 1
@@ -344,7 +387,9 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
     assert "$ai_model" in props
     assert "$ai_provider" in props
     assert props["$ai_input"] == ["Who won the world series in 2020?"]
-    assert props["$ai_output_choices"] == ["The Los Angeles Dodgers won the World Series in 2020."]
+    assert props["$ai_output_choices"] == [
+        "The Los Angeles Dodgers won the World Series in 2020."
+    ]
     assert props["$ai_http_status"] == 200
     assert props["$ai_trace_id"] is not None
     assert isinstance(props["$ai_latency"], float)
@@ -395,8 +440,12 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     assert "distinct_id" in first_generation_args
     assert "$ai_model" in first_generation_props
     assert "$ai_provider" in first_generation_props
-    assert first_generation_props["$ai_input"] == [{"role": "user", "content": "Foo bar"}]
-    assert first_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert first_generation_props["$ai_input"] == [
+        {"role": "user", "content": "Foo bar"}
+    ]
+    assert first_generation_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert first_generation_props["$ai_http_status"] == 200
     assert isinstance(first_generation_props["$ai_latency"], float)
     assert "$ai_span_id" in first_generation_props
@@ -416,8 +465,12 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     assert "distinct_id" in second_generation_args
     assert "$ai_model" in second_generation_props
     assert "$ai_provider" in second_generation_props
-    assert second_generation_props["$ai_input"] == [{"role": "assistant", "content": "Bar"}]
-    assert second_generation_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert second_generation_props["$ai_input"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
+    assert second_generation_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert second_generation_props["$ai_http_status"] == 200
     assert second_generation_props["$ai_trace_id"] is not None
     assert isinstance(second_generation_props["$ai_latency"], float)
@@ -452,7 +505,9 @@ def test_personless_mode(mock_client):
     assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
-    chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
+    chain.invoke(
+        {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
+    )
     assert mock_client.capture.call_count == 6
     span_args = mock_client.capture.call_args_list[3][1]
     generation_args = mock_client.capture.call_args_list[4][1]
@@ -492,7 +547,9 @@ def test_personless_mode_exception(mock_client):
 
     id = uuid.uuid4()
     with pytest.raises(Exception):
-        chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]})
+        chain.invoke(
+            {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
+        )
     assert mock_client.capture.call_count == 6
     span_args = mock_client.capture.call_args_list[3][1]
     generation_args = mock_client.capture.call_args_list[4][1]
@@ -551,7 +608,9 @@ def test_metadata(mock_client):
     assert generation_call_props["$ai_trace_id"] == "test-trace-id"
     assert generation_call_props["foo"] == "bar"
     assert generation_call_props["$ai_input"] == [{"role": "user", "content": "Foo"}]
-    assert generation_call_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
+    assert generation_call_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar"}
+    ]
     assert generation_call_props["$ai_http_status"] == 200
     assert isinstance(generation_call_props["$ai_latency"], float)
 
@@ -618,89 +677,66 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][2], AIMessage)
     assert result["messages"][2].content == "It's a type of greeble."
 
-    assert mock_client.capture.call_count == 12
+    assert mock_client.capture.call_count == 6
     calls = [call[1] for call in mock_client.capture.call_args_list]
 
-    trace_args = calls[11]
-    trace_props = calls[11]["properties"]
+    # The trace event is captured at the end
+    trace_args = calls[-1]
+    trace_props = calls[-1]["properties"]
 
     # Events are captured in the reverse order.
     # Check all trace_ids
     for call in calls:
         assert call["properties"]["$ai_trace_id"] == trace_props["$ai_trace_id"]
 
-    # First span, write the state
-    assert calls[0]["event"] == "$ai_span"
-    assert calls[0]["properties"]["$ai_parent_id"] == calls[2]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[0]["properties"]
-    assert calls[0]["properties"]["$ai_input_state"] == initial_state
-    assert calls[0]["properties"]["$ai_output_state"] == initial_state
-
-    # Second span, set the START node
-    assert calls[1]["event"] == "$ai_span"
-    assert calls[1]["properties"]["$ai_parent_id"] == calls[2]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[1]["properties"]
-    assert calls[1]["properties"]["$ai_input_state"] == initial_state
-    assert calls[1]["properties"]["$ai_output_state"] == initial_state
-
-    # Third span, finish initialization
-    assert calls[2]["event"] == "$ai_span"
-    assert "$ai_span_id" in calls[2]["properties"]
-    assert calls[2]["properties"]["$ai_span_name"] == START
-    assert calls[2]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
-    assert calls[2]["properties"]["$ai_input_state"] == initial_state
-    assert calls[2]["properties"]["$ai_output_state"] == initial_state
-
-    # Fourth span, save the value of fake_plain during its execution
+    # 1. Span, finish initialization
     second_state = {
-        "messages": [HumanMessage(content="What's a bar?"), AIMessage(content="Let's explore bar.")],
+        "messages": [
+            HumanMessage(content="What's a bar?"),
+            AIMessage(content="Let's explore bar."),
+        ],
         "xyz": "abc",
     }
 
-    assert calls[4]["event"] == "$ai_span"
-    assert calls[4]["properties"]["$ai_parent_id"] == calls[5]["properties"]["$ai_span_id"]
+    # 1. Span - the fake_plain node, which doesn't do anything
+    assert calls[0]["event"] == "$ai_span"
+    assert calls[0]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
+    assert "$ai_span_id" in calls[0]["properties"]
+    assert calls[0]["properties"]["$ai_span_name"] == "fake_plain"
+    assert calls[0]["properties"]["$ai_input_state"] == initial_state
+    assert calls[0]["properties"]["$ai_output_state"] == second_state
+
+    # 2. Span - the ChatPromptTemplate within fake_llm's FakeMessagesListChatModel
+    assert calls[1]["event"] == "$ai_span"
+    assert (
+        calls[1]["properties"]["$ai_parent_id"] == calls[3]["properties"]["$ai_span_id"]
+    )
+    assert "$ai_span_id" in calls[1]["properties"]
+    assert calls[1]["properties"]["$ai_span_name"] == "ChatPromptTemplate"
+
+    # 3. Generation - the FakeMessagesListChatModel within fake_llm's RunnableSequence
+    assert calls[2]["event"] == "$ai_generation"
+    assert (
+        calls[2]["properties"]["$ai_parent_id"] == calls[3]["properties"]["$ai_span_id"]
+    )
+    assert "$ai_span_id" in calls[2]["properties"]
+    assert calls[2]["properties"]["$ai_span_name"] == "FakeMessagesListChatModel"
+
+    # 4. Span - RunnableSequence within fake_llm
+    assert calls[3]["event"] == "$ai_span"
+    assert (
+        calls[3]["properties"]["$ai_parent_id"] == calls[4]["properties"]["$ai_span_id"]
+    )
     assert "$ai_span_id" in calls[3]["properties"]
-    assert calls[4]["properties"]["$ai_input_state"] == second_state
-    assert calls[4]["properties"]["$ai_output_state"] == second_state
+    assert calls[3]["properties"]["$ai_span_name"] == "RunnableSequence"
 
-    # Fifth span, run the fake_plain node
-    assert calls[5]["event"] == "$ai_span"
+    # 5. Span - the fake_llm node
+    assert calls[4]["event"] == "$ai_span"
+    assert calls[4]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
     assert "$ai_span_id" in calls[4]["properties"]
-    assert calls[5]["properties"]["$ai_span_name"] == "fake_plain"
-    assert calls[5]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
-    assert calls[5]["properties"]["$ai_input_state"] == initial_state
-    assert calls[5]["properties"]["$ai_output_state"] == second_state
+    assert calls[4]["properties"]["$ai_span_name"] == "fake_llm"
 
-    # Sixth span, chat prompt template
-    assert calls[6]["event"] == "$ai_span"
-    assert calls[6]["properties"]["$ai_parent_id"] == calls[8]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[6]["properties"]
-    assert calls[6]["properties"]["$ai_span_name"] == "ChatPromptTemplate"
-
-    # 7. Generation, fake_llm
-    assert calls[7]["event"] == "$ai_generation"
-    assert calls[7]["properties"]["$ai_parent_id"] == calls[8]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[7]["properties"]
-    assert calls[7]["properties"]["$ai_span_name"] == "FakeMessagesListChatModel"
-
-    # 8. Span, RunnableSequence
-    assert calls[8]["event"] == "$ai_span"
-    assert calls[8]["properties"]["$ai_parent_id"] == calls[10]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[8]["properties"]
-    assert calls[8]["properties"]["$ai_span_name"] == "RunnableSequence"
-
-    # 9. Span, fake_llm write
-    assert calls[9]["event"] == "$ai_span"
-    assert calls[9]["properties"]["$ai_parent_id"] == calls[10]["properties"]["$ai_span_id"]
-    assert "$ai_span_id" in calls[9]["properties"]
-
-    # 10. Span, fake_llm node
-    assert calls[10]["event"] == "$ai_span"
-    assert calls[10]["properties"]["$ai_parent_id"] == trace_props["$ai_trace_id"]
-    assert "$ai_span_id" in calls[10]["properties"]
-    assert calls[10]["properties"]["$ai_span_name"] == "fake_llm"
-
-    # 11. Trace
+    # 6. Trace
     assert trace_args["event"] == "$ai_trace"
     assert trace_props["$ai_span_name"] == "LangGraph"
 
@@ -714,9 +750,14 @@ def test_graph_state(mock_client):
     assert isinstance(trace_props["$ai_output_state"]["messages"][0], HumanMessage)
     assert trace_props["$ai_output_state"]["messages"][0].content == "What's a bar?"
     assert isinstance(trace_props["$ai_output_state"]["messages"][1], AIMessage)
-    assert trace_props["$ai_output_state"]["messages"][1].content == "Let's explore bar."
+    assert (
+        trace_props["$ai_output_state"]["messages"][1].content == "Let's explore bar."
+    )
     assert isinstance(trace_props["$ai_output_state"]["messages"][2], AIMessage)
-    assert trace_props["$ai_output_state"]["messages"][2].content == "It's a type of greeble."
+    assert (
+        trace_props["$ai_output_state"]["messages"][2].content
+        == "It's a type of greeble."
+    )
     assert trace_args["properties"]["$ai_output_state"]["xyz"] == "abc"
 
 
@@ -744,7 +785,9 @@ def test_callbacks_logic(mock_client):
         assert len(callbacks._parent_tree.items()) == 1
         return [m]
 
-    (chain | RunnableLambda(assert_intermediary_run) | model).invoke({}, config={"callbacks": [callbacks]})
+    (chain | RunnableLambda(assert_intermediary_run) | model).invoke(
+        {}, config={"callbacks": [callbacks]}
+    )
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
 
@@ -837,10 +880,16 @@ def test_openai_chain(mock_client):
         {"role": "system", "content": 'You must always answer with "Bar".'},
         {"role": "user", "content": "Foo"},
     ]
-    assert gen_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar", "refusal": None}]
+    assert gen_props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Bar", "refusal": None}
+    ]
     assert gen_props["$ai_http_status"] == 200
     assert isinstance(gen_props["$ai_latency"], float)
-    assert min(approximate_latency - 1, 0) <= math.floor(gen_props["$ai_latency"]) <= approximate_latency
+    assert (
+        min(approximate_latency - 1, 0)
+        <= math.floor(gen_props["$ai_latency"])
+        <= approximate_latency
+    )
     assert gen_props["$ai_input_tokens"] == 20
     assert gen_props["$ai_output_tokens"] == 1
 
@@ -1114,7 +1163,11 @@ def test_anthropic_chain(mock_client):
     assert gen_props["$ai_output_choices"] == [{"role": "assistant", "content": "Bar"}]
     assert gen_props["$ai_http_status"] == 200
     assert isinstance(gen_props["$ai_latency"], float)
-    assert min(approximate_latency - 1, 0) <= math.floor(gen_props["$ai_latency"]) <= approximate_latency
+    assert (
+        min(approximate_latency - 1, 0)
+        <= math.floor(gen_props["$ai_latency"])
+        <= approximate_latency
+    )
     assert gen_props["$ai_input_tokens"] == 17
     assert gen_props["$ai_output_tokens"] == 1
 
@@ -1261,7 +1314,10 @@ def test_tool_calls(mock_client):
             },
         }
     ]
-    assert "additional_kwargs" not in generation_call["properties"]["$ai_output_choices"][0]
+    assert (
+        "additional_kwargs"
+        not in generation_call["properties"]["$ai_output_choices"][0]
+    )
 
 
 async def test_async_traces(mock_client):
@@ -1283,7 +1339,9 @@ async def test_async_traces(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
     assert mock_client.capture.call_count == 4
 
-    first_call, second_call, third_call, fourth_call = mock_client.capture.call_args_list
+    first_call, second_call, third_call, fourth_call = (
+        mock_client.capture.call_args_list
+    )
     assert first_call[1]["event"] == "$ai_span"
     assert second_call[1]["event"] == "$ai_generation"
     assert third_call[1]["event"] == "$ai_trace"
@@ -1291,7 +1349,9 @@ async def test_async_traces(mock_client):
     assert fourth_call[1]["event"] == "$ai_trace"
     assert fourth_call[1]["properties"]["$ai_span_name"] == "sleep"
     assert (
-        min(approximate_latency - 1, 0) <= math.floor(third_call[1]["properties"]["$ai_latency"]) <= approximate_latency
+        min(approximate_latency - 1, 0)
+        <= math.floor(third_call[1]["properties"]["$ai_latency"])
+        <= approximate_latency
     )
 
 
@@ -1313,7 +1373,9 @@ def test_langgraph_agent(mock_client):
     model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0)
     graph = create_react_agent(model, tools=tools)
     inputs = {"messages": [("user", "what is the weather in sf")]}
-    cb = CallbackHandler(mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id")
+    cb = CallbackHandler(
+        mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id"
+    )
     graph.invoke(inputs, config={"callbacks": [cb]})
     calls = [call[1] for call in mock_client.capture.call_args_list]
     assert len(calls) == 21
@@ -1333,7 +1395,9 @@ def test_span_set_parent_ids(mock_client, trace_id):
         ]
     )
     model = FakeMessagesListChatModel(
-        responses=[AIMessage(content="The Los Angeles Dodgers won the World Series in 2020.")]
+        responses=[
+            AIMessage(content="The Los Angeles Dodgers won the World Series in 2020.")
+        ]
     )
     callbacks = [CallbackHandler(mock_client, trace_id=trace_id)]
     chain = prompt | model
@@ -1342,10 +1406,16 @@ def test_span_set_parent_ids(mock_client, trace_id):
     assert mock_client.capture.call_count == 3
 
     span_props = mock_client.capture.call_args_list[0][1]
-    assert span_props["properties"]["$ai_trace_id"] == span_props["properties"]["$ai_parent_id"]
+    assert (
+        span_props["properties"]["$ai_trace_id"]
+        == span_props["properties"]["$ai_parent_id"]
+    )
 
     generation_props = mock_client.capture.call_args_list[1][1]
-    assert generation_props["properties"]["$ai_trace_id"] == generation_props["properties"]["$ai_parent_id"]
+    assert (
+        generation_props["properties"]["$ai_trace_id"]
+        == generation_props["properties"]["$ai_parent_id"]
+    )
 
 
 @pytest.mark.parametrize("trace_id", ["test-trace-id", None])
@@ -1365,7 +1435,9 @@ def test_span_set_parent_ids_for_third_level_run(mock_client, trace_id):
 
     assert mock_client.capture.call_count == 3
 
-    span2, span1, trace = [call[1]["properties"] for call in mock_client.capture.call_args_list]
+    span2, span1, trace = [
+        call[1]["properties"] for call in mock_client.capture.call_args_list
+    ]
     assert span2["$ai_parent_id"] == span1["$ai_span_id"]
     assert span1["$ai_parent_id"] == trace["$ai_trace_id"]
 
@@ -1382,7 +1454,10 @@ def test_captures_error_with_details_in_span(mock_client):
         pass
 
     assert mock_client.capture.call_count == 2
-    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"] == "ValueError: test"
+    assert (
+        mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"]
+        == "ValueError: test"
+    )
     assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
 
 
@@ -1398,5 +1473,8 @@ def test_captures_error_without_details_in_span(mock_client):
         pass
 
     assert mock_client.capture.call_count == 2
-    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"] == "ValueError"
+    assert (
+        mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"]
+        == "ValueError"
+    )
     assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]

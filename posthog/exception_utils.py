@@ -24,7 +24,6 @@ DEFAULT_MAX_VALUE_LENGTH = 1024
 
 
 if TYPE_CHECKING:
-
     from types import FrameType, TracebackType
     from typing import (  # noqa: F401
         Any,
@@ -52,7 +51,9 @@ if TYPE_CHECKING:
     Event = TypedDict(
         "Event",
         {
-            "breadcrumbs": Dict[Literal["values"], List[Dict[str, Any]]],  # TODO: We can expand on this type
+            "breadcrumbs": Dict[
+                Literal["values"], List[Dict[str, Any]]
+            ],  # TODO: We can expand on this type
             "check_in_id": str,
             "contexts": Dict[str, Dict[str, object]],
             "dist": str,
@@ -60,7 +61,9 @@ if TYPE_CHECKING:
             "environment": str,
             "errors": List[Dict[str, Any]],  # TODO: We can expand on this type
             "event_id": str,
-            "exception": Dict[Literal["values"], List[Dict[str, Any]]],  # TODO: We can expand on this type
+            "exception": Dict[
+                Literal["values"], List[Dict[str, Any]]
+            ],  # TODO: We can expand on this type
             # "extra": MutableMapping[str, object],
             # "fingerprint": List[str],
             "level": LogLevelStr,
@@ -78,13 +81,17 @@ if TYPE_CHECKING:
             # "sdk": Mapping[str, object],
             "server_name": str,
             "spans": List[Dict[str, object]],
-            "stacktrace": Dict[str, object],  # We access this key in the code, but I am unsure whether we ever set it
+            "stacktrace": Dict[
+                str, object
+            ],  # We access this key in the code, but I am unsure whether we ever set it
             "start_timestamp": datetime,
             "status": Optional[str],
             # "tags": MutableMapping[
             #     str, str
             # ],  # Tags must be less than 200 characters each
-            "threads": Dict[Literal["values"], List[Dict[str, Any]]],  # TODO: We can expand on this type
+            "threads": Dict[
+                Literal["values"], List[Dict[str, Any]]
+            ],  # TODO: We can expand on this type
             "timestamp": Optional[datetime],  # Must be set before sending the event
             "transaction": str,
             # "transaction_info": Mapping[str, Any],  # TODO: We can expand on this type
@@ -273,7 +280,10 @@ def get_lines_from_file(
     upper_bound = min(lineno + 1 + context_lines, len(source))
 
     try:
-        pre_context = [strip_string(line.strip("\r\n"), max_length=max_length) for line in source[lower_bound:lineno]]
+        pre_context = [
+            strip_string(line.strip("\r\n"), max_length=max_length)
+            for line in source[lower_bound:lineno]
+        ]
         context_line = strip_string(source[lineno].strip("\r\n"), max_length=max_length)
         post_context = [
             strip_string(line.strip("\r\n"), max_length=max_length)
@@ -305,7 +315,9 @@ def get_source_context(
         loader = None
     lineno = tb_lineno - 1
     if lineno is not None and abs_path:
-        return get_lines_from_file(abs_path, lineno, max_value_length, loader=loader, module=module)
+        return get_lines_from_file(
+            abs_path, lineno, max_value_length, loader=loader, module=module
+        )
     return [], None, []
 
 
@@ -342,7 +354,9 @@ def filename_for_module(module, abs_path):
         if not base_module_path:
             return abs_path
 
-        return abs_path.split(base_module_path.rsplit(os.sep, 2)[0], 1)[-1].lstrip(os.sep)
+        return abs_path.split(base_module_path.rsplit(os.sep, 2)[0], 1)[-1].lstrip(
+            os.sep
+        )
     except Exception:
         return abs_path
 
@@ -431,7 +445,11 @@ def get_errno(exc_value):
 
 def get_error_message(exc_value):
     # type: (Optional[BaseException]) -> str
-    return getattr(exc_value, "message", "") or getattr(exc_value, "detail", "") or safe_str(exc_value)
+    return (
+        getattr(exc_value, "message", "")
+        or getattr(exc_value, "detail", "")
+        or safe_str(exc_value)
+    )
 
 
 def single_exception_from_error_tuple(
@@ -452,7 +470,9 @@ def single_exception_from_error_tuple(
     https://develop.sentry.dev/sdk/event-payloads/exception/
     """
     exception_value = {}  # type: Dict[str, Any]
-    exception_value["mechanism"] = mechanism.copy() if mechanism else {"type": "generic", "handled": True}
+    exception_value["mechanism"] = (
+        mechanism.copy() if mechanism else {"type": "generic", "handled": True}
+    )
     if exception_id is not None:
         exception_value["mechanism"]["exception_id"] = exception_id
 
@@ -462,7 +482,9 @@ def single_exception_from_error_tuple(
         errno = None
 
     if errno is not None:
-        exception_value["mechanism"].setdefault("meta", {}).setdefault("errno", {}).setdefault("number", errno)
+        exception_value["mechanism"].setdefault("meta", {}).setdefault(
+            "errno", {}
+        ).setdefault("number", errno)
 
     if source is not None:
         exception_value["mechanism"]["source"] = source
@@ -475,7 +497,9 @@ def single_exception_from_error_tuple(
     if is_root_exception and "type" not in exception_value["mechanism"]:
         exception_value["mechanism"]["type"] = "generic"
 
-    is_exception_group = BaseExceptionGroup is not None and isinstance(exc_value, BaseExceptionGroup)
+    is_exception_group = BaseExceptionGroup is not None and isinstance(
+        exc_value, BaseExceptionGroup
+    )
     if is_exception_group:
         exception_value["mechanism"]["is_exception_group"] = True
 
@@ -523,7 +547,11 @@ if HAS_CHAINED_EXCEPTIONS:
         seen_exceptions = []
         seen_exception_ids = set()  # type: Set[int]
 
-        while exc_type is not None and exc_value is not None and id(exc_value) not in seen_exception_ids:
+        while (
+            exc_type is not None
+            and exc_value is not None
+            and id(exc_value) not in seen_exception_ids
+        ):
             yield exc_type, exc_value, tb
 
             # Avoid hashing random types we don't know anything
@@ -583,11 +611,17 @@ def exceptions_from_error(
     parent_id = exception_id
     exception_id += 1
 
-    should_supress_context = hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__  # type: ignore
+    should_supress_context = (
+        hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__  # type: ignore
+    )
     if should_supress_context:
         # Add direct cause.
         # The field `__cause__` is set when raised with the exception (using the `from` keyword).
-        exception_has_cause = exc_value and hasattr(exc_value, "__cause__") and exc_value.__cause__ is not None
+        exception_has_cause = (
+            exc_value
+            and hasattr(exc_value, "__cause__")
+            and exc_value.__cause__ is not None
+        )
         if exception_has_cause:
             cause = exc_value.__cause__  # type: ignore
             (exception_id, child_exceptions) = exceptions_from_error(
@@ -604,7 +638,11 @@ def exceptions_from_error(
     else:
         # Add indirect cause.
         # The field `__context__` is assigned if another exception occurs while handling the exception.
-        exception_has_content = exc_value and hasattr(exc_value, "__context__") and exc_value.__context__ is not None
+        exception_has_content = (
+            exc_value
+            and hasattr(exc_value, "__context__")
+            and exc_value.__context__ is not None
+        )
         if exception_has_content:
             context = exc_value.__context__  # type: ignore
             (exception_id, child_exceptions) = exceptions_from_error(
@@ -645,7 +683,9 @@ def exceptions_from_error_tuple(
     # type: (...) -> List[Dict[str, Any]]
     exc_type, exc_value, tb = exc_info
 
-    is_exception_group = BaseExceptionGroup is not None and isinstance(exc_value, BaseExceptionGroup)
+    is_exception_group = BaseExceptionGroup is not None and isinstance(
+        exc_value, BaseExceptionGroup
+    )
 
     if is_exception_group:
         (_, exceptions) = exceptions_from_error(
@@ -661,7 +701,11 @@ def exceptions_from_error_tuple(
     else:
         exceptions = []
         for exc_type, exc_value, tb in walk_exception_chain(exc_info):
-            exceptions.append(single_exception_from_error_tuple(exc_type, exc_value, tb, client_options, mechanism))
+            exceptions.append(
+                single_exception_from_error_tuple(
+                    exc_type, exc_value, tb, client_options, mechanism
+                )
+            )
 
     exceptions.reverse()
 
@@ -789,7 +833,11 @@ def event_from_exception(
     return (
         {
             "level": "error",
-            "exception": {"values": exceptions_from_error_tuple(exc_info, client_options, mechanism)},
+            "exception": {
+                "values": exceptions_from_error_tuple(
+                    exc_info, client_options, mechanism
+                )
+            },
         },
         hint,
     )
@@ -813,7 +861,9 @@ def _module_in_list(name, items):
 def _is_external_source(abs_path):
     # type: (str) -> bool
     # check if frame is in 'site-packages' or 'dist-packages'
-    external_source = re.search(r"[\\/](?:dist|site)-packages[\\/]", abs_path) is not None
+    external_source = (
+        re.search(r"[\\/](?:dist|site)-packages[\\/]", abs_path) is not None
+    )
     return external_source
 
 

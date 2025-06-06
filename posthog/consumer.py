@@ -1,9 +1,9 @@
 import json
 import logging
+import time
 from threading import Thread
 
 import backoff
-import monotonic
 
 from posthog.request import APIError, DatetimeSerializer, batch_post
 
@@ -96,18 +96,20 @@ class Consumer(Thread):
         queue = self.queue
         items = []
 
-        start_time = monotonic.monotonic()
+        start_time = time.monotonic()
         total_size = 0
 
         while len(items) < self.flush_at:
-            elapsed = monotonic.monotonic() - start_time
+            elapsed = time.monotonic() - start_time
             if elapsed >= self.flush_interval:
                 break
             try:
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > MAX_MSG_SIZE:
-                    self.log.error("Item exceeds 900kib limit, dropping. (%s)", str(item))
+                    self.log.error(
+                        "Item exceeds 900kib limit, dropping. (%s)", str(item)
+                    )
                     continue
                 items.append(item)
                 total_size += item_size
@@ -134,7 +136,9 @@ class Consumer(Thread):
                 # retry on all other errors (eg. network)
                 return False
 
-        @backoff.on_exception(backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception)
+        @backoff.on_exception(
+            backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception
+        )
         def send_request():
             batch_post(
                 self.api_key,

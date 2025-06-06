@@ -3,11 +3,22 @@ import time
 from unittest.mock import patch
 
 import pytest
-from anthropic.types import Message, Usage
 
-from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+try:
+    from anthropic.types import Message, Usage
+
+    from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# Skip all tests if Anthropic is not available
+pytestmark = pytest.mark.skipif(
+    not ANTHROPIC_AVAILABLE, reason="Anthropic package is not available"
+)
 
 
 @pytest.fixture
@@ -78,7 +89,9 @@ def mock_anthropic_response_with_cached_tokens():
 
 
 def test_basic_completion(mock_client, mock_anthropic_response):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
             model="claude-3-opus-20240229",
@@ -98,7 +111,9 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_provider"] == "anthropic"
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "Test response"}
+        ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
@@ -107,7 +122,9 @@ def test_basic_completion(mock_client, mock_anthropic_response):
 
 
 def test_streaming(mock_client, mock_anthropic_stream):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_stream):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_stream
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
             model="claude-3-opus-20240229",
@@ -144,7 +161,9 @@ def test_streaming(mock_client, mock_anthropic_stream):
 
 
 def test_streaming_with_stream_endpoint(mock_client, mock_anthropic_stream):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_stream):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_stream
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.stream(
             model="claude-3-opus-20240229",
@@ -180,7 +199,9 @@ def test_streaming_with_stream_endpoint(mock_client, mock_anthropic_stream):
 
 
 def test_groups(mock_client, mock_anthropic_response):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
             model="claude-3-opus-20240229",
@@ -197,7 +218,9 @@ def test_groups(mock_client, mock_anthropic_response):
 
 
 def test_privacy_mode_local(mock_client, mock_anthropic_response):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
             model="claude-3-opus-20240229",
@@ -216,7 +239,9 @@ def test_privacy_mode_local(mock_client, mock_anthropic_response):
 
 
 def test_privacy_mode_global(mock_client, mock_anthropic_response):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
         mock_client.privacy_mode = True
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
@@ -290,7 +315,9 @@ async def test_basic_async_integration(mock_client):
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "anthropic"
     assert props["$ai_model"] == "claude-3-opus-20240229"
-    assert props["$ai_input"] == [{"role": "user", "content": "You must always answer with 'Bar'."}]
+    assert props["$ai_input"] == [
+        {"role": "user", "content": "You must always answer with 'Bar'."}
+    ]
     assert props["$ai_output_choices"][0]["role"] == "assistant"
     assert props["$ai_input_tokens"] == 16
     assert props["$ai_output_tokens"] == 1
@@ -300,7 +327,9 @@ async def test_basic_async_integration(mock_client):
 
 
 def test_streaming_system_prompt(mock_client, mock_anthropic_stream):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_stream):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_stream
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
             model="claude-3-opus-20240229",
@@ -319,7 +348,10 @@ def test_streaming_system_prompt(mock_client, mock_anthropic_stream):
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
 
-        assert props["$ai_input"] == [{"role": "system", "content": "Foo"}, {"role": "user", "content": "Bar"}]
+        assert props["$ai_input"] == [
+            {"role": "system", "content": "Foo"},
+            {"role": "user", "content": "Bar"},
+        ]
 
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
@@ -350,10 +382,15 @@ async def test_async_streaming_system_prompt(mock_client, mock_anthropic_stream)
 
 
 def test_error(mock_client, mock_anthropic_response):
-    with patch("anthropic.resources.Messages.create", side_effect=Exception("Test error")):
+    with patch(
+        "anthropic.resources.Messages.create", side_effect=Exception("Test error")
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         with pytest.raises(Exception):
-            client.messages.create(model="claude-3-opus-20240229", messages=[{"role": "user", "content": "Hello"}])
+            client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "Hello"}],
+            )
 
         assert mock_client.capture.call_count == 1
 
@@ -364,7 +401,10 @@ def test_error(mock_client, mock_anthropic_response):
 
 
 def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
-    with patch("anthropic.resources.Messages.create", return_value=mock_anthropic_response_with_cached_tokens):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response_with_cached_tokens,
+    ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
         response = client.messages.create(
             model="claude-3-opus-20240229",
@@ -384,7 +424,9 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_provider"] == "anthropic"
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-        assert props["$ai_output_choices"] == [{"role": "assistant", "content": "Test response"}]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "Test response"}
+        ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_cache_read_input_tokens"] == 15

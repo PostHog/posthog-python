@@ -4,10 +4,18 @@ from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
 from posthog.exception_capture import Integrations  # noqa: F401
+from posthog.scopes import clear_tags, get_tags, new_context, scoped, tag
 from posthog.types import FeatureFlag, FlagsAndPayloads
 from posthog.version import VERSION
 
 __version__ = VERSION
+
+"""Context management."""
+new_context = new_context
+tag = tag
+get_tags = get_tags
+clear_tags = clear_tags
+tracked = scoped
 
 """Settings."""
 api_key = None  # type: Optional[str]
@@ -315,7 +323,7 @@ def capture_exception(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
-    **kwargs
+    **kwargs,
 ):
     # type: (...) -> Tuple[bool, dict]
     """
@@ -358,7 +366,7 @@ def capture_exception(
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
-        **kwargs
+        **kwargs,
     )
 
 

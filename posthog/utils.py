@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Any, Optional
 from uuid import UUID
 
 import six
@@ -52,7 +53,9 @@ def clean(item):
         return float(item)
     if isinstance(item, UUID):
         return str(item)
-    if isinstance(item, (six.string_types, bool, numbers.Number, datetime, date, type(None))):
+    if isinstance(
+        item, (six.string_types, bool, numbers.Number, datetime, date, type(None))
+    ):
         return item
     if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
@@ -99,14 +102,35 @@ def _clean_dataclass(dataclass_):
     return data
 
 
-def _coerce_unicode(cmplx):
+def _coerce_unicode(cmplx: Any) -> Optional[str]:
+    """
+    In theory, this method is only called
+    after many isinstance checks are carried out in `utils.clean`.
+    When we supported Python 2 it was safe to call `decode` on a `str`
+    but in Python 3 that will throw.
+    So, we check if the input is bytes and only call `decode` in that case.
+
+    Previously we would always call `decode` on the input
+    That would throw an error.
+    Then we would call `decode` on the stringified error
+    That would throw an error.
+    And then we would return `None`
+
+    To avoid a breaking change, we can maintain the behavior
+    that anything which did not have `decode` in Python 2
+    returns None.
+    """
+    item = None
     try:
-        item = cmplx.decode("utf-8", "strict")
-    except AttributeError as exception:
-        item = ":".join(exception)
-        item.decode("utf-8", "strict")
+        if isinstance(cmplx, bytes):
+            item = cmplx.decode("utf-8", "strict")
+        elif isinstance(cmplx, str):
+            item = cmplx
+    except Exception as exception:
+        item = ":".join(map(str, exception.args))
         log.warning("Error decoding: %s", item)
         return None
+
     return item
 
 
