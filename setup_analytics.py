@@ -1,6 +1,6 @@
 import os
 import sys
-import tomllib
+import tomli
 import tomli_w
 import shutil
 
@@ -19,9 +19,7 @@ shutil.copy("pyproject.toml", "pyproject.toml.backup")
 
 # Read the original pyproject.toml
 with open("pyproject.toml", "rb") as f:
-    config = tomllib.load(f)
-
-print(config)
+    config = tomli.load(f)
 
 # Override specific values
 config["project"]["name"] = "posthoganalytics"
