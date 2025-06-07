@@ -28,7 +28,6 @@ setup(
     author_email="hey@posthog.com",
     maintainer="PostHog",
     maintainer_email="hey@posthog.com",
-    test_suite="posthog.test.all",
     license="MIT License",
     description="Integrate PostHog into any python application.",
     long_description=long_description,

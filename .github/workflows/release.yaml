@@ -24,14 +24,22 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+        with:
+          python-version: 3.11.11
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+            enable-cache: true
+            pyproject-file: 'pyproject.toml'
+            
       - name: Detect version
         run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
 
       - name: Prepare for building release
-        run: pip install -U pip setuptools packaging wheel twine
+        run: uv sync --extra build
 
-      - name: Push release to PyPI
+      - name: Push releases to PyPI
         run: make release && make release_analytics
 
       - name: Create GitHub release
