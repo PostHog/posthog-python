@@ -27,7 +27,7 @@ jobs:
             - name: Install dev dependencies
               shell: bash
               run: |
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --frozen --dev
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --dev
 
             - name: Check formatting with ruff
               run: |
@@ -63,7 +63,7 @@ jobs:
             - name: Install test dependencies
               shell: bash
               run: |
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --frozen --test
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --test
 
             - name: Run posthog tests
               run: |
