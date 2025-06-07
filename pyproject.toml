@@ -51,6 +51,8 @@ dev = [
     "pre-commit",
     "pydantic",
     "ruff",
+    "tomli",
+    "tomli_w",
 ]
 test = [
     "mock>=2.0.0",
