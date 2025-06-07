@@ -28,6 +28,7 @@ release_analytics:
 	rm -rf posthoganalytics
 	rm -f pyproject.toml
 	cp pyproject.toml.backup pyproject.toml
+	rm -f pyproject.toml.backup
 
 e2e_test:
 	.buildscripts/e2e.sh
