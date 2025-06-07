@@ -8,8 +8,7 @@ dynamic = ["version"]
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "hey@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
-license = "MIT"
-license-files = ["LICENSE"]
+license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [

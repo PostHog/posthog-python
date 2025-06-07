@@ -39,7 +39,7 @@ jobs:
       - name: Prepare for building release
         run: uv sync --extra build
 
-      - name: Push release to PyPI
+      - name: Push releases to PyPI
         run: make release && make release_analytics
 
       - name: Create GitHub release
