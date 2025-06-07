@@ -9,6 +9,7 @@ description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "hey@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
 license = "MIT License"
+license-files = []
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
@@ -82,8 +83,6 @@ packages = [
     "posthog.sentry",
     "posthog.exception_integrations",
 ]
-
-license-files = []
 
 [tool.setuptools.dynamic]
 version = { attr = "posthog.version.VERSION" }
