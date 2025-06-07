@@ -70,6 +70,12 @@ test = [
     "pydantic",
     "parameterized>=0.8.1",
 ]
+build = [
+    "setuptools",
+    "packaging", 
+    "wheel",
+    "twine",
+]
 
 [tool.setuptools]
 packages = [
