@@ -35,7 +35,9 @@ dependencies = [
 Homepage = "https://github.com/posthog/posthog-python"
 Repository = "https://github.com/posthog/posthog-python"
 
-[dependency-groups]
+[project.optional-dependencies]
+sentry = ["sentry-sdk", "django"]
+langchain = ["langchain>=0.2.0"]
 dev = [
     "django-stubs",
     "lxml",
@@ -68,10 +70,6 @@ test = [
     "pydantic",
     "parameterized>=0.8.1",
 ]
-
-[project.optional-dependencies]
-sentry = ["sentry-sdk", "django"]
-langchain = ["langchain>=0.2.0"]
 
 [tool.setuptools]
 packages = [
