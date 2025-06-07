@@ -24,6 +24,8 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+        with:
+          python-version: 3.11.11
 
       - name: Detect version
         run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
