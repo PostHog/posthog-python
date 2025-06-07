@@ -63,7 +63,7 @@ jobs:
             - name: Install test dependencies
               shell: bash
               run: |
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --test
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --group test
 
             - name: Run posthog tests
               run: |
