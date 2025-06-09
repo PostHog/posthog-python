@@ -18,6 +18,7 @@ release_analytics:
 	cp -r posthog/* posthoganalytics/
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthog /from posthoganalytics /g' {} \;
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthog\./from posthoganalytics\./g' {} \;
+	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/import posthog/import posthoganalytics/g' {} \;
 	find ./posthoganalytics -name "*.bak" -delete
 	rm -rf posthog
 	python setup_analytics.py sdist bdist_wheel
@@ -25,6 +26,7 @@ release_analytics:
 	mkdir posthog
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics /from posthog /g' {} \;
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics\./from posthog\./g' {} \;
+	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/import posthoganalytics/import posthog/g' {} \;
 	find ./posthoganalytics -name "*.bak" -delete
 	cp -r posthoganalytics/* posthog/
 	rm -rf posthoganalytics
