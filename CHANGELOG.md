@@ -1,3 +1,7 @@
+## 4.5.0 - 2025-06-09
+
+- add additional user and request context to captured exceptions via the Django integration
+
 ## 4.4.2- 2025-06-09
 
 - empty point release to fix release automation
