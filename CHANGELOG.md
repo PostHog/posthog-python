@@ -1,3 +1,11 @@
+## 4.5.0 - 2025-06-09
+
+- add additional user and request context to captured exceptions via the Django integration
+
+## 4.4.1 and 4.4.2 - 2025-06-07
+
+- empty point release to fix the posthog_analytics release
+
 ## 4.4.1 and 4.4.2- 2025-06-07
 
 - empty point release to fix the posthog_analytics release
@@ -9,11 +17,12 @@
 ## 4.3.2 - 2025-06-06
 
 Add context management:
- - New context manager with `posthog.new_context()`
- - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
- - Function decorator:
-   - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
- - Automatic deduplication of exceptions to ensure each exception is only captured once
+
+- New context manager with `posthog.new_context()`
+- Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
+- Function decorator:
+  - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
+- Automatic deduplication of exceptions to ensure each exception is only captured once
 
 ## 4.2.1 - 2025-6-05
 
