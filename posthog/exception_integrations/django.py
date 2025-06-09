@@ -32,8 +32,8 @@ class DjangoIntegration:
     identifier = "django"
 
     def __init__(self, capture_exception_fn=None):
-        if DJANGO_VERSION < (1, 8):
-            raise IntegrationEnablingError("Django 1.8 or newer is required.")
+        if DJANGO_VERSION < (1, 10):
+            raise IntegrationEnablingError("Django 1.10 or newer is required.")
 
         # TODO: Right now this seems too complicated / overkill for us, but seems like we can automatically plug in middlewares
         # which is great for users (they don't need to do this) and everything should just work.
@@ -56,17 +56,6 @@ class DjangoIntegration:
 
     def uninstall(self):
         pass
-
-
-if DJANGO_VERSION < (1, 10):
-
-    def is_authenticated(request_user):
-        return request_user.is_authenticated()
-
-else:
-
-    def is_authenticated(request_user):
-        return request_user.is_authenticated
 
 
 class DjangoRequestExtractor:
@@ -104,7 +93,7 @@ class DjangoRequestExtractor:
 
         user = getattr(self.request, "user", None)
 
-        if user is None or not is_authenticated(user):
+        if user is None or not user.is_authenticated:
             return user_data
 
         try:
