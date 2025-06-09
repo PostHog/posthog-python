@@ -1,4 +1,9 @@
-## 4.5.0- 2025-06-09
+## 4.6.0 - 2025-06-09
+
+- feat: add additional user and request context to captured exceptions via the Django integration
+- feat: Add `setup()` function to initialise default client
+
+## 4.5.0 - 2025-06-09
 
 - feat: add before_send callback (#249)
 
@@ -17,11 +22,13 @@
 ## 4.3.2 - 2025-06-06
 
 1. Add context management:
- - New context manager with `posthog.new_context()`
- - Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
- - Function decorator:
-   - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
- - Automatic deduplication of exceptions to ensure each exception is only captured once
+
+- New context manager with `posthog.new_context()`
+- Tag functions: `posthog.tag()`, `posthog.get_tags()`, `posthog.clear_tags()`
+- Function decorator:
+  - `@posthog.scoped` - Creates context and captures exceptions thrown within the function
+- Automatic deduplication of exceptions to ensure each exception is only captured once
+
 2. fix: feature flag request use geoip_disable (#235)
 3. chore: pin actions versions (#210)
 4. fix: opinionated setup and clean fn fix (#240)
