@@ -5,7 +5,7 @@
 
 ## 4.5.0 - 2025-06-09
 
-- add additional user and request context to captured exceptions via the Django integration
+- feat: add before_send callback (#249)
 
 ## 4.4.2- 2025-06-09
 
