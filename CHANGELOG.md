@@ -1,3 +1,7 @@
+## 4.4.1 - 2025-06-07
+
+- empty point release to fix the posthog_analytics release
+
 ## 4.4.0 - 2025-06-09
 
 - Use the new `/flags` endpoint for all feature flag evaluations (don't fall back to `/decide` at all)
