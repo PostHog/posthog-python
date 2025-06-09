@@ -77,6 +77,8 @@ build = [
     "packaging", 
     "wheel",
     "twine",
+    "tomli",
+    "tomli_w",
 ]
 
 [tool.setuptools]
