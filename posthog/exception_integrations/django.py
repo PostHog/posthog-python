@@ -32,8 +32,8 @@ class DjangoIntegration:
     identifier = "django"
 
     def __init__(self, capture_exception_fn=None):
-        if DJANGO_VERSION < (1, 10):
-            raise IntegrationEnablingError("Django 1.10 or newer is required.")
+        if DJANGO_VERSION < (4, 2):
+            raise IntegrationEnablingError("Django 4.2 or newer is required.")
 
         # TODO: Right now this seems too complicated / overkill for us, but seems like we can automatically plug in middlewares
         # which is great for users (they don't need to do this) and everything should just work.
