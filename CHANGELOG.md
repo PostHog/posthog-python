@@ -1,3 +1,7 @@
+## 4.6.1 - 2025-06-09
+
+- fix: replace `import posthog` in `posthoganalytics` package
+
 ## 4.6.0 - 2025-06-09
 
 - feat: add additional user and request context to captured exceptions via the Django integration
