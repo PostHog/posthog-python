@@ -144,6 +144,7 @@ class Client(object):
         exception_autocapture_integrations=None,
         project_root=None,
         privacy_mode=False,
+        before_send=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -198,6 +199,15 @@ class Client(object):
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
+
+        if before_send is not None:
+            if callable(before_send):
+                self.before_send = before_send
+            else:
+                self.log.warning("before_send is not callable, it will be ignored")
+                self.before_send = None
+        else:
+            self.before_send = None
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(
@@ -744,6 +754,18 @@ class Client(object):
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
         msg = clean(msg)
+
+        if self.before_send:
+            try:
+                modified_msg = self.before_send(msg)
+                if modified_msg is None:
+                    self.log.debug("Event dropped by before_send callback")
+                    return True, None
+                msg = modified_msg
+            except Exception as e:
+                self.log.exception(f"Error in before_send callback: {e}")
+                # Continue with the original message if callback fails
+
         self.log.debug("queueing: %s", msg)
 
         # if send is False, return msg as if it was successfully queued
