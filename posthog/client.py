@@ -1,5 +1,4 @@
 import atexit
-import hashlib
 import logging
 import numbers
 import os
@@ -27,7 +26,6 @@ from posthog.request import (
     DEFAULT_HOST,
     APIError,
     batch_post,
-    decide,
     determine_server_host,
     flags,
     get,
@@ -57,78 +55,6 @@ except ImportError:
 
 ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
-
-# TODO: Get rid of these when you're done rolling out `/flags` to all customers
-ROLLOUT_PERCENTAGE = 1
-INCLUDED_HASHES = set(
-    {"bc94e67150c97dbcbf52549d50a7b80814841dbf"}
-)  # this is PostHog's API key
-# Explicitly excluding all the API tokens associated with the top 10 customers; we'll get to them soon, but don't want to rollout to them just yet
-EXCLUDED_HASHES = set(
-    {
-        "03005596796f9ee626e9596b8062972cb6a556a0",
-        "05620a20b287e0d5cb1d4a0dd492797f36b952c5",
-        "0f95b5ca12878693c01c6420e727904f1737caa7",
-        "1212b6287a6e7e5ff6be5cb30ec563f35c2139d6",
-        "171ec1bb2caf762e06b1fde2e36a38c4638691a8",
-        "171faa9fc754b1aa42252a4eedb948b7c805d5cb",
-        "178ddde3f628fb0030321387acf939e4e6946d35",
-        "1790085d7e9aa136e8b73c180dd6a6060e2ef949",
-        "1895a3349c2371559c886f19ef1bf60617a934e0",
-        "1f01267d4f0295f88e8943bc963d816ee4abc84b",
-        "213df54990a34e62e3570b430f7ee36ec0928743",
-        "23d235537d988ab98ad259853eab02b07d828c2b",
-        "27135f7ae8f936222a5fcfcdc75c139b27dd3254",
-        "2817396d80fafc86c0816af8e73880f8b3e54320",
-        "29d3235e63db42056858ef04c6a5488c2a459eaa",
-        "2a76d9b5eb9307e540de9d516aa80f6cb5a0292f",
-        "2a92965a1344ab8a1f7dac2507e858f579a88ac2",
-        "2d5823818261512d616161de2bb8a161d48f1e35",
-        "32942f6a879dbfa8011cc68288c098e4a76e6cc0",
-        "3db6c17ab65827ceadf77d9a8462fabd94170ca6",
-        "4975b24f9ced9b2c06b604ddc9612f663f9452d5",
-        "497c7b017b13cd6cdbfe641c71f0dfb660a4c518",
-        "49c79e1dbce4a7b9394d6c14bf0421e04cecb445",
-        "4d63e1c5cd3a80972eac4e7526f03357ac538043",
-        "4da0f42a6f8f116822411152e5cda3c65ed2561f",
-        "4e494675ecd2b841784d6f29b658b38a0877a62e",
-        "4e852d8422130cec991eca2d6416dbe321d0a689",
-        "5120bfd92c9c6731074a89e4a82f49e947d34369",
-        "512cd72f9aa7ab11dfd012cc2e19394a020bd9a8",
-        "5b175d4064cc62f01118a2c6818c2c02fc8f27e1",
-        "5ba4bba3979e97d2c84df2aba394ca29c6c43187",
-        "639014946463614353ca640b268dc6592f62b652",
-        "643b9be9d50104e2b4ba94bc56688adba69c80fe",
-        "658f92992af9fc6a360143d72d93a36f63bbccb0",
-        "673a59c99739dfcee35202e428dd020b94866d52",
-        "67a9829b4997f5c6f3ab8173ad299f634adcfa53",
-        "6d686043e914ae8275df65e1ad890bd32a3b6fdd",
-        "6e4b5e1d649ad006d78f1f1617a9a0f35fc73078",
-        "6f1fc3a8fa9df54d00cbc1ef9ad5f24640589fd0",
-        "764e5fec2c7899cfee620fae8450fcc62cd72bf0",
-        "80ea6d6ed9a5895633c7bee7aba4323eeacdc90e",
-        "872e420156f583bc97351f3d83c02dae734a85df",
-        "8a24844cbeae31e74b4372964cdea74e99d9c0e2",
-        "975ae7330506d4583b000f96ad87abb41a0141ce",
-        "9e3d71378b340def3080e0a3a785a1b964cf43ef",
-        "9ede7b21365661331d024d92915de6e69749892b",
-        "a1ed1b4216ef4cec542c6b3b676507770be24ddc",
-        "a4f66a70a9647b3b89fc59f7642af8ffab073ba1",
-        "a7adb80be9e90948ab6bb726cc6e8e52694aec74",
-        "bca4b14ac8de49cccc02306c7bb6e5ae2acc0f72",
-        "bde5fe49f61e13629c5498d7428a7f6215e482a6",
-        "c54a7074c323aa7c5cb7b24bf826751b2a58f5d8",
-        "c552d20da0c87fb4ebe2da97c7f95c05eef2bca1",
-        "d7682f2d268f3064d433309af34f2935810989d2",
-        "d794ac43d8be26bf99f369ea79501eb774fe1b16",
-        "e0963e2552af77d46bb24d5b5806b5b456c64c5f",
-        "e6f14b2100cb0598925958b097ace82486037a25",
-        "e79ec399ad45f44a4295a5bb1322e2f14600ae39",
-        "eecf29f73f9c31009e5737a6c5ec3f87ec5b8ea6",
-        "f2c01f3cc770c7788257ee60910e2530f92eefc3",
-        "f7bbc58f4122b1e2812c0f1962c584cb404a1ac3",
-    }
-)
 
 
 def get_os_info():
@@ -183,43 +109,6 @@ def system_context() -> dict[str, Any]:
         "$os": os_name,
         "$os_version": os_version,
     }
-
-
-def is_token_in_rollout(
-    token: str,
-    percentage: float = 0,
-    included_hashes: Optional[set[str]] = None,
-    excluded_hashes: Optional[set[str]] = None,
-) -> bool:
-    """
-    Determines if a token should be included in a rollout based on:
-    1. If its hash matches any included_hashes provided
-    2. If its hash falls within the percentage rollout
-
-    Args:
-        token: String to hash (usually API key)
-        percentage: Float between 0 and 1 representing rollout percentage
-        included_hashes: Optional set of specific SHA1 hashes to match against
-        excluded_hashes: Optional set of specific SHA1 hashes to exclude from rollout
-    Returns:
-        bool: True if token should be included in rollout
-    """
-    # First generate SHA1 hash of token
-    token_hash = hashlib.sha1(token.encode("utf-8")).hexdigest()
-
-    # Check if hash matches any included hashes
-    if included_hashes and token_hash in included_hashes:
-        return True
-
-    # Check if hash matches any excluded hashes
-    if excluded_hashes and token_hash in excluded_hashes:
-        return False
-
-    # Convert first 8 chars of hash to int and divide by max value to get number between 0-1
-    hash_int = int(token_hash[:8], 16)
-    hash_float = hash_int / 0xFFFFFFFF
-
-    return hash_float < percentage
 
 
 class Client(object):
@@ -475,27 +364,12 @@ class Client(object):
             "geoip_disable": disable_geoip,
         }
 
-        use_flags = is_token_in_rollout(
+        resp_data = flags(
             self.api_key,
-            ROLLOUT_PERCENTAGE,
-            included_hashes=INCLUDED_HASHES,
-            excluded_hashes=EXCLUDED_HASHES,
+            self.host,
+            timeout=self.feature_flags_request_timeout_seconds,
+            **request_data,
         )
-
-        if use_flags:
-            resp_data = flags(
-                self.api_key,
-                self.host,
-                timeout=self.feature_flags_request_timeout_seconds,
-                **request_data,
-            )
-        else:
-            resp_data = decide(
-                self.api_key,
-                self.host,
-                timeout=self.feature_flags_request_timeout_seconds,
-                **request_data,
-            )
 
         return normalize_flags_response(resp_data)
 
