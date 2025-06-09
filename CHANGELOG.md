@@ -1,4 +1,4 @@
-## 4.4.1 - 2025-06-07
+## 4.4.1 and 4.4.2- 2025-06-07
 
 - empty point release to fix the posthog_analytics release
 

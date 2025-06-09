@@ -16,14 +16,16 @@ release_analytics:
 	rm -rf posthoganalytics
 	mkdir posthoganalytics
 	cp -r posthog/* posthoganalytics/
-	find ./posthoganalytics -type f -not -path "*/__pycache__/*" -exec sed -i '' -e 's/from posthog /from posthoganalytics /g' {} \;
-	find ./posthoganalytics -type f -not -path "*/__pycache__/*" -exec sed -i '' -e 's/from posthog\./from posthoganalytics\./g' {} \;
+	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthog /from posthoganalytics /g' {} \;
+	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthog\./from posthoganalytics\./g' {} \;
+	find ./posthoganalytics -name "*.bak" -delete
 	rm -rf posthog
 	python setup_analytics.py sdist bdist_wheel
 	twine upload dist/*
 	mkdir posthog
-	find ./posthoganalytics -type f -not -path "*/__pycache__/*" -exec sed -i '' -e 's/from posthoganalytics /from posthog /g' {} \;
-	find ./posthoganalytics -type f  -not -path "*/__pycache__/*" -exec sed -i '' -e 's/from posthoganalytics\./from posthog\./g' {} \;
+	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics /from posthog /g' {} \;
+	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics\./from posthog\./g' {} \;
+	find ./posthoganalytics -name "*.bak" -delete
 	cp -r posthoganalytics/* posthog/
 	rm -rf posthoganalytics
 	rm -f pyproject.toml

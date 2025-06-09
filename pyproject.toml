@@ -51,6 +51,10 @@ dev = [
     "pre-commit",
     "pydantic",
     "ruff",
+    "setuptools",
+    "packaging", 
+    "wheel",
+    "twine",
     "tomli",
     "tomli_w",
 ]
@@ -71,12 +75,6 @@ test = [
     "google-genai",
     "pydantic",
     "parameterized>=0.8.1",
-]
-build = [
-    "setuptools",
-    "packaging", 
-    "wheel",
-    "twine",
 ]
 
 [tool.setuptools]
