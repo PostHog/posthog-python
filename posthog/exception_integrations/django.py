@@ -32,8 +32,8 @@ class DjangoIntegration:
     identifier = "django"
 
     def __init__(self, capture_exception_fn=None):
-        if DJANGO_VERSION < (4, 2):
-            raise IntegrationEnablingError("Django 4.2 or newer is required.")
+        if DJANGO_VERSION < (1, 8):
+            raise IntegrationEnablingError("Django 1.8 or newer is required.")
 
         # TODO: Right now this seems too complicated / overkill for us, but seems like we can automatically plug in middlewares
         # which is great for users (they don't need to do this) and everything should just work.
@@ -58,6 +58,17 @@ class DjangoIntegration:
         pass
 
 
+if DJANGO_VERSION < (1, 10):
+
+    def is_authenticated(request_user):
+        return request_user.is_authenticated()
+
+else:
+
+    def is_authenticated(request_user):
+        return request_user.is_authenticated
+
+
 class DjangoRequestExtractor:
     def __init__(self, request):
         # type: (Any) -> None
@@ -67,8 +78,8 @@ class DjangoRequestExtractor:
         headers = self.headers()
 
         # Extract traceparent and tracestate headers
-        traceparent = headers.get("traceparent")
-        tracestate = headers.get("tracestate")
+        traceparent = headers.get("Traceparent")
+        tracestate = headers.get("Tracestate")
 
         # Extract the distinct_id from tracestate
         distinct_id = None
@@ -80,11 +91,37 @@ class DjangoRequestExtractor:
                 distinct_id = match.group(1)
 
         return {
+            **self.user(),
             "distinct_id": distinct_id,
             "ip": headers.get("X-Forwarded-For"),
             "user_agent": headers.get("User-Agent"),
             "traceparent": traceparent,
+            "$request.path": self.request.path,
         }
+
+    def user(self):
+        user_data: dict[str, str] = {}
+
+        user = getattr(self.request, "user", None)
+
+        if user is None or not is_authenticated(user):
+            return user_data
+
+        try:
+            user_id = str(user.pk)
+            if user_id:
+                user_data.setdefault("$user.id", user_id)
+        except Exception:
+            pass
+
+        try:
+            email = str(user.email)
+            if email:
+                user_data.setdefault("$user.email", email)
+        except Exception:
+            pass
+
+        return user_data
 
     def headers(self):
         # type: () -> Dict[str, str]
