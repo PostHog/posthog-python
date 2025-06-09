@@ -1,3 +1,8 @@
+## 4.6.0 - 2025-06-09
+
+- feat: add additional user and request context to captured exceptions via the Django integration
+- feat: Add `setup()` function to initialise default client
+
 ## 4.5.0 - 2025-06-09
 
 - add additional user and request context to captured exceptions via the Django integration

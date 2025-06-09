@@ -85,7 +85,7 @@ class DjangoRequestExtractor:
             "ip": headers.get("X-Forwarded-For"),
             "user_agent": headers.get("User-Agent"),
             "traceparent": traceparent,
-            "$request.path": self.request.path,
+            "$request_path": self.request.path,
         }
 
     def user(self):
@@ -99,14 +99,14 @@ class DjangoRequestExtractor:
         try:
             user_id = str(user.pk)
             if user_id:
-                user_data.setdefault("$user.id", user_id)
+                user_data.setdefault("$user_id", user_id)
         except Exception:
             pass
 
         try:
             email = str(user.email)
             if email:
-                user_data.setdefault("$user.email", email)
+                user_data.setdefault("email", email)
         except Exception:
             pass
 

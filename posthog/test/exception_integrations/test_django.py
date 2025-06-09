@@ -49,7 +49,7 @@ def test_request_extractor_with_no_trace():
         "user_agent": DEFAULT_USER_AGENT,
         "traceparent": None,
         "distinct_id": None,
-        "$request.path": "/api/endpoint",
+        "$request_path": "/api/endpoint",
     }
 
 
@@ -64,7 +64,7 @@ def test_request_extractor_with_trace():
         "user_agent": DEFAULT_USER_AGENT,
         "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
         "distinct_id": None,
-        "$request.path": "/api/endpoint",
+        "$request_path": "/api/endpoint",
     }
 
 
@@ -81,7 +81,7 @@ def test_request_extractor_with_tracestate():
         "user_agent": DEFAULT_USER_AGENT,
         "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
         "distinct_id": "1234",
-        "$request.path": "/api/endpoint",
+        "$request_path": "/api/endpoint",
     }
 
 
@@ -95,7 +95,7 @@ def test_request_extractor_with_complicated_tracestate():
         "user_agent": DEFAULT_USER_AGENT,
         "traceparent": None,
         "distinct_id": "alohaMountainsXUYZ",
-        "$request.path": "/api/endpoint",
+        "$request_path": "/api/endpoint",
     }
 
 
@@ -115,7 +115,7 @@ def test_request_extractor_with_request_user():
         "user_agent": DEFAULT_USER_AGENT,
         "traceparent": None,
         "distinct_id": None,
-        "$request.path": "/api/endpoint",
-        "$user.email": "test@posthog.com",
-        "$user.id": "1",
+        "$request_path": "/api/endpoint",
+        "email": "test@posthog.com",
+        "$user_id": "1",
     }

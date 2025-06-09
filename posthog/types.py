@@ -1,8 +1,12 @@
 import json
 from dataclasses import dataclass
-from typing import Any, List, Optional, TypedDict, Union, cast
+from typing import Any, Callable, List, Optional, TypedDict, Union, cast
 
 FlagValue = Union[bool, str]
+
+# Type alias for the before_send callback function
+# Takes an event dictionary and returns the modified event or None to drop it
+BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
