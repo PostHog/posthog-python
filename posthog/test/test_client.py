@@ -1,5 +1,4 @@
 import time
-import hashlib
 import unittest
 from datetime import datetime
 from uuid import uuid4
