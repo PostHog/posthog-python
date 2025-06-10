@@ -145,12 +145,20 @@ def mock_parsed_response():
                         type="output_text",
                         text='{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
                         annotations=[],
-                        parsed={"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]},
+                        parsed={
+                            "name": "Science Fair",
+                            "date": "Friday",
+                            "participants": ["Alice", "Bob"],
+                        },
                     )
                 ],
             )
         ],
-        output_parsed={"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]},
+        output_parsed={
+            "name": "Science Fair",
+            "date": "Friday",
+            "participants": ["Alice", "Bob"],
+        },
         parallel_tool_calls=True,
         previous_response_id=None,
         usage=ResponseUsage(
@@ -723,7 +731,10 @@ def test_responses_parse(mock_client, mock_parsed_response):
                             "properties": {
                                 "name": {"type": "string"},
                                 "date": {"type": "string"},
-                                "participants": {"type": "array", "items": {"type": "string"}},
+                                "participants": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
                             },
                             "required": ["name", "date", "participants"],
                         },
@@ -752,7 +763,10 @@ def test_responses_parse(mock_client, mock_parsed_response):
             },
         ]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}'}
+            {
+                "role": "assistant",
+                "content": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+            }
         ]
         assert props["$ai_input_tokens"] == 15
         assert props["$ai_output_tokens"] == 20

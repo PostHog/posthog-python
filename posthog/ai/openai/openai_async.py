@@ -229,7 +229,7 @@ class WrappedResponses:
                 properties=event_properties,
                 groups=posthog_groups,
             )
-    
+
     async def parse(
         self,
         posthog_distinct_id: Optional[str] = None,
