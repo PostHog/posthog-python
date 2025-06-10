@@ -4,7 +4,7 @@ from sentry_sdk.integrations import Integration
 from sentry_sdk.scope import add_global_event_processor
 from sentry_sdk.utils import Dsn
 
-import posthog
+from posthog import capture, host
 from posthog.request import DEFAULT_HOST
 from posthog.sentry import POSTHOG_ID_TAG
 
@@ -34,7 +34,7 @@ class PostHogIntegration(Integration):
                 if event.get("tags", {}).get(POSTHOG_ID_TAG):
                     posthog_distinct_id = event["tags"][POSTHOG_ID_TAG]
                     event["tags"]["PostHog URL"] = (
-                        f"{posthog.host or DEFAULT_HOST}/person/{posthog_distinct_id}"
+                        f"{host or DEFAULT_HOST}/person/{posthog_distinct_id}"
                     )
 
                     properties = {
@@ -52,6 +52,6 @@ class PostHogIntegration(Integration):
                                 f"{PostHogIntegration.prefix}{PostHogIntegration.organization}/issues/?project={project_id}&query={event['event_id']}"
                             )
 
-                    posthog.capture(posthog_distinct_id, "$exception", properties)
+                    capture(posthog_distinct_id, "$exception", properties)
 
             return event

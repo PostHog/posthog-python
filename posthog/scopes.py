@@ -39,7 +39,7 @@ def new_context(fresh=False):
              raise ValueError("Something went wrong")
 
     """
-    import posthog
+    from posthog import capture_exception
 
     current_tags = _get_current_context().copy()
     current_stack = _context_stack.get()
@@ -49,7 +49,7 @@ def new_context(fresh=False):
     try:
         yield
     except Exception as e:
-        posthog.capture_exception(e)
+        capture_exception(e)
         raise
     finally:
         _context_stack.reset(token)

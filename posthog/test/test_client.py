@@ -1,4 +1,3 @@
-import hashlib
 import time
 import unittest
 from datetime import datetime
