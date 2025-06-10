@@ -1,7 +1,6 @@
 import contextvars
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, TypeVar, cast
-from posthog import capture_exception
 
 _context_stack: contextvars.ContextVar[list] = contextvars.ContextVar(
     "posthog_context_stack", default=[{}]
@@ -40,6 +39,8 @@ def new_context(fresh=False):
              raise ValueError("Something went wrong")
 
     """
+    from posthog import capture_exception
+
     current_tags = _get_current_context().copy()
     current_stack = _context_stack.get()
     new_stack = current_stack + [{}] if fresh else current_stack + [current_tags]
