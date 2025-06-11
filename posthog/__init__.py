@@ -15,7 +15,7 @@ new_context = new_context
 tag = tag
 get_tags = get_tags
 clear_tags = clear_tags
-tracked = scoped
+scoped = scoped
 
 """Settings."""
 api_key = None  # type: Optional[str]

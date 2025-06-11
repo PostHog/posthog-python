@@ -1,3 +1,8 @@
+## 4.8.0 - 2025-06-10
+
+- fix: export scoped, rather than tracked, decorator
+- feat: allow use of contexts without error tracking
+
 ## 4.7.0 - 2025-06-10
 
 - feat: add support for parse endpoint in responses API (no longer beta)
