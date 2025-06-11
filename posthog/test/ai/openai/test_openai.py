@@ -26,6 +26,11 @@ try:
         ResponseOutputMessage,
         ResponseOutputText,
         ResponseUsage,
+        ParsedResponse,
+    )
+    from openai.types.responses.parsed_response import (
+        ParsedResponseOutputMessage,
+        ParsedResponseOutputText,
     )
 
     from posthog.ai.openai import OpenAI
@@ -109,6 +114,59 @@ def mock_openai_response_with_responses_api():
             input_tokens_details={"prompt_tokens": 10, "cached_tokens": 0},
             output_tokens_details={"reasoning_tokens": 15},
             total_tokens=20,
+        ),
+        user=None,
+        metadata={},
+    )
+
+
+@pytest.fixture
+def mock_parsed_response():
+    return ParsedResponse(
+        id="test",
+        model="gpt-4o-2024-08-06",
+        object="response",
+        created_at=1741476542,
+        status="completed",
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        max_output_tokens=None,
+        tools=[],
+        tool_choice="auto",
+        output=[
+            ParsedResponseOutputMessage(
+                id="msg_123",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    ParsedResponseOutputText(
+                        type="output_text",
+                        text='{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+                        annotations=[],
+                        parsed={
+                            "name": "Science Fair",
+                            "date": "Friday",
+                            "participants": ["Alice", "Bob"],
+                        },
+                    )
+                ],
+            )
+        ],
+        output_parsed={
+            "name": "Science Fair",
+            "date": "Friday",
+            "participants": ["Alice", "Bob"],
+        },
+        parallel_tool_calls=True,
+        previous_response_id=None,
+        usage=ResponseUsage(
+            input_tokens=15,
+            output_tokens=20,
+            input_tokens_details={"prompt_tokens": 15, "cached_tokens": 0},
+            output_tokens_details={"reasoning_tokens": 5},
+            total_tokens=35,
         ),
         user=None,
         metadata={},
@@ -643,6 +701,76 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_reasoning_tokens"] == 15
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+
+
+def test_responses_parse(mock_client, mock_parsed_response):
+    with patch(
+        "openai.resources.responses.Responses.parse",
+        return_value=mock_parsed_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.responses.parse(
+            model="gpt-4o-2024-08-06",
+            input=[
+                {"role": "system", "content": "Extract the event information."},
+                {
+                    "role": "user",
+                    "content": "Alice and Bob are going to a science fair on Friday.",
+                },
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "event",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "date": {"type": "string"},
+                                "participants": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["name", "date", "participants"],
+                        },
+                    },
+                }
+            },
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_parsed_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4o-2024-08-06"
+        assert props["$ai_input"] == [
+            {"role": "system", "content": "Extract the event information."},
+            {
+                "role": "user",
+                "content": "Alice and Bob are going to a science fair on Friday.",
+            },
+        ]
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+            }
+        ]
+        assert props["$ai_input_tokens"] == 15
+        assert props["$ai_output_tokens"] == 20
+        assert props["$ai_reasoning_tokens"] == 5
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)

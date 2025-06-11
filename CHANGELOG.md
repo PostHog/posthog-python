@@ -1,3 +1,7 @@
+## 4.7.0 - 2025-06-10
+
+- feat: add support for parse endpoint in responses API (no longer beta)
+
 ## 4.6.2 - 2025-06-09
 
 - fix: replace `import posthog` with direct method imports

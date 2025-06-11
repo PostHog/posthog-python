@@ -230,6 +230,42 @@ class WrappedResponses:
                 groups=posthog_groups,
             )
 
+    async def parse(
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Parse structured output using OpenAI's 'responses.parse' method, but also track usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional ID to associate with the usage event.
+            posthog_trace_id: Optional trace UUID for linking events.
+            posthog_properties: Optional dictionary of extra properties to include in the event.
+            posthog_privacy_mode: Whether to anonymize the input and output.
+            posthog_groups: Optional dictionary of groups to associate with the event.
+            **kwargs: Any additional parameters for the OpenAI Responses Parse API.
+
+        Returns:
+            The response from OpenAI's responses.parse call.
+        """
+        return await call_llm_and_track_usage_async(
+            posthog_distinct_id,
+            self._client._ph_client,
+            "openai",
+            posthog_trace_id,
+            posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
+            self._client.base_url,
+            self._original.parse,
+            **kwargs,
+        )
+
 
 class WrappedChat:
     """Async wrapper for OpenAI chat that tracks usage in PostHog."""
