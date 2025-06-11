@@ -12,7 +12,7 @@ def _get_current_context() -> Dict[str, Any]:
 
 
 @contextmanager
-def new_context(fresh=False, capturing=True):
+def new_context(fresh=False, capture_exceptions=True):
     """
     Create a new context scope that will be active for the duration of the with block.
     Any tags set within this scope will be isolated to this context. Any exceptions raised
@@ -22,7 +22,7 @@ def new_context(fresh=False, capturing=True):
         fresh: Whether to start with a fresh context (default: False).
                If False, inherits tags from parent context.
                If True, starts with no tags.
-        capturing: Whether to capture exceptions raised within the context (default: True).
+        capture_exceptions: Whether to capture exceptions raised within the context (default: True).
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
 
@@ -52,7 +52,7 @@ def new_context(fresh=False, capturing=True):
     try:
         yield
     except Exception as e:
-        if capturing:
+        if capture_exceptions:
             capture_exception(e)
         raise
     finally:
@@ -92,14 +92,14 @@ def clear_tags() -> None:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(fresh=False, capturing=True):
+def scoped(fresh=False, capture_exceptions=True):
     """
     Decorator that creates a new context for the function. Simply wraps
     the function in a with posthog.new_context(): block.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capturing: Whether to capture and track exceptions with posthog error tracking (default: True)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
 
     Example:
         @posthog.scoped()
@@ -119,7 +119,7 @@ def scoped(fresh=False, capturing=True):
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            with new_context(fresh=fresh, capturing=capturing):
+            with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
                 return func(*args, **kwargs)
 
         return cast(F, wrapper)
