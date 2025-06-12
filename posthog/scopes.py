@@ -12,31 +12,34 @@ def _get_current_context() -> Dict[str, Any]:
 
 
 @contextmanager
-def new_context(fresh=False):
+def new_context(fresh=False, capture_exceptions=True):
     """
-     Create a new context scope that will be active for the duration of the with block.
-     Any tags set within this scope will be isolated to this context. Any exceptions raised
+    Create a new context scope that will be active for the duration of the with block.
+    Any tags set within this scope will be isolated to this context. Any exceptions raised
     or events captured within the context will be tagged with the context tags.
 
-     Args:
-         fresh: Whether to start with a fresh context (default: False).
-                If False, inherits tags from parent context.
-                If True, starts with no tags.
+    Args:
+        fresh: Whether to start with a fresh context (default: False).
+               If False, inherits tags from parent context.
+               If True, starts with no tags.
+        capture_exceptions: Whether to capture exceptions raised within the context (default: True).
+               If True, captures exceptions and tags them with the context tags before propagating them.
+               If False, exceptions will propagate without being tagged or captured.
 
-     Examples:
-         # Inherit parent context tags
-         with posthog.new_context():
-             posthog.tag("request_id", "123")
-             # Both this event and the exception will be tagged with the context tags
-             posthog.capture("event_name", {"property": "value"})
-             raise ValueError("Something went wrong")
+    Examples:
+        # Inherit parent context tags
+        with posthog.new_context():
+            posthog.tag("request_id", "123")
+            # Both this event and the exception will be tagged with the context tags
+            posthog.capture("event_name", {"property": "value"})
+            raise ValueError("Something went wrong")
 
-         # Start with fresh context (no inherited tags)
-         with posthog.new_context(fresh=True):
-             posthog.tag("request_id", "123")
-             # Both this event and the exception will be tagged with the context tags
-             posthog.capture("event_name", {"property": "value"})
-             raise ValueError("Something went wrong")
+        # Start with fresh context (no inherited tags)
+        with posthog.new_context(fresh=True):
+            posthog.tag("request_id", "123")
+            # Both this event and the exception will be tagged with the context tags
+            posthog.capture("event_name", {"property": "value"})
+            raise ValueError("Something went wrong")
 
     """
     from posthog import capture_exception
@@ -49,7 +52,8 @@ def new_context(fresh=False):
     try:
         yield
     except Exception as e:
-        capture_exception(e)
+        if capture_exceptions:
+            capture_exception(e)
         raise
     finally:
         _context_stack.reset(token)
@@ -88,13 +92,14 @@ def clear_tags() -> None:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(fresh=False):
+def scoped(fresh=False, capture_exceptions=True):
     """
     Decorator that creates a new context for the function. Simply wraps
     the function in a with posthog.new_context(): block.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
 
     Example:
         @posthog.scoped()
@@ -114,7 +119,7 @@ def scoped(fresh=False):
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            with new_context(fresh=fresh):
+            with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
                 return func(*args, **kwargs)
 
         return cast(F, wrapper)
