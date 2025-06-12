@@ -1565,6 +1565,7 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
                 usage_metadata={
                     "input_tokens": 200,
                     "output_tokens": 30,
+                    "total_tokens": 1030,
                     "cache_read_input_tokens": 800,  # Anthropic cache read
                 },
             )
@@ -1711,7 +1712,9 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
 def test_openai_reasoning_tokens(mock_client):
-    model = ChatOpenAI(api_key=OPENAI_API_KEY, model="o4-mini", max_tokens=10)
+    model = ChatOpenAI(
+        api_key=OPENAI_API_KEY, model="o4-mini", max_completion_tokens=10
+    )
     cb = CallbackHandler(
         mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id"
     )
