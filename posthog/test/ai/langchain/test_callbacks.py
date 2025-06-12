@@ -1378,11 +1378,11 @@ def test_langgraph_agent(mock_client):
     )
     graph.invoke(inputs, config={"callbacks": [cb]})
     calls = [call[1] for call in mock_client.capture.call_args_list]
-    assert len(calls) == 21
+    assert len(calls) == 15
     for call in calls:
         assert call["properties"]["$ai_trace_id"] == "test-trace-id"
     assert len([call for call in calls if call["event"] == "$ai_generation"]) == 2
-    assert len([call for call in calls if call["event"] == "$ai_span"]) == 18
+    assert len([call for call in calls if call["event"] == "$ai_span"]) == 12
     assert len([call for call in calls if call["event"] == "$ai_trace"]) == 1
 
 
@@ -1435,11 +1435,13 @@ def test_span_set_parent_ids_for_third_level_run(mock_client, trace_id):
 
     assert mock_client.capture.call_count == 3
 
-    span2, span1, trace = [
-        call[1]["properties"] for call in mock_client.capture.call_args_list
-    ]
-    assert span2["$ai_parent_id"] == span1["$ai_span_id"]
-    assert span1["$ai_parent_id"] == trace["$ai_trace_id"]
+    calls = mock_client.capture.call_args_list
+    span_props_2 = calls[0][1]["properties"]
+    span_props_1 = calls[1][1]["properties"]
+    trace_props = calls[2][1]["properties"]
+
+    assert span_props_2["$ai_parent_id"] == span_props_1["$ai_span_id"]
+    assert span_props_1["$ai_parent_id"] == trace_props["$ai_trace_id"]
 
 
 def test_captures_error_with_details_in_span(mock_client):
@@ -1478,3 +1480,243 @@ def test_captures_error_without_details_in_span(mock_client):
         == "ValueError"
     )
     assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
+
+
+def test_openai_reasoning_tokens_o1_mini(mock_client):
+    """Test that OpenAI reasoning tokens (o1-mini) are captured correctly."""
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Think step by step about this problem")]
+    )
+
+    # Mock response with reasoning tokens in output_token_details
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Let me think through this step by step...",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 25,
+                    "total_tokens": 35,
+                    "output_token_details": {"reasoning": 15},  # 15 reasoning tokens
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Let me think through this step by step..."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_props["$ai_input_tokens"] == 10
+    assert generation_props["$ai_output_tokens"] == 25
+    assert generation_props["$ai_reasoning_tokens"] == 15
+
+
+def test_anthropic_cache_write_and_read_tokens(mock_client):
+    """Test that Anthropic cache creation and read tokens are captured correctly."""
+    prompt = ChatPromptTemplate.from_messages([("user", "Analyze this large document")])
+
+    # First call with cache creation
+    model_write = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="I've analyzed the document and cached the context.",
+                usage_metadata={
+                    "total_tokens": 1050,
+                    "input_tokens": 1000,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 800,  # Anthropic cache write
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model_write
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "I've analyzed the document and cached the context."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_props["$ai_input_tokens"] == 1000
+    assert generation_props["$ai_output_tokens"] == 50
+    assert generation_props["$ai_cache_creation_input_tokens"] == 800
+    assert generation_props["$ai_cache_read_input_tokens"] is None
+
+    # Reset mock for second call
+    mock_client.reset_mock()
+
+    # Second call with cache read
+    model_read = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Using cached analysis to provide quick response.",
+                usage_metadata={
+                    "input_tokens": 200,
+                    "output_tokens": 30,
+                    "cache_read_input_tokens": 800,  # Anthropic cache read
+                },
+            )
+        ]
+    )
+
+    chain = prompt | model_read
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Using cached analysis to provide quick response."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_props["$ai_input_tokens"] == 200
+    assert generation_props["$ai_output_tokens"] == 30
+    assert generation_props["$ai_cache_creation_input_tokens"] is None
+    assert generation_props["$ai_cache_read_input_tokens"] == 800
+
+
+def test_openai_cache_read_tokens(mock_client):
+    """Test that OpenAI cache read tokens are captured correctly."""
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Use the cached prompt for this request")]
+    )
+
+    # Mock response with cache read tokens in input_token_details
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response using cached prompt context.",
+                usage_metadata={
+                    "input_tokens": 150,
+                    "output_tokens": 40,
+                    "total_tokens": 190,
+                    "input_token_details": {
+                        "cache_read": 100,  # 100 tokens read from cache
+                        "cache_creation": 0,
+                    },
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response using cached prompt context."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_props["$ai_input_tokens"] == 150
+    assert generation_props["$ai_output_tokens"] == 40
+    assert generation_props["$ai_cache_read_input_tokens"] == 100
+    assert generation_props["$ai_cache_creation_input_tokens"] == 0
+
+
+def test_openai_cache_creation_tokens(mock_client):
+    """Test that OpenAI cache creation tokens are captured correctly."""
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Create a cache for this large prompt context")]
+    )
+
+    # Mock response with cache creation tokens in input_token_details
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Created cache for the prompt context.",
+                usage_metadata={
+                    "input_tokens": 2000,
+                    "output_tokens": 25,
+                    "total_tokens": 2025,
+                    "input_token_details": {
+                        "cache_creation": 1500,  # 1500 tokens written to cache
+                        "cache_read": 0,
+                    },
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Created cache for the prompt context."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_props["$ai_input_tokens"] == 2000
+    assert generation_props["$ai_output_tokens"] == 25
+    assert generation_props["$ai_cache_creation_input_tokens"] == 1500
+    assert generation_props["$ai_cache_read_input_tokens"] == 0
+
+
+def test_combined_reasoning_and_cache_tokens(mock_client):
+    """Test that both reasoning tokens and cache tokens can be captured together."""
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Think through this cached problem")]
+    )
+
+    # Mock response with both reasoning and cache tokens
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Let me reason through this using cached context...",
+                usage_metadata={
+                    "input_tokens": 500,
+                    "output_tokens": 100,
+                    "total_tokens": 600,
+                    "input_token_details": {"cache_read": 300, "cache_creation": 0},
+                    "output_token_details": {"reasoning": 60},  # 60 reasoning tokens
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Let me reason through this using cached context..."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    assert generation_props["$ai_input_tokens"] == 500
+    assert generation_props["$ai_output_tokens"] == 100
+    assert generation_props["$ai_cache_read_input_tokens"] == 300
+    assert generation_props["$ai_cache_creation_input_tokens"] == 0
+    assert generation_props["$ai_reasoning_tokens"] == 60
+
+
+@pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
+def test_openai_reasoning_tokens(mock_client):
+    model = ChatOpenAI(api_key=OPENAI_API_KEY, model="o4-mini", max_tokens=10)
+    cb = CallbackHandler(
+        mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id"
+    )
+    model.invoke("what is the weather in sf", config={"callbacks": [cb]})
+    call = mock_client.capture.call_args_list[0][1]
+    assert call["properties"]["$ai_reasoning_tokens"] is not None
+    assert call["properties"]["$ai_input_tokens"] is not None
+    assert call["properties"]["$ai_output_tokens"] is not None
