@@ -19,6 +19,8 @@ except ImportError:
     # Python 3.10 and below
     BaseExceptionGroup = None  # type: ignore
 
+from posthog.synthetic_exception import SyntheticException
+
 
 DEFAULT_MAX_VALUE_LENGTH = 1024
 
@@ -797,6 +799,10 @@ def exc_info_from_error(error):
     # type: (Union[BaseException, ExcInfo]) -> ExcInfo
     if isinstance(error, tuple) and len(error) == 3:
         exc_type, exc_value, tb = error
+    elif isinstance(error, SyntheticException):
+        exc_type = error.exc_type
+        exc_value = error.exc_value
+        tb = error.exc_traceback
     elif isinstance(error, BaseException):
         tb = getattr(error, "__traceback__", None)
         if tb is not None:
