@@ -14,7 +14,6 @@ from typing import (
     List,
     Optional,
     Sequence,
-    Tuple,
     Union,
     cast,
 )
@@ -569,9 +568,14 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_is_error"] = True
         else:
             # Add usage
-            input_tokens, output_tokens = _parse_usage(output)
-            event_properties["$ai_input_tokens"] = input_tokens
-            event_properties["$ai_output_tokens"] = output_tokens
+            usage = _parse_usage(output)
+            event_properties["$ai_input_tokens"] = usage.input_tokens
+            event_properties["$ai_output_tokens"] = usage.output_tokens
+            event_properties["$ai_cache_creation_input_tokens"] = (
+                usage.cache_write_tokens
+            )
+            event_properties["$ai_cache_read_input_tokens"] = usage.cache_read_tokens
+            event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
 
             # Generation results
             generation_result = output.generations[-1]
@@ -647,9 +651,18 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
     return message_dict
 
 
+@dataclass
+class ModelUsage:
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
+    cache_write_tokens: Optional[int]
+    cache_read_tokens: Optional[int]
+    reasoning_tokens: Optional[int]
+
+
 def _parse_usage_model(
-    usage: Union[BaseModel, Dict],
-) -> Tuple[Union[int, None], Union[int, None]]:
+    usage: Union[BaseModel, dict],
+) -> ModelUsage:
     if isinstance(usage, BaseModel):
         usage = usage.__dict__
 
@@ -657,15 +670,23 @@ def _parse_usage_model(
         # https://pypi.org/project/langchain-anthropic/ (works also for Bedrock-Anthropic)
         ("input_tokens", "input"),
         ("output_tokens", "output"),
+        ("cache_creation_input_tokens", "cache_write"),
+        ("cache_read_input_tokens", "cache_read"),
         # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/get-token-count
         ("prompt_token_count", "input"),
         ("candidates_token_count", "output"),
+        ("cached_content_token_count", "cache_read"),
+        ("thoughts_token_count", "reasoning"),
         # Bedrock: https://docs.aws.amazon.com/bedrock/latest/userguide/monitoring-cw.html#runtime-cloudwatch-metrics
         ("inputTokenCount", "input"),
         ("outputTokenCount", "output"),
+        ("cacheCreationInputTokenCount", "cache_write"),
+        ("cacheReadInputTokenCount", "cache_read"),
         # Bedrock Anthropic
         ("prompt_tokens", "input"),
         ("completion_tokens", "output"),
+        ("cache_creation_input_tokens", "cache_write"),
+        ("cache_read_input_tokens", "cache_read"),
         # langchain-ibm https://pypi.org/project/langchain-ibm/
         ("input_token_count", "input"),
         ("generated_token_count", "output"),
@@ -683,13 +704,45 @@ def _parse_usage_model(
 
             parsed_usage[type_key] = final_count
 
-    return parsed_usage.get("input"), parsed_usage.get("output")
+    # Caching (OpenAI & langchain 0.3.9+)
+    if "input_token_details" in usage and isinstance(
+        usage["input_token_details"], dict
+    ):
+        parsed_usage["cache_write"] = usage["input_token_details"].get("cache_creation")
+        parsed_usage["cache_read"] = usage["input_token_details"].get("cache_read")
+
+    # Reasoning (OpenAI & langchain 0.3.9+)
+    if "output_token_details" in usage and isinstance(
+        usage["output_token_details"], dict
+    ):
+        parsed_usage["reasoning"] = usage["output_token_details"].get("reasoning")
+
+    field_mapping = {
+        "input": "input_tokens",
+        "output": "output_tokens",
+        "cache_write": "cache_write_tokens",
+        "cache_read": "cache_read_tokens",
+        "reasoning": "reasoning_tokens",
+    }
+    return ModelUsage(
+        **{
+            dataclass_key: parsed_usage.get(mapped_key) or 0
+            for mapped_key, dataclass_key in field_mapping.items()
+        },
+    )
 
 
-def _parse_usage(response: LLMResult):
+def _parse_usage(response: LLMResult) -> ModelUsage:
     # langchain-anthropic uses the usage field
     llm_usage_keys = ["token_usage", "usage"]
-    llm_usage: Tuple[Union[int, None], Union[int, None]] = (None, None)
+    llm_usage: ModelUsage = ModelUsage(
+        input_tokens=None,
+        output_tokens=None,
+        cache_write_tokens=None,
+        cache_read_tokens=None,
+        reasoning_tokens=None,
+    )
+
     if response.llm_output is not None:
         for key in llm_usage_keys:
             if response.llm_output.get(key):

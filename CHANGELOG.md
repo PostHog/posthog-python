@@ -1,3 +1,7 @@
+## 4.9.0 - 2025-06-13
+
+- feat(ai): track reasoning and cache tokens in the LangChain callback
+
 ## 4.8.0 - 2025-06-10
 
 - fix: export scoped, rather than tracked, decorator
