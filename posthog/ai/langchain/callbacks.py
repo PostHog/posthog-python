@@ -717,12 +717,18 @@ def _parse_usage_model(
     ):
         parsed_usage["reasoning"] = usage["output_token_details"].get("reasoning")
 
+    field_mapping = {
+        "input": "input_tokens",
+        "output": "output_tokens",
+        "cache_write": "cache_write_tokens",
+        "cache_read": "cache_read_tokens",
+        "reasoning": "reasoning_tokens",
+    }
     return ModelUsage(
-        input_tokens=parsed_usage.get("input"),
-        output_tokens=parsed_usage.get("output"),
-        cache_write_tokens=parsed_usage.get("cache_write"),
-        cache_read_tokens=parsed_usage.get("cache_read"),
-        reasoning_tokens=parsed_usage.get("reasoning"),
+        **{
+            dataclass_key: parsed_usage.get(mapped_key) or 0
+            for mapped_key, dataclass_key in field_mapping.items()
+        },
     )
 
 

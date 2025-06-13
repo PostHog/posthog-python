@@ -1482,8 +1482,8 @@ def test_captures_error_without_details_in_span(mock_client):
     assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
 
 
-def test_openai_reasoning_tokens_o1_mini(mock_client):
-    """Test that OpenAI reasoning tokens (o1-mini) are captured correctly."""
+def test_openai_reasoning_tokens(mock_client):
+    """Test that OpenAI reasoning tokens are captured correctly."""
     prompt = ChatPromptTemplate.from_messages(
         [("user", "Think step by step about this problem")]
     )
@@ -1552,7 +1552,8 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 1000
     assert generation_props["$ai_output_tokens"] == 50
     assert generation_props["$ai_cache_creation_input_tokens"] == 800
-    assert generation_props["$ai_cache_read_input_tokens"] is None
+    assert generation_props["$ai_cache_read_input_tokens"] == 0
+    assert generation_props["$ai_reasoning_tokens"] == 0
 
     # Reset mock for second call
     mock_client.reset_mock()
@@ -1584,8 +1585,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     assert generation_args["event"] == "$ai_generation"
     assert generation_props["$ai_input_tokens"] == 200
     assert generation_props["$ai_output_tokens"] == 30
-    assert generation_props["$ai_cache_creation_input_tokens"] is None
+    assert generation_props["$ai_cache_creation_input_tokens"] == 0
     assert generation_props["$ai_cache_read_input_tokens"] == 800
+    assert generation_props["$ai_reasoning_tokens"] == 0
 
 
 def test_openai_cache_read_tokens(mock_client):
@@ -1627,6 +1629,7 @@ def test_openai_cache_read_tokens(mock_client):
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
+    assert generation_props["$ai_reasoning_tokens"] == 0
 
 
 def test_openai_cache_creation_tokens(mock_client):
@@ -1668,6 +1671,7 @@ def test_openai_cache_creation_tokens(mock_client):
     assert generation_props["$ai_output_tokens"] == 25
     assert generation_props["$ai_cache_creation_input_tokens"] == 1500
     assert generation_props["$ai_cache_read_input_tokens"] == 0
+    assert generation_props["$ai_reasoning_tokens"] == 0
 
 
 def test_combined_reasoning_and_cache_tokens(mock_client):
