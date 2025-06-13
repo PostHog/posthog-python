@@ -708,7 +708,7 @@ class Client(object):
             )
 
             # Mark the exception as captured to prevent duplicate captures
-            if exception is not None:
+            if exception is not None and isinstance(exception, BaseException):
                 setattr(exception, "__posthog_exception_captured", True)
 
             return res

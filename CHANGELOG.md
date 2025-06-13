@@ -1,3 +1,7 @@
+## 4.10.0 - 2025-06-13
+
+- fix: no longer fail in autocapture.
+
 ## 4.9.0 - 2025-06-13
 
 - feat(ai): track reasoning and cache tokens in the LangChain callback
