@@ -1,3 +1,7 @@
+## 5.0.0
+
+- fix: removed deprecated sentry integration
+
 ## 4.10.0 - 2025-06-13
 
 - fix: no longer fail in autocapture.

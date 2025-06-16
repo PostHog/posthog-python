@@ -35,8 +35,4 @@ release_analytics:
 e2e_test:
 	.buildscripts/e2e.sh
 
-django_example:
-	python -m pip install -e ".[sentry]"
-	cd sentry_django_example && python manage.py runserver 8080
-
 .PHONY: test lint release e2e_test
