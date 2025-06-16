@@ -75,7 +75,7 @@ if TYPE_CHECKING:
             # "monitor_config": Mapping[str, object],
             "monitor_slug": Optional[str],
             "platform": Literal["python"],
-            "profile": object,  # Should be sentry_sdk.profiler.Profile, but we can't import that here due to circular imports
+            "profile": object,
             "release": str,
             "request": Dict[str, object],
             # "sdk": Mapping[str, object],
@@ -136,9 +136,6 @@ def event_hint_with_exc_info(exc_info=None):
 class AnnotatedValue:
     """
     Meta information for a data field in the event payload.
-    This is to tell Relay that we have tampered with the fields value.
-    See:
-    https://github.com/getsentry/relay/blob/be12cd49a0f06ea932ed9b9f93a655de5d6ad6d1/relay-general/src/types/meta.rs#L407-L423
     """
 
     __slots__ = ("value", "metadata")
@@ -400,12 +397,7 @@ def serialize_frame(
         )
 
     if include_local_variables:
-        # TODO(nk): Sort out this current invalid import
-        # from sentry_sdk.serializer import serialize
-
-        # rv["vars"] = serialize(
-        #     dict(frame.f_locals), is_vars=True, custom_repr=custom_repr
-        # )
+        # TODO - we don't support local variables, yet
         pass
 
     return rv
@@ -464,10 +456,7 @@ def single_exception_from_error_tuple(
 ):
     # type: (...) -> Dict[str, Any]
     """
-    Creates a dict that goes into the events `exception.values` list and is ingestible by Sentry.
-
-    See the Exception Interface documentation for more details:
-    https://develop.sentry.dev/sdk/event-payloads/exception/
+    Creates a dict that goes into the events `exception.values` list
     """
     exception_value = {}  # type: Dict[str, Any]
     exception_value["mechanism"] = (
@@ -591,9 +580,6 @@ def exceptions_from_error(
     """
     Creates the list of exceptions.
     This can include chained exceptions and exceptions from an ExceptionGroup.
-
-    See the Exception Interface documentation for more details:
-    https://develop.sentry.dev/sdk/event-payloads/exception/
     """
 
     parent = single_exception_from_error_tuple(

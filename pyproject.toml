@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "hey@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
-license = {text = "MIT"}
+license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
@@ -36,7 +36,6 @@ Homepage = "https://github.com/posthog/posthog-python"
 Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
-sentry = ["sentry-sdk", "django"]
 langchain = ["langchain>=0.2.0"]
 dev = [
     "django-stubs",
@@ -52,7 +51,7 @@ dev = [
     "pydantic",
     "ruff",
     "setuptools",
-    "packaging", 
+    "packaging",
     "wheel",
     "twine",
     "tomli",
@@ -87,7 +86,6 @@ packages = [
     "posthog.ai.anthropic",
     "posthog.ai.gemini",
     "posthog.test",
-    "posthog.sentry",
     "posthog.exception_integrations",
 ]
 
