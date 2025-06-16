@@ -30,11 +30,8 @@ posthog/__init__.py:0: note: "identify" defined here
 simulator.py:0: error: Unexpected keyword argument "traits" for "identify"  [call-arg]
 posthog/__init__.py:0: note: "identify" defined here
 example.py:0: error: Statement is unreachable  [unreachable]
-posthog/sentry/posthog_integration.py:0: error: Statement is unreachable  [unreachable]
 posthog/ai/utils.py:0: error: Need type annotation for "output" (hint: "output: list[<type>] = ...")  [var-annotated]
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
-sentry_django_example/sentry_django_example/settings.py:0: error: Need type annotation for "ALLOWED_HOSTS" (hint: "ALLOWED_HOSTS: list[<type>] = ...")  [var-annotated]
-sentry_django_example/sentry_django_example/settings.py:0: error: Incompatible types in assignment (expression has type "str", variable has type "None")  [assignment]
