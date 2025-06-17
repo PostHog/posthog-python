@@ -10,8 +10,8 @@ class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
     This middleware wraps all calls with a posthog context. It attempts to extract the following from the request headers:
-    - Session ID as $session_id, (extracted from `X-POSTHOG-SESSION-ID`)
-    - Distinct ID as $distinct_id, (extracted from `X-POSTHOG-DISTINCT-ID`)
+    - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
+    - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`)
     - Request URL as $current_url
     - Request Method as $request_method
 
@@ -26,7 +26,9 @@ class PosthogContextMiddleware:
     You can use the `POSTHOG_MW_TAG_MAP` function to remove any default tags you don't want to capture, or override them with your own values.
 
     Context tags are automatically included as properties on all events captured within a context, including exceptions.
-    See the context documentation for more information.
+    See the context documentation for more information. The extracted distinct ID and session ID, if found, are used to
+    associate all events captured in the middleware context with the same distinct ID and session as currently active on the
+    frontend. See the documentation for `set_context_session` and `identify_context` for more details.
     """
 
     def __init__(self, get_response):
@@ -79,12 +81,12 @@ class PosthogContextMiddleware:
         # Extract session ID from X-POSTHOG-SESSION-ID header
         session_id = request.headers.get("X-POSTHOG-SESSION-ID")
         if session_id:
-            tags["$session_id"] = session_id
+            scopes.set_context_session(session_id)
 
         # Extract distinct ID from X-POSTHOG-DISTINCT-ID header
         distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID")
         if distinct_id:
-            tags["$distinct_id"] = distinct_id
+            scopes.identify_context(distinct_id)
 
         # Extract current URL
         absolute_url = request.build_absolute_uri()
