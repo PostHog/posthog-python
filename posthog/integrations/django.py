@@ -25,7 +25,8 @@ class PosthogContextMiddleware:
 
     You can use the `POSTHOG_MW_TAG_MAP` function to remove any default tags you don't want to capture, or override them with your own values.
 
-    Context tags are automatically included in all events captured within a context, including exceptions. See the context documentation for more information.
+    Context tags are automatically included as properties on all events captured within a context, including exceptions.
+    See the context documentation for more information.
     """
 
     def __init__(self, get_response):
