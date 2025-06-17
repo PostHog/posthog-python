@@ -53,7 +53,7 @@ class TestScopes(unittest.TestCase):
                 self.assertNotIn("outer", get_tags())
 
             with new_context(fresh=False):
-                # Inner context should start empty
+                # Inner context should inherit outer tag
                 assert get_tags() == {"outer": "value"}
 
             # After exiting context, inner tag should be gone

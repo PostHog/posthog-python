@@ -155,7 +155,7 @@ def clear_tags() -> None:
 def identify_context(distinct_id: str) -> None:
     """
     Identify the current context with a distinct ID, associating all events captured in this or
-    child contexts with the given distinct ID (unless identify_scope is called again). This is overridden by
+    child contexts with the given distinct ID (unless identify_context is called again). This is overridden by
     distinct id's passed directly to posthog.capture and related methods (identify, set etc).
 
     Args:
@@ -169,7 +169,7 @@ def identify_context(distinct_id: str) -> None:
 def set_context_session(session_id: str) -> None:
     """
     Set the session ID for the current context, associating all events captured in this or
-    child contexts with the given session ID (unless set_scope_session is called again).
+    child contexts with the given session ID (unless set_context_session is called again).
 
     Args:
         session_id: The session ID to associate with the current context and its children. See https://posthog.com/docs/data/sessions
