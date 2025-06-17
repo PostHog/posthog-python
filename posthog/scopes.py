@@ -1,12 +1,12 @@
 import contextvars
 from contextlib import contextmanager
-from typing import Self, Optional, Any, Callable, Dict, TypeVar, cast
+from typing import Optional, Any, Callable, Dict, TypeVar, cast
 
 
 class ContextScope:
     def __init__(
         self,
-        parent: Optional[Self],
+        parent=None,
         fresh: bool = False,
         capture_exceptions: bool = True,
     ):
@@ -26,7 +26,7 @@ class ContextScope:
     def add_tag(self, key: str, value: Any):
         self.tags[key] = value
 
-    def get_parent(self) -> Optional[Self]:
+    def get_parent(self):
         return self.parent
 
     def get_session_id(self) -> Optional[str]:
