@@ -62,7 +62,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         self.assertEqual(tags["$session_id"], "session-123")
         self.assertEqual(tags["$distinct_id"], "user-456")
         self.assertEqual(tags["$current_url"], "https://example.com/api/test")
-        self.assertEqual(tags["request_method"], "POST")
+        self.assertEqual(tags["$request_method"], "POST")
 
     def test_extract_tags_missing_headers(self):
         """Test tag extraction when PostHog headers are missing"""
@@ -74,7 +74,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         self.assertNotIn("$session_id", tags)
         self.assertNotIn("$distinct_id", tags)
         self.assertEqual(tags["$current_url"], "http://example.com/home")
-        self.assertEqual(tags["request_method"], "GET")
+        self.assertEqual(tags["$request_method"], "GET")
 
     def test_extract_tags_partial_headers(self):
         """Test tag extraction with only some PostHog headers present"""
@@ -87,7 +87,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
         self.assertEqual(tags["$session_id"], "session-only")
         self.assertNotIn("$distinct_id", tags)
-        self.assertEqual(tags["request_method"], "PUT")
+        self.assertEqual(tags["$request_method"], "PUT")
 
     def test_extract_tags_with_extra_tags(self):
         """Test tag extraction with extra_tags function"""
@@ -148,7 +148,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         self.assertEqual(tags["$distinct_id"], "user-123")
         self.assertEqual(tags["extra"], "value")
         self.assertEqual(tags["modified"], True)
-        self.assertEqual(tags["request_method"], "DELETE")
+        self.assertEqual(tags["$request_method"], "DELETE")
 
     def test_extract_tags_extra_tags_returns_none(self):
         """Test tag extraction when extra_tags returns None"""
@@ -161,7 +161,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
         tags = middleware.extract_tags(request)
 
-        self.assertEqual(tags["request_method"], "GET")
+        self.assertEqual(tags["$request_method"], "GET")
         # Should not crash when extra_tags returns None
 
     def test_extract_tags_extra_tags_returns_empty_dict(self):
@@ -175,7 +175,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
         tags = middleware.extract_tags(request)
 
-        self.assertEqual(tags["request_method"], "PATCH")
+        self.assertEqual(tags["$request_method"], "PATCH")
 
 
 if __name__ == "__main__":
