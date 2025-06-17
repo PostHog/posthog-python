@@ -779,6 +779,31 @@ def set_in_app_in_frames(frames, in_app_exclude, in_app_include, project_root=No
     return frames
 
 
+def exception_is_already_captured(error):
+    # type: (Union[BaseException, ExcInfo]) -> bool
+    if isinstance(error, BaseException):
+        return hasattr(error, "__posthog_exception_captured")
+    # Autocaptured exceptions are passed as a tuple from our system hooks,
+    # the second item is the exception value (the first is the exception type)
+    elif isinstance(error, tuple) and len(error) > 1:
+        return error[1] is not None and hasattr(
+            error[1], "__posthog_exception_captured"
+        )
+    else:
+        return False  # type: ignore[unreachable]
+
+
+def mark_exception_as_captured(error):
+    # type: (Union[BaseException, ExcInfo]) -> None
+    if isinstance(error, BaseException):
+        setattr(error, "__posthog_exception_captured", True)
+    # Autocaptured exceptions are passed as a tuple from our system hooks,
+    # the second item is the exception value (the first is the exception type)
+    elif isinstance(error, tuple) and len(error) > 1:
+        if error[1] is not None:
+            setattr(error[1], "__posthog_exception_captured", True)
+
+
 def exc_info_from_error(error):
     # type: (Union[BaseException, ExcInfo]) -> ExcInfo
     if isinstance(error, tuple) and len(error) == 3:
