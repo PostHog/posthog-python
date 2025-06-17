@@ -9,21 +9,23 @@ if TYPE_CHECKING:
 class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
-    This middleware wraps all calls with a posthog scope. It attempts to extract the following from the request headers:
+    This middleware wraps all calls with a posthog context. It attempts to extract the following from the request headers:
     - Session ID as $session_id, (extracted from `X-POSTHOG-SESSION-ID`)
     - Distinct ID as $distinct_id, (extracted from `X-POSTHOG-DISTINCT-ID`)
     - Request URL as $current_url
-    - Request Method as request_method
+    - Request Method as $request_method
 
-    The scope will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
+    The context will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
     `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings.
 
     The middleware behaviour is customisable through 3 additional functions:
-    - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the scope.
+    - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
     - `POSTHOG_MW_REQUEST_FILTER`, which is a Callable[[HttpRequest], bool] expected to return `False` if the request should not be tracked.
-    - `POSTHOG_MW_TAG_MAP`, which is a Callable[[Dict[str, Any]], Dict[str, Any]], which you can use to modify the tags before they're added to the scope.
+    - `POSTHOG_MW_TAG_MAP`, which is a Callable[[Dict[str, Any]], Dict[str, Any]], which you can use to modify the tags before they're added to the context.
 
     You can use the `POSTHOG_MW_TAG_MAP` function to remove any default tags you don't want to capture, or override them with your own values.
+
+    Context tags are automatically included in all events captured within a context, including exceptions. See the context documentation for more information.
     """
 
     def __init__(self, get_response):
