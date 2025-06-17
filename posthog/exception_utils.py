@@ -787,8 +787,8 @@ def exception_is_already_captured(error):
         return error[2] is not None and hasattr(
             error[2], "__posthog_exception_captured"
         )
-    else:  # type: ignore[unreachable]
-        return False
+    else:
+        return False  # type: ignore[unreachable]
 
 
 def mark_exception_as_captured(error):
