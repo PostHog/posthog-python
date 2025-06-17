@@ -36,30 +36,31 @@ class PosthogContextMiddleware:
             settings.POSTHOG_MW_EXTRA_TAGS
         ):
             self.extra_tags = cast(
-                "Callable[[HttpRequest], Dict[str, Any]]",
+                "Optional[Callable[[HttpRequest], Dict[str, Any]]]",
                 settings.POSTHOG_MW_EXTRA_TAGS,
             )
         else:
-            self.extra_tags = None  # type: Optional[Callable[[HttpRequest], Dict[str, Any]]]
+            self.extra_tags = None
 
         if hasattr(settings, "POSTHOG_MW_REQUEST_FILTER") and callable(
             settings.POSTHOG_MW_REQUEST_FILTER
         ):
             self.request_filter = cast(
-                "Callable[[HttpRequest], bool]", settings.POSTHOG_MW_REQUEST_FILTER
+                "Optional[Callable[[HttpRequest], bool]]",
+                settings.POSTHOG_MW_REQUEST_FILTER,
             )
         else:
-            self.request_filter = None  # type: Optional[Callable[[HttpRequest], bool]]
+            self.request_filter = None
 
         if hasattr(settings, "POSTHOG_MW_TAG_MAP") and callable(
             settings.POSTHOG_MW_TAG_MAP
         ):
             self.tag_map = cast(
-                "Callable[[Dict[str, Any]], Dict[str, Any]]",
+                "Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]",
                 settings.POSTHOG_MW_TAG_MAP,
             )
         else:
-            self.tag_map = None  # type: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]
+            self.tag_map = None
 
         if hasattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS") and isinstance(
             settings.POSTHOG_MW_CAPTURE_EXCEPTIONS, bool
