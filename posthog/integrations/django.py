@@ -90,7 +90,7 @@ class PosthogContextMiddleware:
 
         # Extract request method
         if request.method:
-            tags["request_method"] = request.method
+            tags["$request_method"] = request.method
 
         # Apply extra tags if configured
         if self.extra_tags:
