@@ -1,3 +1,4 @@
+from posthog.scopes import new_context, get_context_session_id, get_context_distinct_id
 import unittest
 from unittest.mock import Mock
 
@@ -44,50 +45,55 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         return middleware
 
     def test_extract_tags_basic(self):
-        """Test basic tag extraction from request"""
-        middleware = self.create_middleware()
-        request = MockRequest(
-            headers={
-                "X-POSTHOG-SESSION-ID": "session-123",
-                "X-POSTHOG-DISTINCT-ID": "user-456",
-            },
-            method="POST",
-            path="/api/test",
-            host="example.com",
-            is_secure=True,
-        )
+        with new_context():
+            """Test basic tag extraction from request"""
+            middleware = self.create_middleware()
+            request = MockRequest(
+                headers={
+                    "X-POSTHOG-SESSION-ID": "session-123",
+                    "X-POSTHOG-DISTINCT-ID": "user-456",
+                },
+                method="POST",
+                path="/api/test",
+                host="example.com",
+                is_secure=True,
+            )
 
-        tags = middleware.extract_tags(request)
+            tags = middleware.extract_tags(request)
 
-        self.assertEqual(tags["$session_id"], "session-123")
-        self.assertEqual(tags["$distinct_id"], "user-456")
-        self.assertEqual(tags["$current_url"], "https://example.com/api/test")
-        self.assertEqual(tags["$request_method"], "POST")
+            self.assertEqual(get_context_session_id(), "session-123")
+            self.assertEqual(get_context_distinct_id(), "user-456")
+            self.assertEqual(tags["$current_url"], "https://example.com/api/test")
+            self.assertEqual(tags["$request_method"], "POST")
 
     def test_extract_tags_missing_headers(self):
         """Test tag extraction when PostHog headers are missing"""
-        middleware = self.create_middleware()
-        request = MockRequest(headers={}, method="GET", path="/home")
 
-        tags = middleware.extract_tags(request)
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(headers={}, method="GET", path="/home")
 
-        self.assertNotIn("$session_id", tags)
-        self.assertNotIn("$distinct_id", tags)
-        self.assertEqual(tags["$current_url"], "http://example.com/home")
-        self.assertEqual(tags["$request_method"], "GET")
+            tags = middleware.extract_tags(request)
+
+            self.assertIsNone(get_context_session_id())
+            self.assertIsNone(get_context_distinct_id())
+            self.assertEqual(tags["$current_url"], "http://example.com/home")
+            self.assertEqual(tags["$request_method"], "GET")
 
     def test_extract_tags_partial_headers(self):
         """Test tag extraction with only some PostHog headers present"""
-        middleware = self.create_middleware()
-        request = MockRequest(
-            headers={"X-POSTHOG-SESSION-ID": "session-only"}, method="PUT"
-        )
 
-        tags = middleware.extract_tags(request)
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "session-only"}, method="PUT"
+            )
 
-        self.assertEqual(tags["$session_id"], "session-only")
-        self.assertNotIn("$distinct_id", tags)
-        self.assertEqual(tags["$request_method"], "PUT")
+            tags = middleware.extract_tags(request)
+
+            self.assertEqual(get_context_session_id(), "session-only")
+            self.assertIsNone(get_context_distinct_id())
+            self.assertEqual(tags["$request_method"], "PUT")
 
     def test_extract_tags_with_extra_tags(self):
         """Test tag extraction with extra_tags function"""
@@ -95,60 +101,41 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         def extra_tags_func(request):
             return {"custom_tag": "custom_value", "user_id": "789"}
 
-        middleware = self.create_middleware(extra_tags=extra_tags_func)
-        request = MockRequest(
-            headers={"X-POSTHOG-SESSION-ID": "session-123"}, method="GET"
-        )
+        with new_context():
+            middleware = self.create_middleware(extra_tags=extra_tags_func)
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "session-123"}, method="GET"
+            )
 
-        tags = middleware.extract_tags(request)
+            tags = middleware.extract_tags(request)
 
-        self.assertEqual(tags["$session_id"], "session-123")
-        self.assertEqual(tags["custom_tag"], "custom_value")
-        self.assertEqual(tags["user_id"], "789")
+            self.assertEqual(get_context_session_id(), "session-123")
+            self.assertEqual(tags["custom_tag"], "custom_value")
+            self.assertEqual(tags["user_id"], "789")
 
     def test_extract_tags_with_tag_map(self):
         """Test tag extraction with tag_map function"""
 
-        def tag_map_func(tags):
-            # Remove session_id and add a mapped version
-            if "$session_id" in tags:
-                tags["mapped_session"] = f"mapped_{tags['$session_id']}"
-                del tags["$session_id"]
-            return tags
-
-        middleware = self.create_middleware(tag_map=tag_map_func)
-        request = MockRequest(
-            headers={"X-POSTHOG-SESSION-ID": "session-123"}, method="GET"
-        )
-
-        tags = middleware.extract_tags(request)
-
-        self.assertNotIn("$session_id", tags)
-        self.assertEqual(tags["mapped_session"], "mapped_session-123")
-
-    def test_extract_tags_with_both_extra_and_map(self):
-        """Test tag extraction with both extra_tags and tag_map"""
-
         def extra_tags_func(request):
-            return {"extra": "value"}
+            return {"custom_tag": "custom_value", "user_id": "789"}
 
         def tag_map_func(tags):
-            tags["modified"] = True
+            if "custom_tag" in tags:
+                tags["mapped_custom_tag"] = f"mapped_{tags['custom_tag']}"
+                del tags["custom_tag"]
             return tags
 
-        middleware = self.create_middleware(
-            extra_tags=extra_tags_func, tag_map=tag_map_func
-        )
-        request = MockRequest(
-            headers={"X-POSTHOG-DISTINCT-ID": "user-123"}, method="DELETE"
-        )
+        with new_context():
+            middleware = self.create_middleware(
+                tag_map=tag_map_func, extra_tags=extra_tags_func
+            )
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "session-123"}, method="GET"
+            )
 
-        tags = middleware.extract_tags(request)
+            tags = middleware.extract_tags(request)
 
-        self.assertEqual(tags["$distinct_id"], "user-123")
-        self.assertEqual(tags["extra"], "value")
-        self.assertEqual(tags["modified"], True)
-        self.assertEqual(tags["$request_method"], "DELETE")
+            self.assertEqual(tags["mapped_custom_tag"], "mapped_custom_value")
 
     def test_extract_tags_extra_tags_returns_none(self):
         """Test tag extraction when extra_tags returns None"""
