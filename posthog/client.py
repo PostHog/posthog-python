@@ -33,7 +33,11 @@ from posthog.request import (
     get,
     remote_config,
 )
-from posthog.scopes import get_tags
+from posthog.scopes import (
+    _get_current_context,
+    get_context_distinct_id,
+    get_context_session_id,
+)
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
@@ -285,9 +289,16 @@ class Client(object):
                 stacklevel=2,
             )
 
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
         properties = properties or {}
+
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
+
+        if "$session_id" not in properties and get_context_session_id():
+            properties["$session_id"] = get_context_session_id()
 
         msg = {
             "timestamp": timestamp,
@@ -358,6 +369,9 @@ class Client(object):
         """
         Get feature flags decision, using either flags() or decide() API based on rollout.
         """
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
         require("distinct_id", distinct_id, ID_TYPES)
 
         if disable_geoip is None:
@@ -406,14 +420,19 @@ class Client(object):
 
         properties = {**(properties or {}), **system_context()}
 
+        if "$session_id" not in properties and get_context_session_id():
+            properties["$session_id"] = get_context_session_id()
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
         require("event", event, string_types)
 
-        # Grab current context tags, if any exist
-        context_tags = get_tags()
-        if context_tags:
-            properties.update(context_tags)
+        current_context = _get_current_context()
+        if current_context:
+            properties.update(current_context.collect_tags())
 
         msg = {
             "properties": properties,
@@ -480,6 +499,9 @@ class Client(object):
                 stacklevel=2,
             )
 
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
         properties = properties or {}
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
@@ -509,6 +531,9 @@ class Client(object):
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
 
         properties = properties or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -581,6 +606,9 @@ class Client(object):
                 stacklevel=2,
             )
 
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
         require("previous_id", previous_id, ID_TYPES)
         require("distinct_id", distinct_id, ID_TYPES)
 
@@ -612,6 +640,9 @@ class Client(object):
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
 
         properties = properties or {}
         require("distinct_id", distinct_id, ID_TYPES)
@@ -647,6 +678,9 @@ class Client(object):
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
 
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
