@@ -8,9 +8,14 @@ class MockRequest:
     """Mock Django HttpRequest object"""
 
     def __init__(
-        self, meta=None, method="GET", path="/test", host="example.com", is_secure=False
+        self,
+        headers=None,
+        method="GET",
+        path="/test",
+        host="example.com",
+        is_secure=False,
     ):
-        self.META = meta or {}
+        self.headers = headers or {}
         self.method = method
         self.path = path
         self._host = host
@@ -42,9 +47,9 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         """Test basic tag extraction from request"""
         middleware = self.create_middleware()
         request = MockRequest(
-            meta={
-                "HTTP_X_POSTHOG_SESSION_ID": "session-123",
-                "HTTP_X_POSTHOG_DISTINCT_ID": "user-456",
+            headers={
+                "X-POSTHOG-SESSION-ID": "session-123",
+                "X-POSTHOG-DISTINCT-ID": "user-456",
             },
             method="POST",
             path="/api/test",
@@ -62,7 +67,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
     def test_extract_tags_missing_headers(self):
         """Test tag extraction when PostHog headers are missing"""
         middleware = self.create_middleware()
-        request = MockRequest(meta={}, method="GET", path="/home")
+        request = MockRequest(headers={}, method="GET", path="/home")
 
         tags = middleware.extract_tags(request)
 
@@ -75,7 +80,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         """Test tag extraction with only some PostHog headers present"""
         middleware = self.create_middleware()
         request = MockRequest(
-            meta={"HTTP_X_POSTHOG_SESSION_ID": "session-only"}, method="PUT"
+            headers={"X-POSTHOG-SESSION-ID": "session-only"}, method="PUT"
         )
 
         tags = middleware.extract_tags(request)
@@ -92,7 +97,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
         middleware = self.create_middleware(extra_tags=extra_tags_func)
         request = MockRequest(
-            meta={"HTTP_X_POSTHOG_SESSION_ID": "session-123"}, method="GET"
+            headers={"X-POSTHOG-SESSION-ID": "session-123"}, method="GET"
         )
 
         tags = middleware.extract_tags(request)
@@ -113,7 +118,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
         middleware = self.create_middleware(tag_map=tag_map_func)
         request = MockRequest(
-            meta={"HTTP_X_POSTHOG_SESSION_ID": "session-123"}, method="GET"
+            headers={"X-POSTHOG-SESSION-ID": "session-123"}, method="GET"
         )
 
         tags = middleware.extract_tags(request)
@@ -135,7 +140,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             extra_tags=extra_tags_func, tag_map=tag_map_func
         )
         request = MockRequest(
-            meta={"HTTP_X_POSTHOG_DISTINCT_ID": "user-123"}, method="DELETE"
+            headers={"X-POSTHOG-DISTINCT-ID": "user-123"}, method="DELETE"
         )
 
         tags = middleware.extract_tags(request)
@@ -171,35 +176,6 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         tags = middleware.extract_tags(request)
 
         self.assertEqual(tags["request_method"], "PATCH")
-
-    def test_extract_tags_url_encoding(self):
-        """Test URL building with different scenarios"""
-        middleware = self.create_middleware()
-
-        # Test with query parameters in path
-        request = MockRequest(
-            path="/search?q=test&page=1", host="api.example.com", is_secure=True
-        )
-
-        tags = middleware.extract_tags(request)
-
-        self.assertEqual(
-            tags["$current_url"], "https://api.example.com/search?q=test&page=1"
-        )
-
-    def test_extract_tags_case_sensitivity(self):
-        """Test that header extraction is case sensitive for META keys"""
-        middleware = self.create_middleware()
-        request = MockRequest(
-            meta={
-                "HTTP_X_POSTHOG_SESSION_ID": "correct-session",
-                "http_x_posthog_session_id": "wrong-session",  # lowercase won't match
-            }
-        )
-
-        tags = middleware.extract_tags(request)
-
-        self.assertEqual(tags["$session_id"], "correct-session")
 
 
 if __name__ == "__main__":

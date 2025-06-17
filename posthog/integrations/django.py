@@ -74,12 +74,12 @@ class PosthogContextMiddleware:
         tags = {}
 
         # Extract session ID from X-POSTHOG-SESSION-ID header
-        session_id = request.META.get("HTTP_X_POSTHOG_SESSION_ID")
+        session_id = request.headers.get("X-POSTHOG-SESSION-ID")
         if session_id:
             tags["$session_id"] = session_id
 
         # Extract distinct ID from X-POSTHOG-DISTINCT-ID header
-        distinct_id = request.META.get("HTTP_X_POSTHOG_DISTINCT_ID")
+        distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID")
         if distinct_id:
             tags["$distinct_id"] = distinct_id
 
