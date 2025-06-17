@@ -19,6 +19,8 @@ from posthog.exception_utils import (
     exc_info_from_error,
     exceptions_from_error_tuple,
     handle_in_app,
+    exception_is_already_captured,
+    mark_exception_as_captured,
 )
 from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
 from posthog.poller import Poller
@@ -652,9 +654,7 @@ class Client(object):
             properties = properties or {}
 
             # Check if this exception has already been captured
-            if exception is not None and hasattr(
-                exception, "__posthog_exception_captured"
-            ):
+            if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
                 return
 
@@ -708,8 +708,8 @@ class Client(object):
             )
 
             # Mark the exception as captured to prevent duplicate captures
-            if exception is not None and isinstance(exception, BaseException):
-                setattr(exception, "__posthog_exception_captured", True)
+            if exception is not None:
+                mark_exception_as_captured(exception)
 
             return res
         except Exception as e:
