@@ -432,7 +432,10 @@ class Client(object):
 
         current_context = _get_current_context()
         if current_context:
-            properties.update(current_context.collect_tags())
+            context_tags = current_context.collect_tags()
+            # We want explicitly passed properties to override context tags
+            context_tags.update(properties)
+            properties = context_tags
 
         msg = {
             "properties": properties,
