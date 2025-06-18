@@ -87,6 +87,7 @@ packages = [
     "posthog.ai.gemini",
     "posthog.test",
     "posthog.exception_integrations",
+    "posthog.integrations",
 ]
 
 [tool.setuptools.dynamic]
