@@ -1,4 +1,9 @@
-## 5.0.0
+# 5.1.0
+
+- feat: session and distinct ID's can now be associated with contexts, and are used as such
+- feat: django http request middleware
+
+## 5.0.0 - 2025-06-16
 
 - fix: removed deprecated sentry integration
 

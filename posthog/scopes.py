@@ -1,14 +1,66 @@
 import contextvars
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, TypeVar, cast
+from typing import Optional, Any, Callable, Dict, TypeVar, cast
 
-_context_stack: contextvars.ContextVar[list] = contextvars.ContextVar(
-    "posthog_context_stack", default=[{}]
+
+class ContextScope:
+    def __init__(
+        self,
+        parent=None,
+        fresh: bool = False,
+        capture_exceptions: bool = True,
+    ):
+        self.parent = parent
+        self.fresh = fresh
+        self.capture_exceptions = capture_exceptions
+        self.session_id: Optional[str] = None
+        self.distinct_id: Optional[str] = None
+        self.tags: Dict[str, Any] = {}
+
+    def set_session_id(self, session_id: str):
+        self.session_id = session_id
+
+    def set_distinct_id(self, distinct_id: str):
+        self.distinct_id = distinct_id
+
+    def add_tag(self, key: str, value: Any):
+        self.tags[key] = value
+
+    def get_parent(self):
+        return self.parent
+
+    def get_session_id(self) -> Optional[str]:
+        if self.session_id is not None:
+            return self.session_id
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_session_id()
+        return None
+
+    def get_distinct_id(self) -> Optional[str]:
+        if self.distinct_id is not None:
+            return self.distinct_id
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_distinct_id()
+        return None
+
+    def collect_tags(self) -> Dict[str, Any]:
+        tags = self.tags.copy()
+        if self.parent and not self.fresh:
+            # We want child tags to take precedence over parent tags,
+            # so we can't use a simple update here, instead collecting
+            # the parent tags and then updating with the child tags.
+            new_tags = self.parent.collect_tags()
+            tags.update(new_tags)
+        return tags
+
+
+_context_stack: contextvars.ContextVar[Optional[ContextScope]] = contextvars.ContextVar(
+    "posthog_context_stack", default=None
 )
 
 
-def _get_current_context() -> Dict[str, Any]:
-    return _context_stack.get()[-1]
+def _get_current_context() -> Optional[ContextScope]:
+    return _context_stack.get()
 
 
 @contextmanager
@@ -20,8 +72,8 @@ def new_context(fresh=False, capture_exceptions=True):
 
     Args:
         fresh: Whether to start with a fresh context (default: False).
-               If False, inherits tags from parent context.
-               If True, starts with no tags.
+               If False, inherits tags, identity and session id's from parent context.
+               If True, starts with no state
         capture_exceptions: Whether to capture exceptions raised within the context (default: True).
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
@@ -44,19 +96,18 @@ def new_context(fresh=False, capture_exceptions=True):
     """
     from posthog import capture_exception
 
-    current_tags = _get_current_context().copy()
-    current_stack = _context_stack.get()
-    new_stack = current_stack + [{}] if fresh else current_stack + [current_tags]
-    token = _context_stack.set(new_stack)
+    current_context = _get_current_context()
+    new_context = ContextScope(current_context, fresh, capture_exceptions)
+    _context_stack.set(new_context)
 
     try:
         yield
     except Exception as e:
-        if capture_exceptions:
+        if new_context.capture_exceptions:
             capture_exception(e)
         raise
     finally:
-        _context_stack.reset(token)
+        _context_stack.set(new_context.get_parent())
 
 
 def tag(key: str, value: Any) -> None:
@@ -70,9 +121,13 @@ def tag(key: str, value: Any) -> None:
     Example:
         posthog.tag("user_id", "123")
     """
-    _get_current_context()[key] = value
+    current_context = _get_current_context()
+    if current_context:
+        current_context.add_tag(key, value)
 
 
+# NOTE: we should probably also remove this - there's no reason for the user to ever
+# need to manually interact with the current tag set
 def get_tags() -> Dict[str, Any]:
     """
     Get all tags from the current context. Note, modifying
@@ -81,12 +136,75 @@ def get_tags() -> Dict[str, Any]:
     Returns:
         Dict of all tags in the current context
     """
-    return _get_current_context().copy()
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.collect_tags()
+    return {}
 
 
+# NOTE: We should probably remove this function - the way to clear scope context
+# is by entering a new, fresh context, rather than by clearing the tags or other
+# scope data directly.
 def clear_tags() -> None:
-    """Clear all tags in the current context."""
-    _get_current_context().clear()
+    """Clear all tags in the current context. Does not clear parent tags"""
+    current_context = _get_current_context()
+    if current_context:
+        current_context.tags.clear()
+
+
+def identify_context(distinct_id: str) -> None:
+    """
+    Identify the current context with a distinct ID, associating all events captured in this or
+    child contexts with the given distinct ID (unless identify_context is called again). This is overridden by
+    distinct id's passed directly to posthog.capture and related methods (identify, set etc). Entering a
+    fresh context will clear the context-level distinct ID.
+
+    Args:
+        distinct_id: The distinct ID to associate with the current context and its children.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_distinct_id(distinct_id)
+
+
+def set_context_session(session_id: str) -> None:
+    """
+    Set the session ID for the current context, associating all events captured in this or
+    child contexts with the given session ID (unless set_context_session is called again).
+    Entering a fresh context will clear the context-level session ID.
+
+    Args:
+        session_id: The session ID to associate with the current context and its children. See https://posthog.com/docs/data/sessions
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_session_id(session_id)
+
+
+def get_context_session_id() -> Optional[str]:
+    """
+    Get the session ID for the current context.
+
+    Returns:
+        The session ID if set, None otherwise
+    """
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_session_id()
+    return None
+
+
+def get_context_distinct_id() -> Optional[str]:
+    """
+    Get the distinct ID for the current context.
+
+    Returns:
+        The distinct ID if set, None otherwise
+    """
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_distinct_id()
+    return None
 
 
 F = TypeVar("F", bound=Callable[..., Any])
