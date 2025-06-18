@@ -46,3 +46,19 @@ Assuming you have a [local version of PostHog](https://posthog.com/docs/developi
 ### Releasing Versions
 
 Updates are released using GitHub Actions: after bumping `version.py` in `master` and adding to `CHANGELOG.md`, go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yaml) and dispatch it manually, using workflow from `master`.
+
+
+### Testing changes locally with the PostHog app
+
+You can run `make prep_local`, and it'll create a new folder alongside the SDK repo one called `posthog-python-local`, which you can then import into the posthog project by changing pyproject.toml to look like this:
+```toml
+dependencies = [
+    ...
+    "posthoganalytics" #NOTE: no version number
+    ...
+]
+...
+[tools.uv.sources]
+posthoganalytics = { path = "../posthog-python-local" }
+```
+This'll let you build and test SDK changes fully locally, incorporating them into your local posthog app stack. It mainly takes care of the `posthog -> posthoganalytics` module renaming. You'll need to re-run `make prep_local` each time you make a change, and re-run `uv sync --active` in the posthog app project.
