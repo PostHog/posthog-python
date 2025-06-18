@@ -72,8 +72,8 @@ def new_context(fresh=False, capture_exceptions=True):
 
     Args:
         fresh: Whether to start with a fresh context (default: False).
-               If False, inherits tags from parent context.
-               If True, starts with no tags.
+               If False, inherits tags, identity and session id's from parent context.
+               If True, starts with no state
         capture_exceptions: Whether to capture exceptions raised within the context (default: True).
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
@@ -156,7 +156,8 @@ def identify_context(distinct_id: str) -> None:
     """
     Identify the current context with a distinct ID, associating all events captured in this or
     child contexts with the given distinct ID (unless identify_context is called again). This is overridden by
-    distinct id's passed directly to posthog.capture and related methods (identify, set etc).
+    distinct id's passed directly to posthog.capture and related methods (identify, set etc). Entering a
+    fresh context will clear the context-level distinct ID.
 
     Args:
         distinct_id: The distinct ID to associate with the current context and its children.
@@ -170,6 +171,7 @@ def set_context_session(session_id: str) -> None:
     """
     Set the session ID for the current context, associating all events captured in this or
     child contexts with the given session ID (unless set_context_session is called again).
+    Entering a fresh context will clear the context-level session ID.
 
     Args:
         session_id: The session ID to associate with the current context and its children. See https://posthog.com/docs/data/sessions
