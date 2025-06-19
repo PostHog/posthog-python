@@ -1,3 +1,7 @@
+# 5.3.0 - 2025-06-19
+
+- fix: safely handle exception values
+
 # 5.2.0 - 2025-06-19
 
 - feat: construct artificial stack traces if no traceback is available on a captured exception
