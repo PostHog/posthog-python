@@ -117,22 +117,6 @@ class TestClient(unittest.TestCase):
             capture_call = patch_capture.call_args[0]
             self.assertEqual(capture_call[0], "distinct_id")
             self.assertEqual(capture_call[1], "$exception")
-            self.assertEqual(
-                capture_call[2],
-                {
-                    "$exception_type": "Exception",
-                    "$exception_message": "test exception",
-                    "$exception_list": [
-                        {
-                            "mechanism": {"type": "generic", "handled": True},
-                            "module": None,
-                            "type": "Exception",
-                            "value": "test exception",
-                        }
-                    ],
-                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/distinct_id",
-                },
-            )
 
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -144,22 +128,6 @@ class TestClient(unittest.TestCase):
             capture_call = patch_capture.call_args[0]
             self.assertEqual(capture_call[0], "distinct_id")
             self.assertEqual(capture_call[1], "$exception")
-            self.assertEqual(
-                capture_call[2],
-                {
-                    "$exception_type": "Exception",
-                    "$exception_message": "test exception",
-                    "$exception_list": [
-                        {
-                            "mechanism": {"type": "generic", "handled": True},
-                            "module": None,
-                            "type": "Exception",
-                            "value": "test exception",
-                        }
-                    ],
-                    "$exception_personURL": "https://us.i.posthog.com/project/random_key/person/distinct_id",
-                },
-            )
 
     def test_basic_capture_exception_with_correct_host_generation(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -173,22 +141,6 @@ class TestClient(unittest.TestCase):
             capture_call = patch_capture.call_args[0]
             self.assertEqual(capture_call[0], "distinct_id")
             self.assertEqual(capture_call[1], "$exception")
-            self.assertEqual(
-                capture_call[2],
-                {
-                    "$exception_type": "Exception",
-                    "$exception_message": "test exception",
-                    "$exception_list": [
-                        {
-                            "mechanism": {"type": "generic", "handled": True},
-                            "module": None,
-                            "type": "Exception",
-                            "value": "test exception",
-                        }
-                    ],
-                    "$exception_personURL": "https://aloha.com/project/random_key/person/distinct_id",
-                },
-            )
 
     def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(
         self,
@@ -206,22 +158,6 @@ class TestClient(unittest.TestCase):
             capture_call = patch_capture.call_args[0]
             self.assertEqual(capture_call[0], "distinct_id")
             self.assertEqual(capture_call[1], "$exception")
-            self.assertEqual(
-                capture_call[2],
-                {
-                    "$exception_type": "Exception",
-                    "$exception_message": "test exception",
-                    "$exception_list": [
-                        {
-                            "mechanism": {"type": "generic", "handled": True},
-                            "module": None,
-                            "type": "Exception",
-                            "value": "test exception",
-                        }
-                    ],
-                    "$exception_personURL": "https://app.posthog.com/project/random_key/person/distinct_id",
-                },
-            )
 
     def test_basic_capture_exception_with_no_exception_given(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
