@@ -1,4 +1,8 @@
-# 5.1.0
+# 5.2.0 - 2025-06-19
+
+- feat: construct artificial stack traces if no traceback is available on a captured exception
+
+## 5.1.0 - 2025-06-18
 
 - feat: session and distinct ID's can now be associated with contexts, and are used as such
 - feat: django http request middleware

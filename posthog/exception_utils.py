@@ -9,6 +9,7 @@ import linecache
 import os
 import re
 import sys
+import types
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -809,6 +810,10 @@ def exc_info_from_error(error):
     if isinstance(error, tuple) and len(error) == 3:
         exc_type, exc_value, tb = error
     elif isinstance(error, BaseException):
+        try:
+            construct_artificial_traceback(error)
+        except Exception:
+            pass
         tb = getattr(error, "__traceback__", None)
         if tb is not None:
             exc_type = type(error)
@@ -831,6 +836,31 @@ def exc_info_from_error(error):
         exc_info = cast(ExcInfo, exc_info)
 
     return exc_info
+
+
+def construct_artificial_traceback(e):
+    # type: (BaseException) -> None
+    if getattr(e, "__traceback__", None) is not None:
+        return
+
+    depth = 0
+    frames = []
+    while True:
+        try:
+            frame = sys._getframe(depth)
+            depth += 1
+        except ValueError:
+            break
+
+        frames.append(frame)
+
+    frames.reverse()
+
+    tb = None
+    for frame in frames:
+        tb = types.TracebackType(tb, frame, frame.f_lasti, frame.f_lineno)
+
+    setattr(e, "__traceback__", tb)
 
 
 def event_from_exception(
