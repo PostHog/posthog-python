@@ -438,11 +438,13 @@ def get_errno(exc_value):
 
 def get_error_message(exc_value):
     # type: (Optional[BaseException]) -> str
-    return (
+    message = (
         getattr(exc_value, "message", "")
         or getattr(exc_value, "detail", "")
-        or safe_str(exc_value)
+        or exc_value
     )
+
+    return safe_str(message)
 
 
 def single_exception_from_error_tuple(
