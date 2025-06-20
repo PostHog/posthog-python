@@ -1,6 +1,6 @@
 # 5.4.0 - 2025-06-20
 
-- chore: add support to session_id context on page method
+- feat: add support to session_id context on page method
 
 # 5.3.0 - 2025-06-19
 
