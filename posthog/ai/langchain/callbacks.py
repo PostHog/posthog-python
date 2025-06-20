@@ -756,12 +756,13 @@ def _parse_usage(response: LLMResult) -> ModelUsage:
                 break
 
             for generation_chunk in generation:
-                if generation_chunk.generation_info and (
-                    "usage_metadata" in generation_chunk.generation_info
-                ):
-                    llm_usage = _parse_usage_model(
-                        generation_chunk.generation_info["usage_metadata"]
-                    )
+                usage_metadata = (
+                    (generation_chunk.generation_info or {}).get("usage_metadata") or
+                    (generation_chunk.message or {}).get("usage_metadata") or
+                    {}
+                )
+                if usage_metadata:
+                    llm_usage = _parse_usage_model(usage_metadata)
                     break
 
                 message_chunk = getattr(generation_chunk, "message", {})
