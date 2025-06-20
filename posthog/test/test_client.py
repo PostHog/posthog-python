@@ -2,9 +2,9 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
-from unittest import mock
 from posthog.scopes import get_context_session_id, set_context_session, new_context
 
+import mock
 import six
 from parameterized import parameterized
 
