@@ -651,6 +651,9 @@ class Client(object):
         require("distinct_id", distinct_id, ID_TYPES)
         require("properties", properties, dict)
 
+        if "$session_id" not in properties and get_context_session_id():
+            properties["$session_id"] = get_context_session_id()
+
         require("url", url, string_types)
         properties["$current_url"] = url
 
