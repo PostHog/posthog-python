@@ -2,6 +2,7 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
+from posthog.scopes import get_context_session_id, set_context_session, new_context
 
 import mock
 import six
@@ -939,6 +940,255 @@ class TestClient(unittest.TestCase):
         self.assertEqual(msg["uuid"], "new-uuid")
         self.assertEqual(msg["distinct_id"], "distinct_id")
 
+    @parameterized.expand(
+        [
+            # test_name, session_id, additional_properties, expected_properties
+            ("basic_session_id", "test-session-123", {}, {}),
+            (
+                "session_id_with_other_properties",
+                "test-session-456",
+                {
+                    "custom_prop": "custom_value",
+                    "$process_person_profile": False,
+                    "$current_url": "https://example.com",
+                },
+                {
+                    "custom_prop": "custom_value",
+                    "$process_person_profile": False,
+                    "$current_url": "https://example.com",
+                },
+            ),
+            ("session_id_uuid_format", str(uuid4()), {}, {}),
+            ("session_id_numeric_string", "1234567890", {}, {}),
+            ("session_id_empty_string", "", {}, {}),
+            ("session_id_with_special_chars", "session-123_test.id", {}, {}),
+        ]
+    )
+    def test_capture_with_session_id_variations(
+        self, test_name, session_id, additional_properties, expected_properties
+    ):
+        client = self.client
+
+        properties = {"$session_id": session_id, **additional_properties}
+        success, msg = client.capture(
+            "distinct_id", "python test event", properties=properties
+        )
+        client.flush()
+
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        self.assertEqual(msg["event"], "python test event")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$session_id"], session_id)
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+        # Check additional expected properties
+        for key, value in expected_properties.items():
+            self.assertEqual(msg["properties"][key], value)
+
+    def test_session_id_preserved_with_groups(self):
+        client = self.client
+        session_id = "group-session-101"
+
+        success, msg = client.capture(
+            "distinct_id",
+            "test_event",
+            properties={"$session_id": session_id},
+            groups={"company": "id:5", "instance": "app.posthog.com"},
+        )
+        client.flush()
+
+        self.assertTrue(success)
+        self.assertEqual(msg["properties"]["$session_id"], session_id)
+        self.assertEqual(
+            msg["properties"]["$groups"],
+            {"company": "id:5", "instance": "app.posthog.com"},
+        )
+
+    def test_session_id_with_anonymous_event(self):
+        client = self.client
+        session_id = "anonymous-session-202"
+
+        success, msg = client.capture(
+            "distinct_id",
+            "anonymous_event",
+            properties={"$session_id": session_id, "$process_person_profile": False},
+        )
+        client.flush()
+
+        self.assertTrue(success)
+        self.assertEqual(msg["properties"]["$session_id"], session_id)
+        self.assertEqual(msg["properties"]["$process_person_profile"], False)
+
+    def test_page_with_session_id(self):
+        client = self.client
+        session_id = "page-session-303"
+
+        success, msg = client.page(
+            "distinct_id",
+            "https://posthog.com/contact",
+            properties={"$session_id": session_id, "page_type": "contact"},
+        )
+        client.flush()
+
+        self.assertTrue(success)
+        self.assertFalse(self.failed)
+        self.assertEqual(msg["event"], "$pageview")
+        self.assertEqual(msg["distinct_id"], "distinct_id")
+        self.assertEqual(msg["properties"]["$session_id"], session_id)
+        self.assertEqual(
+            msg["properties"]["$current_url"], "https://posthog.com/contact"
+        )
+        self.assertEqual(msg["properties"]["page_type"], "contact")
+
+    @parameterized.expand(
+        [
+            # test_name, event_name, session_id, additional_properties, expected_additional_properties
+            (
+                "screen_event",
+                "$screen",
+                "special-session-505",
+                {"$screen_name": "HomeScreen"},
+                {"$screen_name": "HomeScreen"},
+            ),
+            (
+                "survey_event",
+                "survey sent",
+                "survey-session-606",
+                {
+                    "$survey_id": "survey_123",
+                    "$survey_questions": [
+                        {"id": "q1", "question": "How likely are you to recommend us?"}
+                    ],
+                },
+                {"$survey_id": "survey_123"},
+            ),
+            (
+                "complex_properties_event",
+                "complex_event",
+                "mixed-session-707",
+                {
+                    "$current_url": "https://example.com/page",
+                    "$process_person_profile": True,
+                    "custom_property": "custom_value",
+                    "numeric_property": 42,
+                    "boolean_property": True,
+                },
+                {
+                    "$current_url": "https://example.com/page",
+                    "$process_person_profile": True,
+                    "custom_property": "custom_value",
+                    "numeric_property": 42,
+                    "boolean_property": True,
+                },
+            ),
+            (
+                "csp_violation",
+                "$csp_violation",
+                "csp-session-789",
+                {
+                    "$csp_version": "1.0",
+                    "$current_url": "https://example.com/page",
+                    "$process_person_profile": False,
+                    "$raw_user_agent": "Mozilla/5.0 Test Agent",
+                    "$csp_document_url": "https://example.com/page",
+                    "$csp_blocked_url": "https://malicious.com/script.js",
+                    "$csp_violated_directive": "script-src",
+                },
+                {
+                    "$csp_version": "1.0",
+                    "$current_url": "https://example.com/page",
+                    "$process_person_profile": False,
+                    "$raw_user_agent": "Mozilla/5.0 Test Agent",
+                    "$csp_document_url": "https://example.com/page",
+                    "$csp_blocked_url": "https://malicious.com/script.js",
+                    "$csp_violated_directive": "script-src",
+                },
+            ),
+        ]
+    )
+    def test_session_id_with_different_event_types(
+        self,
+        test_name,
+        event_name,
+        session_id,
+        additional_properties,
+        expected_additional_properties,
+    ):
+        client = self.client
+
+        properties = {"$session_id": session_id, **additional_properties}
+        success, msg = client.capture("distinct_id", event_name, properties=properties)
+        client.flush()
+
+        self.assertTrue(success)
+        self.assertEqual(msg["event"], event_name)
+        self.assertEqual(msg["properties"]["$session_id"], session_id)
+
+        # Check additional expected properties
+        for key, value in expected_additional_properties.items():
+            self.assertEqual(msg["properties"][key], value)
+
+        # Verify system properties are still added
+        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+    @parameterized.expand(
+        [
+            # test_name, super_properties, event_session_id, expected_session_id, expected_super_props
+            (
+                "super_properties_override_session_id",
+                {"$session_id": "super-session", "source": "test"},
+                "event-session-808",
+                "super-session",
+                {"source": "test"},
+            ),
+            (
+                "no_super_properties_conflict",
+                {"source": "test", "version": "1.0"},
+                "event-session-909",
+                "event-session-909",
+                {"source": "test", "version": "1.0"},
+            ),
+            (
+                "empty_super_properties",
+                {},
+                "event-session-111",
+                "event-session-111",
+                {},
+            ),
+            (
+                "super_properties_with_other_dollar_props",
+                {"$current_url": "https://super.com", "source": "test"},
+                "event-session-222",
+                "event-session-222",
+                {"$current_url": "https://super.com", "source": "test"},
+            ),
+        ]
+    )
+    def test_session_id_with_super_properties_variations(
+        self,
+        test_name,
+        super_properties,
+        event_session_id,
+        expected_session_id,
+        expected_super_props,
+    ):
+        client = Client(FAKE_TEST_API_KEY, super_properties=super_properties)
+
+        success, msg = client.capture(
+            "distinct_id", "test_event", properties={"$session_id": event_session_id}
+        )
+        client.flush()
+
+        self.assertTrue(success)
+        self.assertEqual(msg["properties"]["$session_id"], expected_session_id)
+
+        # Check expected super properties are present
+        for key, value in expected_super_props.items():
+            self.assertEqual(msg["properties"][key], value)
+
     def test_flush(self):
         client = self.client
         # set up the consumer with more requests than a single batch will allow
@@ -1397,3 +1647,75 @@ class TestClient(unittest.TestCase):
             "errorsWhileComputingFlags": False,
             "requestId": "test-id",
         }
+
+    def test_set_context_session_with_capture(self):
+        with new_context():
+            set_context_session("context-session-123")
+
+            success, msg = self.client.capture(
+                "distinct_id", "test_event", {"custom_prop": "value"}
+            )
+            self.client.flush()
+
+            self.assertTrue(success)
+            self.assertEqual(msg["properties"]["$session_id"], "context-session-123")
+
+    def test_set_context_session_with_page(self):
+        with new_context():
+            set_context_session("page-context-session-456")
+
+            success, msg = self.client.page("distinct_id", "https://example.com/page")
+            self.client.flush()
+
+            self.assertTrue(success)
+            self.assertEqual(
+                msg["properties"]["$session_id"], "page-context-session-456"
+            )
+
+    def test_set_context_session_with_page_explicit_properties(self):
+        with new_context():
+            set_context_session("page-explicit-session-789")
+
+            properties = {
+                "$session_id": get_context_session_id(),
+                "page_type": "landing",
+            }
+            success, msg = self.client.page(
+                "distinct_id", "https://example.com/landing", properties
+            )
+            self.client.flush()
+
+            self.assertTrue(success)
+            self.assertEqual(
+                msg["properties"]["$session_id"], "page-explicit-session-789"
+            )
+
+    def test_set_context_session_override_in_capture(self):
+        """Test that explicit session ID overrides context session ID in capture"""
+        from posthog.scopes import set_context_session, new_context
+
+        with new_context():
+            set_context_session("context-session-override")
+
+            success, msg = self.client.capture(
+                "distinct_id",
+                "test_event",
+                {"$session_id": "explicit-session-override", "custom_prop": "value"},
+            )
+            self.client.flush()
+
+            self.assertTrue(success)
+            self.assertEqual(
+                msg["properties"]["$session_id"], "explicit-session-override"
+            )
+
+    def test_set_context_session_with_identify(self):
+        with new_context(capture_exceptions=False):
+            set_context_session("identify-session-555")
+
+            success, msg = self.client.identify("distinct_id", {"trait": "value"})
+            self.client.flush()
+
+            self.assertTrue(success)
+            # In identify, the session ID is added to the $set payload
+            self.assertEqual(msg["$set"]["$session_id"], "identify-session-555")
