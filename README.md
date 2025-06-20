@@ -45,7 +45,9 @@ Assuming you have a [local version of PostHog](https://posthog.com/docs/developi
 
 ### Releasing Versions
 
-Updates are released using GitHub Actions: after bumping `version.py` in `master` and adding to `CHANGELOG.md`, go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yaml) and dispatch it manually, using workflow from `master`.
+Updates are released automatically using GitHub Actions when `version.py` is updated on `master`. After bumping `version.py` in `master` and adding to `CHANGELOG.md`, the [release workflow](https://github.com/PostHog/posthog-python/blob/master/.github/workflows/release.yaml) will automatically trigger and deploy the new version.
+
+If you need to check the latest runs or manually trigger a release, you can go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yaml) and dispatch it manually, using workflow from `master`.
 
 
 ### Testing changes locally with the PostHog app
