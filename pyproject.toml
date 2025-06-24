@@ -86,7 +86,6 @@ packages = [
     "posthog.ai.anthropic",
     "posthog.ai.gemini",
     "posthog.test",
-    "posthog.exception_integrations",
     "posthog.integrations",
 ]
 

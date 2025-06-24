@@ -3,10 +3,7 @@ import warnings
 from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
 
 from posthog.client import Client
-from posthog.exception_capture import Integrations  # noqa: F401
 from posthog.scopes import (
-    clear_tags,
-    get_tags,
     new_context,
     scoped,
     tag,
@@ -21,8 +18,6 @@ __version__ = VERSION
 """Context management."""
 new_context = new_context
 tag = tag
-get_tags = get_tags
-clear_tags = clear_tags
 scoped = scoped
 identify_context = identify_context
 set_context_session = set_context_session
@@ -44,7 +39,6 @@ feature_flags_request_timeout_seconds = 3  # type: int
 super_properties = None  # type: Optional[Dict]
 # Currently alpha, use at your own risk
 enable_exception_autocapture = False  # type: bool
-exception_autocapture_integrations = []  # type: List[Integrations]
 log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
 project_root = None  # type: Optional[str]
@@ -54,27 +48,31 @@ privacy_mode = False  # type: bool
 default_client = None  # type: Optional[Client]
 
 
+# NOTE - this and following functions take and unpack kwargs because we needed to make
+# it impossible to write `posthog.capture(distinct-id, event-name)` - basically, to enforce
+# the breaking change made between 5.3.0 and 6.0.0. This decision can be unrolled in later
+# versions, without a breaking change, to get back the type information in function signatures
 def capture(
-    distinct_id,  # type: str
     event,  # type: str
-    properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    groups=None,  # type: Optional[Dict]
-    send_feature_flags=False,
-    disable_geoip=None,  # type: Optional[bool]
+    **kwargs,
 ):
-    # type: (...) -> Tuple[bool, dict]
+    # type: (...) -> Optional[str]
+    distinct_id = kwargs.get("distinct_id", None)
+    properties = kwargs.get("properties", None)
+    timestamp = kwargs.get("timestamp", None)
+    uuid = kwargs.get("uuid", None)
+    groups = kwargs.get("groups", None)
+    send_feature_flags = kwargs.get("send_feature_flags", False)
+    disable_geoip = kwargs.get("disable_geoip", None)
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
 
     A `capture` call requires
-    - `distinct id` which uniquely identifies your user
     - `event name` to specify the event
     - We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on.
 
     Optionally you can submit
+    - `distinct id` which uniquely identifies your user. This overrides any context-level ID, if set
     - `properties`, which can be a dict with any information you'd like to add
     - `groups`, which is a dict of group type -> group key mappings
 
@@ -87,19 +85,11 @@ def capture(
     ```
     """
 
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     return _proxy(
         "capture",
         distinct_id=distinct_id,
         event=event,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
@@ -108,101 +98,45 @@ def capture(
     )
 
 
-def identify(
-    distinct_id,  # type: str
-    properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    disable_geoip=None,  # type: Optional[bool]
-):
-    # type: (...) -> Tuple[bool, dict]
-    """
-    Identify lets you add metadata on your users so you can more easily identify who they are in PostHog, and even do things like segment users by these properties.
-
-    An `identify` call requires
-    - `distinct id` which uniquely identifies your user
-    - `properties` with a dict with any key: value pairs
-
-    For example:
-    ```python
-    posthog.identify('distinct id', {
-        'email': 'dwayne@gmail.com',
-        'name': 'Dwayne Johnson'
-    })
-    ```
-    """
-
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    return _proxy(
-        "identify",
-        distinct_id=distinct_id,
-        properties=properties,
-        context=context,
-        timestamp=timestamp,
-        uuid=uuid,
-        disable_geoip=disable_geoip,
-    )
-
-
-def set(
-    distinct_id,  # type: str
-    properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    disable_geoip=None,  # type: Optional[bool]
-):
-    # type: (...) -> Tuple[bool, dict]
+def set(**kwargs):
+    # type: (...) -> Optional[str]
+    distinct_id = kwargs.get("distinct_id", None)
+    properties = kwargs.get("properties", None)
+    timestamp = kwargs.get("timestamp", None)
+    uuid = kwargs.get("uuid", None)
+    disable_geoip = kwargs.get("disabled_geoip", None)
     """
     Set properties on a user record.
     This will overwrite previous people property values, just like `identify`.
 
      A `set` call requires
-     - `distinct id` which uniquely identifies your user
      - `properties` with a dict with any key: value pairs
 
      For example:
      ```python
-     posthog.set('distinct id', {
+     posthog.set(distinct_id='distinct id', properties={
          'current_browser': 'Chrome',
      })
      ```
     """
 
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     return _proxy(
         "set",
         distinct_id=distinct_id,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
     )
 
 
-def set_once(
-    distinct_id,  # type: str
-    properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    disable_geoip=None,  # type: Optional[bool]
-):
-    # type: (...) -> Tuple[bool, dict]
+def set_once(**kwargs):
+    # type: (...) -> Optional[str]
+    distinct_id = kwargs.get("distinct_id", None)
+    properties = kwargs.get("properties", None)
+    timestamp = kwargs.get("timestamp", None)
+    uuid = kwargs.get("uuid", None)
+    disable_geoip = kwargs.get("disabled_geoip", None)
     """
     Set properties on a user record, only if they do not yet exist.
     This will not overwrite previous people property values, unlike `identify`.
@@ -218,19 +152,10 @@ def set_once(
      })
      ```
     """
-
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     return _proxy(
         "set_once",
         distinct_id=distinct_id,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
@@ -246,7 +171,7 @@ def group_identify(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> Tuple[bool, dict]
+    # type: (...) -> Optional[str]
     """
     Set properties on a group
 
@@ -290,7 +215,7 @@ def alias(
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
 ):
-    # type: (...) -> Tuple[bool, dict]
+    # type: (...) -> Optional[str]
     """
     To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
 
@@ -330,13 +255,12 @@ def capture_exception(
     exception=None,  # type: Optional[BaseException]
     distinct_id=None,  # type: Optional[str]
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     groups=None,  # type: Optional[Dict]
     **kwargs,
 ):
-    # type: (...) -> Tuple[bool, dict]
+    # type: (...) -> Optional[str]
     """
     capture_exception allows you to capture exceptions that happen in your code. This is useful for debugging and understanding what errors your users are encountering.
     This function never raises an exception, even if it fails to send the event.
@@ -361,19 +285,11 @@ def capture_exception(
     ```
     """
 
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     return _proxy(
         "capture_exception",
         exception=exception,
         distinct_id=distinct_id,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         groups=groups,
@@ -565,16 +481,6 @@ def load_feature_flags():
     return _proxy("load_feature_flags")
 
 
-def page(*args, **kwargs):
-    """Send a page call."""
-    _proxy("page", *args, **kwargs)
-
-
-def screen(*args, **kwargs):
-    """Send a screen call."""
-    _proxy("screen", *args, **kwargs)
-
-
 def flush():
     """Tell the client to flush."""
     _proxy("flush")
@@ -613,7 +519,6 @@ def setup():
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
-            exception_autocapture_integrations=exception_autocapture_integrations,
         )
 
     # always set incase user changes it

@@ -75,7 +75,7 @@ posthog.capture(
 )
 
 # # Add properties to the person
-posthog.identify("new_distinct_id", {"email": "something@something.com"})
+posthog.set("new_distinct_id", {"email": "something@something.com"})
 
 # Add properties to a group
 posthog.group_identify("company", "id:5", {"employees": 11})

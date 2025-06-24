@@ -1,3 +1,11 @@
+# 6.0.0
+
+This release contains a number of major breaking changes:
+- feat: make distinct_id an optional parameter in posthog.capture and related functions
+- feat: make capture and related functions return `Optional[str]`, which is the UUID of the sent event, if it was sent
+- fix: remove `identify` (prefer `posthog.set()`), and `page` and `screen` (prefer `posthog.capture()`)
+- fix: delete exception-capture specific integrations module. Prefer the general-purpose django middleware as a replacement for the django `Integration`.
+
 # 5.4.0 - 2025-06-20
 
 - feat: add support to session_id context on page method

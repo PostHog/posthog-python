@@ -126,8 +126,6 @@ def tag(key: str, value: Any) -> None:
         current_context.add_tag(key, value)
 
 
-# NOTE: we should probably also remove this - there's no reason for the user to ever
-# need to manually interact with the current tag set
 def get_tags() -> Dict[str, Any]:
     """
     Get all tags from the current context. Note, modifying
@@ -142,22 +140,14 @@ def get_tags() -> Dict[str, Any]:
     return {}
 
 
-# NOTE: We should probably remove this function - the way to clear scope context
-# is by entering a new, fresh context, rather than by clearing the tags or other
-# scope data directly.
-def clear_tags() -> None:
-    """Clear all tags in the current context. Does not clear parent tags"""
-    current_context = _get_current_context()
-    if current_context:
-        current_context.tags.clear()
-
-
 def identify_context(distinct_id: str) -> None:
     """
     Identify the current context with a distinct ID, associating all events captured in this or
     child contexts with the given distinct ID (unless identify_context is called again). This is overridden by
     distinct id's passed directly to posthog.capture and related methods (identify, set etc). Entering a
-    fresh context will clear the context-level distinct ID.
+    fresh context will clear the context-level distinct ID. The distinct-id passed should be uniquely associated
+    with one of your users. Events captured outside of a context, or in a context with no associated distinct
+    ID, will be assigned a random UUID, and captured as "personless".
 
     Args:
         distinct_id: The distinct ID to associate with the current context and its children.

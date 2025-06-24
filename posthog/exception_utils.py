@@ -796,15 +796,17 @@ def exception_is_already_captured(error):
         return False  # type: ignore[unreachable]
 
 
-def mark_exception_as_captured(error):
-    # type: (Union[BaseException, ExcInfo]) -> None
+def mark_exception_as_captured(error, uuid):
+    # type: (Union[BaseException, ExcInfo], str) -> None
     if isinstance(error, BaseException):
         setattr(error, "__posthog_exception_captured", True)
+        setattr(error, "__posthog_exception_uuid", uuid)
     # Autocaptured exceptions are passed as a tuple from our system hooks,
     # the second item is the exception value (the first is the exception type)
     elif isinstance(error, tuple) and len(error) > 1:
         if error[1] is not None:
             setattr(error[1], "__posthog_exception_captured", True)
+            setattr(error[1], "__posthog_exception_uuid", uuid)
 
 
 def exc_info_from_error(error):

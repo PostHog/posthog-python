@@ -7,6 +7,9 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
+import sys
+import platform
+import distro  # For Linux OS detection
 
 import six
 from dateutil.tz import tzlocal, tzutc
@@ -198,3 +201,57 @@ def str_iequals(value, comparand):
         False
     """
     return str(value).casefold() == str(comparand).casefold()
+
+
+def get_os_info():
+    """
+    Returns standardized OS name and version information.
+    Similar to how user agent parsing works in JS.
+    """
+    os_name = ""
+    os_version = ""
+
+    platform_name = sys.platform
+
+    if platform_name.startswith("win"):
+        os_name = "Windows"
+        if hasattr(platform, "win32_ver"):
+            win_version = platform.win32_ver()[0]
+            if win_version:
+                os_version = win_version
+
+    elif platform_name == "darwin":
+        os_name = "Mac OS X"
+        if hasattr(platform, "mac_ver"):
+            mac_version = platform.mac_ver()[0]
+            if mac_version:
+                os_version = mac_version
+
+    elif platform_name.startswith("linux"):
+        os_name = "Linux"
+        linux_info = distro.info()
+        if linux_info["version"]:
+            os_version = linux_info["version"]
+
+    elif platform_name.startswith("freebsd"):
+        os_name = "FreeBSD"
+        if hasattr(platform, "release"):
+            os_version = platform.release()
+
+    else:
+        os_name = platform_name
+        if hasattr(platform, "release"):
+            os_version = platform.release()
+
+    return os_name, os_version
+
+
+def system_context() -> dict[str, Any]:
+    os_name, os_version = get_os_info()
+
+    return {
+        "$python_runtime": platform.python_implementation(),
+        "$python_version": "%s.%s.%s" % (sys.version_info[:3]),
+        "$os": os_name,
+        "$os_version": os_version,
+    }
