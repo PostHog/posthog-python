@@ -135,7 +135,7 @@ class PosthogContextMiddleware:
 
         user = getattr(request, "user", None)
 
-        if user and user.is_authenticated:
+        if user and getattr(user, "is_authenticated", False):
             try:
                 user_id = str(user.pk)
             except Exception:
