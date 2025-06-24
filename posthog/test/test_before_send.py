@@ -118,7 +118,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(enqueued_msg["event"], "robust_event")
 
     def test_before_send_callback_works_with_all_event_types(self):
-        """Test that before_send works with capture, identify, set, etc."""
+        """Test that before_send works with capture, set, etc."""
 
         def add_marker(event):
             if "properties" not in event:
