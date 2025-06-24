@@ -1,7 +1,10 @@
 import contextvars
 from contextlib import contextmanager
-from typing import Optional, Any, Callable, Dict, TypeVar, cast
-from posthog.client import Client
+from typing import Optional, Any, Callable, Dict, TypeVar, cast, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # To avoid circular imports
+    from posthog.client import Client
 
 
 class ContextScope:
@@ -10,7 +13,7 @@ class ContextScope:
         parent=None,
         fresh: bool = False,
         capture_exceptions: bool = True,
-        client: Optional[Client] = None,
+        client: Optional["Client"] = None,
     ):
         self.client: Optional[Client] = client
         self.parent = parent
@@ -67,7 +70,9 @@ def _get_current_context() -> Optional[ContextScope]:
 
 
 @contextmanager
-def new_context(fresh=False, capture_exceptions=True, client: Optional[Client] = None):
+def new_context(
+    fresh=False, capture_exceptions=True, client: Optional["Client"] = None
+):
     """
     Create a new context scope that will be active for the duration of the with block.
     Any tags set within this scope will be isolated to this context. Any exceptions raised
