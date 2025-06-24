@@ -1,6 +1,7 @@
 import contextvars
 from contextlib import contextmanager
 from typing import Optional, Any, Callable, Dict, TypeVar, cast
+from posthog.client import Client
 
 
 class ContextScope:
@@ -9,7 +10,9 @@ class ContextScope:
         parent=None,
         fresh: bool = False,
         capture_exceptions: bool = True,
+        client: Optional[Client] = None,
     ):
+        self.client: Optional[Client] = client
         self.parent = parent
         self.fresh = fresh
         self.capture_exceptions = capture_exceptions
@@ -64,7 +67,7 @@ def _get_current_context() -> Optional[ContextScope]:
 
 
 @contextmanager
-def new_context(fresh=False, capture_exceptions=True):
+def new_context(fresh=False, capture_exceptions=True, client: Optional[Client] = None):
     """
     Create a new context scope that will be active for the duration of the with block.
     Any tags set within this scope will be isolated to this context. Any exceptions raised
@@ -77,6 +80,9 @@ def new_context(fresh=False, capture_exceptions=True):
         capture_exceptions: Whether to capture exceptions raised within the context (default: True).
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
+        client: Optional client instance to use for capturing exceptions (default: None).
+                If provided, the client will be used to capture exceptions within the context.
+                If not provided, the default (global) client will be used.
 
     Examples:
         # Inherit parent context tags
@@ -97,14 +103,17 @@ def new_context(fresh=False, capture_exceptions=True):
     from posthog import capture_exception
 
     current_context = _get_current_context()
-    new_context = ContextScope(current_context, fresh, capture_exceptions)
+    new_context = ContextScope(current_context, fresh, capture_exceptions, client)
     _context_stack.set(new_context)
 
     try:
         yield
     except Exception as e:
         if new_context.capture_exceptions:
-            capture_exception(e)
+            if new_context.client:
+                new_context.client.capture_exception(e)
+            else:
+                capture_exception(e)
         raise
     finally:
         _context_stack.set(new_context.get_parent())

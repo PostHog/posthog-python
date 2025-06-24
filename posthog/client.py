@@ -11,6 +11,7 @@ from dateutil.tz import tzutc
 from six import string_types
 
 from posthog.consumer import Consumer
+from posthog.scopes import new_context
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
     exc_info_from_error,
@@ -223,6 +224,11 @@ class Client(object):
                 # if we've disabled sending, just don't start the consumer
                 if send:
                     consumer.start()
+
+    def new_context(self, fresh=False, capture_exceptions=True):
+        return new_context(
+            fresh=fresh, capture_exceptions=capture_exceptions, client=self
+        )
 
     @property
     def feature_flags(self):
