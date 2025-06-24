@@ -82,7 +82,11 @@ def new_context(fresh=False, capture_exceptions=True, client: Optional[Client] =
                If False, exceptions will propagate without being tagged or captured.
         client: Optional client instance to use for capturing exceptions (default: None).
                 If provided, the client will be used to capture exceptions within the context.
-                If not provided, the default (global) client will be used.
+                If not provided, the default (global) client will be used. Note that the passed
+                client is only used to capture exceptions within the context - other events captured
+                within the context via `Client.capture` or `posthog.capture` will still carry the context
+                state (tags, identity, session id), but will be captured by the client directly used (or
+                the global one, in the case of `posthog.capture`)
 
     Examples:
         # Inherit parent context tags
@@ -121,7 +125,8 @@ def new_context(fresh=False, capture_exceptions=True, client: Optional[Client] =
 
 def tag(key: str, value: Any) -> None:
     """
-    Add a tag to the current context.
+    Add a tag to the current context. All tags are added as properties to any event, including exceptions, captured
+    within the context.
 
     Args:
         key: The tag key
