@@ -1,4 +1,9 @@
+posthog/utils.py:0: error: Library stubs not installed for "six"  [import-untyped]
+posthog/utils.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
 posthog/utils.py:0: error: Statement is unreachable  [unreachable]
+posthog/request.py:0: error: Library stubs not installed for "requests"  [import-untyped]
+posthog/request.py:0: note: Hint: "python3 -m pip install types-requests"
+posthog/request.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
 posthog/request.py:0: error: Incompatible types in assignment (expression has type "bytes", variable has type "str")  [assignment]
 posthog/consumer.py:0: error: Name "Empty" already defined (possibly by an import)  [no-redef]
 posthog/consumer.py:0: error: Need type annotation for "items" (hint: "items: list[<type>] = ...")  [var-annotated]
@@ -6,10 +11,24 @@ posthog/consumer.py:0: error: Unsupported operand types for <= ("int" and "str")
 posthog/consumer.py:0: note: Right operand is of type "int | str"
 posthog/consumer.py:0: error: Unsupported operand types for < ("str" and "int")  [operator]
 posthog/consumer.py:0: note: Left operand is of type "int | str"
+posthog/feature_flags.py:0: error: Library stubs not installed for "dateutil"  [import-untyped]
+posthog/feature_flags.py:0: error: Library stubs not installed for "dateutil.relativedelta"  [import-untyped]
 posthog/feature_flags.py:0: error: Unused "type: ignore" comment  [unused-ignore]
+posthog/client.py:0: error: Library stubs not installed for "dateutil.tz"  [import-untyped]
+posthog/client.py:0: note: Hint: "python3 -m pip install types-python-dateutil"
+posthog/client.py:0: note: (or run "mypy --install-types" to install all missing stub packages)
+posthog/client.py:0: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports
+posthog/client.py:0: error: Library stubs not installed for "six"  [import-untyped]
+posthog/client.py:0: note: Hint: "python3 -m pip install types-six"
 posthog/client.py:0: error: Name "queue" already defined (by an import)  [no-redef]
 posthog/client.py:0: error: Need type annotation for "queue"  [var-annotated]
 posthog/client.py:0: error: Item "None" of "Any | None" has no attribute "get"  [union-attr]
+simulator.py:0: error: Unexpected keyword argument "anonymous_id" for "capture"  [call-arg]
+posthog/__init__.py:0: note: "capture" defined here
+simulator.py:0: error: Unexpected keyword argument "anonymous_id" for "identify"  [call-arg]
+posthog/__init__.py:0: note: "identify" defined here
+simulator.py:0: error: Unexpected keyword argument "traits" for "identify"  [call-arg]
+posthog/__init__.py:0: note: "identify" defined here
 example.py:0: error: Statement is unreachable  [unreachable]
 posthog/ai/utils.py:0: error: Need type annotation for "output" (hint: "output: list[<type>] = ...")  [var-annotated]
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
