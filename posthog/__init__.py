@@ -1,14 +1,14 @@
 import datetime  # noqa: F401
 import warnings
-from typing import Callable, Dict, List, Optional, Tuple  # noqa: F401
+from typing import Callable, Dict, Optional, Any  # noqa: F401
 
 from posthog.client import Client
 from posthog.scopes import (
-    new_context,
-    scoped,
-    tag,
-    set_context_session,
-    identify_context,
+    new_context as inner_new_context,
+    scoped as inner_scoped,
+    tag as inner_tag,
+    set_context_session as inner_set_context_session,
+    identify_context as inner_identify_context,
 )
 from posthog.types import FeatureFlag, FlagsAndPayloads
 from posthog.version import VERSION
@@ -16,11 +16,26 @@ from posthog.version import VERSION
 __version__ = VERSION
 
 """Context management."""
-new_context = new_context
-tag = tag
-scoped = scoped
-identify_context = identify_context
-set_context_session = set_context_session
+
+
+def new_context(fresh=False, capture_exceptions=True):
+    return inner_new_context(fresh=fresh, capture_exceptions=capture_exceptions)
+
+
+def scoped(fresh=False, capture_exceptions=True):
+    return inner_scoped(fresh=fresh, capture_exceptions=capture_exceptions)
+
+
+def set_context_session(session_id: str):
+    return inner_set_context_session(session_id)
+
+
+def identify_context(distinct_id: str):
+    return inner_identify_context(distinct_id)
+
+
+def tag(name: str, value: Any):
+    return inner_tag(name, value)
 
 
 """Settings."""
