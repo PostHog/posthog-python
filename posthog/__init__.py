@@ -151,7 +151,7 @@ def set_once(**kwargs):
     properties = kwargs.get("properties", None)
     timestamp = kwargs.get("timestamp", None)
     uuid = kwargs.get("uuid", None)
-    disable_geoip = kwargs.get("disabled_geoip", None)
+    disable_geoip = kwargs.get("disable_geoip", None)
     """
     Set properties on a user record, only if they do not yet exist.
     This will not overwrite previous people property values, unlike `identify`.
