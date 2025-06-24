@@ -78,7 +78,7 @@ class PosthogContextMiddleware:
         # type: (HttpRequest) -> Dict[str, Any]
         tags = {}
 
-        (user_id, user_email) = self.extract_request_user()
+        (user_id, user_email) = self.extract_request_user(request)
 
         # Extract session ID from X-POSTHOG-SESSION-ID header
         session_id = request.headers.get("X-POSTHOG-SESSION-ID")
