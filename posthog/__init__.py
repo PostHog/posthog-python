@@ -119,7 +119,7 @@ def set(**kwargs):
     properties = kwargs.get("properties", None)
     timestamp = kwargs.get("timestamp", None)
     uuid = kwargs.get("uuid", None)
-    disable_geoip = kwargs.get("disabled_geoip", None)
+    disable_geoip = kwargs.get("disable_geoip", None)
     """
     Set properties on a user record.
     This will overwrite previous people property values, just like `identify`.
