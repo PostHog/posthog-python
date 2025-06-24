@@ -1046,80 +1046,80 @@ class TestClient(unittest.TestCase):
     def test_capture_with_session_id_variations(
         self, test_name, session_id, additional_properties, expected_properties
     ):
-        client = self.client
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
-        properties = {"$session_id": session_id, **additional_properties}
-        success, msg = client.capture(
-            "distinct_id", "python test event", properties=properties
-        )
-        client.flush()
+            properties = {"$session_id": session_id, **additional_properties}
+            msg_uuid = client.capture(
+                "distinct_id", "python test event", properties=properties
+            )
 
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["event"], "python test event")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        # Check additional expected properties
-        for key, value in expected_properties.items():
-            self.assertEqual(msg["properties"][key], value)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+            # Check additional expected properties
+            for key, value in expected_properties.items():
+                self.assertEqual(msg["properties"][key], value)
 
     def test_session_id_preserved_with_groups(self):
-        client = self.client
-        session_id = "group-session-101"
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            session_id = "group-session-101"
 
-        success, msg = client.capture(
-            "distinct_id",
-            "test_event",
-            properties={"$session_id": session_id},
-            groups={"company": "id:5", "instance": "app.posthog.com"},
-        )
-        client.flush()
+            msg_uuid = client.capture(
+                "distinct_id",
+                "test_event",
+                properties={"$session_id": session_id},
+                groups={"company": "id:5", "instance": "app.posthog.com"},
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(
-            msg["properties"]["$groups"],
-            {"company": "id:5", "instance": "app.posthog.com"},
-        )
+            self.assertIsNotNone(msg_uuid)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertEqual(
+                msg["properties"]["$groups"],
+                {"company": "id:5", "instance": "app.posthog.com"},
+            )
 
     def test_session_id_with_anonymous_event(self):
-        client = self.client
-        session_id = "anonymous-session-202"
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            session_id = "anonymous-session-202"
 
-        success, msg = client.capture(
-            "distinct_id",
-            "anonymous_event",
-            properties={"$session_id": session_id, "$process_person_profile": False},
-        )
-        client.flush()
+            msg_uuid = client.capture(
+                "distinct_id",
+                "anonymous_event",
+                properties={
+                    "$session_id": session_id,
+                    "$process_person_profile": False,
+                },
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(msg["properties"]["$process_person_profile"], False)
+            self.assertIsNotNone(msg_uuid)
 
-    def test_page_with_session_id(self):
-        client = self.client
-        session_id = "page-session-303"
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        success, msg = client.page(
-            "distinct_id",
-            "https://posthog.com/contact",
-            properties={"$session_id": session_id, "page_type": "contact"},
-        )
-        client.flush()
-
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["event"], "$pageview")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(
-            msg["properties"]["$current_url"], "https://posthog.com/contact"
-        )
-        self.assertEqual(msg["properties"]["page_type"], "contact")
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertEqual(msg["properties"]["$process_person_profile"], False)
 
     @parameterized.expand(
         [
@@ -1195,23 +1195,29 @@ class TestClient(unittest.TestCase):
         additional_properties,
         expected_additional_properties,
     ):
-        client = self.client
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
-        properties = {"$session_id": session_id, **additional_properties}
-        success, msg = client.capture("distinct_id", event_name, properties=properties)
-        client.flush()
+            properties = {"$session_id": session_id, **additional_properties}
+            msg_uuid = client.capture("distinct_id", event_name, properties=properties)
 
-        self.assertTrue(success)
-        self.assertEqual(msg["event"], event_name)
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertIsNotNone(msg_uuid)
 
-        # Check additional expected properties
-        for key, value in expected_additional_properties.items():
-            self.assertEqual(msg["properties"][key], value)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        # Verify system properties are still added
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(msg["event"], event_name)
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+
+            # Check additional expected properties
+            for key, value in expected_additional_properties.items():
+                self.assertEqual(msg["properties"][key], value)
+
+            # Verify system properties are still added
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     @parameterized.expand(
         [
@@ -1254,19 +1260,29 @@ class TestClient(unittest.TestCase):
         expected_session_id,
         expected_super_props,
     ):
-        client = Client(FAKE_TEST_API_KEY, super_properties=super_properties)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY, super_properties=super_properties, sync_mode=True
+            )
 
-        success, msg = client.capture(
-            "distinct_id", "test_event", properties={"$session_id": event_session_id}
-        )
-        client.flush()
+            msg_uuid = client.capture(
+                "distinct_id",
+                "test_event",
+                properties={"$session_id": event_session_id},
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$session_id"], expected_session_id)
+            self.assertIsNotNone(msg_uuid)
 
-        # Check expected super properties are present
-        for key, value in expected_super_props.items():
-            self.assertEqual(msg["properties"][key], value)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$session_id"], expected_session_id)
+
+            # Check expected super properties are present
+            for key, value in expected_super_props.items():
+                self.assertEqual(msg["properties"][key], value)
 
     def test_flush(self):
         client = self.client
@@ -1774,73 +1790,74 @@ class TestClient(unittest.TestCase):
         }
 
     def test_set_context_session_with_capture(self):
-        with new_context():
-            set_context_session("context-session-123")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context():
+                set_context_session("context-session-123")
 
-            success, msg = self.client.capture(
-                "distinct_id", "test_event", {"custom_prop": "value"}
-            )
-            self.client.flush()
+                msg_uuid = client.capture(
+                    "distinct_id", "test_event", {"custom_prop": "value"}
+                )
 
-            self.assertTrue(success)
-            self.assertEqual(msg["properties"]["$session_id"], "context-session-123")
+                self.assertIsNotNone(msg_uuid)
 
-    def test_set_context_session_with_page(self):
-        with new_context():
-            set_context_session("page-context-session-456")
+                # Get the enqueued message from the mock
+                mock_post.assert_called_once()
+                batch_data = mock_post.call_args[1]["batch"]
+                msg = batch_data[0]
 
-            success, msg = self.client.page("distinct_id", "https://example.com/page")
-            self.client.flush()
-
-            self.assertTrue(success)
-            self.assertEqual(
-                msg["properties"]["$session_id"], "page-context-session-456"
-            )
+                self.assertEqual(
+                    msg["properties"]["$session_id"], "context-session-123"
+                )
 
     def test_set_context_session_with_page_explicit_properties(self):
-        with new_context():
-            set_context_session("page-explicit-session-789")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context():
+                set_context_session("page-explicit-session-789")
 
-            properties = {
-                "$session_id": get_context_session_id(),
-                "page_type": "landing",
-            }
-            success, msg = self.client.page(
-                "distinct_id", "https://example.com/landing", properties
-            )
-            self.client.flush()
+                properties = {
+                    "$session_id": get_context_session_id(),
+                    "page_type": "landing",
+                }
+                msg_uuid = client.capture("distinct_id", "$page", properties)
 
-            self.assertTrue(success)
-            self.assertEqual(
-                msg["properties"]["$session_id"], "page-explicit-session-789"
-            )
+                self.assertIsNotNone(msg_uuid)
+
+                # Get the enqueued message from the mock
+                mock_post.assert_called_once()
+                batch_data = mock_post.call_args[1]["batch"]
+                msg = batch_data[0]
+
+                self.assertEqual(
+                    msg["properties"]["$session_id"], "page-explicit-session-789"
+                )
 
     def test_set_context_session_override_in_capture(self):
         """Test that explicit session ID overrides context session ID in capture"""
         from posthog.scopes import set_context_session, new_context
 
-        with new_context():
-            set_context_session("context-session-override")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context():
+                set_context_session("context-session-override")
 
-            success, msg = self.client.capture(
-                "distinct_id",
-                "test_event",
-                {"$session_id": "explicit-session-override", "custom_prop": "value"},
-            )
-            self.client.flush()
+                msg_uuid = client.capture(
+                    "distinct_id",
+                    "test_event",
+                    {
+                        "$session_id": "explicit-session-override",
+                        "custom_prop": "value",
+                    },
+                )
 
-            self.assertTrue(success)
-            self.assertEqual(
-                msg["properties"]["$session_id"], "explicit-session-override"
-            )
+                self.assertIsNotNone(msg_uuid)
 
-    def test_set_context_session_with_identify(self):
-        with new_context(capture_exceptions=False):
-            set_context_session("identify-session-555")
+                # Get the enqueued message from the mock
+                mock_post.assert_called_once()
+                batch_data = mock_post.call_args[1]["batch"]
+                msg = batch_data[0]
 
-            success, msg = self.client.identify("distinct_id", {"trait": "value"})
-            self.client.flush()
-
-            self.assertTrue(success)
-            # In identify, the session ID is added to the $set payload
-            self.assertEqual(msg["$set"]["$session_id"], "identify-session-555")
+                self.assertEqual(
+                    msg["properties"]["$session_id"], "explicit-session-override"
+                )
