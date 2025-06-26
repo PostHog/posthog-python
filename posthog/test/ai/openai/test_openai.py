@@ -237,7 +237,7 @@ def mock_openai_response_with_tool_calls():
                             id="call_abc123",
                             type="function",
                             function=Function(
-                                name="get_weather",
+                                name="get_process",
                                 arguments='{"location": "San Francisco", "unit": "celsius"}',
                             ),
                         )
@@ -452,7 +452,7 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
                 {
                     "type": "function",
                     "function": {
-                        "name": "get_weather",
+                        "name": "get_process",
                         "description": "Get weather",
                         "parameters": {},
                     },
@@ -487,7 +487,7 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         tool_call = tool_calls[0]
         assert tool_call.id == "call_abc123"
         assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
+        assert tool_call.function.name == "get_process"
 
         # Verify the arguments
         arguments = tool_call.function.arguments
@@ -519,8 +519,8 @@ def test_streaming_with_tool_calls(mock_client):
                                 id="call_abc123",
                                 type="function",
                                 function=ChoiceDeltaToolCallFunction(
-                                    name="get_weather",
-                                    arguments='{"location": "',
+                                    name="get_process",
+                                    arguments='{"process_id":',
                                 ),
                             )
                         ],
@@ -544,7 +544,7 @@ def test_streaming_with_tool_calls(mock_client):
                                 id="call_abc123",
                                 type="function",
                                 function=ChoiceDeltaToolCallFunction(
-                                    arguments='San Francisco"',
+                                    arguments='2',
                                 ),
                             )
                         ],
@@ -568,7 +568,7 @@ def test_streaming_with_tool_calls(mock_client):
                                 id="call_abc123",
                                 type="function",
                                 function=ChoiceDeltaToolCallFunction(
-                                    arguments=', "unit": "celsius"}',
+                                    arguments='}',
                                 ),
                             )
                         ],
@@ -586,7 +586,7 @@ def test_streaming_with_tool_calls(mock_client):
                 ChoiceChunk(
                     index=0,
                     delta=ChoiceDelta(
-                        content="The weather in San Francisco is 15°C.",
+                        content="Process ID 2 retrieved.",
                     ),
                     finish_reason=None,
                 )
@@ -616,7 +616,7 @@ def test_streaming_with_tool_calls(mock_client):
                 {
                     "type": "function",
                     "function": {
-                        "name": "get_weather",
+                        "name": "get_process",
                         "description": "Get weather",
                         "parameters": {},
                     },
@@ -653,17 +653,17 @@ def test_streaming_with_tool_calls(mock_client):
         tool_call = tool_calls[0]
         assert tool_call.id == "call_abc123"
         assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
+        assert tool_call.function.name == "get_process"
 
         # Verify the arguments were concatenated correctly
         arguments = tool_call.function.arguments
         parsed_args = json.loads(arguments)
-        assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
+        assert parsed_args == {"process_id": 2}
 
         # Check that the content was also accumulated
         assert (
             props["$ai_output_choices"][0]["content"]
-            == "The weather in San Francisco is 15°C."
+            == "Process ID 2 retrieved."
         )
 
         # Check token usage
