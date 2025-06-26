@@ -8,7 +8,7 @@ except ImportError:
 
 # Don't import analytics-python module here, since deps may not be installed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "posthog"))
-from posthog.version import VERSION  # noqa: E402
+from version import VERSION  # noqa: E402
 
 long_description = """
 PostHog is developer-friendly, self-hosted product analytics.
