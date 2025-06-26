@@ -113,7 +113,7 @@ class CallbackHandler(BaseCallbackHandler):
         client: Optional[Client] = None,
         *,
         distinct_id: Optional[Union[str, int, float, UUID]] = None,
-        trace_id: Optional[Union[str, int, float, UUID]] = None,
+        trace_id: Optional[Union[str, int, UUID]] = None,
         properties: Optional[Dict[str, Any]] = None,
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,

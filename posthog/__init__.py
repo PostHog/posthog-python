@@ -206,7 +206,6 @@ def capture_exception(
     exception: Optional[ExceptionArg] = None,  # type: Optional[BaseException]
     **kwargs: Unpack[OptionalCaptureArgs],
 ):
-    # type: (...) -> Optional[str]
     """
     capture_exception allows you to capture exceptions that happen in your code. This is useful for debugging and understanding what errors your users are encountering.
     This function never raises an exception, even if it fails to send the event.
