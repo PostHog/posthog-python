@@ -44,6 +44,6 @@ class ExceptionCapture:
     def capture_exception(self, exception, metadata=None):
         try:
             distinct_id = metadata.get("distinct_id") if metadata else None
-            self.client.capture_exception(exception, distinct_id)
+            self.client.capture_exception(exception, distinct_id=distinct_id)
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")

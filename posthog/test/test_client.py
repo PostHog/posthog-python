@@ -39,7 +39,7 @@ class TestClient(unittest.TestCase):
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     def test_requires_api_key(self):
-        self.assertRaises(AssertionError, Client)
+        self.assertRaises(TypeError, Client)
 
     def test_empty_flush(self):
         self.client.flush()
@@ -47,7 +47,7 @@ class TestClient(unittest.TestCase):
     def test_basic_capture(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -72,7 +72,9 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             uuid = str(uuid4())
-            msg_uuid = client.capture("distinct_id", "python test event", uuid=uuid)
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", uuid=uuid
+            )
             self.assertEqual(msg_uuid, uuid)
             self.assertFalse(self.failed)
 
@@ -96,7 +98,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
 
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -119,7 +121,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
 
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
 
             # Check the enqueued message
@@ -137,20 +139,20 @@ class TestClient(unittest.TestCase):
             client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            capture_call = patch_capture.call_args
+            self.assertEqual(capture_call[0][0], "$exception")
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
-            client.capture_exception(exception, "distinct_id")
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            capture_call = patch_capture.call_args
+            self.assertEqual(capture_call[0][0], "$exception")
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_correct_host_generation(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -158,12 +160,12 @@ class TestClient(unittest.TestCase):
                 FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com"
             )
             exception = Exception("test exception")
-            client.capture_exception(exception, "distinct_id")
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            call = patch_capture.call_args
+            self.assertEqual(call[0][0], "$exception")
+            self.assertEqual(call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(
         self,
@@ -175,12 +177,12 @@ class TestClient(unittest.TestCase):
                 host="https://app.posthog.com",
             )
             exception = Exception("test exception")
-            client.capture_exception(exception, "distinct_id")
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            capture_call = patch_capture.call_args
+            self.assertEqual(capture_call[0][0], "$exception")
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_no_exception_given(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -188,51 +190,69 @@ class TestClient(unittest.TestCase):
             try:
                 raise Exception("test exception")
             except Exception:
-                client.capture_exception(distinct_id="distinct_id")
+                client.capture_exception(None, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
-            self.assertEqual(capture_call[2]["$exception_type"], "Exception")
-            self.assertEqual(capture_call[2]["$exception_message"], "test exception")
+            capture_call = patch_capture.call_args
+            print(capture_call)
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
+            self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["mechanism"]["type"], "generic"
+                capture_call[1]["properties"]["$exception_type"], "Exception"
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["mechanism"]["handled"], True
-            )
-            self.assertEqual(capture_call[2]["$exception_list"][0]["module"], None)
-            self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
-            self.assertEqual(
-                capture_call[2]["$exception_list"][0]["value"], "test exception"
+                capture_call[1]["properties"]["$exception_message"], "test exception"
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["type"],
+                capture_call[1]["properties"]["$exception_list"][0]["mechanism"][
+                    "type"
+                ],
+                "generic",
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["mechanism"][
+                    "handled"
+                ],
+                True,
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["module"], None
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["type"], "Exception"
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["value"],
+                "test exception",
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "type"
+                ],
                 "raw",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "filename"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["filename"],
                 "posthog/test/test_client.py",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "function"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["function"],
                 "test_basic_capture_exception_with_no_exception_given",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "module"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["module"],
                 "posthog.test.test_client",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "in_app"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["in_app"],
                 True,
             )
 
@@ -240,7 +260,7 @@ class TestClient(unittest.TestCase):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             with self.assertLogs("posthog", level="WARNING") as logs:
                 client = self.client
-                client.capture_exception()
+                client.capture_exception(None)
 
                 self.assertFalse(patch_capture.called)
                 self.assertEqual(
@@ -252,12 +272,11 @@ class TestClient(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY, log_captured_exceptions=True)
         with self.assertLogs("posthog", level="ERROR") as logs:
             client.capture_exception(
-                Exception("test exception"), "distinct_id", path="one/two/three"
+                Exception("test exception"), distinct_id="distinct_id"
             )
             self.assertEqual(
                 logs.output[0], "ERROR:posthog:test exception\nNoneType: None"
             )
-            self.assertEqual(getattr(logs.records[0], "path"), "one/two/three")
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags(self, patch_flags):
@@ -271,7 +290,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.capture(
-                "distinct_id", "python test event", send_feature_flags=True
+                "python test event", distinct_id="distinct_id", send_feature_flags=True
             )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
@@ -395,7 +414,7 @@ class TestClient(unittest.TestCase):
             )
             client.feature_flags = [multivariate_flag, basic_flag, false_flag]
 
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -430,7 +449,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             client.feature_flags = []
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -548,9 +567,9 @@ class TestClient(unittest.TestCase):
             client.feature_flags = [multivariate_flag, basic_flag]
 
             msg_uuid = client.capture(
-                "distinct_id",
                 "python test event",
-                {"$feature/beta-feature-local": "my-custom-variant"},
+                distinct_id="distinct_id",
+                properties={"$feature/beta-feature-local": "my-custom-variant"},
             )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
@@ -595,7 +614,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.capture(
-                "distinct_id", "python test event", send_feature_flags=True
+                "python test event", distinct_id="distinct_id", send_feature_flags=True
             )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
@@ -656,8 +675,8 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.capture(
-                "distinct_id",
                 "python test event",
+                distinct_id="distinct_id",
                 send_feature_flags=True,
                 disable_geoip=False,
             )
@@ -711,7 +730,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.capture(
-                "distinct_id", "python test event", send_feature_flags=False
+                "python test event", distinct_id="distinct_id", send_feature_flags=False
             )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
@@ -738,7 +757,7 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture(
-                distinct_id=157963456373623802, event="python test event"
+                "python test event", distinct_id=157963456373623802
             )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
@@ -754,9 +773,9 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture(
-                "distinct_id",
                 "python test event",
-                {"property": "value"},
+                distinct_id="distinct_id",
+                properties={"property": "value"},
                 timestamp=datetime(2014, 9, 3),
                 uuid="new-uuid",
             )
@@ -781,8 +800,8 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture(
-                "distinct_id",
                 "test_event",
+                distinct_id="distinct_id",
                 groups={"company": "id:5", "instance": "app.posthog.com"},
             )
 
@@ -801,7 +820,9 @@ class TestClient(unittest.TestCase):
     def test_basic_set(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            msg_uuid = client.set("distinct_id", {"trait": "value"})
+            msg_uuid = client.set(
+                distinct_id="distinct_id", properties={"trait": "value"}
+            )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -819,8 +840,8 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.set(
-                "distinct_id",
-                {"trait": "value"},
+                distinct_id="distinct_id",
+                properties={"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
                 uuid="new-uuid",
             )
@@ -843,7 +864,9 @@ class TestClient(unittest.TestCase):
     def test_basic_set_once(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            msg_uuid = client.set_once("distinct_id", {"trait": "value"})
+            msg_uuid = client.set_once(
+                distinct_id="distinct_id", properties={"trait": "value"}
+            )
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -861,8 +884,8 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.set_once(
-                "distinct_id",
-                {"trait": "value"},
+                distinct_id="distinct_id",
+                properties={"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
                 uuid="new-uuid",
             )
@@ -1051,7 +1074,7 @@ class TestClient(unittest.TestCase):
 
             properties = {"$session_id": session_id, **additional_properties}
             msg_uuid = client.capture(
-                "distinct_id", "python test event", properties=properties
+                "python test event", distinct_id="distinct_id", properties=properties
             )
 
             self.assertIsNotNone(msg_uuid)
@@ -1078,8 +1101,8 @@ class TestClient(unittest.TestCase):
             session_id = "group-session-101"
 
             msg_uuid = client.capture(
-                "distinct_id",
                 "test_event",
+                distinct_id="distinct_id",
                 properties={"$session_id": session_id},
                 groups={"company": "id:5", "instance": "app.posthog.com"},
             )
@@ -1103,8 +1126,8 @@ class TestClient(unittest.TestCase):
             session_id = "anonymous-session-202"
 
             msg_uuid = client.capture(
-                "distinct_id",
                 "anonymous_event",
+                distinct_id="distinct_id",
                 properties={
                     "$session_id": session_id,
                     "$process_person_profile": False,
@@ -1199,7 +1222,9 @@ class TestClient(unittest.TestCase):
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             properties = {"$session_id": session_id, **additional_properties}
-            msg_uuid = client.capture("distinct_id", event_name, properties=properties)
+            msg_uuid = client.capture(
+                event_name, distinct_id="distinct_id", properties=properties
+            )
 
             self.assertIsNotNone(msg_uuid)
 
@@ -1266,8 +1291,8 @@ class TestClient(unittest.TestCase):
             )
 
             msg_uuid = client.capture(
-                "distinct_id",
                 "test_event",
+                distinct_id="distinct_id",
                 properties={"$session_id": event_session_id},
             )
 
@@ -1288,7 +1313,9 @@ class TestClient(unittest.TestCase):
         client = self.client
         # set up the consumer with more requests than a single batch will allow
         for i in range(1000):
-            client.capture("distinct_id", "event", {"trait": "value"})
+            client.capture(
+                "event", distinct_id="distinct_id", properties={"trait": "value"}
+            )
         # We can't reliably assert that the queue is non-empty here; that's
         # a race condition. We do our best to load it up though.
         client.flush()
@@ -1299,7 +1326,9 @@ class TestClient(unittest.TestCase):
         client = self.client
         # set up the consumer with more requests than a single batch will allow
         for i in range(1000):
-            client.capture("distinct_id", "test event", {"trait": "value"})
+            client.capture(
+                "test event", distinct_id="distinct_id", properties={"trait": "value"}
+            )
         client.shutdown()
         # we expect two things after shutdown:
         # 1. client queue is empty
@@ -1312,7 +1341,7 @@ class TestClient(unittest.TestCase):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
 
-            msg_uuid = client.capture("distinct_id", "test event")
+            msg_uuid = client.capture("test event", distinct_id="distinct_id")
             self.assertFalse(client.consumers)
             self.assertTrue(client.queue.empty())
             self.assertIsNotNone(msg_uuid)
@@ -1326,9 +1355,9 @@ class TestClient(unittest.TestCase):
         client.join()
 
         for i in range(10):
-            client.capture("distinct_id", "test event")
+            client.capture("test event", distinct_id="distinct_id")
 
-        msg_uuid = client.capture("distinct_id", "test event")
+        msg_uuid = client.capture("test event", distinct_id="distinct_id")
         # Make sure we are informed that the queue is at capacity
         self.assertIsNone(msg_uuid)
 
@@ -1336,7 +1365,7 @@ class TestClient(unittest.TestCase):
         Client(six.u("unicode_key"))
 
     def test_numeric_distinct_id(self):
-        self.client.capture(1234, "python event")
+        self.client.capture("python event", distinct_id=1234)
         self.client.flush()
         self.assertFalse(self.failed)
 
@@ -1346,7 +1375,9 @@ class TestClient(unittest.TestCase):
     def test_gzip(self):
         client = Client(FAKE_TEST_API_KEY, on_error=self.fail, gzip=True)
         for _ in range(10):
-            client.capture("distinct_id", "event", {"trait": "value"})
+            client.capture(
+                "event", distinct_id="distinct_id", properties={"trait": "value"}
+            )
         client.flush()
         self.assertFalse(self.failed)
 
@@ -1364,7 +1395,9 @@ class TestClient(unittest.TestCase):
             "posthog.consumer.batch_post", side_effect=mock_post_fn
         ) as mock_post:
             for _ in range(20):
-                client.capture("distinct_id", "event", {"trait": "value"})
+                client.capture(
+                    "event", distinct_id="distinct_id", properties={"trait": "value"}
+                )
             time.sleep(1)
             self.assertEqual(mock_post.call_count, 2)
 
@@ -1380,7 +1413,7 @@ class TestClient(unittest.TestCase):
 
     def test_disabled(self):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
-        msg_uuid = client.capture("distinct_id", "python test event")
+        msg_uuid = client.capture("python test event", distinct_id="distinct_id")
         client.flush()
         self.assertIsNone(msg_uuid)
         self.assertFalse(self.failed)
@@ -1420,7 +1453,7 @@ class TestClient(unittest.TestCase):
                 disabled=False,
                 sync_mode=True,
             )
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
 
             self.assertIsNotNone(msg_uuid)
             self.assertFalse(self.failed)
@@ -1432,7 +1465,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["event"], "python test event")
 
             client.disabled = True
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNone(msg_uuid)
             self.assertFalse(self.failed)
 
@@ -1444,7 +1477,7 @@ class TestClient(unittest.TestCase):
                 disable_geoip=True,
                 sync_mode=True,
             )
-            msg_uuid = client.capture("distinct_id", "python test event")
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
 
             # Get the enqueued message from the mock
@@ -1462,12 +1495,17 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.set(
-                "distinct_id", {"a": "b", "c": "d"}, disable_geoip=True
+                distinct_id="distinct_id",
+                properties={"a": "b", "c": "d"},
+                disable_geoip=True,
             )
             self.assertIsNotNone(msg_uuid)
 
             msg_uuid = client.capture(
-                "distinct_id", "event", {"trait": "value"}, disable_geoip=False
+                "event",
+                distinct_id="distinct_id",
+                properties={"trait": "value"},
+                disable_geoip=False,
             )
             self.assertIsNotNone(msg_uuid)
 
@@ -1493,7 +1531,7 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.capture(
-                "distinct_id", "python test event", disable_geoip=False
+                "python test event", distinct_id="distinct_id", disable_geoip=False
             )
             self.assertIsNotNone(msg_uuid)
 
@@ -1796,7 +1834,9 @@ class TestClient(unittest.TestCase):
                 set_context_session("context-session-123")
 
                 msg_uuid = client.capture(
-                    "distinct_id", "test_event", {"custom_prop": "value"}
+                    "test_event",
+                    distinct_id="distinct_id",
+                    properties={"custom_prop": "value"},
                 )
 
                 self.assertIsNotNone(msg_uuid)
@@ -1820,7 +1860,9 @@ class TestClient(unittest.TestCase):
                     "$session_id": get_context_session_id(),
                     "page_type": "landing",
                 }
-                msg_uuid = client.capture("distinct_id", "$page", properties)
+                msg_uuid = client.capture(
+                    "$page", distinct_id="distinct_id", properties=properties
+                )
 
                 self.assertIsNotNone(msg_uuid)
 
@@ -1843,9 +1885,9 @@ class TestClient(unittest.TestCase):
                 set_context_session("context-session-override")
 
                 msg_uuid = client.capture(
-                    "distinct_id",
                     "test_event",
-                    {
+                    distinct_id="distinct_id",
+                    properties={
                         "$session_id": "explicit-session-override",
                         "custom_prop": "value",
                     },

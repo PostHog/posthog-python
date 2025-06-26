@@ -27,7 +27,7 @@ class TestModule(unittest.TestCase):
         self.assertRaises(Exception, self.posthog.capture)
 
     def test_track(self):
-        res = self.posthog.capture("distinct_id", "python module event")
+        res = self.posthog.capture("python module event", distinct_id="distinct_id")
         self._assert_enqueue_result(res)
         self.posthog.flush()
 

@@ -1,7 +1,8 @@
 import datetime  # noqa: F401
-import warnings
 from typing import Callable, Dict, Optional, Any  # noqa: F401
+from typing_extensions import Unpack
 
+from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ExceptionArg
 from posthog.client import Client
 from posthog.scopes import (
     new_context as inner_new_context,
@@ -67,18 +68,7 @@ default_client = None  # type: Optional[Client]
 # it impossible to write `posthog.capture(distinct-id, event-name)` - basically, to enforce
 # the breaking change made between 5.3.0 and 6.0.0. This decision can be unrolled in later
 # versions, without a breaking change, to get back the type information in function signatures
-def capture(
-    event,  # type: str
-    **kwargs,
-):
-    # type: (...) -> Optional[str]
-    distinct_id = kwargs.get("distinct_id", None)
-    properties = kwargs.get("properties", None)
-    timestamp = kwargs.get("timestamp", None)
-    uuid = kwargs.get("uuid", None)
-    groups = kwargs.get("groups", None)
-    send_feature_flags = kwargs.get("send_feature_flags", False)
-    disable_geoip = kwargs.get("disable_geoip", None)
+def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
     """
     Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
 
@@ -100,26 +90,10 @@ def capture(
     ```
     """
 
-    return _proxy(
-        "capture",
-        distinct_id=distinct_id,
-        event=event,
-        properties=properties,
-        timestamp=timestamp,
-        uuid=uuid,
-        groups=groups,
-        send_feature_flags=send_feature_flags,
-        disable_geoip=disable_geoip,
-    )
+    return _proxy("capture", event, **kwargs)
 
 
-def set(**kwargs):
-    # type: (...) -> Optional[str]
-    distinct_id = kwargs.get("distinct_id", None)
-    properties = kwargs.get("properties", None)
-    timestamp = kwargs.get("timestamp", None)
-    uuid = kwargs.get("uuid", None)
-    disable_geoip = kwargs.get("disable_geoip", None)
+def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record.
     This will overwrite previous people property values, just like `identify`.
@@ -135,23 +109,10 @@ def set(**kwargs):
      ```
     """
 
-    return _proxy(
-        "set",
-        distinct_id=distinct_id,
-        properties=properties,
-        timestamp=timestamp,
-        uuid=uuid,
-        disable_geoip=disable_geoip,
-    )
+    return _proxy("set", **kwargs)
 
 
-def set_once(**kwargs):
-    # type: (...) -> Optional[str]
-    distinct_id = kwargs.get("distinct_id", None)
-    properties = kwargs.get("properties", None)
-    timestamp = kwargs.get("timestamp", None)
-    uuid = kwargs.get("uuid", None)
-    disable_geoip = kwargs.get("disable_geoip", None)
+def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record, only if they do not yet exist.
     This will not overwrite previous people property values, unlike `identify`.
@@ -167,21 +128,13 @@ def set_once(**kwargs):
      })
      ```
     """
-    return _proxy(
-        "set_once",
-        distinct_id=distinct_id,
-        properties=properties,
-        timestamp=timestamp,
-        uuid=uuid,
-        disable_geoip=disable_geoip,
-    )
+    return _proxy("set_once", **kwargs)
 
 
 def group_identify(
     group_type,  # type: str
     group_key,  # type: str
     properties=None,  # type: Optional[Dict]
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
@@ -203,19 +156,11 @@ def group_identify(
      ```
     """
 
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     return _proxy(
         "group_identify",
         group_type=group_type,
         group_key=group_key,
         properties=properties,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
@@ -225,7 +170,6 @@ def group_identify(
 def alias(
     previous_id,  # type: str
     distinct_id,  # type: str
-    context=None,  # type: Optional[Dict]
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
@@ -248,18 +192,10 @@ def alias(
     ```
     """
 
-    if context is not None:
-        warnings.warn(
-            "The 'context' parameter is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
     return _proxy(
         "alias",
         previous_id=previous_id,
         distinct_id=distinct_id,
-        context=context,
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
@@ -267,13 +203,8 @@ def alias(
 
 
 def capture_exception(
-    exception=None,  # type: Optional[BaseException]
-    distinct_id=None,  # type: Optional[str]
-    properties=None,  # type: Optional[Dict]
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    groups=None,  # type: Optional[Dict]
-    **kwargs,
+    exception: Optional[ExceptionArg] = None,  # type: Optional[BaseException]
+    **kwargs: Unpack[OptionalCaptureArgs],
 ):
     # type: (...) -> Optional[str]
     """
@@ -300,16 +231,7 @@ def capture_exception(
     ```
     """
 
-    return _proxy(
-        "capture_exception",
-        exception=exception,
-        distinct_id=distinct_id,
-        properties=properties,
-        timestamp=timestamp,
-        uuid=uuid,
-        groups=groups,
-        **kwargs,
-    )
+    return _proxy("capture_exception", exception=exception, **kwargs)
 
 
 def feature_enabled(
@@ -515,6 +437,8 @@ def shutdown():
 def setup():
     global default_client
     if not default_client:
+        if not api_key:
+            raise ValueError("API key is required")
         default_client = Client(
             api_key,
             host=host,
@@ -523,7 +447,6 @@ def setup():
             send=send,
             sync_mode=sync_mode,
             personal_api_key=personal_api_key,
-            project_api_key=project_api_key,
             poll_interval=poll_interval,
             disabled=disabled,
             disable_geoip=disable_geoip,

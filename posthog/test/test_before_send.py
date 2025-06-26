@@ -47,7 +47,9 @@ class TestClient(unittest.TestCase):
                 before_send=my_before_send,
                 sync_mode=True,
             )
-            msg_uuid = client.capture("user1", "test_event", {"original": "value"})
+            msg_uuid = client.capture(
+                "test_event", distinct_id="user1", properties={"original": "value"}
+            )
 
             self.assertIsNotNone(msg_uuid)
 
@@ -80,11 +82,11 @@ class TestClient(unittest.TestCase):
             )
 
             # Event should be dropped
-            msg_uuid = client.capture("user1", "test_drop_me")
+            msg_uuid = client.capture("test_drop_me", distinct_id="user1")
             self.assertIsNone(msg_uuid)
 
             # Event should go through
-            msg_uuid = client.capture("user1", "keep_me")
+            msg_uuid = client.capture("keep_me", distinct_id="user1")
             self.assertIsNotNone(msg_uuid)
 
             # Check the enqueued message
@@ -106,7 +108,7 @@ class TestClient(unittest.TestCase):
                 before_send=buggy_before_send,
                 sync_mode=True,
             )
-            msg_uuid = client.capture("user1", "robust_event")
+            msg_uuid = client.capture("robust_event", distinct_id="user1")
 
             # Event should still be sent despite the exception
             self.assertIsNotNone(msg_uuid)
@@ -135,11 +137,11 @@ class TestClient(unittest.TestCase):
             )
 
             # Test capture
-            msg_uuid = client.capture("user1", "event")
+            msg_uuid = client.capture("event", distinct_id="user1")
             self.assertIsNotNone(msg_uuid)
 
             # Test set
-            msg_uuid = client.set("user1", {"prop": "value"})
+            msg_uuid = client.set(distinct_id="user1", properties={"prop": "value"})
             self.assertIsNotNone(msg_uuid)
 
             # Check all events were marked
@@ -158,7 +160,7 @@ class TestClient(unittest.TestCase):
                 before_send=None,
                 sync_mode=True,
             )
-            msg_uuid = client.capture("user1", "normal_event")
+            msg_uuid = client.capture("normal_event", distinct_id="user1")
             self.assertIsNotNone(msg_uuid)
 
             # Check the event was sent normally
@@ -195,9 +197,9 @@ class TestClient(unittest.TestCase):
                 sync_mode=True,
             )
             msg_uuid = client.capture(
-                "user1",
                 "form_submit",
-                {
+                distinct_id="user1",
+                properties={
                     "email": "user@example.com",
                     "credit_card": "1234-5678-9012-3456",
                     "form_name": "contact",

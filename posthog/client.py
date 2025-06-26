@@ -1,15 +1,16 @@
 import atexit
 import logging
-import numbers
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Optional, Union
-from uuid import UUID, uuid4
+from typing import Any, Dict, Optional, Union
+from typing_extensions import Unpack
+from uuid import uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
 
+from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ID_TYPES, ExceptionArg
 from posthog.consumer import Consumer
 from posthog.scopes import new_context
 from posthog.exception_capture import ExceptionCapture
@@ -63,7 +64,6 @@ except ImportError:
     import Queue as queue
 
 
-ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
 
 
@@ -71,7 +71,6 @@ def get_identity_state(passed) -> tuple[str, bool]:
     """Returns the distinct id to use, and whether this is a personless event or not"""
     stringified = stringify_id(passed)
     if stringified and len(stringified):
-        require("distinct_id", passed, ID_TYPES)
         return (stringified, False)
 
     context_id = get_context_distinct_id()
@@ -102,7 +101,7 @@ class Client(object):
 
     def __init__(
         self,
-        api_key=None,
+        project_api_key: str,
         host=None,
         debug=False,
         max_queue_size=10000,
@@ -117,7 +116,6 @@ class Client(object):
         thread=1,
         poll_interval=30,
         personal_api_key=None,
-        project_api_key=None,
         disabled=False,
         disable_geoip=True,
         historical_migration=False,
@@ -132,9 +130,7 @@ class Client(object):
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
-        self.api_key = project_api_key or api_key
-
-        require("api_key", self.api_key, string_types)
+        self.api_key = project_api_key
 
         self.on_error = on_error
         self.debug = debug
@@ -302,8 +298,8 @@ class Client(object):
 
     def get_flags_decision(
         self,
-        distinct_id,
-        groups=None,
+        distinct_id: Optional[ID_TYPES] = None,
+        groups: Optional[dict] = {},
         person_properties=None,
         group_properties=None,
         disable_geoip=None,
@@ -314,14 +310,11 @@ class Client(object):
 
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
-        require("distinct_id", distinct_id, ID_TYPES)
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
 
-        if groups:
-            require("groups", groups, dict)
-        else:
+        if not groups:
             groups = {}
 
         request_data = {
@@ -342,22 +335,17 @@ class Client(object):
         return normalize_flags_response(resp_data)
 
     def capture(
-        self,
-        distinct_id=None,
-        event=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        groups=None,
-        send_feature_flags=False,
-        disable_geoip=None,
-    ):
-        # type: (...) -> Optional[str]
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        groups = kwargs.get("groups", None)
+        send_feature_flags = kwargs.get("send_feature_flags", False)
+        disable_geoip = kwargs.get("disable_geoip", None)
 
         properties = {**(properties or {}), **system_context()}
-
-        require("properties", properties, dict)
-        require("event", event, string_types)
 
         properties = add_context_tags(properties)
 
@@ -375,7 +363,6 @@ class Client(object):
         }
 
         if groups:
-            require("groups", groups, dict)
             msg["properties"]["$groups"] = groups
 
         extra_properties: dict[str, Any] = {}
@@ -415,17 +402,14 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
-    def set(
-        self,
-        distinct_id=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
+    def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        disable_geoip = kwargs.get("disable_geoip", None)
+
         properties = properties or {}
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
 
         properties = add_context_tags(properties)
 
@@ -444,17 +428,13 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
-    def set_once(
-        self,
-        distinct_id=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
+    def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        disable_geoip = kwargs.get("disable_geoip", None)
         properties = properties or {}
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
 
         properties = add_context_tags(properties)
 
@@ -475,8 +455,8 @@ class Client(object):
 
     def group_identify(
         self,
-        group_type=None,
-        group_key=None,
+        group_type: str,
+        group_key: str,
         properties=None,
         timestamp=None,
         uuid=None,
@@ -484,9 +464,6 @@ class Client(object):
         distinct_id=None,
     ):
         properties = properties or {}
-        require("group_type", group_type, ID_TYPES)
-        require("group_key", group_key, ID_TYPES)
-        require("properties", properties, dict)
 
         # group_identify is purposefully always personful
         distinct_id = get_identity_state(distinct_id)[0]
@@ -511,8 +488,8 @@ class Client(object):
 
     def alias(
         self,
-        previous_id=None,
-        distinct_id=None,
+        previous_id: str,
+        distinct_id: Optional[str],
         timestamp=None,
         uuid=None,
         disable_geoip=None,
@@ -521,8 +498,6 @@ class Client(object):
 
         if personless:
             return None  # Personless alias() does nothing - should this throw?
-
-        require("previous_id", previous_id, ID_TYPES)
 
         msg = {
             "properties": {
@@ -542,14 +517,13 @@ class Client(object):
 
     def capture_exception(
         self,
-        exception=None,
-        distinct_id=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        groups=None,
-        **kwargs,
+        exception: Optional[ExceptionArg],
+        **kwargs: Unpack[OptionalCaptureArgs],
     ):
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        send_feature_flags = kwargs.get("send_feature_flags", True)
+        disable_geoip = kwargs.get("disable_geoip", None)
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
         try:
@@ -559,8 +533,6 @@ class Client(object):
             if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
                 return None
-
-            require("properties", properties, dict)
 
             if exception is not None:
                 exc_info = exc_info_from_error(exception)
@@ -598,8 +570,18 @@ class Client(object):
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
 
+            timestamp = kwargs.get("timestamp", None)
+            uuid = kwargs.get("uuid", None)
+            groups = kwargs.get("groups", None)
             res = self.capture(
-                distinct_id, "$exception", properties, timestamp, uuid, groups
+                "$exception",
+                distinct_id=distinct_id,
+                properties=properties,
+                timestamp=timestamp,
+                uuid=uuid,
+                groups=groups,
+                send_feature_flags=send_feature_flags,
+                disable_geoip=disable_geoip,
             )
 
             # Mark the exception as captured to prevent duplicate captures
@@ -620,8 +602,6 @@ class Client(object):
         timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.now(tz=tzutc())
-
-        require("timestamp", timestamp, datetime)
 
         # add common
         timestamp = guess_timezone(timestamp)
@@ -870,21 +850,17 @@ class Client(object):
 
     def _get_feature_flag_result(
         self,
-        key,
-        distinct_id,
+        key: str,
+        distinct_id: ID_TYPES,
         *,
         override_match_value: Optional[FlagValue] = None,
-        groups={},
+        groups: Dict[str, str] = {},
         person_properties={},
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
     ) -> Optional[FeatureFlagResult]:
-        require("key", key, string_types)
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
         if self.disabled:
             return None
 
@@ -1010,7 +986,7 @@ class Client(object):
     def _locally_evaluate_flag(
         self,
         key: str,
-        distinct_id: str,
+        distinct_id: ID_TYPES,
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
@@ -1074,7 +1050,7 @@ class Client(object):
     def _get_feature_flag_details_from_decide(
         self,
         key: str,
-        distinct_id: str,
+        distinct_id: ID_TYPES,
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
@@ -1093,12 +1069,12 @@ class Client(object):
 
     def _capture_feature_flag_called(
         self,
-        distinct_id: str,
+        distinct_id: ID_TYPES,
         key: str,
         response: Optional[FlagValue],
         payload: Optional[str],
         flag_was_locally_evaluated: bool,
-        groups: dict[str, str],
+        groups: Dict[str, str],
         disable_geoip: Optional[bool],
         request_id: Optional[str],
         flag_details: Optional[FeatureFlag],
@@ -1136,9 +1112,9 @@ class Client(object):
                         properties["$feature_flag_id"] = flag_details.metadata.id
 
             self.capture(
-                distinct_id,
                 "$feature_flag_called",
-                properties,
+                distinct_id=distinct_id,
+                properties=properties,
                 groups=groups,
                 disable_geoip=disable_geoip,
             )
@@ -1256,16 +1232,13 @@ class Client(object):
 
     def _get_all_flags_and_payloads_locally(
         self,
-        distinct_id,
+        distinct_id: ID_TYPES,
         *,
-        groups={},
+        groups: Dict[str, Union[str, int]],
         person_properties={},
         group_properties={},
         warn_on_unknown_groups=False,
     ) -> tuple[FlagsAndPayloads, bool]:
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
 
@@ -1325,13 +1298,6 @@ class Client(object):
                 }
 
         return all_person_properties, all_group_properties
-
-
-def require(name, field, data_type):
-    """Require that the named `field` has the right `data_type`"""
-    if not isinstance(field, data_type):
-        msg = "{0} must have {1}, got: {2}".format(name, data_type, field)
-        raise AssertionError(msg)
 
 
 def stringify_id(val):

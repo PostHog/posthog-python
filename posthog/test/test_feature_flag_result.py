@@ -229,9 +229,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertEqual(flag_result.variant, None)
         self.assertEqual(flag_result.payload, 300)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
@@ -283,9 +283,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertEqual(flag_result.payload, {"some": "value"})
 
         patch_capture.assert_called_with(
-            "distinct_id",
             "$feature_flag_called",
-            {
+            distinct_id="distinct_id",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": "variant-1",
                 "locally_evaluated": True,
@@ -305,9 +305,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertIsNone(another_flag_result.payload)
 
         patch_capture.assert_called_with(
-            "another-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="another-distinct-id",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": "variant-2",
                 "locally_evaluated": True,
@@ -345,9 +345,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertEqual(flag_result.variant, None)
         self.assertEqual(flag_result.payload, 300)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": False,
@@ -388,9 +388,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
         self.assertEqual(flag_result.get_value(), "variant-1")
         self.assertEqual(flag_result.payload, [1, 2, 3])
         patch_capture.assert_called_with(
-            "distinct_id",
             "$feature_flag_called",
-            {
+            distinct_id="distinct_id",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": "variant-1",
                 "locally_evaluated": False,
@@ -431,9 +431,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
 
         self.assertIsNone(flag_result)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "no-person-flag",
                 "$feature_flag_response": None,
                 "locally_evaluated": False,
