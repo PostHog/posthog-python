@@ -84,7 +84,7 @@ class CallbackHandler(BaseCallbackHandler):
     _client: Client
     """PostHog client instance."""
 
-    _distinct_id: Optional[Union[str, int, float, UUID]]
+    _distinct_id: Optional[Union[str, int, UUID]]
     """Distinct ID of the user to associate the trace with."""
 
     _trace_id: Optional[Union[str, int, float, UUID]]
