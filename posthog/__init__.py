@@ -203,7 +203,7 @@ def alias(
 
 
 def capture_exception(
-    exception: Optional[ExceptionArg] = None,  # type: Optional[BaseException]
+    exception: Optional[ExceptionArg] = None,
     **kwargs: Unpack[OptionalCaptureArgs],
 ):
     """
