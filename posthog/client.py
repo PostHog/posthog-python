@@ -716,7 +716,7 @@ class Client(object):
     def _load_feature_flags(self):
         try:
             # Store old flags to detect changes
-            old_flags_by_key = self.feature_flags_by_key or {}
+            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
 
             response = get(
                 self.personal_api_key,
