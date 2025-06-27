@@ -1,6 +1,7 @@
 import logging
 import numbers
 import re
+import time
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
@@ -155,6 +156,122 @@ class SizeLimitedDict(defaultdict):
             self.clear()
 
         super().__setitem__(key, value)
+
+
+class FlagCacheEntry:
+    def __init__(self, flag_result, flag_definition_version, timestamp=None):
+        self.flag_result = flag_result
+        self.flag_definition_version = flag_definition_version
+        self.timestamp = timestamp or time.time()
+
+    def is_valid(self, current_time, ttl, current_flag_version):
+        time_valid = (current_time - self.timestamp) < ttl
+        version_valid = self.flag_definition_version == current_flag_version
+        return time_valid and version_valid
+
+    def is_stale_but_usable(self, current_time, max_stale_age=3600):
+        return (current_time - self.timestamp) < max_stale_age
+
+
+class FlagCache:
+    def __init__(self, max_size=10000, default_ttl=300):
+        self.cache = {}  # distinct_id -> {flag_key: FlagCacheEntry}
+        self.access_times = {}  # distinct_id -> last_access_time
+        self.max_size = max_size
+        self.default_ttl = default_ttl
+
+    def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
+        current_time = time.time()
+
+        if distinct_id not in self.cache:
+            return None
+
+        user_flags = self.cache[distinct_id]
+        if flag_key not in user_flags:
+            return None
+
+        entry = user_flags[flag_key]
+        if entry.is_valid(current_time, self.default_ttl, current_flag_version):
+            self.access_times[distinct_id] = current_time
+            return entry.flag_result
+
+        return None
+
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=3600):
+        current_time = time.time()
+
+        if distinct_id not in self.cache:
+            return None
+
+        user_flags = self.cache[distinct_id]
+        if flag_key not in user_flags:
+            return None
+
+        entry = user_flags[flag_key]
+        if entry.is_stale_but_usable(current_time, max_stale_age):
+            return entry.flag_result
+
+        return None
+
+    def set_cached_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        current_time = time.time()
+
+        # Evict LRU users if we're at capacity
+        if distinct_id not in self.cache and len(self.cache) >= self.max_size:
+            self._evict_lru()
+
+        # Initialize user cache if needed
+        if distinct_id not in self.cache:
+            self.cache[distinct_id] = {}
+
+        # Store the flag result
+        self.cache[distinct_id][flag_key] = FlagCacheEntry(
+            flag_result, flag_definition_version, current_time
+        )
+        self.access_times[distinct_id] = current_time
+
+    def invalidate_version(self, old_version):
+        users_to_remove = []
+
+        for distinct_id, user_flags in self.cache.items():
+            flags_to_remove = []
+            for flag_key, entry in user_flags.items():
+                if entry.flag_definition_version == old_version:
+                    flags_to_remove.append(flag_key)
+
+            # Remove invalidated flags
+            for flag_key in flags_to_remove:
+                del user_flags[flag_key]
+
+            # Remove user entirely if no flags remain
+            if not user_flags:
+                users_to_remove.append(distinct_id)
+
+        # Clean up empty users
+        for distinct_id in users_to_remove:
+            del self.cache[distinct_id]
+            if distinct_id in self.access_times:
+                del self.access_times[distinct_id]
+
+    def _evict_lru(self):
+        if not self.access_times:
+            return
+
+        # Remove 20% of least recently used entries
+        sorted_users = sorted(self.access_times.items(), key=lambda x: x[1])
+        to_remove = max(1, len(sorted_users) // 5)
+
+        for distinct_id, _ in sorted_users[:to_remove]:
+            if distinct_id in self.cache:
+                del self.cache[distinct_id]
+            if distinct_id in self.access_times:
+                del self.access_times[distinct_id]
+
+    def clear(self):
+        self.cache.clear()
+        self.access_times.clear()
 
 
 def convert_to_datetime_aware(date_obj):

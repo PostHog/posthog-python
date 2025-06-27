@@ -50,6 +50,7 @@ from posthog.types import (
     to_values,
 )
 from posthog.utils import (
+    FlagCache,
     SizeLimitedDict,
     clean,
     guess_timezone,
@@ -126,6 +127,9 @@ class Client(object):
         project_root=None,
         privacy_mode=False,
         before_send=None,
+        enable_flag_cache=True,
+        flag_cache_size=10000,
+        flag_cache_ttl=300,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -151,6 +155,10 @@ class Client(object):
         )
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        self.flag_cache = (
+            FlagCache(flag_cache_size, flag_cache_ttl) if enable_flag_cache else None
+        )
+        self.flag_definition_version = 0
         self.disabled = disabled
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
@@ -707,6 +715,9 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
+            # Store old flags to detect changes
+            old_flags_by_key = self.feature_flags_by_key or {}
+
             response = get(
                 self.personal_api_key,
                 f"/api/feature_flag/local_evaluation/?token={self.api_key}&send_cohorts",
@@ -717,6 +728,12 @@ class Client(object):
             self.feature_flags = response["flags"] or []
             self.group_type_mapping = response["group_type_mapping"] or {}
             self.cohorts = response["cohorts"] or {}
+
+            # Check if flag definitions changed and update version
+            if self.flag_cache and old_flags_by_key != self.feature_flags_by_key:
+                old_version = self.flag_definition_version
+                self.flag_definition_version += 1
+                self.flag_cache.invalidate_version(old_version)
 
         except APIError as e:
             if e.status == 401:
@@ -738,6 +755,10 @@ class Client(object):
                 self.feature_flags = []
                 self.group_type_mapping = {}
                 self.cohorts = {}
+
+                # Clear flag cache when quota limited
+                if self.flag_cache:
+                    self.flag_cache.clear()
 
                 if self.debug:
                     raise APIError(
@@ -889,6 +910,12 @@ class Client(object):
             flag_result = FeatureFlagResult.from_value_and_payload(
                 key, lookup_match_value, payload
             )
+
+            # Cache successful local evaluation
+            if self.flag_cache and flag_result:
+                self.flag_cache.set_cached_flag(
+                    distinct_id, key, flag_result, self.flag_definition_version
+                )
         elif not only_evaluate_locally:
             try:
                 flag_details, request_id = self._get_feature_flag_details_from_decide(
@@ -902,11 +929,29 @@ class Client(object):
                 flag_result = FeatureFlagResult.from_flag_details(
                     flag_details, override_match_value
                 )
+
+                # Cache successful remote evaluation
+                if self.flag_cache and flag_result:
+                    self.flag_cache.set_cached_flag(
+                        distinct_id, key, flag_result, self.flag_definition_version
+                    )
+
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+
+                # Fallback to cached value if remote evaluation fails
+                if self.flag_cache:
+                    stale_result = self.flag_cache.get_stale_cached_flag(
+                        distinct_id, key
+                    )
+                    if stale_result:
+                        self.log.info(
+                            f"[FEATURE FLAGS] Using stale cached value for flag {key}"
+                        )
+                        flag_result = stale_result
 
         if send_feature_flag_events:
             self._capture_feature_flag_called(

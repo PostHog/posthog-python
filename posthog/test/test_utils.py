@@ -1,3 +1,4 @@
+import time
 import unittest
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from pydantic.v1 import BaseModel as BaseModelV1
 
 from posthog import utils
+from posthog.types import FeatureFlagResult
 
 TEST_API_KEY = "kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4"
 FAKE_TEST_API_KEY = "random_key"
@@ -173,3 +175,124 @@ class TestUtils(unittest.TestCase):
                 "inner_optional": None,
             },
         }
+
+
+class TestFlagCache(unittest.TestCase):
+    def setUp(self):
+        self.cache = utils.FlagCache(max_size=3, default_ttl=1)
+        self.flag_result = FeatureFlagResult.from_value_and_payload(
+            "test-flag", True, None
+        )
+
+    def test_cache_basic_operations(self):
+        distinct_id = "user123"
+        flag_key = "test-flag"
+        flag_version = 1
+
+        # Test cache miss
+        result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
+        assert result is None
+
+        # Test cache set and hit
+        self.cache.set_cached_flag(
+            distinct_id, flag_key, self.flag_result, flag_version
+        )
+        result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
+        assert result is not None
+        assert result.get_value()
+
+    def test_cache_ttl_expiration(self):
+        distinct_id = "user123"
+        flag_key = "test-flag"
+        flag_version = 1
+
+        # Set flag in cache
+        self.cache.set_cached_flag(
+            distinct_id, flag_key, self.flag_result, flag_version
+        )
+
+        # Should be available immediately
+        result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
+        assert result is not None
+
+        # Wait for TTL to expire (1 second + buffer)
+        time.sleep(1.1)
+
+        # Should be expired
+        result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
+        assert result is None
+
+    def test_cache_version_invalidation(self):
+        distinct_id = "user123"
+        flag_key = "test-flag"
+        old_version = 1
+        new_version = 2
+
+        # Set flag with old version
+        self.cache.set_cached_flag(distinct_id, flag_key, self.flag_result, old_version)
+
+        # Should hit with old version
+        result = self.cache.get_cached_flag(distinct_id, flag_key, old_version)
+        assert result is not None
+
+        # Should miss with new version
+        result = self.cache.get_cached_flag(distinct_id, flag_key, new_version)
+        assert result is None
+
+        # Invalidate old version
+        self.cache.invalidate_version(old_version)
+
+        # Should miss even with old version after invalidation
+        result = self.cache.get_cached_flag(distinct_id, flag_key, old_version)
+        assert result is None
+
+    def test_stale_cache_functionality(self):
+        distinct_id = "user123"
+        flag_key = "test-flag"
+        flag_version = 1
+
+        # Set flag in cache
+        self.cache.set_cached_flag(
+            distinct_id, flag_key, self.flag_result, flag_version
+        )
+
+        # Wait for TTL to expire
+        time.sleep(1.1)
+
+        # Should not get fresh cache
+        result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
+        assert result is None
+
+        # Should get stale cache (within 1 hour default)
+        stale_result = self.cache.get_stale_cached_flag(distinct_id, flag_key)
+        assert stale_result is not None
+        assert stale_result.get_value()
+
+    def test_lru_eviction(self):
+        # Cache has max_size=3, so adding 4 users should evict the LRU one
+        flag_version = 1
+
+        # Add 3 users
+        for i in range(3):
+            user_id = f"user{i}"
+            self.cache.set_cached_flag(
+                user_id, "test-flag", self.flag_result, flag_version
+            )
+
+        # Access user0 to make it recently used
+        self.cache.get_cached_flag("user0", "test-flag", flag_version)
+
+        # Add 4th user, should evict user1 (least recently used)
+        self.cache.set_cached_flag("user3", "test-flag", self.flag_result, flag_version)
+
+        # user0 should still be there (was recently accessed)
+        result = self.cache.get_cached_flag("user0", "test-flag", flag_version)
+        assert result is not None
+
+        # user2 should still be there (was recently added)
+        result = self.cache.get_cached_flag("user2", "test-flag", flag_version)
+        assert result is not None
+
+        # user3 should be there (just added)
+        result = self.cache.get_cached_flag("user3", "test-flag", flag_version)
+        assert result is not None
