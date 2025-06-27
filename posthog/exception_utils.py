@@ -11,7 +11,24 @@ import re
 import sys
 import types
 from datetime import datetime
-from typing import TYPE_CHECKING
+from types import FrameType, TracebackType  # noqa: F401
+from typing import (  # noqa: F401
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+    TYPE_CHECKING,
+)
+
+from posthog.args import ExcInfo, ExceptionArg  # noqa: F401
 
 try:
     # Python 3.11
@@ -23,85 +40,61 @@ except ImportError:
 
 DEFAULT_MAX_VALUE_LENGTH = 1024
 
+LogLevelStr = Literal["fatal", "critical", "error", "warning", "info", "debug"]
 
-if TYPE_CHECKING:
-    from types import FrameType, TracebackType
-    from typing import (  # noqa: F401
-        Any,
-        Callable,
-        Dict,
-        Iterator,
-        List,
-        Literal,
-        Optional,
-        Set,
-        Tuple,
-        Type,
-        TypedDict,
-        TypeVar,
-        Union,
-        cast,
-    )
-
-    ExcInfo = Union[
-        Tuple[Type[BaseException], BaseException, Optional[TracebackType]],
-        Tuple[None, None, None],
-    ]
-    LogLevelStr = Literal["fatal", "critical", "error", "warning", "info", "debug"]
-
-    Event = TypedDict(
-        "Event",
-        {
-            "breadcrumbs": Dict[
-                Literal["values"], List[Dict[str, Any]]
-            ],  # TODO: We can expand on this type
-            "check_in_id": str,
-            "contexts": Dict[str, Dict[str, object]],
-            "dist": str,
-            "duration": Optional[float],
-            "environment": str,
-            "errors": List[Dict[str, Any]],  # TODO: We can expand on this type
-            "event_id": str,
-            "exception": Dict[
-                Literal["values"], List[Dict[str, Any]]
-            ],  # TODO: We can expand on this type
-            # "extra": MutableMapping[str, object],
-            # "fingerprint": List[str],
-            "level": LogLevelStr,
-            # "logentry": Mapping[str, object],
-            "logger": str,
-            # "measurements": Dict[str, MeasurementValue],
-            "message": str,
-            "modules": Dict[str, str],
-            # "monitor_config": Mapping[str, object],
-            "monitor_slug": Optional[str],
-            "platform": Literal["python"],
-            "profile": object,
-            "release": str,
-            "request": Dict[str, object],
-            # "sdk": Mapping[str, object],
-            "server_name": str,
-            "spans": List[Dict[str, object]],
-            "stacktrace": Dict[
-                str, object
-            ],  # We access this key in the code, but I am unsure whether we ever set it
-            "start_timestamp": datetime,
-            "status": Optional[str],
-            # "tags": MutableMapping[
-            #     str, str
-            # ],  # Tags must be less than 200 characters each
-            "threads": Dict[
-                Literal["values"], List[Dict[str, Any]]
-            ],  # TODO: We can expand on this type
-            "timestamp": Optional[datetime],  # Must be set before sending the event
-            "transaction": str,
-            # "transaction_info": Mapping[str, Any],  # TODO: We can expand on this type
-            "type": Literal["check_in", "transaction"],
-            "user": Dict[str, object],
-            "_metrics_summary": Dict[str, object],
-        },
-        total=False,
-    )
+Event = TypedDict(
+    "Event",
+    {
+        "breadcrumbs": Dict[
+            Literal["values"], List[Dict[str, Any]]
+        ],  # TODO: We can expand on this type
+        "check_in_id": str,
+        "contexts": Dict[str, Dict[str, object]],
+        "dist": str,
+        "duration": Optional[float],
+        "environment": str,
+        "errors": List[Dict[str, Any]],  # TODO: We can expand on this type
+        "event_id": str,
+        "exception": Dict[
+            Literal["values"], List[Dict[str, Any]]
+        ],  # TODO: We can expand on this type
+        # "extra": MutableMapping[str, object],
+        # "fingerprint": List[str],
+        "level": LogLevelStr,
+        # "logentry": Mapping[str, object],
+        "logger": str,
+        # "measurements": Dict[str, MeasurementValue],
+        "message": str,
+        "modules": Dict[str, str],
+        # "monitor_config": Mapping[str, object],
+        "monitor_slug": Optional[str],
+        "platform": Literal["python"],
+        "profile": object,
+        "release": str,
+        "request": Dict[str, object],
+        # "sdk": Mapping[str, object],
+        "server_name": str,
+        "spans": List[Dict[str, object]],
+        "stacktrace": Dict[
+            str, object
+        ],  # We access this key in the code, but I am unsure whether we ever set it
+        "start_timestamp": datetime,
+        "status": Optional[str],
+        # "tags": MutableMapping[
+        #     str, str
+        # ],  # Tags must be less than 200 characters each
+        "threads": Dict[
+            Literal["values"], List[Dict[str, Any]]
+        ],  # TODO: We can expand on this type
+        "timestamp": Optional[datetime],  # Must be set before sending the event
+        "transaction": str,
+        # "transaction_info": Mapping[str, Any],  # TODO: We can expand on this type
+        "type": Literal["check_in", "transaction"],
+        "user": Dict[str, object],
+        "_metrics_summary": Dict[str, object],
+    },
+    total=False,
+)
 
 
 epoch = datetime(1970, 1, 1)
@@ -362,12 +355,9 @@ def filename_for_module(module, abs_path):
 def serialize_frame(
     frame,
     tb_lineno=None,
-    include_local_variables=True,
-    include_source_context=True,
     max_value_length=None,
-    custom_repr=None,
 ):
-    # type: (FrameType, Optional[int], bool, bool, Optional[int], Optional[Callable[..., Optional[str]]]) -> Dict[str, Any]
+    # type: (FrameType, Optional[int], Optional[int]) -> Dict[str, Any]
     f_code = getattr(frame, "f_code", None)
     if not f_code:
         abs_path = None
@@ -392,43 +382,11 @@ def serialize_frame(
         "lineno": tb_lineno,
     }  # type: Dict[str, Any]
 
-    if include_source_context:
-        rv["pre_context"], rv["context_line"], rv["post_context"] = get_source_context(
-            frame, tb_lineno, max_value_length
-        )
-
-    if include_local_variables:
-        # TODO - we don't support local variables, yet
-        pass
+    rv["pre_context"], rv["context_line"], rv["post_context"] = get_source_context(
+        frame, tb_lineno, max_value_length
+    )
 
     return rv
-
-
-def current_stacktrace(
-    include_local_variables=True,  # type: bool
-    include_source_context=True,  # type: bool
-    max_value_length=None,  # type: Optional[int]
-):
-    # type: (...) -> Dict[str, Any]
-    __tracebackhide__ = True
-    frames = []
-
-    f = sys._getframe()  # type: Optional[FrameType]
-    while f is not None:
-        if not should_hide_frame(f):
-            frames.append(
-                serialize_frame(
-                    f,
-                    include_local_variables=include_local_variables,
-                    include_source_context=include_source_context,
-                    max_value_length=max_value_length,
-                )
-            )
-        f = f.f_back
-
-    frames.reverse()
-
-    return {"frames": frames, "type": "raw"}
 
 
 def get_errno(exc_value):
@@ -451,7 +409,6 @@ def single_exception_from_error_tuple(
     exc_type,  # type: Optional[type]
     exc_value,  # type: Optional[BaseException]
     tb,  # type: Optional[TracebackType]
-    client_options=None,  # type: Optional[Dict[str, Any]]
     mechanism=None,  # type: Optional[Dict[str, Any]]
     exception_id=None,  # type: Optional[int]
     parent_id=None,  # type: Optional[int]
@@ -499,25 +456,13 @@ def single_exception_from_error_tuple(
     exception_value["type"] = get_type_name(exc_type)
     exception_value["value"] = get_error_message(exc_value)
 
-    if client_options is None:
-        include_local_variables = True
-        include_source_context = True
-        max_value_length = DEFAULT_MAX_VALUE_LENGTH  # fallback
-        custom_repr = None
-    else:
-        include_local_variables = client_options["include_local_variables"]
-        include_source_context = client_options["include_source_context"]
-        max_value_length = client_options["max_value_length"]
-        custom_repr = client_options.get("custom_repr")
+    max_value_length = DEFAULT_MAX_VALUE_LENGTH  # fallback
 
     frames = [
         serialize_frame(
             tb.tb_frame,
             tb_lineno=tb.tb_lineno,
-            include_local_variables=include_local_variables,
-            include_source_context=include_source_context,
             max_value_length=max_value_length,
-            custom_repr=custom_repr,
         )
         for tb in iter_stacks(tb)
     ]
@@ -573,7 +518,6 @@ def exceptions_from_error(
     exc_type,  # type: Optional[type]
     exc_value,  # type: Optional[BaseException]
     tb,  # type: Optional[TracebackType]
-    client_options=None,  # type: Optional[Dict[str, Any]]
     mechanism=None,  # type: Optional[Dict[str, Any]]
     exception_id=0,  # type: int
     parent_id=0,  # type: int
@@ -589,7 +533,6 @@ def exceptions_from_error(
         exc_type=exc_type,
         exc_value=exc_value,
         tb=tb,
-        client_options=client_options,
         mechanism=mechanism,
         exception_id=exception_id,
         parent_id=parent_id,
@@ -617,7 +560,6 @@ def exceptions_from_error(
                 exc_type=type(cause),
                 exc_value=cause,
                 tb=getattr(cause, "__traceback__", None),
-                client_options=client_options,
                 mechanism=mechanism,
                 exception_id=exception_id,
                 source="__cause__",
@@ -638,7 +580,6 @@ def exceptions_from_error(
                 exc_type=type(context),
                 exc_value=context,
                 tb=getattr(context, "__traceback__", None),
-                client_options=client_options,
                 mechanism=mechanism,
                 exception_id=exception_id,
                 source="__context__",
@@ -653,7 +594,6 @@ def exceptions_from_error(
                 exc_type=type(e),
                 exc_value=e,
                 tb=getattr(e, "__traceback__", None),
-                client_options=client_options,
                 mechanism=mechanism,
                 exception_id=exception_id,
                 parent_id=parent_id,
@@ -666,7 +606,6 @@ def exceptions_from_error(
 
 def exceptions_from_error_tuple(
     exc_info,  # type: ExcInfo
-    client_options=None,  # type: Optional[Dict[str, Any]]
     mechanism=None,  # type: Optional[Dict[str, Any]]
 ):
     # type: (...) -> List[Dict[str, Any]]
@@ -681,7 +620,6 @@ def exceptions_from_error_tuple(
             exc_type=exc_type,
             exc_value=exc_value,
             tb=tb,
-            client_options=client_options,
             mechanism=mechanism,
             exception_id=0,
             parent_id=0,
@@ -691,9 +629,7 @@ def exceptions_from_error_tuple(
         exceptions = []
         for exc_type, exc_value, tb in walk_exception_chain(exc_info):
             exceptions.append(
-                single_exception_from_error_tuple(
-                    exc_type, exc_value, tb, client_options, mechanism
-                )
+                single_exception_from_error_tuple(exc_type, exc_value, tb, mechanism)
             )
 
     exceptions.reverse()
@@ -783,7 +719,7 @@ def set_in_app_in_frames(frames, in_app_exclude, in_app_include, project_root=No
 
 
 def exception_is_already_captured(error):
-    # type: (Union[BaseException, ExcInfo]) -> bool
+    # type: (ExceptionArg) -> bool
     if isinstance(error, BaseException):
         return hasattr(error, "__posthog_exception_captured")
     # Autocaptured exceptions are passed as a tuple from our system hooks,
@@ -796,19 +732,21 @@ def exception_is_already_captured(error):
         return False  # type: ignore[unreachable]
 
 
-def mark_exception_as_captured(error):
-    # type: (Union[BaseException, ExcInfo]) -> None
+def mark_exception_as_captured(error, uuid):
+    # type: (ExceptionArg, str) -> None
     if isinstance(error, BaseException):
         setattr(error, "__posthog_exception_captured", True)
+        setattr(error, "__posthog_exception_uuid", uuid)
     # Autocaptured exceptions are passed as a tuple from our system hooks,
     # the second item is the exception value (the first is the exception type)
     elif isinstance(error, tuple) and len(error) > 1:
         if error[1] is not None:
             setattr(error[1], "__posthog_exception_captured", True)
+            setattr(error[1], "__posthog_exception_uuid", uuid)
 
 
 def exc_info_from_error(error):
-    # type: (Union[BaseException, ExcInfo]) -> ExcInfo
+    # type: (ExceptionArg) -> ExcInfo
     if isinstance(error, tuple) and len(error) == 3:
         exc_type, exc_value, tb = error
     elif isinstance(error, BaseException):
@@ -863,27 +801,6 @@ def construct_artificial_traceback(e):
         tb = types.TracebackType(tb, frame, frame.f_lasti, frame.f_lineno)
 
     setattr(e, "__traceback__", tb)
-
-
-def event_from_exception(
-    exc_info,  # type: Union[BaseException, ExcInfo]
-    client_options=None,  # type: Optional[Dict[str, Any]]
-    mechanism=None,  # type: Optional[Dict[str, Any]]
-):
-    # type: (...) -> Tuple[Event, Dict[str, Any]]
-    exc_info = exc_info_from_error(exc_info)
-    hint = event_hint_with_exc_info(exc_info)
-    return (
-        {
-            "level": "error",
-            "exception": {
-                "values": exceptions_from_error_tuple(
-                    exc_info, client_options, mechanism
-                )
-            },
-        },
-        hint,
-    )
 
 
 def _module_in_list(name, items):

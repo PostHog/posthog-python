@@ -7,8 +7,7 @@ class TestModule(unittest.TestCase):
     posthog = None
 
     def _assert_enqueue_result(self, result):
-        self.assertEqual(type(result[0]), bool)
-        self.assertEqual(type(result[1]), dict)
+        self.assertEqual(type(result[0]), str)
 
     def failed(self):
         self.failed = True
@@ -28,22 +27,13 @@ class TestModule(unittest.TestCase):
         self.assertRaises(Exception, self.posthog.capture)
 
     def test_track(self):
-        res = self.posthog.capture("distinct_id", "python module event")
-        self._assert_enqueue_result(res)
-        self.posthog.flush()
-
-    def test_identify(self):
-        res = self.posthog.identify("distinct_id", {"email": "user@email.com"})
+        res = self.posthog.capture("python module event", distinct_id="distinct_id")
         self._assert_enqueue_result(res)
         self.posthog.flush()
 
     def test_alias(self):
         res = self.posthog.alias("previousId", "distinct_id")
         self._assert_enqueue_result(res)
-        self.posthog.flush()
-
-    def test_page(self):
-        self.posthog.page("distinct_id", "https://posthog.com/contact")
         self.posthog.flush()
 
     def test_flush(self):

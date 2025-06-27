@@ -2695,9 +2695,9 @@ class TestCaptureCalls(unittest.TestCase):
         )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "complex-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
@@ -2729,9 +2729,9 @@ class TestCaptureCalls(unittest.TestCase):
         )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id2",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id2",
+            properties={
                 "$feature_flag": "complex-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
@@ -2767,9 +2767,9 @@ class TestCaptureCalls(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 1)
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id2",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id2",
+            properties={
                 "$feature_flag": "decide-flag",
                 "$feature_flag_response": "decide-value",
                 "locally_evaluated": False,
@@ -2820,9 +2820,9 @@ class TestCaptureCalls(unittest.TestCase):
         )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "decide-flag",
                 "$feature_flag_response": "decide-variant",
                 "locally_evaluated": False,
@@ -2871,9 +2871,9 @@ class TestCaptureCalls(unittest.TestCase):
         )
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "decide-flag-with-payload",
                 "$feature_flag_response": True,
                 "locally_evaluated": False,
@@ -2948,7 +2948,9 @@ class TestCaptureCalls(unittest.TestCase):
             "featureFlags": {"person-flag": True},
             "featureFlagPayloads": {"person-flag": 300},
         }
-        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
 
         client.feature_flags = [
             {
@@ -2977,9 +2979,9 @@ class TestCaptureCalls(unittest.TestCase):
         # Assert that capture was called once, with the correct parameters
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
@@ -3012,9 +3014,9 @@ class TestCaptureCalls(unittest.TestCase):
 
         self.assertEqual(patch_capture.call_count, 1)
         patch_capture.assert_called_with(
-            "some-distinct-id2",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id2",
+            properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
@@ -3058,9 +3060,9 @@ class TestCaptureCalls(unittest.TestCase):
         )
 
         patch_capture.assert_called_with(
-            "some-distinct-id",
             "$feature_flag_called",
-            {
+            distinct_id="some-distinct-id",
+            properties={
                 "$feature_flag": "complex-flag",
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
@@ -3102,9 +3104,9 @@ class TestCaptureCalls(unittest.TestCase):
                 person_properties={"region": "USA", "name": "Aloha"},
             )
             patch_capture.assert_called_with(
-                distinct_id,
                 "$feature_flag_called",
-                {
+                distinct_id=distinct_id,
+                properties={
                     "$feature_flag": "complex-flag",
                     "$feature_flag_response": True,
                     "locally_evaluated": True,
@@ -5229,7 +5231,9 @@ class TestConsistency(unittest.TestCase):
             "featureFlags": {}
         }  # Ensure decide returns empty flags
 
-        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
         client.feature_flags = [
             {
                 "id": 1,
@@ -5253,7 +5257,9 @@ class TestConsistency(unittest.TestCase):
             "featureFlagPayloads": {"Beta-Feature": {"some": "value"}},
         }
 
-        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
         client.feature_flags = [
             {
                 "id": 1,
@@ -5282,7 +5288,9 @@ class TestConsistency(unittest.TestCase):
             "featureFlagPayloads": {"Beta-Feature": {"some": "value"}},
         }
 
-        client = Client(api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
         client.feature_flags = [
             {
                 "id": 1,

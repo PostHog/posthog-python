@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING, cast
-from posthog import scopes
+from posthog import contexts
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
@@ -78,15 +78,21 @@ class PosthogContextMiddleware:
         # type: (HttpRequest) -> Dict[str, Any]
         tags = {}
 
+        (user_id, user_email) = self.extract_request_user(request)
+
         # Extract session ID from X-POSTHOG-SESSION-ID header
         session_id = request.headers.get("X-POSTHOG-SESSION-ID")
         if session_id:
-            scopes.set_context_session(session_id)
+            contexts.set_context_session(session_id)
 
-        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header
-        distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID")
+        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
+        distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID") or user_id
         if distinct_id:
-            scopes.identify_context(distinct_id)
+            contexts.identify_context(distinct_id)
+
+        # Extract user email
+        if user_email:
+            tags["email"] = user_email
 
         # Extract current URL
         absolute_url = request.build_absolute_uri()
@@ -96,6 +102,20 @@ class PosthogContextMiddleware:
         # Extract request method
         if request.method:
             tags["$request_method"] = request.method
+
+        # Extract request path
+        if request.path:
+            tags["$request_path"] = request.path
+
+        # Extract IP address
+        ip_address = request.headers.get("X-Forwarded-For")
+        if ip_address:
+            tags["$ip_address"] = ip_address
+
+        # Extract user agent
+        user_agent = request.headers.get("User-Agent")
+        if user_agent:
+            tags["$user_agent"] = user_agent
 
         # Apply extra tags if configured
         if self.extra_tags:
@@ -109,13 +129,32 @@ class PosthogContextMiddleware:
 
         return tags
 
+    def extract_request_user(self, request):
+        user_id = None
+        email = None
+
+        user = getattr(request, "user", None)
+
+        if user and getattr(user, "is_authenticated", False):
+            try:
+                user_id = str(user.pk)
+            except Exception:
+                pass
+
+            try:
+                email = str(user.email)
+            except Exception:
+                pass
+
+        return user_id, email
+
     def __call__(self, request):
         # type: (HttpRequest) -> HttpResponse
         if self.request_filter and not self.request_filter(request):
             return self.get_response(request)
 
-        with scopes.new_context(self.capture_exceptions):
+        with contexts.new_context(self.capture_exceptions):
             for k, v in self.extract_tags(request).items():
-                scopes.tag(k, v)
+                contexts.tag(k, v)
 
             return self.get_response(request)

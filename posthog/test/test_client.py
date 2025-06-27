@@ -2,7 +2,7 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
-from posthog.scopes import get_context_session_id, set_context_session, new_context
+from posthog.contexts import get_context_session_id, set_context_session, new_context
 
 import mock
 import six
@@ -39,74 +39,98 @@ class TestClient(unittest.TestCase):
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
 
     def test_requires_api_key(self):
-        self.assertRaises(AssertionError, Client)
+        self.assertRaises(TypeError, Client)
 
     def test_empty_flush(self):
         self.client.flush()
 
     def test_basic_capture(self):
-        client = self.client
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        # these will change between platforms so just asssert on presence here
-        assert msg["properties"]["$python_runtime"] == mock.ANY
-        assert msg["properties"]["$python_version"] == mock.ANY
-        assert msg["properties"]["$os"] == mock.ANY
-        assert msg["properties"]["$os_version"] == mock.ANY
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            # these will change between platforms so just asssert on presence here
+            assert msg["properties"]["$python_runtime"] == mock.ANY
+            assert msg["properties"]["$python_version"] == mock.ANY
+            assert msg["properties"]["$os"] == mock.ANY
+            assert msg["properties"]["$os_version"] == mock.ANY
 
     def test_basic_capture_with_uuid(self):
-        client = self.client
-        uuid = str(uuid4())
-        success, msg = client.capture("distinct_id", "python test event", uuid=uuid)
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            uuid = str(uuid4())
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", uuid=uuid
+            )
+            self.assertEqual(msg_uuid, uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["uuid"], uuid)
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertEqual(msg["uuid"], uuid)
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_capture_with_project_api_key(self):
-        client = Client(project_api_key=FAKE_TEST_API_KEY, on_error=self.set_fail)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                project_api_key=FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                sync_mode=True,
+            )
 
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_super_properties(self):
-        client = Client(FAKE_TEST_API_KEY, super_properties={"source": "repo-name"})
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                super_properties={"source": "repo-name"},
+                sync_mode=True,
+            )
 
-        _, msg = client.capture("distinct_id", "python test event")
-        client.flush()
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNotNone(msg_uuid)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertEqual(msg["properties"]["source"], "repo-name")
+            # Check the enqueued message
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        _, msg = client.identify("distinct_id", {"trait": "value"})
-        client.flush()
-
-        self.assertEqual(msg["$set"]["trait"], "value")
-        self.assertEqual(msg["properties"]["source"], "repo-name")
+            self.assertEqual(msg["event"], "python test event")
+            self.assertEqual(msg["properties"]["source"], "repo-name")
 
     def test_basic_capture_exception(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -115,20 +139,20 @@ class TestClient(unittest.TestCase):
             client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            capture_call = patch_capture.call_args
+            self.assertEqual(capture_call[0][0], "$exception")
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
             exception = Exception("test exception")
-            client.capture_exception(exception, "distinct_id")
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            capture_call = patch_capture.call_args
+            self.assertEqual(capture_call[0][0], "$exception")
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_correct_host_generation(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -136,12 +160,12 @@ class TestClient(unittest.TestCase):
                 FAKE_TEST_API_KEY, on_error=self.set_fail, host="https://aloha.com"
             )
             exception = Exception("test exception")
-            client.capture_exception(exception, "distinct_id")
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            call = patch_capture.call_args
+            self.assertEqual(call[0][0], "$exception")
+            self.assertEqual(call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_correct_host_generation_for_server_hosts(
         self,
@@ -153,12 +177,12 @@ class TestClient(unittest.TestCase):
                 host="https://app.posthog.com",
             )
             exception = Exception("test exception")
-            client.capture_exception(exception, "distinct_id")
+            client.capture_exception(exception, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
+            capture_call = patch_capture.call_args
+            self.assertEqual(capture_call[0][0], "$exception")
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
     def test_basic_capture_exception_with_no_exception_given(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -166,51 +190,69 @@ class TestClient(unittest.TestCase):
             try:
                 raise Exception("test exception")
             except Exception:
-                client.capture_exception(distinct_id="distinct_id")
+                client.capture_exception(None, distinct_id="distinct_id")
 
             self.assertTrue(patch_capture.called)
-            capture_call = patch_capture.call_args[0]
-            self.assertEqual(capture_call[0], "distinct_id")
-            self.assertEqual(capture_call[1], "$exception")
-            self.assertEqual(capture_call[2]["$exception_type"], "Exception")
-            self.assertEqual(capture_call[2]["$exception_message"], "test exception")
+            capture_call = patch_capture.call_args
+            print(capture_call)
+            self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
+            self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["mechanism"]["type"], "generic"
+                capture_call[1]["properties"]["$exception_type"], "Exception"
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["mechanism"]["handled"], True
-            )
-            self.assertEqual(capture_call[2]["$exception_list"][0]["module"], None)
-            self.assertEqual(capture_call[2]["$exception_list"][0]["type"], "Exception")
-            self.assertEqual(
-                capture_call[2]["$exception_list"][0]["value"], "test exception"
+                capture_call[1]["properties"]["$exception_message"], "test exception"
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["type"],
+                capture_call[1]["properties"]["$exception_list"][0]["mechanism"][
+                    "type"
+                ],
+                "generic",
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["mechanism"][
+                    "handled"
+                ],
+                True,
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["module"], None
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["type"], "Exception"
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["value"],
+                "test exception",
+            )
+            self.assertEqual(
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "type"
+                ],
                 "raw",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "filename"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["filename"],
                 "posthog/test/test_client.py",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "function"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["function"],
                 "test_basic_capture_exception_with_no_exception_given",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "module"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["module"],
                 "posthog.test.test_client",
             )
             self.assertEqual(
-                capture_call[2]["$exception_list"][0]["stacktrace"]["frames"][0][
-                    "in_app"
-                ],
+                capture_call[1]["properties"]["$exception_list"][0]["stacktrace"][
+                    "frames"
+                ][0]["in_app"],
                 True,
             )
 
@@ -218,7 +260,7 @@ class TestClient(unittest.TestCase):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             with self.assertLogs("posthog", level="WARNING") as logs:
                 client = self.client
-                client.capture_exception()
+                client.capture_exception(None)
 
                 self.assertFalse(patch_capture.called)
                 self.assertEqual(
@@ -230,48 +272,52 @@ class TestClient(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY, log_captured_exceptions=True)
         with self.assertLogs("posthog", level="ERROR") as logs:
             client.capture_exception(
-                Exception("test exception"), "distinct_id", path="one/two/three"
+                Exception("test exception"), distinct_id="distinct_id"
             )
             self.assertEqual(
                 logs.output[0], "ERROR:posthog:test exception\nNoneType: None"
             )
-            self.assertEqual(getattr(logs.records[0], "path"), "one/two/three")
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
 
-        client = Client(
-            FAKE_TEST_API_KEY,
-            on_error=self.set_fail,
-            personal_api_key=FAKE_TEST_API_KEY,
-        )
-        success, msg = client.capture(
-            "distinct_id", "python test event", send_feature_flags=True
-        )
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", send_feature_flags=True
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
-        self.assertEqual(msg["properties"]["$active_feature_flags"], ["beta-feature"])
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        self.assertEqual(patch_flags.call_count, 1)
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(
+                msg["properties"]["$feature/beta-feature"], "random-variant"
+            )
+            self.assertEqual(
+                msg["properties"]["$active_feature_flags"], ["beta-feature"]
+            )
+
+            self.assertEqual(patch_flags.call_count, 1)
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_locally_evaluated_feature_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
-        client = Client(
-            FAKE_TEST_API_KEY,
-            on_error=self.set_fail,
-            personal_api_key=FAKE_TEST_API_KEY,
-        )
 
         multivariate_flag = {
             "id": 1,
@@ -358,40 +404,64 @@ class TestClient(unittest.TestCase):
                 "payloads": {"true": 300},
             },
         }
-        client.feature_flags = [multivariate_flag, basic_flag, false_flag]
 
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            client.feature_flags = [multivariate_flag, basic_flag, false_flag]
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(
-            msg["properties"]["$feature/beta-feature-local"], "third-variant"
-        )
-        self.assertEqual(msg["properties"]["$feature/false-flag"], False)
-        self.assertEqual(
-            msg["properties"]["$active_feature_flags"], ["beta-feature-local"]
-        )
-        assert "$feature/beta-feature" not in msg["properties"]
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(patch_flags.call_count, 0)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(
+                msg["properties"]["$feature/beta-feature-local"], "third-variant"
+            )
+            self.assertEqual(msg["properties"]["$feature/false-flag"], False)
+            self.assertEqual(
+                msg["properties"]["$active_feature_flags"], ["beta-feature-local"]
+            )
+            assert "$feature/beta-feature" not in msg["properties"]
+
+            self.assertEqual(patch_flags.call_count, 0)
 
         # test that flags are not evaluated without local evaluation
-        client.feature_flags = []
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        assert "$feature/beta-feature" not in msg["properties"]
-        assert "$feature/beta-feature-local" not in msg["properties"]
-        assert "$feature/false-flag" not in msg["properties"]
-        assert "$active_feature_flags" not in msg["properties"]
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            client.feature_flags = []
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            assert "$feature/beta-feature" not in msg["properties"]
+            assert "$feature/beta-feature-local" not in msg["properties"]
+            assert "$feature/false-flag" not in msg["properties"]
+            assert "$active_feature_flags" not in msg["properties"]
 
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_quota_limited(self, patch_get):
@@ -415,11 +485,6 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
-        client = Client(
-            FAKE_TEST_API_KEY,
-            on_error=self.set_fail,
-            personal_api_key=FAKE_TEST_API_KEY,
-        )
 
         multivariate_flag = {
             "id": 1,
@@ -491,33 +556,45 @@ class TestClient(unittest.TestCase):
                 "payloads": {"true": 300},
             },
         }
-        client.feature_flags = [multivariate_flag, basic_flag]
 
-        success, msg = client.capture(
-            "distinct_id",
-            "python test event",
-            {"$feature/beta-feature-local": "my-custom-variant"},
-        )
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            client.feature_flags = [multivariate_flag, basic_flag]
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(
-            msg["properties"]["$feature/beta-feature-local"], "my-custom-variant"
-        )
-        self.assertEqual(
-            msg["properties"]["$active_feature_flags"], ["beta-feature-local"]
-        )
-        assert "$feature/beta-feature" not in msg["properties"]
-        assert "$feature/person-flag" not in msg["properties"]
+            msg_uuid = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                properties={"$feature/beta-feature-local": "my-custom-variant"},
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(patch_flags.call_count, 0)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(
+                msg["properties"]["$feature/beta-feature-local"], "my-custom-variant"
+            )
+            self.assertEqual(
+                msg["properties"]["$active_feature_flags"], ["beta-feature-local"]
+            )
+            assert "$feature/beta-feature" not in msg["properties"]
+            assert "$feature/person-flag" not in msg["properties"]
+
+            self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_returns_active_only(self, patch_flags):
@@ -529,43 +606,51 @@ class TestClient(unittest.TestCase):
             }
         }
 
-        client = Client(
-            FAKE_TEST_API_KEY,
-            on_error=self.set_fail,
-            personal_api_key=FAKE_TEST_API_KEY,
-        )
-        success, msg = client.capture(
-            "distinct_id", "python test event", send_feature_flags=True
-        )
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", send_feature_flags=True
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertTrue(msg["properties"]["$geoip_disable"])
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
-        self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
-        self.assertEqual(
-            msg["properties"]["$active_feature_flags"],
-            ["beta-feature", "alpha-feature"],
-        )
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        self.assertEqual(patch_flags.call_count, 1)
-        patch_flags.assert_called_with(
-            "random_key",
-            "https://us.i.posthog.com",
-            timeout=3,
-            distinct_id="distinct_id",
-            groups={},
-            person_properties=None,
-            group_properties=None,
-            geoip_disable=True,
-        )
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertTrue(msg["properties"]["$geoip_disable"])
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(
+                msg["properties"]["$feature/beta-feature"], "random-variant"
+            )
+            self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
+            self.assertEqual(
+                msg["properties"]["$active_feature_flags"],
+                ["beta-feature", "alpha-feature"],
+            )
+
+            self.assertEqual(patch_flags.call_count, 1)
+            patch_flags.assert_called_with(
+                "random_key",
+                "https://us.i.posthog.com",
+                timeout=3,
+                distinct_id="distinct_id",
+                groups={},
+                person_properties=None,
+                group_properties=None,
+                geoip_disable=True,
+            )
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(
@@ -579,49 +664,57 @@ class TestClient(unittest.TestCase):
             }
         }
 
-        client = Client(
-            FAKE_TEST_API_KEY,
-            host="https://app.posthog.com",
-            on_error=self.set_fail,
-            personal_api_key=FAKE_TEST_API_KEY,
-            disable_geoip=True,
-            feature_flags_request_timeout_seconds=12,
-        )
-        success, msg = client.capture(
-            "distinct_id",
-            "python test event",
-            send_feature_flags=True,
-            disable_geoip=False,
-        )
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                host="https://app.posthog.com",
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                disable_geoip=True,
+                feature_flags_request_timeout_seconds=12,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                send_feature_flags=True,
+                disable_geoip=False,
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertTrue("$geoip_disable" not in msg["properties"])
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["properties"]["$feature/beta-feature"], "random-variant")
-        self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
-        self.assertEqual(
-            msg["properties"]["$active_feature_flags"],
-            ["beta-feature", "alpha-feature"],
-        )
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        self.assertEqual(patch_flags.call_count, 1)
-        patch_flags.assert_called_with(
-            "random_key",
-            "https://us.i.posthog.com",
-            timeout=12,
-            distinct_id="distinct_id",
-            groups={},
-            person_properties=None,
-            group_properties=None,
-            geoip_disable=False,
-        )
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(
+                msg["properties"]["$feature/beta-feature"], "random-variant"
+            )
+            self.assertEqual(msg["properties"]["$feature/alpha-feature"], True)
+            self.assertEqual(
+                msg["properties"]["$active_feature_flags"],
+                ["beta-feature", "alpha-feature"],
+            )
+
+            self.assertEqual(patch_flags.call_count, 1)
+            patch_flags.assert_called_with(
+                "random_key",
+                "https://us.i.posthog.com",
+                timeout=12,
+                distinct_id="distinct_id",
+                groups={},
+                person_properties=None,
+                group_properties=None,
+                geoip_disable=False,
+            )
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_switched_off_doesnt_send_them(
@@ -629,316 +722,325 @@ class TestClient(unittest.TestCase):
     ):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
 
-        client = Client(
-            FAKE_TEST_API_KEY,
-            on_error=self.set_fail,
-            personal_api_key=FAKE_TEST_API_KEY,
-        )
-        success, msg = client.capture(
-            "distinct_id", "python test event", send_feature_flags=False
-        )
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", send_feature_flags=False
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["event"], "python test event")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertTrue("$feature/beta-feature" not in msg["properties"])
-        self.assertTrue("$active_feature_flags" not in msg["properties"])
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        self.assertEqual(patch_flags.call_count, 0)
+            self.assertEqual(msg["event"], "python test event")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertTrue("$feature/beta-feature" not in msg["properties"])
+            self.assertTrue("$active_feature_flags" not in msg["properties"])
+
+            self.assertEqual(patch_flags.call_count, 0)
 
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800
-        client = self.client
-        success, msg = client.capture(
-            distinct_id=157963456373623802, event="python test event"
-        )
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.capture(
+                "python test event", distinct_id=157963456373623802
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["distinct_id"], "157963456373623802")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["distinct_id"], "157963456373623802")
 
     def test_advanced_capture(self):
-        client = self.client
-        success, msg = client.capture(
-            "distinct_id",
-            "python test event",
-            {"property": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                properties={"property": "value"},
+                timestamp=datetime(2014, 9, 3),
+                uuid="new-uuid",
+            )
 
-        self.assertTrue(success)
+            self.assertEqual(msg_uuid, "new-uuid")
 
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["properties"]["property"], "value")
-        self.assertEqual(msg["event"], "python test event")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertEqual(msg["uuid"], "new-uuid")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertTrue("$groups" not in msg["properties"])
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["properties"]["property"], "value")
+            self.assertEqual(msg["event"], "python test event")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertTrue("$groups" not in msg["properties"])
 
     def test_groups_capture(self):
-        success, msg = self.client.capture(
-            "distinct_id",
-            "test_event",
-            groups={"company": "id:5", "instance": "app.posthog.com"},
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.capture(
+                "test_event",
+                distinct_id="distinct_id",
+                groups={"company": "id:5", "instance": "app.posthog.com"},
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(
-            msg["properties"]["$groups"],
-            {"company": "id:5", "instance": "app.posthog.com"},
-        )
+            self.assertIsNotNone(msg_uuid)
 
-    def test_basic_identify(self):
-        client = self.client
-        success, msg = client.identify("distinct_id", {"trait": "value"})
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        self.assertEqual(msg["$set"]["trait"], "value")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-
-    def test_advanced_identify(self):
-        client = self.client
-        success, msg = client.identify(
-            "distinct_id",
-            {"trait": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-        )
-
-        self.assertTrue(success)
-
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["$set"]["trait"], "value")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["uuid"], "new-uuid")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(
+                msg["properties"]["$groups"],
+                {"company": "id:5", "instance": "app.posthog.com"},
+            )
 
     def test_basic_set(self):
-        client = self.client
-        success, msg = client.set("distinct_id", {"trait": "value"})
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.set(
+                distinct_id="distinct_id", properties={"trait": "value"}
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["$set"]["trait"], "value")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["$set"]["trait"], "value")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set(self):
-        client = self.client
-        success, msg = client.set(
-            "distinct_id",
-            {"trait": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.set(
+                distinct_id="distinct_id",
+                properties={"trait": "value"},
+                timestamp=datetime(2014, 9, 3),
+                uuid="new-uuid",
+            )
 
-        self.assertTrue(success)
+            self.assertEqual(msg_uuid, "new-uuid")
 
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["$set"]["trait"], "value")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["uuid"], "new-uuid")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["$set"]["trait"], "value")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_set_once(self):
-        client = self.client
-        success, msg = client.set_once("distinct_id", {"trait": "value"})
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.set_once(
+                distinct_id="distinct_id", properties={"trait": "value"}
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        self.assertEqual(msg["$set_once"]["trait"], "value")
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["$set_once"]["trait"], "value")
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set_once(self):
-        client = self.client
-        success, msg = client.set_once(
-            "distinct_id",
-            {"trait": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.set_once(
+                distinct_id="distinct_id",
+                properties={"trait": "value"},
+                timestamp=datetime(2014, 9, 3),
+                uuid="new-uuid",
+            )
 
-        self.assertTrue(success)
+            self.assertEqual(msg_uuid, "new-uuid")
 
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(msg["$set_once"]["trait"], "value")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["uuid"], "new-uuid")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["$set_once"]["trait"], "value")
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_group_identify(self):
-        success, msg = self.client.group_identify("organization", "id:5")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.group_identify("organization", "id:5")
 
-        self.assertTrue(success)
-        self.assertEqual(msg["event"], "$groupidentify")
-        self.assertEqual(msg["distinct_id"], "$organization_id:5")
-        self.assertEqual(
-            msg["properties"],
-            {
-                "$group_type": "organization",
-                "$group_key": "id:5",
-                "$group_set": {},
-                "$lib": "posthog-python",
-                "$lib_version": VERSION,
-                "$geoip_disable": True,
-            },
-        )
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
+            self.assertIsNotNone(msg_uuid)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "$groupidentify")
+            self.assertEqual(
+                msg["properties"],
+                {
+                    "$group_type": "organization",
+                    "$group_key": "id:5",
+                    "$group_set": {},
+                    "$lib": "posthog-python",
+                    "$lib_version": VERSION,
+                    "$geoip_disable": True,
+                },
+            )
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
 
     def test_basic_group_identify_with_distinct_id(self):
-        success, msg = self.client.group_identify(
-            "organization", "id:5", distinct_id="distinct_id"
-        )
-        self.assertTrue(success)
-        self.assertEqual(msg["event"], "$groupidentify")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(
-            msg["properties"],
-            {
-                "$group_type": "organization",
-                "$group_key": "id:5",
-                "$group_set": {},
-                "$lib": "posthog-python",
-                "$lib_version": VERSION,
-                "$geoip_disable": True,
-            },
-        )
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertIsNone(msg.get("uuid"))
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.group_identify(
+                "organization", "id:5", distinct_id="distinct_id"
+            )
+            self.assertIsNotNone(msg_uuid)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "$groupidentify")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(
+                msg["properties"],
+                {
+                    "$group_type": "organization",
+                    "$group_key": "id:5",
+                    "$group_set": {},
+                    "$lib": "posthog-python",
+                    "$lib_version": VERSION,
+                    "$geoip_disable": True,
+                },
+            )
+            self.assertTrue(isinstance(msg["timestamp"], str))
+            self.assertIsNotNone(msg.get("uuid"))
 
     def test_advanced_group_identify(self):
-        success, msg = self.client.group_identify(
-            "organization",
-            "id:5",
-            {"trait": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.group_identify(
+                "organization",
+                "id:5",
+                {"trait": "value"},
+                timestamp=datetime(2014, 9, 3),
+                uuid="new-uuid",
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["event"], "$groupidentify")
-        self.assertEqual(msg["distinct_id"], "$organization_id:5")
-        self.assertEqual(
-            msg["properties"],
-            {
-                "$group_type": "organization",
-                "$group_key": "id:5",
-                "$group_set": {"trait": "value"},
-                "$lib": "posthog-python",
-                "$lib_version": VERSION,
-                "$geoip_disable": True,
-            },
-        )
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg_uuid, "new-uuid")
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "$groupidentify")
+            self.assertEqual(
+                msg["properties"],
+                {
+                    "$group_type": "organization",
+                    "$group_key": "id:5",
+                    "$group_set": {"trait": "value"},
+                    "$lib": "posthog-python",
+                    "$lib_version": VERSION,
+                    "$geoip_disable": True,
+                },
+            )
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
 
     def test_advanced_group_identify_with_distinct_id(self):
-        success, msg = self.client.group_identify(
-            "organization",
-            "id:5",
-            {"trait": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-            distinct_id="distinct_id",
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.group_identify(
+                "organization",
+                "id:5",
+                {"trait": "value"},
+                timestamp=datetime(2014, 9, 3),
+                uuid="new-uuid",
+                distinct_id="distinct_id",
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["event"], "$groupidentify")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg_uuid, "new-uuid")
 
-        self.assertEqual(
-            msg["properties"],
-            {
-                "$group_type": "organization",
-                "$group_key": "id:5",
-                "$group_set": {"trait": "value"},
-                "$lib": "posthog-python",
-                "$lib_version": VERSION,
-                "$geoip_disable": True,
-            },
-        )
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "$groupidentify")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+
+            self.assertEqual(
+                msg["properties"],
+                {
+                    "$group_type": "organization",
+                    "$group_key": "id:5",
+                    "$group_set": {"trait": "value"},
+                    "$lib": "posthog-python",
+                    "$lib_version": VERSION,
+                    "$geoip_disable": True,
+                },
+            )
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
 
     def test_basic_alias(self):
-        client = self.client
-        success, msg = client.alias("previousId", "distinct_id")
-        client.flush()
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["properties"]["distinct_id"], "previousId")
-        self.assertEqual(msg["properties"]["alias"], "distinct_id")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.alias("previousId", "distinct_id")
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-    def test_basic_page(self):
-        client = self.client
-        success, msg = client.page("distinct_id", url="https://posthog.com/contact")
-        self.assertFalse(self.failed)
-        client.flush()
-        self.assertTrue(success)
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(
-            msg["properties"]["$current_url"], "https://posthog.com/contact"
-        )
-
-    def test_basic_page_distinct_uuid(self):
-        client = self.client
-        distinct_id = uuid4()
-        success, msg = client.page(distinct_id, url="https://posthog.com/contact")
-        self.assertFalse(self.failed)
-        client.flush()
-        self.assertTrue(success)
-        self.assertEqual(msg["distinct_id"], str(distinct_id))
-        self.assertEqual(
-            msg["properties"]["$current_url"], "https://posthog.com/contact"
-        )
-
-    def test_advanced_page(self):
-        client = self.client
-        success, msg = client.page(
-            "distinct_id",
-            "https://posthog.com/contact",
-            {"property": "value"},
-            timestamp=datetime(2014, 9, 3),
-            uuid="new-uuid",
-        )
-
-        self.assertTrue(success)
-
-        self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
-        self.assertEqual(
-            msg["properties"]["$current_url"], "https://posthog.com/contact"
-        )
-        self.assertEqual(msg["properties"]["property"], "value")
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-        self.assertTrue(isinstance(msg["timestamp"], str))
-        self.assertEqual(msg["uuid"], "new-uuid")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+            self.assertEqual(msg["properties"]["distinct_id"], "previousId")
+            self.assertEqual(msg["properties"]["alias"], "distinct_id")
 
     @parameterized.expand(
         [
@@ -967,80 +1069,80 @@ class TestClient(unittest.TestCase):
     def test_capture_with_session_id_variations(
         self, test_name, session_id, additional_properties, expected_properties
     ):
-        client = self.client
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
-        properties = {"$session_id": session_id, **additional_properties}
-        success, msg = client.capture(
-            "distinct_id", "python test event", properties=properties
-        )
-        client.flush()
+            properties = {"$session_id": session_id, **additional_properties}
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", properties=properties
+            )
 
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["event"], "python test event")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        # Check additional expected properties
-        for key, value in expected_properties.items():
-            self.assertEqual(msg["properties"][key], value)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+            # Check additional expected properties
+            for key, value in expected_properties.items():
+                self.assertEqual(msg["properties"][key], value)
 
     def test_session_id_preserved_with_groups(self):
-        client = self.client
-        session_id = "group-session-101"
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            session_id = "group-session-101"
 
-        success, msg = client.capture(
-            "distinct_id",
-            "test_event",
-            properties={"$session_id": session_id},
-            groups={"company": "id:5", "instance": "app.posthog.com"},
-        )
-        client.flush()
+            msg_uuid = client.capture(
+                "test_event",
+                distinct_id="distinct_id",
+                properties={"$session_id": session_id},
+                groups={"company": "id:5", "instance": "app.posthog.com"},
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(
-            msg["properties"]["$groups"],
-            {"company": "id:5", "instance": "app.posthog.com"},
-        )
+            self.assertIsNotNone(msg_uuid)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertEqual(
+                msg["properties"]["$groups"],
+                {"company": "id:5", "instance": "app.posthog.com"},
+            )
 
     def test_session_id_with_anonymous_event(self):
-        client = self.client
-        session_id = "anonymous-session-202"
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            session_id = "anonymous-session-202"
 
-        success, msg = client.capture(
-            "distinct_id",
-            "anonymous_event",
-            properties={"$session_id": session_id, "$process_person_profile": False},
-        )
-        client.flush()
+            msg_uuid = client.capture(
+                "anonymous_event",
+                distinct_id="distinct_id",
+                properties={
+                    "$session_id": session_id,
+                    "$process_person_profile": False,
+                },
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(msg["properties"]["$process_person_profile"], False)
+            self.assertIsNotNone(msg_uuid)
 
-    def test_page_with_session_id(self):
-        client = self.client
-        session_id = "page-session-303"
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        success, msg = client.page(
-            "distinct_id",
-            "https://posthog.com/contact",
-            properties={"$session_id": session_id, "page_type": "contact"},
-        )
-        client.flush()
-
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["event"], "$pageview")
-        self.assertEqual(msg["distinct_id"], "distinct_id")
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
-        self.assertEqual(
-            msg["properties"]["$current_url"], "https://posthog.com/contact"
-        )
-        self.assertEqual(msg["properties"]["page_type"], "contact")
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertEqual(msg["properties"]["$process_person_profile"], False)
 
     @parameterized.expand(
         [
@@ -1116,23 +1218,31 @@ class TestClient(unittest.TestCase):
         additional_properties,
         expected_additional_properties,
     ):
-        client = self.client
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
-        properties = {"$session_id": session_id, **additional_properties}
-        success, msg = client.capture("distinct_id", event_name, properties=properties)
-        client.flush()
+            properties = {"$session_id": session_id, **additional_properties}
+            msg_uuid = client.capture(
+                event_name, distinct_id="distinct_id", properties=properties
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["event"], event_name)
-        self.assertEqual(msg["properties"]["$session_id"], session_id)
+            self.assertIsNotNone(msg_uuid)
 
-        # Check additional expected properties
-        for key, value in expected_additional_properties.items():
-            self.assertEqual(msg["properties"][key], value)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
 
-        # Verify system properties are still added
-        self.assertEqual(msg["properties"]["$lib"], "posthog-python")
-        self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(msg["event"], event_name)
+            self.assertEqual(msg["properties"]["$session_id"], session_id)
+
+            # Check additional expected properties
+            for key, value in expected_additional_properties.items():
+                self.assertEqual(msg["properties"][key], value)
+
+            # Verify system properties are still added
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     @parameterized.expand(
         [
@@ -1175,25 +1285,37 @@ class TestClient(unittest.TestCase):
         expected_session_id,
         expected_super_props,
     ):
-        client = Client(FAKE_TEST_API_KEY, super_properties=super_properties)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY, super_properties=super_properties, sync_mode=True
+            )
 
-        success, msg = client.capture(
-            "distinct_id", "test_event", properties={"$session_id": event_session_id}
-        )
-        client.flush()
+            msg_uuid = client.capture(
+                "test_event",
+                distinct_id="distinct_id",
+                properties={"$session_id": event_session_id},
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["$session_id"], expected_session_id)
+            self.assertIsNotNone(msg_uuid)
 
-        # Check expected super properties are present
-        for key, value in expected_super_props.items():
-            self.assertEqual(msg["properties"][key], value)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$session_id"], expected_session_id)
+
+            # Check expected super properties are present
+            for key, value in expected_super_props.items():
+                self.assertEqual(msg["properties"][key], value)
 
     def test_flush(self):
         client = self.client
         # set up the consumer with more requests than a single batch will allow
         for i in range(1000):
-            success, msg = client.identify("distinct_id", {"trait": "value"})
+            client.capture(
+                "event", distinct_id="distinct_id", properties={"trait": "value"}
+            )
         # We can't reliably assert that the queue is non-empty here; that's
         # a race condition. We do our best to load it up though.
         client.flush()
@@ -1204,7 +1326,9 @@ class TestClient(unittest.TestCase):
         client = self.client
         # set up the consumer with more requests than a single batch will allow
         for i in range(1000):
-            success, msg = client.identify("distinct_id", {"trait": "value"})
+            client.capture(
+                "test event", distinct_id="distinct_id", properties={"trait": "value"}
+            )
         client.shutdown()
         # we expect two things after shutdown:
         # 1. client queue is empty
@@ -1214,12 +1338,16 @@ class TestClient(unittest.TestCase):
             self.assertFalse(consumer.is_alive())
 
     def test_synchronous(self):
-        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
 
-        success, message = client.identify("distinct_id")
-        self.assertFalse(client.consumers)
-        self.assertTrue(client.queue.empty())
-        self.assertTrue(success)
+            msg_uuid = client.capture("test event", distinct_id="distinct_id")
+            self.assertFalse(client.consumers)
+            self.assertTrue(client.queue.empty())
+            self.assertIsNotNone(msg_uuid)
+
+            # Verify the message was sent immediately
+            mock_post.assert_called_once()
 
     def test_overflow(self):
         client = Client(FAKE_TEST_API_KEY, max_queue_size=1)
@@ -1227,17 +1355,17 @@ class TestClient(unittest.TestCase):
         client.join()
 
         for i in range(10):
-            client.identify("distinct_id")
+            client.capture("test event", distinct_id="distinct_id")
 
-        success, msg = client.identify("distinct_id")
+        msg_uuid = client.capture("test event", distinct_id="distinct_id")
         # Make sure we are informed that the queue is at capacity
-        self.assertFalse(success)
+        self.assertIsNone(msg_uuid)
 
     def test_unicode(self):
         Client(six.u("unicode_key"))
 
     def test_numeric_distinct_id(self):
-        self.client.capture(1234, "python event")
+        self.client.capture("python event", distinct_id=1234)
         self.client.flush()
         self.assertFalse(self.failed)
 
@@ -1247,7 +1375,9 @@ class TestClient(unittest.TestCase):
     def test_gzip(self):
         client = Client(FAKE_TEST_API_KEY, on_error=self.fail, gzip=True)
         for _ in range(10):
-            client.identify("distinct_id", {"trait": "value"})
+            client.capture(
+                "event", distinct_id="distinct_id", properties={"trait": "value"}
+            )
         client.flush()
         self.assertFalse(self.failed)
 
@@ -1265,7 +1395,9 @@ class TestClient(unittest.TestCase):
             "posthog.consumer.batch_post", side_effect=mock_post_fn
         ) as mock_post:
             for _ in range(20):
-                client.identify("distinct_id", {"trait": "value"})
+                client.capture(
+                    "event", distinct_id="distinct_id", properties={"trait": "value"}
+                )
             time.sleep(1)
             self.assertEqual(mock_post.call_count, 2)
 
@@ -1281,12 +1413,10 @@ class TestClient(unittest.TestCase):
 
     def test_disabled(self):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
-        success, msg = client.capture("distinct_id", "python test event")
+        msg_uuid = client.capture("python test event", distinct_id="distinct_id")
         client.flush()
-        self.assertFalse(success)
+        self.assertIsNone(msg_uuid)
         self.assertFalse(self.failed)
-
-        self.assertEqual(msg, "disabled")
 
     @mock.patch("posthog.client.flags")
     def test_disabled_with_feature_flags(self, patch_flags):
@@ -1316,51 +1446,100 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client.queue.empty())
 
     def test_enabled_to_disabled(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=False)
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                disabled=False,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
 
-        self.assertTrue(success)
-        self.assertFalse(self.failed)
-        self.assertEqual(msg["event"], "python test event")
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
 
-        client.disabled = True
-        success, msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertFalse(success)
-        self.assertFalse(self.failed)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+            self.assertEqual(msg["event"], "python test event")
 
-        self.assertEqual(msg, "disabled")
+            client.disabled = True
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNone(msg_uuid)
+            self.assertFalse(self.failed)
 
     def test_disable_geoip_default_on_events(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=True)
-        _, capture_msg = client.capture("distinct_id", "python test event")
-        client.flush()
-        self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                disable_geoip=True,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+            self.assertIsNotNone(msg_uuid)
 
-        _, identify_msg = client.identify("distinct_id", {"trait": "value"})
-        client.flush()
-        self.assertEqual(identify_msg["properties"]["$geoip_disable"], True)
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            capture_msg = batch_data[0]
+            self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
 
     def test_disable_geoip_override_on_events(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=False)
-        _, capture_msg = client.set(
-            "distinct_id", {"a": "b", "c": "d"}, disable_geoip=True
-        )
-        client.flush()
-        self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                disable_geoip=False,
+                sync_mode=True,
+            )
+            msg_uuid = client.set(
+                distinct_id="distinct_id",
+                properties={"a": "b", "c": "d"},
+                disable_geoip=True,
+            )
+            self.assertIsNotNone(msg_uuid)
 
-        _, identify_msg = client.page(
-            "distinct_id", "http://a.com", {"trait": "value"}, disable_geoip=False
-        )
-        client.flush()
-        self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
+            msg_uuid = client.capture(
+                "event",
+                distinct_id="distinct_id",
+                properties={"trait": "value"},
+                disable_geoip=False,
+            )
+            self.assertIsNotNone(msg_uuid)
+
+            # Check both calls were made
+            self.assertEqual(mock_post.call_count, 2)
+
+            # Check set event
+            set_batch = mock_post.call_args_list[0][1]["batch"]
+            capture_msg = set_batch[0]
+            self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
+
+            # Check page event
+            page_batch = mock_post.call_args_list[1][1]["batch"]
+            identify_msg = page_batch[0]
+            self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
 
     def test_disable_geoip_method_overrides_init_on_events(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disable_geoip=True)
-        _, msg = client.capture("distinct_id", "python test event", disable_geoip=False)
-        client.flush()
-        self.assertTrue("$geoip_disable" not in msg["properties"])
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                disable_geoip=True,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", disable_geoip=False
+            )
+            self.assertIsNotNone(msg_uuid)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+            self.assertTrue("$geoip_disable" not in msg["properties"])
 
     @mock.patch("posthog.client.flags")
     def test_disable_geoip_default_on_decide(self, patch_flags):
@@ -1555,8 +1734,8 @@ class TestClient(unittest.TestCase):
         distro_info,
     ):
         """Test that we can mock platform and sys for testing system_context"""
-        with mock.patch("posthog.client.platform") as mock_platform:
-            with mock.patch("posthog.client.sys") as mock_sys:
+        with mock.patch("posthog.utils.platform") as mock_platform:
+            with mock.patch("posthog.utils.sys") as mock_sys:
                 # Set up common mocks
                 mock_platform.python_implementation.return_value = expected_runtime
                 mock_sys.version_info = version_info
@@ -1572,15 +1751,15 @@ class TestClient(unittest.TestCase):
                 if sys_platform == "linux":
                     # Directly patch the get_os_info function to return our expected values
                     with mock.patch(
-                        "posthog.client.get_os_info",
+                        "posthog.utils.get_os_info",
                         return_value=(expected_os, expected_os_version),
                     ):
-                        from posthog.client import system_context
+                        from posthog.utils import system_context
 
                         context = system_context()
                 else:
                     # Get system context for non-Linux platforms
-                    from posthog.client import system_context
+                    from posthog.utils import system_context
 
                     context = system_context()
 
@@ -1649,73 +1828,78 @@ class TestClient(unittest.TestCase):
         }
 
     def test_set_context_session_with_capture(self):
-        with new_context():
-            set_context_session("context-session-123")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context():
+                set_context_session("context-session-123")
 
-            success, msg = self.client.capture(
-                "distinct_id", "test_event", {"custom_prop": "value"}
-            )
-            self.client.flush()
+                msg_uuid = client.capture(
+                    "test_event",
+                    distinct_id="distinct_id",
+                    properties={"custom_prop": "value"},
+                )
 
-            self.assertTrue(success)
-            self.assertEqual(msg["properties"]["$session_id"], "context-session-123")
+                self.assertIsNotNone(msg_uuid)
 
-    def test_set_context_session_with_page(self):
-        with new_context():
-            set_context_session("page-context-session-456")
+                # Get the enqueued message from the mock
+                mock_post.assert_called_once()
+                batch_data = mock_post.call_args[1]["batch"]
+                msg = batch_data[0]
 
-            success, msg = self.client.page("distinct_id", "https://example.com/page")
-            self.client.flush()
-
-            self.assertTrue(success)
-            self.assertEqual(
-                msg["properties"]["$session_id"], "page-context-session-456"
-            )
+                self.assertEqual(
+                    msg["properties"]["$session_id"], "context-session-123"
+                )
 
     def test_set_context_session_with_page_explicit_properties(self):
-        with new_context():
-            set_context_session("page-explicit-session-789")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context():
+                set_context_session("page-explicit-session-789")
 
-            properties = {
-                "$session_id": get_context_session_id(),
-                "page_type": "landing",
-            }
-            success, msg = self.client.page(
-                "distinct_id", "https://example.com/landing", properties
-            )
-            self.client.flush()
+                properties = {
+                    "$session_id": get_context_session_id(),
+                    "page_type": "landing",
+                }
+                msg_uuid = client.capture(
+                    "$page", distinct_id="distinct_id", properties=properties
+                )
 
-            self.assertTrue(success)
-            self.assertEqual(
-                msg["properties"]["$session_id"], "page-explicit-session-789"
-            )
+                self.assertIsNotNone(msg_uuid)
+
+                # Get the enqueued message from the mock
+                mock_post.assert_called_once()
+                batch_data = mock_post.call_args[1]["batch"]
+                msg = batch_data[0]
+
+                self.assertEqual(
+                    msg["properties"]["$session_id"], "page-explicit-session-789"
+                )
 
     def test_set_context_session_override_in_capture(self):
         """Test that explicit session ID overrides context session ID in capture"""
-        from posthog.scopes import set_context_session, new_context
+        from posthog.contexts import set_context_session, new_context
 
-        with new_context():
-            set_context_session("context-session-override")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context():
+                set_context_session("context-session-override")
 
-            success, msg = self.client.capture(
-                "distinct_id",
-                "test_event",
-                {"$session_id": "explicit-session-override", "custom_prop": "value"},
-            )
-            self.client.flush()
+                msg_uuid = client.capture(
+                    "test_event",
+                    distinct_id="distinct_id",
+                    properties={
+                        "$session_id": "explicit-session-override",
+                        "custom_prop": "value",
+                    },
+                )
 
-            self.assertTrue(success)
-            self.assertEqual(
-                msg["properties"]["$session_id"], "explicit-session-override"
-            )
+                self.assertIsNotNone(msg_uuid)
 
-    def test_set_context_session_with_identify(self):
-        with new_context(capture_exceptions=False):
-            set_context_session("identify-session-555")
+                # Get the enqueued message from the mock
+                mock_post.assert_called_once()
+                batch_data = mock_post.call_args[1]["batch"]
+                msg = batch_data[0]
 
-            success, msg = self.client.identify("distinct_id", {"trait": "value"})
-            self.client.flush()
-
-            self.assertTrue(success)
-            # In identify, the session ID is added to the $set payload
-            self.assertEqual(msg["$set"]["$session_id"], "identify-session-555")
+                self.assertEqual(
+                    msg["properties"]["$session_id"], "explicit-session-override"
+                )

@@ -22,13 +22,20 @@ posthog/client.py:0: error: Library stubs not installed for "six"  [import-untyp
 posthog/client.py:0: note: Hint: "python3 -m pip install types-six"
 posthog/client.py:0: error: Name "queue" already defined (by an import)  [no-redef]
 posthog/client.py:0: error: Need type annotation for "queue"  [var-annotated]
-posthog/client.py:0: error: Item "None" of "Any | None" has no attribute "get"  [union-attr]
-simulator.py:0: error: Unexpected keyword argument "anonymous_id" for "capture"  [call-arg]
-posthog/__init__.py:0: note: "capture" defined here
-simulator.py:0: error: Unexpected keyword argument "anonymous_id" for "identify"  [call-arg]
-posthog/__init__.py:0: note: "identify" defined here
-simulator.py:0: error: Unexpected keyword argument "traits" for "identify"  [call-arg]
-posthog/__init__.py:0: note: "identify" defined here
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "Any | list[Any]", variable has type "None")  [assignment]
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "dict[Any, Any]", variable has type "None")  [assignment]
+posthog/client.py:0: error: "None" has no attribute "__iter__" (not iterable)  [attr-defined]
+posthog/client.py:0: error: Statement is unreachable  [unreachable]
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "Any | dict[Any, Any]", variable has type "None")  [assignment]
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "Any | dict[Any, Any]", variable has type "None")  [assignment]
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "dict[Never, Never]", variable has type "None")  [assignment]
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "dict[Never, Never]", variable has type "None")  [assignment]
+posthog/client.py:0: error: Right operand of "and" is never evaluated  [unreachable]
+posthog/client.py:0: error: Incompatible types in assignment (expression has type "Poller", variable has type "None")  [assignment]
+posthog/client.py:0: error: "None" has no attribute "start"  [attr-defined]
+posthog/client.py:0: error: "None" has no attribute "get"  [attr-defined]
+posthog/client.py:0: error: Statement is unreachable  [unreachable]
+posthog/client.py:0: error: Statement is unreachable  [unreachable]
 example.py:0: error: Statement is unreachable  [unreachable]
 posthog/ai/utils.py:0: error: Need type annotation for "output" (hint: "output: list[<type>] = ...")  [var-annotated]
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]

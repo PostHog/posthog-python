@@ -41,9 +41,9 @@ print(
 
 # Capture an event
 posthog.capture(
-    "distinct_id",
     "event",
-    {"property1": "value", "property2": "value"},
+    distinct_id="distinct_id",
+    properties={"property1": "value", "property2": "value"},
     send_feature_flags=True,
 )
 
@@ -65,31 +65,35 @@ exit()
 posthog.alias("distinct_id", "new_distinct_id")
 
 posthog.capture(
-    "new_distinct_id", "event2", {"property1": "value", "property2": "value"}
+    "event2",
+    distinct_id="new_distinct_id",
+    properties={"property1": "value", "property2": "value"},
 )
 posthog.capture(
-    "new_distinct_id",
     "event-with-groups",
-    {"property1": "value", "property2": "value"},
+    distinct_id="new_distinct_id",
+    properties={"property1": "value", "property2": "value"},
     groups={"company": "id:5"},
 )
 
 # # Add properties to the person
-posthog.identify("new_distinct_id", {"email": "something@something.com"})
+posthog.set(
+    distinct_id="new_distinct_id", properties={"email": "something@something.com"}
+)
 
 # Add properties to a group
 posthog.group_identify("company", "id:5", {"employees": 11})
 
 # properties set only once to the person
-posthog.set_once("new_distinct_id", {"self_serve_signup": True})
+posthog.set_once(distinct_id="new_distinct_id", properties={"self_serve_signup": True})
 
 
 posthog.set_once(
-    "new_distinct_id", {"self_serve_signup": False}
+    distinct_id="new_distinct_id", properties={"self_serve_signup": False}
 )  # this will not change the property (because it was already set)
 
-posthog.set("new_distinct_id", {"current_browser": "Chrome"})
-posthog.set("new_distinct_id", {"current_browser": "Firefox"})
+posthog.set(distinct_id="new_distinct_id", properties={"current_browser": "Chrome"})
+posthog.set(distinct_id="new_distinct_id", properties={"current_browser": "Firefox"})
 
 
 # #############################################################################

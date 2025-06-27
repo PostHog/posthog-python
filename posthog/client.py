@@ -1,18 +1,16 @@
 import atexit
 import logging
-import numbers
 import os
-import platform
 import sys
-import warnings
 from datetime import datetime, timedelta
-from typing import Any, Optional, Union
-from uuid import UUID, uuid4
+from typing import Any, Dict, Optional, Union
+from typing_extensions import Unpack
+from uuid import uuid4
 
-import distro  # For Linux OS detection
 from dateutil.tz import tzutc
 from six import string_types
 
+from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ID_TYPES, ExceptionArg
 from posthog.consumer import Consumer
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
@@ -33,10 +31,11 @@ from posthog.request import (
     get,
     remote_config,
 )
-from posthog.scopes import (
+from posthog.contexts import (
     _get_current_context,
     get_context_distinct_id,
     get_context_session_id,
+    new_context,
 )
 from posthog.types import (
     FeatureFlag,
@@ -50,7 +49,13 @@ from posthog.types import (
     to_payloads,
     to_values,
 )
-from posthog.utils import SizeLimitedDict, clean, guess_timezone, remove_trailing_slash
+from posthog.utils import (
+    SizeLimitedDict,
+    clean,
+    guess_timezone,
+    remove_trailing_slash,
+    system_context,
+)
 from posthog.version import VERSION
 
 try:
@@ -59,62 +64,34 @@ except ImportError:
     import Queue as queue
 
 
-ID_TYPES = (numbers.Number, string_types, UUID)
 MAX_DICT_SIZE = 50_000
 
 
-def get_os_info():
-    """
-    Returns standardized OS name and version information.
-    Similar to how user agent parsing works in JS.
-    """
-    os_name = ""
-    os_version = ""
+def get_identity_state(passed) -> tuple[str, bool]:
+    """Returns the distinct id to use, and whether this is a personless event or not"""
+    stringified = stringify_id(passed)
+    if stringified and len(stringified):
+        return (stringified, False)
 
-    platform_name = sys.platform
+    context_id = get_context_distinct_id()
+    if context_id:
+        return (context_id, False)
 
-    if platform_name.startswith("win"):
-        os_name = "Windows"
-        if hasattr(platform, "win32_ver"):
-            win_version = platform.win32_ver()[0]
-            if win_version:
-                os_version = win_version
-
-    elif platform_name == "darwin":
-        os_name = "Mac OS X"
-        if hasattr(platform, "mac_ver"):
-            mac_version = platform.mac_ver()[0]
-            if mac_version:
-                os_version = mac_version
-
-    elif platform_name.startswith("linux"):
-        os_name = "Linux"
-        linux_info = distro.info()
-        if linux_info["version"]:
-            os_version = linux_info["version"]
-
-    elif platform_name.startswith("freebsd"):
-        os_name = "FreeBSD"
-        if hasattr(platform, "release"):
-            os_version = platform.release()
-
-    else:
-        os_name = platform_name
-        if hasattr(platform, "release"):
-            os_version = platform.release()
-
-    return os_name, os_version
+    return (str(uuid4()), True)
 
 
-def system_context() -> dict[str, Any]:
-    os_name, os_version = get_os_info()
+def add_context_tags(properties):
+    current_context = _get_current_context()
+    if current_context:
+        context_tags = current_context.collect_tags()
+        # We want explicitly passed properties to override context tags
+        context_tags.update(properties)
+        properties = context_tags
 
-    return {
-        "$python_runtime": platform.python_implementation(),
-        "$python_version": "%s.%s.%s" % (sys.version_info[:3]),
-        "$os": os_name,
-        "$os_version": os_version,
-    }
+    if "$session_id" not in properties and get_context_session_id():
+        properties["$session_id"] = get_context_session_id()
+
+    return properties
 
 
 class Client(object):
@@ -124,7 +101,7 @@ class Client(object):
 
     def __init__(
         self,
-        api_key=None,
+        project_api_key: str,
         host=None,
         debug=False,
         max_queue_size=10000,
@@ -139,7 +116,6 @@ class Client(object):
         thread=1,
         poll_interval=30,
         personal_api_key=None,
-        project_api_key=None,
         disabled=False,
         disable_geoip=True,
         historical_migration=False,
@@ -147,7 +123,6 @@ class Client(object):
         super_properties=None,
         enable_exception_autocapture=False,
         log_captured_exceptions=False,
-        exception_autocapture_integrations=None,
         project_root=None,
         privacy_mode=False,
         before_send=None,
@@ -155,9 +130,7 @@ class Client(object):
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
-        self.api_key = project_api_key or api_key
-
-        require("api_key", self.api_key, string_types)
+        self.api_key = project_api_key
 
         self.on_error = on_error
         self.debug = debug
@@ -184,7 +157,6 @@ class Client(object):
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
-        self.exception_autocapture_integrations = exception_autocapture_integrations
         self.exception_capture = None
         self.privacy_mode = privacy_mode
 
@@ -216,9 +188,7 @@ class Client(object):
             self.before_send = None
 
         if self.enable_exception_autocapture:
-            self.exception_capture = ExceptionCapture(
-                self, integrations=self.exception_autocapture_integrations
-            )
+            self.exception_capture = ExceptionCapture(self)
 
         if sync_mode:
             self.consumers = None
@@ -251,6 +221,11 @@ class Client(object):
                 if send:
                     consumer.start()
 
+    def new_context(self, fresh=False, capture_exceptions=True):
+        return new_context(
+            fresh=fresh, capture_exceptions=capture_exceptions, client=self
+        )
+
     @property
     def feature_flags(self):
         """
@@ -272,43 +247,6 @@ class Client(object):
         assert self.feature_flags_by_key is not None, (
             "feature_flags_by_key should be initialized when feature_flags is set"
         )
-
-    def identify(
-        self,
-        distinct_id=None,
-        properties=None,
-        context=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
-        properties = properties or {}
-
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
-
-        if "$session_id" not in properties and get_context_session_id():
-            properties["$session_id"] = get_context_session_id()
-
-        msg = {
-            "timestamp": timestamp,
-            "distinct_id": distinct_id,
-            "$set": properties,
-            "event": "$identify",
-            "uuid": uuid,
-        }
-
-        return self._enqueue(msg, disable_geoip)
 
     def get_feature_variants(
         self,
@@ -360,8 +298,8 @@ class Client(object):
 
     def get_flags_decision(
         self,
-        distinct_id,
-        groups=None,
+        distinct_id: Optional[ID_TYPES] = None,
+        groups: Optional[dict] = {},
         person_properties=None,
         group_properties=None,
         disable_geoip=None,
@@ -372,14 +310,11 @@ class Client(object):
 
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
-        require("distinct_id", distinct_id, ID_TYPES)
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
 
-        if groups:
-            require("groups", groups, dict)
-        else:
+        if not groups:
             groups = {}
 
         request_data = {
@@ -400,42 +335,24 @@ class Client(object):
         return normalize_flags_response(resp_data)
 
     def capture(
-        self,
-        distinct_id=None,
-        event=None,
-        properties=None,
-        context=None,
-        timestamp=None,
-        uuid=None,
-        groups=None,
-        send_feature_flags=False,
-        disable_geoip=None,
-    ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        groups = kwargs.get("groups", None)
+        send_feature_flags = kwargs.get("send_feature_flags", False)
+        disable_geoip = kwargs.get("disable_geoip", None)
 
         properties = {**(properties or {}), **system_context()}
 
-        if "$session_id" not in properties and get_context_session_id():
-            properties["$session_id"] = get_context_session_id()
+        properties = add_context_tags(properties)
 
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
+        (distinct_id, personless) = get_identity_state(distinct_id)
 
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
-        require("event", event, string_types)
-
-        current_context = _get_current_context()
-        if current_context:
-            context_tags = current_context.collect_tags()
-            # We want explicitly passed properties to override context tags
-            context_tags.update(properties)
-            properties = context_tags
+        if personless:
+            properties["$process_person_profile"] = False
 
         msg = {
             "properties": properties,
@@ -446,7 +363,6 @@ class Client(object):
         }
 
         if groups:
-            require("groups", groups, dict)
             msg["properties"]["$groups"] = groups
 
         extra_properties: dict[str, Any] = {}
@@ -486,28 +402,21 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
-    def set(
-        self,
-        distinct_id=None,
-        properties=None,
-        context=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
+    def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        disable_geoip = kwargs.get("disable_geoip", None)
 
         properties = properties or {}
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
+
+        properties = add_context_tags(properties)
+
+        (distinct_id, personless) = get_identity_state(distinct_id)
+
+        if personless or not properties:
+            return None  # Personless set() does nothing
 
         msg = {
             "timestamp": timestamp,
@@ -519,28 +428,20 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
-    def set_once(
-        self,
-        distinct_id=None,
-        properties=None,
-        context=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
+    def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        disable_geoip = kwargs.get("disable_geoip", None)
         properties = properties or {}
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
+
+        properties = add_context_tags(properties)
+
+        (distinct_id, personless) = get_identity_state(distinct_id)
+
+        if personless or not properties:
+            return None  # Personless set_once() does nothing
 
         msg = {
             "timestamp": timestamp,
@@ -554,30 +455,18 @@ class Client(object):
 
     def group_identify(
         self,
-        group_type=None,
-        group_key=None,
+        group_type: str,
+        group_key: str,
         properties=None,
-        context=None,
         timestamp=None,
         uuid=None,
         disable_geoip=None,
         distinct_id=None,
     ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
         properties = properties or {}
-        require("group_type", group_type, ID_TYPES)
-        require("group_key", group_key, ID_TYPES)
-        require("properties", properties, dict)
 
-        if distinct_id:
-            require("distinct_id", distinct_id, ID_TYPES)
-        else:
-            distinct_id = "${}_{}".format(group_type, group_key)
+        # group_identify is purposefully always personful
+        distinct_id = get_identity_state(distinct_id)[0]
 
         msg = {
             "event": "$groupidentify",
@@ -591,29 +480,24 @@ class Client(object):
             "uuid": uuid,
         }
 
+        # NOTE - group_identify doesn't generally use context properties - should it?
+        if get_context_session_id():
+            msg["properties"]["$session_id"] = get_context_session_id()
+
         return self._enqueue(msg, disable_geoip)
 
     def alias(
         self,
-        previous_id=None,
-        distinct_id=None,
-        context=None,
+        previous_id: str,
+        distinct_id: Optional[str],
         timestamp=None,
         uuid=None,
         disable_geoip=None,
     ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        (distinct_id, personless) = get_identity_state(distinct_id)
 
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
-        require("previous_id", previous_id, ID_TYPES)
-        require("distinct_id", distinct_id, ID_TYPES)
+        if personless:
+            return None  # Personless alias() does nothing - should this throw?
 
         msg = {
             "properties": {
@@ -623,71 +507,23 @@ class Client(object):
             "timestamp": timestamp,
             "event": "$create_alias",
             "distinct_id": previous_id,
-        }
-
-        return self._enqueue(msg, disable_geoip)
-
-    def page(
-        self,
-        distinct_id=None,
-        url=None,
-        properties=None,
-        context=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
-        properties = properties or {}
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("properties", properties, dict)
-
-        if "$session_id" not in properties and get_context_session_id():
-            properties["$session_id"] = get_context_session_id()
-
-        require("url", url, string_types)
-        properties["$current_url"] = url
-
-        msg = {
-            "event": "$pageview",
-            "properties": properties,
-            "timestamp": timestamp,
-            "distinct_id": distinct_id,
             "uuid": uuid,
         }
+
+        if get_context_session_id():
+            msg["properties"]["$session_id"] = get_context_session_id()
 
         return self._enqueue(msg, disable_geoip)
 
     def capture_exception(
         self,
-        exception=None,
-        distinct_id=None,
-        properties=None,
-        context=None,
-        timestamp=None,
-        uuid=None,
-        groups=None,
-        **kwargs,
+        exception: Optional[ExceptionArg],
+        **kwargs: Unpack[OptionalCaptureArgs],
     ):
-        if context is not None:
-            warnings.warn(
-                "The 'context' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        send_feature_flags = kwargs.get("send_feature_flags", True)
+        disable_geoip = kwargs.get("disable_geoip", None)
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
         try:
@@ -696,16 +532,7 @@ class Client(object):
             # Check if this exception has already been captured
             if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
-                return
-
-            # if there's no distinct_id, we'll generate one and set personless mode
-            # via $process_person_profile = false
-            if distinct_id is None:
-                properties["$process_person_profile"] = False
-                distinct_id = uuid4()
-
-            require("distinct_id", distinct_id, ID_TYPES)
-            require("properties", properties, dict)
+                return None
 
             if exception is not None:
                 exc_info = exc_info_from_error(exception)
@@ -714,7 +541,7 @@ class Client(object):
 
             if exc_info is None or exc_info == (None, None, None):
                 self.log.warning("No exception information available")
-                return
+                return None
 
             # Format stack trace for cymbal
             all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
@@ -743,39 +570,53 @@ class Client(object):
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
 
+            timestamp = kwargs.get("timestamp", None)
+            uuid = kwargs.get("uuid", None)
+            groups = kwargs.get("groups", None)
             res = self.capture(
-                distinct_id, "$exception", properties, context, timestamp, uuid, groups
+                "$exception",
+                distinct_id=distinct_id,
+                properties=properties,
+                timestamp=timestamp,
+                uuid=uuid,
+                groups=groups,
+                send_feature_flags=send_feature_flags,
+                disable_geoip=disable_geoip,
             )
 
             # Mark the exception as captured to prevent duplicate captures
-            if exception is not None:
-                mark_exception_as_captured(exception)
+            if exception is not None and res is not None:
+                mark_exception_as_captured(exception, res)
 
             return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
 
     def _enqueue(self, msg, disable_geoip):
+        # type: (...) -> Optional[str]
         """Push a new `msg` onto the queue, return `(success, msg)`"""
 
         if self.disabled:
-            return False, "disabled"
+            return None
 
         timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.now(tz=tzutc())
 
-        require("timestamp", timestamp, datetime)
-
         # add common
         timestamp = guess_timezone(timestamp)
         msg["timestamp"] = timestamp.isoformat()
 
-        # only send if "uuid" is truthy
         if "uuid" in msg:
             uuid = msg.pop("uuid")
             if uuid:
                 msg["uuid"] = stringify_id(uuid)
+
+        if "uuid" not in msg:
+            # Always send a uuid, so we can always return one
+            msg["uuid"] = stringify_id(uuid4())
+
+        sent_uuid = msg["uuid"]
 
         if not msg.get("properties"):
             msg["properties"] = {}
@@ -800,7 +641,7 @@ class Client(object):
                 modified_msg = self.before_send(msg)
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
-                    return True, None
+                    return None
                 msg = modified_msg
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
@@ -810,7 +651,7 @@ class Client(object):
 
         # if send is False, return msg as if it was successfully queued
         if not self.send:
-            return True, msg
+            return sent_uuid
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
@@ -823,15 +664,15 @@ class Client(object):
                 historical_migration=self.historical_migration,
             )
 
-            return True, msg
+            return sent_uuid
 
         try:
             self.queue.put(msg, block=False)
             self.log.debug("enqueued %s.", msg["event"])
-            return True, msg
+            return sent_uuid
         except queue.Full:
             self.log.warning("analytics-python queue is full")
-            return False, msg
+            return None
 
     def flush(self):
         """Forces a flush from the internal queue to the server"""
@@ -1009,21 +850,17 @@ class Client(object):
 
     def _get_feature_flag_result(
         self,
-        key,
-        distinct_id,
+        key: str,
+        distinct_id: ID_TYPES,
         *,
         override_match_value: Optional[FlagValue] = None,
-        groups={},
+        groups: Dict[str, str] = {},
         person_properties={},
         group_properties={},
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
     ) -> Optional[FeatureFlagResult]:
-        require("key", key, string_types)
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
         if self.disabled:
             return None
 
@@ -1149,7 +986,7 @@ class Client(object):
     def _locally_evaluate_flag(
         self,
         key: str,
-        distinct_id: str,
+        distinct_id: ID_TYPES,
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
@@ -1213,7 +1050,7 @@ class Client(object):
     def _get_feature_flag_details_from_decide(
         self,
         key: str,
-        distinct_id: str,
+        distinct_id: ID_TYPES,
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
@@ -1232,12 +1069,12 @@ class Client(object):
 
     def _capture_feature_flag_called(
         self,
-        distinct_id: str,
+        distinct_id: ID_TYPES,
         key: str,
         response: Optional[FlagValue],
         payload: Optional[str],
         flag_was_locally_evaluated: bool,
-        groups: dict[str, str],
+        groups: Dict[str, str],
         disable_geoip: Optional[bool],
         request_id: Optional[str],
         flag_details: Optional[FeatureFlag],
@@ -1275,9 +1112,9 @@ class Client(object):
                         properties["$feature_flag_id"] = flag_details.metadata.id
 
             self.capture(
-                distinct_id,
                 "$feature_flag_called",
-                properties,
+                distinct_id=distinct_id,
+                properties=properties,
                 groups=groups,
                 disable_geoip=disable_geoip,
             )
@@ -1395,16 +1232,13 @@ class Client(object):
 
     def _get_all_flags_and_payloads_locally(
         self,
-        distinct_id,
+        distinct_id: ID_TYPES,
         *,
-        groups={},
+        groups: Dict[str, Union[str, int]],
         person_properties={},
         group_properties={},
         warn_on_unknown_groups=False,
     ) -> tuple[FlagsAndPayloads, bool]:
-        require("distinct_id", distinct_id, ID_TYPES)
-        require("groups", groups, dict)
-
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
 
@@ -1464,13 +1298,6 @@ class Client(object):
                 }
 
         return all_person_properties, all_group_properties
-
-
-def require(name, field, data_type):
-    """Require that the named `field` has the right `data_type`"""
-    if not isinstance(field, data_type):
-        msg = "{0} must have {1}, got: {2}".format(name, data_type, field)
-        raise AssertionError(msg)
 
 
 def stringify_id(val):

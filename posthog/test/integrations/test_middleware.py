@@ -1,4 +1,8 @@
-from posthog.scopes import new_context, get_context_session_id, get_context_distinct_id
+from posthog.contexts import (
+    new_context,
+    get_context_session_id,
+    get_context_distinct_id,
+)
 import unittest
 from unittest.mock import Mock
 

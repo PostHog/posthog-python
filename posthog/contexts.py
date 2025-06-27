@@ -1,6 +1,10 @@
 import contextvars
 from contextlib import contextmanager
-from typing import Optional, Any, Callable, Dict, TypeVar, cast
+from typing import Optional, Any, Callable, Dict, TypeVar, cast, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # To avoid circular imports
+    from posthog.client import Client
 
 
 class ContextScope:
@@ -9,7 +13,9 @@ class ContextScope:
         parent=None,
         fresh: bool = False,
         capture_exceptions: bool = True,
+        client: Optional["Client"] = None,
     ):
+        self.client: Optional[Client] = client
         self.parent = parent
         self.fresh = fresh
         self.capture_exceptions = capture_exceptions
@@ -64,7 +70,9 @@ def _get_current_context() -> Optional[ContextScope]:
 
 
 @contextmanager
-def new_context(fresh=False, capture_exceptions=True):
+def new_context(
+    fresh=False, capture_exceptions=True, client: Optional["Client"] = None
+):
     """
     Create a new context scope that will be active for the duration of the with block.
     Any tags set within this scope will be isolated to this context. Any exceptions raised
@@ -77,6 +85,13 @@ def new_context(fresh=False, capture_exceptions=True):
         capture_exceptions: Whether to capture exceptions raised within the context (default: True).
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
+        client: Optional client instance to use for capturing exceptions (default: None).
+                If provided, the client will be used to capture exceptions within the context.
+                If not provided, the default (global) client will be used. Note that the passed
+                client is only used to capture exceptions within the context - other events captured
+                within the context via `Client.capture` or `posthog.capture` will still carry the context
+                state (tags, identity, session id), but will be captured by the client directly used (or
+                the global one, in the case of `posthog.capture`)
 
     Examples:
         # Inherit parent context tags
@@ -97,14 +112,17 @@ def new_context(fresh=False, capture_exceptions=True):
     from posthog import capture_exception
 
     current_context = _get_current_context()
-    new_context = ContextScope(current_context, fresh, capture_exceptions)
+    new_context = ContextScope(current_context, fresh, capture_exceptions, client)
     _context_stack.set(new_context)
 
     try:
         yield
     except Exception as e:
         if new_context.capture_exceptions:
-            capture_exception(e)
+            if new_context.client:
+                new_context.client.capture_exception(e)
+            else:
+                capture_exception(e)
         raise
     finally:
         _context_stack.set(new_context.get_parent())
@@ -112,7 +130,8 @@ def new_context(fresh=False, capture_exceptions=True):
 
 def tag(key: str, value: Any) -> None:
     """
-    Add a tag to the current context.
+    Add a tag to the current context. All tags are added as properties to any event, including exceptions, captured
+    within the context.
 
     Args:
         key: The tag key
@@ -126,8 +145,6 @@ def tag(key: str, value: Any) -> None:
         current_context.add_tag(key, value)
 
 
-# NOTE: we should probably also remove this - there's no reason for the user to ever
-# need to manually interact with the current tag set
 def get_tags() -> Dict[str, Any]:
     """
     Get all tags from the current context. Note, modifying
@@ -142,22 +159,14 @@ def get_tags() -> Dict[str, Any]:
     return {}
 
 
-# NOTE: We should probably remove this function - the way to clear scope context
-# is by entering a new, fresh context, rather than by clearing the tags or other
-# scope data directly.
-def clear_tags() -> None:
-    """Clear all tags in the current context. Does not clear parent tags"""
-    current_context = _get_current_context()
-    if current_context:
-        current_context.tags.clear()
-
-
 def identify_context(distinct_id: str) -> None:
     """
     Identify the current context with a distinct ID, associating all events captured in this or
     child contexts with the given distinct ID (unless identify_context is called again). This is overridden by
     distinct id's passed directly to posthog.capture and related methods (identify, set etc). Entering a
-    fresh context will clear the context-level distinct ID.
+    fresh context will clear the context-level distinct ID. The distinct-id passed should be uniquely associated
+    with one of your users. Events captured outside of a context, or in a context with no associated distinct
+    ID, will be assigned a random UUID, and captured as "personless".
 
     Args:
         distinct_id: The distinct ID to associate with the current context and its children.

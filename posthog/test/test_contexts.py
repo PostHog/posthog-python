@@ -1,8 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from posthog.scopes import (
-    clear_tags,
+from posthog.contexts import (
     get_tags,
     new_context,
     scoped,
@@ -14,11 +13,7 @@ from posthog.scopes import (
 )
 
 
-class TestScopes(unittest.TestCase):
-    def setUp(self):
-        # Reset any context between tests
-        clear_tags()
-
+class TestContexts(unittest.TestCase):
     def test_tag_and_get_tags(self):
         with new_context(fresh=True):
             tag("key1", "value1")
@@ -27,14 +22,6 @@ class TestScopes(unittest.TestCase):
             tags = get_tags()
             assert tags["key1"] == "value1"
             assert tags["key2"] == 2
-
-    def test_clear_tags(self):
-        with new_context(fresh=True):
-            tag("key1", "value1")
-            assert get_tags()["key1"] == "value1"
-
-            clear_tags()
-            assert get_tags() == {}
 
     def test_new_context_isolation(self):
         with new_context(fresh=True):

@@ -40,16 +40,30 @@ class TestClient(unittest.TestCase):
             event["properties"]["processed_by_before_send"] = True
             return event
 
-        client = Client(
-            FAKE_TEST_API_KEY, on_error=self.set_fail, before_send=my_before_send
-        )
-        success, msg = client.capture("user1", "test_event", {"original": "value"})
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=my_before_send,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "test_event", distinct_id="user1", properties={"original": "value"}
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["processed_by_before_send"], True)
-        self.assertEqual(msg["properties"]["original"], "value")
-        self.assertEqual(len(processed_events), 1)
-        self.assertEqual(processed_events[0]["event"], "test_event")
+            self.assertIsNotNone(msg_uuid)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+
+            self.assertEqual(
+                enqueued_msg["properties"]["processed_by_before_send"], True
+            )
+            self.assertEqual(enqueued_msg["properties"]["original"], "value")
+            self.assertEqual(len(processed_events), 1)
+            self.assertEqual(processed_events[0]["event"], "test_event")
 
     def test_before_send_callback_drops_event(self):
         """Test that before_send callback can drop events by returning None."""
@@ -59,20 +73,27 @@ class TestClient(unittest.TestCase):
                 return None
             return event
 
-        client = Client(
-            FAKE_TEST_API_KEY, on_error=self.set_fail, before_send=drop_test_events
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=drop_test_events,
+                sync_mode=True,
+            )
 
-        # Event should be dropped
-        success, msg = client.capture("user1", "test_drop_me")
-        self.assertTrue(success)
-        self.assertIsNone(msg)
+            # Event should be dropped
+            msg_uuid = client.capture("test_drop_me", distinct_id="user1")
+            self.assertIsNone(msg_uuid)
 
-        # Event should go through
-        success, msg = client.capture("user1", "keep_me")
-        self.assertTrue(success)
-        self.assertIsNotNone(msg)
-        self.assertEqual(msg["event"], "keep_me")
+            # Event should go through
+            msg_uuid = client.capture("keep_me", distinct_id="user1")
+            self.assertIsNotNone(msg_uuid)
+
+            # Check the enqueued message
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["event"], "keep_me")
 
     def test_before_send_callback_handles_exceptions(self):
         """Test that exceptions in before_send don't crash the client."""
@@ -80,18 +101,26 @@ class TestClient(unittest.TestCase):
         def buggy_before_send(event):
             raise ValueError("Oops!")
 
-        client = Client(
-            FAKE_TEST_API_KEY, on_error=self.set_fail, before_send=buggy_before_send
-        )
-        success, msg = client.capture("user1", "robust_event")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=buggy_before_send,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("robust_event", distinct_id="user1")
 
-        # Event should still be sent despite the exception
-        self.assertTrue(success)
-        self.assertIsNotNone(msg)
-        self.assertEqual(msg["event"], "robust_event")
+            # Event should still be sent despite the exception
+            self.assertIsNotNone(msg_uuid)
+
+            # Check the enqueued message
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["event"], "robust_event")
 
     def test_before_send_callback_works_with_all_event_types(self):
-        """Test that before_send works with capture, identify, set, etc."""
+        """Test that before_send works with capture, set, etc."""
 
         def add_marker(event):
             if "properties" not in event:
@@ -99,38 +128,46 @@ class TestClient(unittest.TestCase):
             event["properties"]["marked"] = True
             return event
 
-        client = Client(
-            FAKE_TEST_API_KEY, on_error=self.set_fail, before_send=add_marker
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=add_marker,
+                sync_mode=True,
+            )
 
-        # Test capture
-        success, msg = client.capture("user1", "event")
-        self.assertTrue(success)
-        self.assertTrue(msg["properties"]["marked"])
+            # Test capture
+            msg_uuid = client.capture("event", distinct_id="user1")
+            self.assertIsNotNone(msg_uuid)
 
-        # Test identify
-        success, msg = client.identify("user1", {"trait": "value"})
-        self.assertTrue(success)
-        self.assertTrue(msg["properties"]["marked"])
+            # Test set
+            msg_uuid = client.set(distinct_id="user1", properties={"prop": "value"})
+            self.assertIsNotNone(msg_uuid)
 
-        # Test set
-        success, msg = client.set("user1", {"prop": "value"})
-        self.assertTrue(success)
-        self.assertTrue(msg["properties"]["marked"])
-
-        # Test page
-        success, msg = client.page("user1", "https://example.com")
-        self.assertTrue(success)
-        self.assertTrue(msg["properties"]["marked"])
+            # Check all events were marked
+            self.assertEqual(mock_post.call_count, 2)
+            for call in mock_post.call_args_list:
+                batch_data = call[1]["batch"]
+                enqueued_msg = batch_data[0]
+                self.assertTrue(enqueued_msg["properties"]["marked"])
 
     def test_before_send_callback_disabled_when_none(self):
         """Test that client works normally when before_send is None."""
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, before_send=None)
-        success, msg = client.capture("user1", "normal_event")
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=None,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("normal_event", distinct_id="user1")
+            self.assertIsNotNone(msg_uuid)
 
-        self.assertTrue(success)
-        self.assertIsNotNone(msg)
-        self.assertEqual(msg["event"], "normal_event")
+            # Check the event was sent normally
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["event"], "normal_event")
 
     def test_before_send_callback_pii_scrubbing_example(self):
         """Test a realistic PII scrubbing use case."""
@@ -152,20 +189,30 @@ class TestClient(unittest.TestCase):
 
             return event
 
-        client = Client(
-            FAKE_TEST_API_KEY, on_error=self.set_fail, before_send=scrub_pii
-        )
-        success, msg = client.capture(
-            "user1",
-            "form_submit",
-            {
-                "email": "user@example.com",
-                "credit_card": "1234-5678-9012-3456",
-                "form_name": "contact",
-            },
-        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=scrub_pii,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture(
+                "form_submit",
+                distinct_id="user1",
+                properties={
+                    "email": "user@example.com",
+                    "credit_card": "1234-5678-9012-3456",
+                    "form_name": "contact",
+                },
+            )
 
-        self.assertTrue(success)
-        self.assertEqual(msg["properties"]["email"], "***@example.com")
-        self.assertNotIn("credit_card", msg["properties"])
-        self.assertEqual(msg["properties"]["form_name"], "contact")
+            self.assertIsNotNone(msg_uuid)
+
+            # Check the enqueued message was scrubbed
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+
+            self.assertEqual(enqueued_msg["properties"]["email"], "***@example.com")
+            self.assertNotIn("credit_card", enqueued_msg["properties"])
+            self.assertEqual(enqueued_msg["properties"]["form_name"], "contact")
