@@ -2,7 +2,7 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
-from posthog.scopes import get_context_session_id, set_context_session, new_context
+from posthog.contexts import get_context_session_id, set_context_session, new_context
 
 import mock
 import six
@@ -1877,7 +1877,7 @@ class TestClient(unittest.TestCase):
 
     def test_set_context_session_override_in_capture(self):
         """Test that explicit session ID overrides context session ID in capture"""
-        from posthog.scopes import set_context_session, new_context
+        from posthog.contexts import set_context_session, new_context
 
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)

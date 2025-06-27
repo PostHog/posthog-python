@@ -12,7 +12,6 @@ from six import string_types
 
 from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ID_TYPES, ExceptionArg
 from posthog.consumer import Consumer
-from posthog.scopes import new_context
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
     exc_info_from_error,
@@ -32,10 +31,11 @@ from posthog.request import (
     get,
     remote_config,
 )
-from posthog.scopes import (
+from posthog.contexts import (
     _get_current_context,
     get_context_distinct_id,
     get_context_session_id,
+    new_context,
 )
 from posthog.types import (
     FeatureFlag,
@@ -415,7 +415,7 @@ class Client(object):
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
-        if personless:
+        if personless or not properties:
             return None  # Personless set() does nothing
 
         msg = {
@@ -440,7 +440,7 @@ class Client(object):
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
-        if personless:
+        if personless or not properties:
             return None  # Personless set_once() does nothing
 
         msg = {

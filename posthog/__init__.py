@@ -4,7 +4,7 @@ from typing_extensions import Unpack
 
 from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ExceptionArg
 from posthog.client import Client
-from posthog.scopes import (
+from posthog.contexts import (
     new_context as inner_new_context,
     scoped as inner_scoped,
     tag as inner_tag,
@@ -64,7 +64,7 @@ privacy_mode = False  # type: bool
 default_client = None  # type: Optional[Client]
 
 
-# NOTE - this and following functions take and unpack kwargs because we needed to make
+# NOTE - this and following functions take unpacked kwargs because we needed to make
 # it impossible to write `posthog.capture(distinct-id, event-name)` - basically, to enforce
 # the breaking change made between 5.3.0 and 6.0.0. This decision can be unrolled in later
 # versions, without a breaking change, to get back the type information in function signatures
@@ -76,17 +76,33 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
     - `event name` to specify the event
     - We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on.
 
-    Optionally you can submit
-    - `distinct id` which uniquely identifies your user. This overrides any context-level ID, if set
-    - `properties`, which can be a dict with any information you'd like to add
-    - `groups`, which is a dict of group type -> group key mappings
+    Capture takes a number of optional arguments, which are defined by the `OptionalCaptureArgs` type.
 
     For example:
     ```python
-    posthog.capture('distinct id', 'opened app')
-    posthog.capture('distinct id', 'movie played', {'movie_id': '123', 'category': 'romcom'})
+    # Enter a new context (e.g. a request/response cycle, an instance of a background job, etc)
+    with posthog.new_context():
+        # Associate this context with some user, by distinct_id
+        posthog.identify_context('some user')
 
-    posthog.capture('distinct id', 'purchase', groups={'company': 'id:5'})
+        # Capture an event, associated with the context-level distinct ID ('some user')
+        posthog.capture('movie started')
+
+        # Capture an event associated with some other user (overriding the context-level distinct ID)
+        posthog.capture('movie joined', distinct_id='some-other-user')
+
+        # Capture an event with some properties
+        posthog.capture('movie played', properties={'movie_id': '123', 'category': 'romcom'})
+
+        # Capture an event with some properties
+        posthog.capture('purchase', properties={'product_id': '123', 'category': 'romcom'})
+        # Capture an event with some associated group
+        posthog.capture('purchase', groups={'company': 'id:5'})
+
+        # Adding a tag to the current context will cause it to appear on all subsequent events
+        posthog.tag_context('some-tag', 'some-value')
+
+        posthog.capture('another-event') # Will be captured with `'some-tag': 'some-value'` in the properties dict
     ```
     """
 
@@ -96,10 +112,14 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
 def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record.
-    This will overwrite previous people property values, just like `identify`.
+    This will overwrite previous people property values. Generally operates similar to `capture`, with
+    distinct_id being an optional argument, defaulting to the current context's distinct ID.
 
-     A `set` call requires
-     - `properties` with a dict with any key: value pairs
+    If there is no context-level distinct ID, and no override distinct_id is passed, this function
+    will do nothing.
+
+    Context tags are folded into $set properties, so tagging the current context and then calling `set` will
+    cause those tags to be set on the user (unlike capture, which causes them to just be set on the event).
 
      For example:
      ```python
@@ -115,17 +135,9 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
 def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record, only if they do not yet exist.
-    This will not overwrite previous people property values, unlike `identify`.
+    This will not overwrite previous people property values, unlike `set`.
 
-     A `set_once` call requires
-     - `distinct id` which uniquely identifies your user
-     - `properties` with a dict with any key: value pairs
-
-     For example:
-     ```python
-     posthog.set_once('distinct id', {
-         'referred_by': 'friend',
-     })
+    Otherwise, operates in an identical manner to `set`.
      ```
     """
     return _proxy("set_once", **kwargs)
@@ -146,7 +158,6 @@ def group_identify(
      A `group_identify` call requires
      - `group_type` type of your group
      - `group_key` unique identifier of the group
-     - `properties` with a dict with any key: value pairs
 
      For example:
      ```python
@@ -176,11 +187,10 @@ def alias(
 ):
     # type: (...) -> Optional[str]
     """
-    To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?"
-
-    In a purely back-end implementation, this means whenever an anonymous user does something, you'll want to send a session ID ([Django](https://stackoverflow.com/questions/526179/in-django-how-can-i-find-out-the-request-session-sessionid-and-use-it-as-a-vari), [Flask](https://stackoverflow.com/questions/15156132/flask-login-how-to-get-session-id)) with the capture call. Then, when that users signs up, you want to do an alias call with the session ID and the newly created user ID.
-
-    The same concept applies for when a user logs in.
+    To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call.
+    This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or
+    "What do users do on our website before signing up?". Particularly useful for associating user behaviour before and after
+    they e.g. register, login, or perform some other identifying action.
 
     An `alias` call requires
     - `previous distinct id` the unique ID of the user before
@@ -207,27 +217,26 @@ def capture_exception(
     **kwargs: Unpack[OptionalCaptureArgs],
 ):
     """
-    capture_exception allows you to capture exceptions that happen in your code. This is useful for debugging and understanding what errors your users are encountering.
-    This function never raises an exception, even if it fails to send the event.
+    capture_exception allows you to capture exceptions that happen in your code.
 
-    A `capture_exception` call does not require any fields, but we recommend sending:
-    - `distinct id` which uniquely identifies your user for which this exception happens
+    Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog.
+    This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception,
+    if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context
+    boundary (e.g. by existing a `with posthog.new_context():` block already)
+
+    A `capture_exception` call does not require any fields, but we recommend passing an exception of some kind:
     - `exception` to specify the exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
 
-    Optionally you can submit
-    - `properties`, which can be a dict with any information you'd like to add
-    - `groups`, which is a dict of group type -> group key mappings
-    - remaining `kwargs` will be logged if `log_captured_exceptions` is enabled
+    If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised
+    and the point at which it is captured (the "traceback").
 
-    For example:
-    ```python
-    try:
-        1 / 0
-    except Exception as e:
-        posthog.capture_exception(e, 'my specific distinct id')
-        posthog.capture_exception(distinct_id='my specific distinct id')
+    If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace
+    captured will be the full stack trace at the moment the exception was captured.
 
-    ```
+    Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently,
+    which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason.
+
+    `capture_exception` takes the same set of optional arguments as `capture`.
     """
 
     return _proxy("capture_exception", exception=exception, **kwargs)

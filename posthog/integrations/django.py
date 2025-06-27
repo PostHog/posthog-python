@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING, cast
-from posthog import scopes
+from posthog import contexts
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
@@ -83,12 +83,12 @@ class PosthogContextMiddleware:
         # Extract session ID from X-POSTHOG-SESSION-ID header
         session_id = request.headers.get("X-POSTHOG-SESSION-ID")
         if session_id:
-            scopes.set_context_session(session_id)
+            contexts.set_context_session(session_id)
 
         # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
         distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID") or user_id
         if distinct_id:
-            scopes.identify_context(distinct_id)
+            contexts.identify_context(distinct_id)
 
         # Extract user email
         if user_email:
@@ -153,8 +153,8 @@ class PosthogContextMiddleware:
         if self.request_filter and not self.request_filter(request):
             return self.get_response(request)
 
-        with scopes.new_context(self.capture_exceptions):
+        with contexts.new_context(self.capture_exceptions):
             for k, v in self.extract_tags(request).items():
-                scopes.tag(k, v)
+                contexts.tag(k, v)
 
             return self.get_response(request)
