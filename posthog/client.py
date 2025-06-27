@@ -730,7 +730,9 @@ class Client(object):
             self.cohorts = response["cohorts"] or {}
 
             # Check if flag definitions changed and update version
-            if self.flag_cache and old_flags_by_key != self.feature_flags_by_key:
+            if self.flag_cache and old_flags_by_key != (
+                self.feature_flags_by_key or {}
+            ):
                 old_version = self.flag_definition_version
                 self.flag_definition_version += 1
                 self.flag_cache.invalidate_version(old_version)
