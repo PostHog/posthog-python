@@ -1,7 +1,7 @@
+import json
 import time
 import uuid
 from typing import Any, Dict, List, Optional
-
 try:
     import openai
 except ImportError:
@@ -389,7 +389,7 @@ class WrappedCompletions:
                             if content:
                                 accumulated_content.append(content)
 
-                        # Process tool calls
+                        # Process tool calls and handle JSON argument chunks
                         tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None)
                         if tool_calls:
                             for tool_call in tool_calls:
@@ -401,11 +401,16 @@ class WrappedCompletions:
                                     if hasattr(tool_call, "function") and hasattr(
                                         tool_call.function, "arguments"
                                     ):
-                                        accumulated_tools[
-                                            index
-                                        ].function.arguments += (
-                                            tool_call.function.arguments
-                                        )
+                                        try:
+                                            # Try to parse existing arguments as JSON
+                                            existing_args = json.loads(accumulated_tools[index].function.arguments) if accumulated_tools[index].function.arguments else {}
+                                            new_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                                            # Merge the dictionaries
+                                            merged_args = {**existing_args, **new_args}
+                                            accumulated_tools[index].function.arguments = json.dumps(merged_args)
+                                        except json.JSONDecodeError:
+                                            # Fall back to simple concatenation if JSON parsing fails
+                                            accumulated_tools[index].function.arguments += tool_call.function.arguments
 
                     yield chunk
 
