@@ -1,5 +1,7 @@
+import json
 import logging
 import numbers
+import pickle
 import re
 import time
 from collections import defaultdict
@@ -272,6 +274,151 @@ class FlagCache:
     def clear(self):
         self.cache.clear()
         self.access_times.clear()
+
+
+class RedisFlagCache:
+    def __init__(
+        self, redis_client, default_ttl=300, stale_ttl=3600, key_prefix="posthog:flags:"
+    ):
+        self.redis = redis_client
+        self.default_ttl = default_ttl
+        self.stale_ttl = stale_ttl
+        self.key_prefix = key_prefix
+        self.version_key = f"{key_prefix}version"
+
+    def _get_cache_key(self, distinct_id, flag_key):
+        return f"{self.key_prefix}{distinct_id}:{flag_key}"
+
+    def _serialize_entry(self, flag_result, flag_definition_version, timestamp=None):
+        if timestamp is None:
+            timestamp = time.time()
+
+        # Use pickle for FeatureFlagResult to preserve all object data
+        serialized_result = pickle.dumps(flag_result).hex()
+
+        entry = {
+            "flag_result": serialized_result,
+            "flag_version": flag_definition_version,
+            "timestamp": timestamp,
+        }
+        return json.dumps(entry)
+
+    def _deserialize_entry(self, data):
+        try:
+            entry = json.loads(data)
+            # Deserialize the flag result from hex-encoded pickle
+            flag_result = pickle.loads(bytes.fromhex(entry["flag_result"]))
+            return FlagCacheEntry(
+                flag_result=flag_result,
+                flag_definition_version=entry["flag_version"],
+                timestamp=entry["timestamp"],
+            )
+        except (json.JSONDecodeError, pickle.PickleError, KeyError, ValueError):
+            # If deserialization fails, treat as cache miss
+            return None
+
+    def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
+        try:
+            cache_key = self._get_cache_key(distinct_id, flag_key)
+            data = self.redis.get(cache_key)
+
+            if data:
+                entry = self._deserialize_entry(data)
+                if entry and entry.is_valid(
+                    time.time(), self.default_ttl, current_flag_version
+                ):
+                    return entry.flag_result
+
+            return None
+        except Exception:
+            # Redis error - return None to fall back to normal evaluation
+            return None
+
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        try:
+            if max_stale_age is None:
+                max_stale_age = self.stale_ttl
+
+            cache_key = self._get_cache_key(distinct_id, flag_key)
+            data = self.redis.get(cache_key)
+
+            if data:
+                entry = self._deserialize_entry(data)
+                if entry and entry.is_stale_but_usable(time.time(), max_stale_age):
+                    return entry.flag_result
+
+            return None
+        except Exception:
+            # Redis error - return None
+            return None
+
+    def set_cached_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        try:
+            cache_key = self._get_cache_key(distinct_id, flag_key)
+            serialized_entry = self._serialize_entry(
+                flag_result, flag_definition_version
+            )
+
+            # Set with TTL for automatic cleanup (use stale_ttl for total lifetime)
+            self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
+
+            # Update the current version
+            self.redis.set(self.version_key, flag_definition_version)
+
+        except Exception:
+            # Redis error - silently fail, don't break flag evaluation
+            pass
+
+    def invalidate_version(self, old_version):
+        try:
+            # For Redis, we use a simple approach: scan for keys with old version
+            # and delete them. This could be expensive with many keys, but it's
+            # necessary for correctness.
+
+            cursor = 0
+            pattern = f"{self.key_prefix}*"
+
+            while True:
+                cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+
+                for key in keys:
+                    if key.decode() == self.version_key:
+                        continue
+
+                    try:
+                        data = self.redis.get(key)
+                        if data:
+                            entry_dict = json.loads(data)
+                            if entry_dict.get("flag_version") == old_version:
+                                self.redis.delete(key)
+                    except (json.JSONDecodeError, KeyError):
+                        # If we can't parse the entry, delete it to be safe
+                        self.redis.delete(key)
+
+                if cursor == 0:
+                    break
+
+        except Exception:
+            # Redis error - silently fail
+            pass
+
+    def clear(self):
+        try:
+            # Delete all keys matching our pattern
+            cursor = 0
+            pattern = f"{self.key_prefix}*"
+
+            while True:
+                cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+                if keys:
+                    self.redis.delete(*keys)
+                if cursor == 0:
+                    break
+        except Exception:
+            # Redis error - silently fail
+            pass
 
 
 def convert_to_datetime_aware(date_obj):

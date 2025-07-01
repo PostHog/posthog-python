@@ -51,6 +51,7 @@ from posthog.types import (
 )
 from posthog.utils import (
     FlagCache,
+    RedisFlagCache,
     SizeLimitedDict,
     clean,
     guess_timezone,
@@ -96,7 +97,33 @@ def add_context_tags(properties):
 
 
 class Client(object):
-    """Create a new PostHog client."""
+    """Create a new PostHog client.
+
+    Examples:
+        Basic usage:
+        >>> client = Client("your-api-key")
+
+        With feature flag fallback cache (memory):
+        >>> client = Client("your-api-key", enable_flag_fallback_cache=True)
+
+        With Redis fallback cache for high-scale applications:
+        >>> client = Client(
+        ...     "your-api-key",
+        ...     enable_flag_fallback_cache=True,
+        ...     flag_fallback_cache_backend="redis",
+        ...     flag_fallback_cache_redis_url="redis://localhost:6379/0"
+        ... )
+
+        With existing Redis client:
+        >>> import redis
+        >>> redis_client = redis.Redis(host='localhost', port=6379, db=0)
+        >>> client = Client(
+        ...     "your-api-key",
+        ...     enable_flag_fallback_cache=True,
+        ...     flag_fallback_cache_backend="redis",
+        ...     flag_fallback_cache_redis_client=redis_client
+        ... )
+    """
 
     log = logging.getLogger("posthog")
 
@@ -127,9 +154,12 @@ class Client(object):
         project_root=None,
         privacy_mode=False,
         before_send=None,
-        enable_flag_cache=True,
-        flag_cache_size=10000,
-        flag_cache_ttl=300,
+        enable_flag_fallback_cache=False,
+        flag_fallback_cache_size=10000,
+        flag_fallback_cache_ttl=300,
+        flag_fallback_cache_backend="memory",
+        flag_fallback_cache_redis_url=None,
+        flag_fallback_cache_redis_client=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -155,8 +185,13 @@ class Client(object):
         )
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
-        self.flag_cache = (
-            FlagCache(flag_cache_size, flag_cache_ttl) if enable_flag_cache else None
+        self.flag_cache = self._initialize_flag_cache(
+            enable_flag_fallback_cache,
+            flag_fallback_cache_backend,
+            flag_fallback_cache_size,
+            flag_fallback_cache_ttl,
+            flag_fallback_cache_redis_url,
+            flag_fallback_cache_redis_client,
         )
         self.flag_definition_version = 0
         self.disabled = disabled
@@ -1324,6 +1359,75 @@ class Client(object):
             "featureFlags": flags,
             "featureFlagPayloads": payloads,
         }, fallback_to_decide
+
+    def _initialize_flag_cache(
+        self,
+        enable_flag_fallback_cache,
+        backend,
+        cache_size,
+        cache_ttl,
+        redis_url,
+        redis_client,
+    ):
+        """Initialize feature flag cache for graceful degradation during service outages.
+
+        When enabled, the cache stores flag evaluation results and serves them as fallback
+        when the PostHog API is unavailable. This ensures your application continues to
+        receive flag values even during outages.
+
+        Example Redis usage:
+            client = Client(
+                "your-api-key",
+                enable_flag_fallback_cache=True,
+                flag_fallback_cache_backend="redis",
+                flag_fallback_cache_redis_url="redis://localhost:6379/0"
+            )
+
+            # Normal evaluation - cache is populated
+            flag_value = client.get_feature_flag("my-flag", "user123")
+
+            # During API outage - returns cached value instead of None
+            flag_value = client.get_feature_flag("my-flag", "user123")  # Uses cache
+        """
+        if not enable_flag_fallback_cache:
+            return None
+
+        if backend == "redis":
+            try:
+                # Try to import redis
+                import redis
+
+                # Use provided client or create from URL
+                if redis_client:
+                    client = redis_client
+                elif redis_url:
+                    client = redis.from_url(redis_url)
+                else:
+                    raise ValueError(
+                        "Redis backend requires either flag_cache_redis_url or flag_cache_redis_client"
+                    )
+
+                # Test connection
+                client.ping()
+
+                return RedisFlagCache(client, default_ttl=cache_ttl)
+
+            except ImportError:
+                self.log.warning(
+                    "[FEATURE FLAGS] Redis not available, falling back to memory cache"
+                )
+                return FlagCache(cache_size, cache_ttl)
+            except Exception as e:
+                self.log.warning(
+                    f"[FEATURE FLAGS] Redis connection failed: {e}, falling back to memory cache"
+                )
+                return FlagCache(cache_size, cache_ttl)
+
+        elif backend == "memory":
+            return FlagCache(cache_size, cache_ttl)
+
+        else:
+            raise ValueError(f"Unknown flag cache backend: {backend}")
 
     def feature_flag_definitions(self):
         return self.feature_flags
