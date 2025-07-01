@@ -1,3 +1,7 @@
+# 6.0.1
+
+- fix: response `$process_person_profile` property when passed to capture
+
 # 6.0.0
 
 This release contains a number of major breaking changes:
