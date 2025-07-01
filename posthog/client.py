@@ -351,7 +351,7 @@ class Client(object):
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
-        if personless:
+        if personless and "$process_person_profile" not in properties:
             properties["$process_person_profile"] = False
 
         msg = {
