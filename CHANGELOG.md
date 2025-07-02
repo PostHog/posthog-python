@@ -1,3 +1,7 @@
+# 6.0.2 - 2025-07-02
+
+- fix: send_feature_flags changed to default to false in `Client::capture_exception`
+
 # 6.0.1
 
 - fix: response `$process_person_profile` property when passed to capture
