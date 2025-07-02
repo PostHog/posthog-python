@@ -22,7 +22,7 @@ class OptionalCaptureArgs(TypedDict):
             error ID if you capture an exception).
         groups: Group identifiers to associate with this event (format: {group_type: group_key})
         send_feature_flags: Whether to include currently active feature flags in the event properties.
-            Defaults to True
+            Defaults to False
         disable_geoip: Whether to disable GeoIP lookup for this event. Defaults to False.
     """
 
