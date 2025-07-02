@@ -1389,11 +1389,7 @@ class Client(object):
         try:
             parsed = urlparse(cache_url)
             scheme = parsed.scheme.lower()
-
-            # Parse query parameters
             query_params = parse_qs(parsed.query)
-
-            # Extract common parameters with defaults
             ttl = int(query_params.get("ttl", [300])[0])
 
             if scheme == "memory":
@@ -1402,10 +1398,9 @@ class Client(object):
 
             elif scheme == "redis":
                 try:
-                    # Try to import redis
+                    # Not worth importing redis if we're not using it
                     import redis
 
-                    # Reconstruct Redis URL without query parameters
                     redis_url = f"{parsed.scheme}://"
                     if parsed.username or parsed.password:
                         redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
@@ -1417,7 +1412,7 @@ class Client(object):
 
                     client = redis.from_url(redis_url)
 
-                    # Test connection
+                    # Test connection before using it
                     client.ping()
 
                     return RedisFlagCache(client, default_ttl=ttl)
