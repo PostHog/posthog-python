@@ -1419,18 +1419,14 @@ class Client(object):
 
                 except ImportError:
                     self.log.warning(
-                        "[FEATURE FLAGS] Redis not available, falling back to memory cache"
+                        "[FEATURE FLAGS] Redis not available, flag caching disabled"
                     )
-                    # Fallback to memory cache with same TTL
-                    size = int(query_params.get("size", [10000])[0])
-                    return FlagCache(size, ttl)
+                    return None
                 except Exception as e:
                     self.log.warning(
-                        f"[FEATURE FLAGS] Redis connection failed: {e}, falling back to memory cache"
+                        f"[FEATURE FLAGS] Redis connection failed: {e}, flag caching disabled"
                     )
-                    # Fallback to memory cache with same TTL
-                    size = int(query_params.get("size", [10000])[0])
-                    return FlagCache(size, ttl)
+                    return None
             else:
                 raise ValueError(
                     f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis"
