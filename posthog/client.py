@@ -103,25 +103,22 @@ class Client(object):
         Basic usage:
         >>> client = Client("your-api-key")
 
-        With feature flag fallback cache (memory):
-        >>> client = Client("your-api-key", enable_flag_fallback_cache=True)
+        With memory-based feature flag fallback cache:
+        >>> client = Client(
+        ...     "your-api-key",
+        ...     flag_fallback_cache_url="memory://local/?ttl=300&size=10000"
+        ... )
 
         With Redis fallback cache for high-scale applications:
         >>> client = Client(
         ...     "your-api-key",
-        ...     enable_flag_fallback_cache=True,
-        ...     flag_fallback_cache_backend="redis",
-        ...     flag_fallback_cache_redis_url="redis://localhost:6379/0"
+        ...     flag_fallback_cache_url="redis://localhost:6379/0/?ttl=300"
         ... )
 
-        With existing Redis client:
-        >>> import redis
-        >>> redis_client = redis.Redis(host='localhost', port=6379, db=0)
+        With Redis authentication:
         >>> client = Client(
         ...     "your-api-key",
-        ...     enable_flag_fallback_cache=True,
-        ...     flag_fallback_cache_backend="redis",
-        ...     flag_fallback_cache_redis_client=redis_client
+        ...     flag_fallback_cache_url="redis://username:password@localhost:6379/0/?ttl=300"
         ... )
     """
 
@@ -154,12 +151,7 @@ class Client(object):
         project_root=None,
         privacy_mode=False,
         before_send=None,
-        enable_flag_fallback_cache=False,
-        flag_fallback_cache_size=10000,
-        flag_fallback_cache_ttl=300,
-        flag_fallback_cache_backend="memory",
-        flag_fallback_cache_redis_url=None,
-        flag_fallback_cache_redis_client=None,
+        flag_fallback_cache_url=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -185,14 +177,7 @@ class Client(object):
         )
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
-        self.flag_cache = self._initialize_flag_cache(
-            enable_flag_fallback_cache,
-            flag_fallback_cache_backend,
-            flag_fallback_cache_size,
-            flag_fallback_cache_ttl,
-            flag_fallback_cache_redis_url,
-            flag_fallback_cache_redis_client,
-        )
+        self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
         self.disabled = disabled
         self.disable_geoip = disable_geoip
@@ -1360,27 +1345,31 @@ class Client(object):
             "featureFlagPayloads": payloads,
         }, fallback_to_decide
 
-    def _initialize_flag_cache(
-        self,
-        enable_flag_fallback_cache,
-        backend,
-        cache_size,
-        cache_ttl,
-        redis_url,
-        redis_client,
-    ):
+    def _initialize_flag_cache(self, cache_url):
         """Initialize feature flag cache for graceful degradation during service outages.
 
         When enabled, the cache stores flag evaluation results and serves them as fallback
         when the PostHog API is unavailable. This ensures your application continues to
         receive flag values even during outages.
 
-        Example Redis usage:
+        Args:
+            cache_url: Cache configuration URL. Examples:
+                - None: Disable caching
+                - "memory://local/?ttl=300&size=10000": Memory cache with TTL and size
+                - "redis://localhost:6379/0/?ttl=300": Redis cache with TTL
+                - "redis://username:password@host:port/?ttl=300": Redis with auth
+
+        Example usage:
+            # Memory cache
             client = Client(
                 "your-api-key",
-                enable_flag_fallback_cache=True,
-                flag_fallback_cache_backend="redis",
-                flag_fallback_cache_redis_url="redis://localhost:6379/0"
+                flag_fallback_cache_url="memory://local/?ttl=300&size=10000"
+            )
+
+            # Redis cache
+            client = Client(
+                "your-api-key",
+                flag_fallback_cache_url="redis://localhost:6379/0/?ttl=300"
             )
 
             # Normal evaluation - cache is populated
@@ -1389,45 +1378,74 @@ class Client(object):
             # During API outage - returns cached value instead of None
             flag_value = client.get_feature_flag("my-flag", "user123")  # Uses cache
         """
-        if not enable_flag_fallback_cache:
+        if not cache_url:
             return None
 
-        if backend == "redis":
-            try:
-                # Try to import redis
-                import redis
+        try:
+            from urllib.parse import urlparse, parse_qs
+        except ImportError:
+            from urlparse import urlparse, parse_qs
 
-                # Use provided client or create from URL
-                if redis_client:
-                    client = redis_client
-                elif redis_url:
-                    client = redis.from_url(redis_url)
-                else:
-                    raise ValueError(
-                        "Redis backend requires either flag_cache_redis_url or flag_cache_redis_client"
+        try:
+            parsed = urlparse(cache_url)
+            scheme = parsed.scheme.lower()
+
+            # Parse query parameters
+            query_params = parse_qs(parsed.query)
+
+            # Extract common parameters with defaults
+            ttl = int(query_params.get("ttl", [300])[0])
+
+            if scheme == "memory":
+                size = int(query_params.get("size", [10000])[0])
+                return FlagCache(size, ttl)
+
+            elif scheme == "redis":
+                try:
+                    # Try to import redis
+                    import redis
+
+                    # Reconstruct Redis URL without query parameters
+                    redis_url = f"{parsed.scheme}://"
+                    if parsed.username or parsed.password:
+                        redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
+                    redis_url += (
+                        f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}"
                     )
+                    if parsed.path:
+                        redis_url += parsed.path
 
-                # Test connection
-                client.ping()
+                    client = redis.from_url(redis_url)
 
-                return RedisFlagCache(client, default_ttl=cache_ttl)
+                    # Test connection
+                    client.ping()
 
-            except ImportError:
-                self.log.warning(
-                    "[FEATURE FLAGS] Redis not available, falling back to memory cache"
+                    return RedisFlagCache(client, default_ttl=ttl)
+
+                except ImportError:
+                    self.log.warning(
+                        "[FEATURE FLAGS] Redis not available, falling back to memory cache"
+                    )
+                    # Fallback to memory cache with same TTL
+                    size = int(query_params.get("size", [10000])[0])
+                    return FlagCache(size, ttl)
+                except Exception as e:
+                    self.log.warning(
+                        f"[FEATURE FLAGS] Redis connection failed: {e}, falling back to memory cache"
+                    )
+                    # Fallback to memory cache with same TTL
+                    size = int(query_params.get("size", [10000])[0])
+                    return FlagCache(size, ttl)
+            else:
+                raise ValueError(
+                    f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis"
                 )
-                return FlagCache(cache_size, cache_ttl)
-            except Exception as e:
-                self.log.warning(
-                    f"[FEATURE FLAGS] Redis connection failed: {e}, falling back to memory cache"
-                )
-                return FlagCache(cache_size, cache_ttl)
 
-        elif backend == "memory":
-            return FlagCache(cache_size, cache_ttl)
-
-        else:
-            raise ValueError(f"Unknown flag cache backend: {backend}")
+        except Exception as e:
+            self.log.warning(
+                f"[FEATURE FLAGS] Failed to parse cache URL '{cache_url}': {e}"
+            )
+            return None
 
     def feature_flag_definitions(self):
         return self.feature_flags

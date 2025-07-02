@@ -1,7 +1,6 @@
 import json
 import logging
 import numbers
-import pickle
 import re
 import time
 from collections import defaultdict
@@ -293,8 +292,8 @@ class RedisFlagCache:
         if timestamp is None:
             timestamp = time.time()
 
-        # Use pickle for FeatureFlagResult to preserve all object data
-        serialized_result = pickle.dumps(flag_result).hex()
+        # Use clean to make flag_result JSON-serializable for cross-platform compatibility
+        serialized_result = clean(flag_result)
 
         entry = {
             "flag_result": serialized_result,
@@ -306,14 +305,13 @@ class RedisFlagCache:
     def _deserialize_entry(self, data):
         try:
             entry = json.loads(data)
-            # Deserialize the flag result from hex-encoded pickle
-            flag_result = pickle.loads(bytes.fromhex(entry["flag_result"]))
+            flag_result = entry["flag_result"]
             return FlagCacheEntry(
                 flag_result=flag_result,
                 flag_definition_version=entry["flag_version"],
                 timestamp=entry["timestamp"],
             )
-        except (json.JSONDecodeError, pickle.PickleError, KeyError, ValueError):
+        except (json.JSONDecodeError, KeyError, ValueError):
             # If deserialization fails, treat as cache miss
             return None
 
