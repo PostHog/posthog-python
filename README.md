@@ -32,7 +32,7 @@ We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
 ```bash
 uv python install 3.9.19
 uv python pin 3.9.19
-uv venv env
+uv venv
 source env/bin/activate
 uv sync --extra dev --extra test
 pre-commit install

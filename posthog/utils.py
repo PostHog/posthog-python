@@ -1,6 +1,8 @@
+import json
 import logging
 import numbers
 import re
+import time
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone
@@ -155,6 +157,266 @@ class SizeLimitedDict(defaultdict):
             self.clear()
 
         super().__setitem__(key, value)
+
+
+class FlagCacheEntry:
+    def __init__(self, flag_result, flag_definition_version, timestamp=None):
+        self.flag_result = flag_result
+        self.flag_definition_version = flag_definition_version
+        self.timestamp = timestamp or time.time()
+
+    def is_valid(self, current_time, ttl, current_flag_version):
+        time_valid = (current_time - self.timestamp) < ttl
+        version_valid = self.flag_definition_version == current_flag_version
+        return time_valid and version_valid
+
+    def is_stale_but_usable(self, current_time, max_stale_age=3600):
+        return (current_time - self.timestamp) < max_stale_age
+
+
+class FlagCache:
+    def __init__(self, max_size=10000, default_ttl=300):
+        self.cache = {}  # distinct_id -> {flag_key: FlagCacheEntry}
+        self.access_times = {}  # distinct_id -> last_access_time
+        self.max_size = max_size
+        self.default_ttl = default_ttl
+
+    def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
+        current_time = time.time()
+
+        if distinct_id not in self.cache:
+            return None
+
+        user_flags = self.cache[distinct_id]
+        if flag_key not in user_flags:
+            return None
+
+        entry = user_flags[flag_key]
+        if entry.is_valid(current_time, self.default_ttl, current_flag_version):
+            self.access_times[distinct_id] = current_time
+            return entry.flag_result
+
+        return None
+
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=3600):
+        current_time = time.time()
+
+        if distinct_id not in self.cache:
+            return None
+
+        user_flags = self.cache[distinct_id]
+        if flag_key not in user_flags:
+            return None
+
+        entry = user_flags[flag_key]
+        if entry.is_stale_but_usable(current_time, max_stale_age):
+            return entry.flag_result
+
+        return None
+
+    def set_cached_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        current_time = time.time()
+
+        # Evict LRU users if we're at capacity
+        if distinct_id not in self.cache and len(self.cache) >= self.max_size:
+            self._evict_lru()
+
+        # Initialize user cache if needed
+        if distinct_id not in self.cache:
+            self.cache[distinct_id] = {}
+
+        # Store the flag result
+        self.cache[distinct_id][flag_key] = FlagCacheEntry(
+            flag_result, flag_definition_version, current_time
+        )
+        self.access_times[distinct_id] = current_time
+
+    def invalidate_version(self, old_version):
+        users_to_remove = []
+
+        for distinct_id, user_flags in self.cache.items():
+            flags_to_remove = []
+            for flag_key, entry in user_flags.items():
+                if entry.flag_definition_version == old_version:
+                    flags_to_remove.append(flag_key)
+
+            # Remove invalidated flags
+            for flag_key in flags_to_remove:
+                del user_flags[flag_key]
+
+            # Remove user entirely if no flags remain
+            if not user_flags:
+                users_to_remove.append(distinct_id)
+
+        # Clean up empty users
+        for distinct_id in users_to_remove:
+            del self.cache[distinct_id]
+            if distinct_id in self.access_times:
+                del self.access_times[distinct_id]
+
+    def _evict_lru(self):
+        if not self.access_times:
+            return
+
+        # Remove 20% of least recently used entries
+        sorted_users = sorted(self.access_times.items(), key=lambda x: x[1])
+        to_remove = max(1, len(sorted_users) // 5)
+
+        for distinct_id, _ in sorted_users[:to_remove]:
+            if distinct_id in self.cache:
+                del self.cache[distinct_id]
+            if distinct_id in self.access_times:
+                del self.access_times[distinct_id]
+
+    def clear(self):
+        self.cache.clear()
+        self.access_times.clear()
+
+
+class RedisFlagCache:
+    def __init__(
+        self, redis_client, default_ttl=300, stale_ttl=3600, key_prefix="posthog:flags:"
+    ):
+        self.redis = redis_client
+        self.default_ttl = default_ttl
+        self.stale_ttl = stale_ttl
+        self.key_prefix = key_prefix
+        self.version_key = f"{key_prefix}version"
+
+    def _get_cache_key(self, distinct_id, flag_key):
+        return f"{self.key_prefix}{distinct_id}:{flag_key}"
+
+    def _serialize_entry(self, flag_result, flag_definition_version, timestamp=None):
+        if timestamp is None:
+            timestamp = time.time()
+
+        # Use clean to make flag_result JSON-serializable for cross-platform compatibility
+        serialized_result = clean(flag_result)
+
+        entry = {
+            "flag_result": serialized_result,
+            "flag_version": flag_definition_version,
+            "timestamp": timestamp,
+        }
+        return json.dumps(entry)
+
+    def _deserialize_entry(self, data):
+        try:
+            entry = json.loads(data)
+            flag_result = entry["flag_result"]
+            return FlagCacheEntry(
+                flag_result=flag_result,
+                flag_definition_version=entry["flag_version"],
+                timestamp=entry["timestamp"],
+            )
+        except (json.JSONDecodeError, KeyError, ValueError):
+            # If deserialization fails, treat as cache miss
+            return None
+
+    def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
+        try:
+            cache_key = self._get_cache_key(distinct_id, flag_key)
+            data = self.redis.get(cache_key)
+
+            if data:
+                entry = self._deserialize_entry(data)
+                if entry and entry.is_valid(
+                    time.time(), self.default_ttl, current_flag_version
+                ):
+                    return entry.flag_result
+
+            return None
+        except Exception:
+            # Redis error - return None to fall back to normal evaluation
+            return None
+
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        try:
+            if max_stale_age is None:
+                max_stale_age = self.stale_ttl
+
+            cache_key = self._get_cache_key(distinct_id, flag_key)
+            data = self.redis.get(cache_key)
+
+            if data:
+                entry = self._deserialize_entry(data)
+                if entry and entry.is_stale_but_usable(time.time(), max_stale_age):
+                    return entry.flag_result
+
+            return None
+        except Exception:
+            # Redis error - return None
+            return None
+
+    def set_cached_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        try:
+            cache_key = self._get_cache_key(distinct_id, flag_key)
+            serialized_entry = self._serialize_entry(
+                flag_result, flag_definition_version
+            )
+
+            # Set with TTL for automatic cleanup (use stale_ttl for total lifetime)
+            self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
+
+            # Update the current version
+            self.redis.set(self.version_key, flag_definition_version)
+
+        except Exception:
+            # Redis error - silently fail, don't break flag evaluation
+            pass
+
+    def invalidate_version(self, old_version):
+        try:
+            # For Redis, we use a simple approach: scan for keys with old version
+            # and delete them. This could be expensive with many keys, but it's
+            # necessary for correctness.
+
+            cursor = 0
+            pattern = f"{self.key_prefix}*"
+
+            while True:
+                cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+
+                for key in keys:
+                    if key.decode() == self.version_key:
+                        continue
+
+                    try:
+                        data = self.redis.get(key)
+                        if data:
+                            entry_dict = json.loads(data)
+                            if entry_dict.get("flag_version") == old_version:
+                                self.redis.delete(key)
+                    except (json.JSONDecodeError, KeyError):
+                        # If we can't parse the entry, delete it to be safe
+                        self.redis.delete(key)
+
+                if cursor == 0:
+                    break
+
+        except Exception:
+            # Redis error - silently fail
+            pass
+
+    def clear(self):
+        try:
+            # Delete all keys matching our pattern
+            cursor = 0
+            pattern = f"{self.key_prefix}*"
+
+            while True:
+                cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+                if keys:
+                    self.redis.delete(*keys)
+                if cursor == 0:
+                    break
+        except Exception:
+            # Redis error - silently fail
+            pass
 
 
 def convert_to_datetime_aware(date_obj):

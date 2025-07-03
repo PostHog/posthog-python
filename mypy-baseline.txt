@@ -42,3 +42,5 @@ posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [v
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?
+posthog/client.py:0: error: Name "urlparse" already defined (possibly by an import)  [no-redef]
+posthog/client.py:0: error: Name "parse_qs" already defined (possibly by an import)  [no-redef]
