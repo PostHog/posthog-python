@@ -7,6 +7,11 @@ from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
 from uuid import uuid4
 
+try:
+    from urllib.parse import urlparse, parse_qs
+except ImportError:
+    from urlparse import urlparse, parse_qs
+
 from dateutil.tz import tzutc
 from six import string_types
 
@@ -1380,11 +1385,6 @@ class Client(object):
         """
         if not cache_url:
             return None
-
-        try:
-            from urllib.parse import urlparse, parse_qs
-        except ImportError:
-            from urlparse import urlparse, parse_qs
 
         try:
             parsed = urlparse(cache_url)
