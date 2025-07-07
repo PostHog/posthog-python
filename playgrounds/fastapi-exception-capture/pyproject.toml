@@ -1,0 +1,8 @@
+[project]
+name = "fastapi-exception-capture-playground"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["fastapi>=0.104.0", "uvicorn[standard]>=0.24.0", "posthog"]
+
+[tool.uv.sources]
+posthog = { path = "../..", editable = true }
