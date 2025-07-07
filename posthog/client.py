@@ -50,6 +50,8 @@ from posthog.types import (
     to_values,
 )
 from posthog.utils import (
+    FlagCache,
+    RedisFlagCache,
     SizeLimitedDict,
     clean,
     guess_timezone,
@@ -95,7 +97,30 @@ def add_context_tags(properties):
 
 
 class Client(object):
-    """Create a new PostHog client."""
+    """Create a new PostHog client.
+
+    Examples:
+        Basic usage:
+        >>> client = Client("your-api-key")
+
+        With memory-based feature flag fallback cache:
+        >>> client = Client(
+        ...     "your-api-key",
+        ...     flag_fallback_cache_url="memory://local/?ttl=300&size=10000"
+        ... )
+
+        With Redis fallback cache for high-scale applications:
+        >>> client = Client(
+        ...     "your-api-key",
+        ...     flag_fallback_cache_url="redis://localhost:6379/0/?ttl=300"
+        ... )
+
+        With Redis authentication:
+        >>> client = Client(
+        ...     "your-api-key",
+        ...     flag_fallback_cache_url="redis://username:password@localhost:6379/0/?ttl=300"
+        ... )
+    """
 
     log = logging.getLogger("posthog")
 
@@ -126,6 +151,7 @@ class Client(object):
         project_root=None,
         privacy_mode=False,
         before_send=None,
+        flag_fallback_cache_url=None,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -151,6 +177,8 @@ class Client(object):
         )
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
+        self.flag_definition_version = 0
         self.disabled = disabled
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
@@ -707,6 +735,9 @@ class Client(object):
 
     def _load_feature_flags(self):
         try:
+            # Store old flags to detect changes
+            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+
             response = get(
                 self.personal_api_key,
                 f"/api/feature_flag/local_evaluation/?token={self.api_key}&send_cohorts",
@@ -717,6 +748,14 @@ class Client(object):
             self.feature_flags = response["flags"] or []
             self.group_type_mapping = response["group_type_mapping"] or {}
             self.cohorts = response["cohorts"] or {}
+
+            # Check if flag definitions changed and update version
+            if self.flag_cache and old_flags_by_key != (
+                self.feature_flags_by_key or {}
+            ):
+                old_version = self.flag_definition_version
+                self.flag_definition_version += 1
+                self.flag_cache.invalidate_version(old_version)
 
         except APIError as e:
             if e.status == 401:
@@ -738,6 +777,10 @@ class Client(object):
                 self.feature_flags = []
                 self.group_type_mapping = {}
                 self.cohorts = {}
+
+                # Clear flag cache when quota limited
+                if self.flag_cache:
+                    self.flag_cache.clear()
 
                 if self.debug:
                     raise APIError(
@@ -889,6 +932,12 @@ class Client(object):
             flag_result = FeatureFlagResult.from_value_and_payload(
                 key, lookup_match_value, payload
             )
+
+            # Cache successful local evaluation
+            if self.flag_cache and flag_result:
+                self.flag_cache.set_cached_flag(
+                    distinct_id, key, flag_result, self.flag_definition_version
+                )
         elif not only_evaluate_locally:
             try:
                 flag_details, request_id = self._get_feature_flag_details_from_decide(
@@ -902,11 +951,29 @@ class Client(object):
                 flag_result = FeatureFlagResult.from_flag_details(
                     flag_details, override_match_value
                 )
+
+                # Cache successful remote evaluation
+                if self.flag_cache and flag_result:
+                    self.flag_cache.set_cached_flag(
+                        distinct_id, key, flag_result, self.flag_definition_version
+                    )
+
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+
+                # Fallback to cached value if remote evaluation fails
+                if self.flag_cache:
+                    stale_result = self.flag_cache.get_stale_cached_flag(
+                        distinct_id, key
+                    )
+                    if stale_result:
+                        self.log.info(
+                            f"[FEATURE FLAGS] Using stale cached value for flag {key}"
+                        )
+                        flag_result = stale_result
 
         if send_feature_flag_events:
             self._capture_feature_flag_called(
@@ -1277,6 +1344,99 @@ class Client(object):
             "featureFlags": flags,
             "featureFlagPayloads": payloads,
         }, fallback_to_decide
+
+    def _initialize_flag_cache(self, cache_url):
+        """Initialize feature flag cache for graceful degradation during service outages.
+
+        When enabled, the cache stores flag evaluation results and serves them as fallback
+        when the PostHog API is unavailable. This ensures your application continues to
+        receive flag values even during outages.
+
+        Args:
+            cache_url: Cache configuration URL. Examples:
+                - None: Disable caching
+                - "memory://local/?ttl=300&size=10000": Memory cache with TTL and size
+                - "redis://localhost:6379/0/?ttl=300": Redis cache with TTL
+                - "redis://username:password@host:port/?ttl=300": Redis with auth
+
+        Example usage:
+            # Memory cache
+            client = Client(
+                "your-api-key",
+                flag_fallback_cache_url="memory://local/?ttl=300&size=10000"
+            )
+
+            # Redis cache
+            client = Client(
+                "your-api-key",
+                flag_fallback_cache_url="redis://localhost:6379/0/?ttl=300"
+            )
+
+            # Normal evaluation - cache is populated
+            flag_value = client.get_feature_flag("my-flag", "user123")
+
+            # During API outage - returns cached value instead of None
+            flag_value = client.get_feature_flag("my-flag", "user123")  # Uses cache
+        """
+        if not cache_url:
+            return None
+
+        try:
+            from urllib.parse import urlparse, parse_qs
+        except ImportError:
+            from urlparse import urlparse, parse_qs
+
+        try:
+            parsed = urlparse(cache_url)
+            scheme = parsed.scheme.lower()
+            query_params = parse_qs(parsed.query)
+            ttl = int(query_params.get("ttl", [300])[0])
+
+            if scheme == "memory":
+                size = int(query_params.get("size", [10000])[0])
+                return FlagCache(size, ttl)
+
+            elif scheme == "redis":
+                try:
+                    # Not worth importing redis if we're not using it
+                    import redis
+
+                    redis_url = f"{parsed.scheme}://"
+                    if parsed.username or parsed.password:
+                        redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
+                    redis_url += (
+                        f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}"
+                    )
+                    if parsed.path:
+                        redis_url += parsed.path
+
+                    client = redis.from_url(redis_url)
+
+                    # Test connection before using it
+                    client.ping()
+
+                    return RedisFlagCache(client, default_ttl=ttl)
+
+                except ImportError:
+                    self.log.warning(
+                        "[FEATURE FLAGS] Redis not available, flag caching disabled"
+                    )
+                    return None
+                except Exception as e:
+                    self.log.warning(
+                        f"[FEATURE FLAGS] Redis connection failed: {e}, flag caching disabled"
+                    )
+                    return None
+            else:
+                raise ValueError(
+                    f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis"
+                )
+
+        except Exception as e:
+            self.log.warning(
+                f"[FEATURE FLAGS] Failed to parse cache URL '{cache_url}': {e}"
+            )
+            return None
 
     def feature_flag_definitions(self):
         return self.feature_flags
