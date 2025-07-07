@@ -379,7 +379,7 @@ class Client(object):
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
-        if personless:
+        if personless and "$process_person_profile" not in properties:
             properties["$process_person_profile"] = False
 
         msg = {
@@ -550,7 +550,7 @@ class Client(object):
     ):
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
-        send_feature_flags = kwargs.get("send_feature_flags", True)
+        send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
         # this is important to ensure we don't unexpectedly re-raise exceptions in the user's code.
