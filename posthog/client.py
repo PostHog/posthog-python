@@ -97,29 +97,20 @@ def add_context_tags(properties):
 
 
 class Client(object):
-    """Create a new PostHog client.
+    """
+    This is the SDK reference for the PostHog Python SDK. 
+    You can learn more about example usage in the [Python SDK documentation](/docs/libraries/python). 
+    You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django) 
+    guides to integrate PostHog into your project.
 
     Examples:
-        Basic usage:
-        >>> client = Client("your-api-key")
-
-        With memory-based feature flag fallback cache:
-        >>> client = Client(
-        ...     "your-api-key",
-        ...     flag_fallback_cache_url="memory://local/?ttl=300&size=10000"
-        ... )
-
-        With Redis fallback cache for high-scale applications:
-        >>> client = Client(
-        ...     "your-api-key",
-        ...     flag_fallback_cache_url="redis://localhost:6379/0/?ttl=300"
-        ... )
-
-        With Redis authentication:
-        >>> client = Client(
-        ...     "your-api-key",
-        ...     flag_fallback_cache_url="redis://username:password@localhost:6379/0/?ttl=300"
-        ... )
+        ```python
+        from posthog import Posthog
+        posthog = Posthog('<ph_project_api_key>', host='<ph_client_api_host>')
+        posthog.debug = True
+        if settings.TEST:
+            posthog.disabled = True
+        ```
     """
 
     log = logging.getLogger("posthog")
@@ -153,6 +144,24 @@ class Client(object):
         before_send=None,
         flag_fallback_cache_url=None,
     ):
+        """
+        Initialize a new PostHog client instance.
+
+        Args:
+            project_api_key: The project API key.
+            host: The host to use for the client.
+            debug: Whether to enable debug mode.
+
+        Examples:
+            ```python
+            from posthog import Posthog
+
+            posthog = Posthog('<ph_project_api_key>', host='<ph_app_host>')
+            ```
+        
+        Category:
+            Initialization
+        """
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
@@ -250,6 +259,23 @@ class Client(object):
                     consumer.start()
 
     def new_context(self, fresh=False, capture_exceptions=True):
+        """
+        Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
+
+        Args:
+            fresh: Whether to create a fresh context that doesn't inherit from parent.
+            capture_exceptions: Whether to automatically capture exceptions in this context.
+
+        Examples:
+            ```python
+            with posthog.new_context():
+                identify_context('<distinct_id>')
+                posthog.capture('event_name')
+            ```
+
+        Category:
+            Contexts
+        """
         return new_context(
             fresh=fresh, capture_exceptions=capture_exceptions, client=self
         )
@@ -285,7 +311,17 @@ class Client(object):
         disable_geoip=None,
     ) -> dict[str, Union[bool, str]]:
         """
-        Get feature flag variants for a distinct_id by calling decide.
+        Get feature flag variants for a user by calling decide.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Category:
+            Feature Flags
         """
         resp_data = self.get_flags_decision(
             distinct_id, groups, person_properties, group_properties, disable_geoip
@@ -301,7 +337,22 @@ class Client(object):
         disable_geoip=None,
     ) -> dict[str, str]:
         """
-        Get feature flag payloads for a distinct_id by calling decide.
+        Get feature flag payloads for a user by calling decide.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            payloads = posthog.get_feature_payloads('<distinct_id>')
+            ```
+
+        Category:
+            Feature Flags
         """
         resp_data = self.get_flags_decision(
             distinct_id, groups, person_properties, group_properties, disable_geoip
@@ -317,7 +368,22 @@ class Client(object):
         disable_geoip=None,
     ) -> FlagsAndPayloads:
         """
-        Get feature flags and payloads for a distinct_id by calling decide.
+        Get feature flags and payloads for a user by calling decide.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            result = posthog.get_feature_flags_and_payloads('<distinct_id>')
+            ```
+
+        Category:
+            Feature Flags
         """
         resp = self.get_flags_decision(
             distinct_id, groups, person_properties, group_properties, disable_geoip
@@ -333,7 +399,22 @@ class Client(object):
         disable_geoip=None,
     ) -> FlagsResponse:
         """
-        Get feature flags decision, using either flags() or decide() API based on rollout.
+        Get feature flags decision.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            decision = posthog.get_flags_decision('user123')
+            ```
+
+        Category:
+            Feature Flags
         """
 
         if distinct_id is None:
@@ -365,6 +446,52 @@ class Client(object):
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
+        """
+        Captures an event manually. [Learn about capture best practices](https://posthog.com/docs/product-analytics/capture-events)
+
+        Args:
+            event: The event name to capture.
+            distinct_id: The distinct ID of the user.
+            properties: A dictionary of properties to include with the event.
+            timestamp: The timestamp of the event.
+            uuid: A unique identifier for the event.
+            groups: A dictionary of group information.
+            send_feature_flags: Whether to send feature flags with the event.
+            disable_geoip: Whether to disable GeoIP for this event.
+
+        Examples:
+            ```python
+            # Anonymous event
+            posthog.capture('some-anon-event')
+            ```
+            ```python
+            # Context usage
+            from posthog import identify_context, new_context
+            with new_context():
+                identify_context('distinct_id_of_the_user')
+                posthog.capture('user_signed_up')
+                posthog.capture('user_logged_in')
+                posthog.capture('some-custom-action', distinct_id='distinct_id_of_the_user')
+            ```
+            ```python
+            # Set event properties
+            posthog.capture(
+                "user_signed_up",
+                distinct_id="distinct_id_of_the_user",
+                properties={
+                    "login_type": "email",
+                    "is_free_trial": "true"
+                }
+            )
+            ```
+            ```python
+            # Page view event
+            posthog.capture('$pageview', distinct_id="distinct_id_of_the_user", properties={'$current_url': 'https://example.com'})
+            ```
+
+        Category:
+            Capture
+        """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
@@ -431,6 +558,39 @@ class Client(object):
         return self._enqueue(msg, disable_geoip)
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        """
+        Set properties on a person profile.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            properties: A dictionary of properties to set.
+            timestamp: The timestamp of the event.
+            uuid: A unique identifier for the event.
+            disable_geoip: Whether to disable GeoIP for this event.
+
+        Examples:
+            ```python
+            # Set with distinct id
+            posthog.capture(
+                'event_name',
+                distinct_id='user-distinct-id',
+                properties={
+                    '$set': {'name': 'Max Hedgehog'},
+                    '$set_once': {'initial_url': '/blog'}
+                }
+            )
+            ```
+            ```python
+            # Set using context
+            from posthog import new_context, identify_context
+            with new_context():
+                identify_context('user-distinct-id')
+                posthog.capture('event_name')
+            ```
+
+        Category:
+            Identification
+        """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
@@ -457,6 +617,24 @@ class Client(object):
         return self._enqueue(msg, disable_geoip)
 
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        """
+        Set properties on a person profile only if they haven't been set before.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            properties: A dictionary of properties to set once.
+            timestamp: The timestamp of the event.
+            uuid: A unique identifier for the event.
+            disable_geoip: Whether to disable GeoIP for this event.
+
+        Examples:
+            ```python
+            posthog.set_once(distinct_id='user123', properties={'initial_signup_date': '2024-01-01'})
+            ```
+
+        Category:
+            Identification
+        """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
@@ -491,6 +669,29 @@ class Client(object):
         disable_geoip=None,
         distinct_id=None,
     ):
+        """
+        Identify a group and set its properties.
+
+        Args:
+            group_type: The type of group (e.g., 'company', 'team').
+            group_key: The unique identifier for the group.
+            properties: A dictionary of properties to set on the group.
+            timestamp: The timestamp of the event.
+            uuid: A unique identifier for the event.
+            disable_geoip: Whether to disable GeoIP for this event.
+            distinct_id: The distinct ID of the user performing the action.
+
+        Examples:
+            ```python
+            posthog.group_identify('company', 'company_id_in_your_db', {
+                'name': 'Awesome Inc.',
+                'employees': 11
+            })
+            ```
+
+        Category:
+            Identification
+        """
         properties = properties or {}
 
         # group_identify is purposefully always personful
@@ -522,6 +723,24 @@ class Client(object):
         uuid=None,
         disable_geoip=None,
     ):
+        """
+        Create an alias between two distinct IDs.
+
+        Args:
+            previous_id: The previous distinct ID.
+            distinct_id: The new distinct ID to alias to.
+            timestamp: The timestamp of the event.
+            uuid: A unique identifier for the event.
+            disable_geoip: Whether to disable GeoIP for this event.
+
+        Examples:
+            ```python
+            posthog.alias(previous_id='distinct_id', distinct_id='alias_id')
+            ```
+
+        Category:
+            Identification
+        """
         (distinct_id, personless) = get_identity_state(distinct_id)
 
         if personless:
@@ -548,6 +767,28 @@ class Client(object):
         exception: Optional[ExceptionArg],
         **kwargs: Unpack[OptionalCaptureArgs],
     ):
+        """
+        Capture an exception for error tracking.
+
+        Args:
+            exception: The exception to capture.
+            distinct_id: The distinct ID of the user.
+            properties: A dictionary of additional properties.
+            send_feature_flags: Whether to send feature flags with the exception.
+            disable_geoip: Whether to disable GeoIP for this event.
+
+        Examples:
+            ```python
+            try:
+                # Some code that might fail
+                pass
+            except Exception as e:
+                posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
+            ```
+
+        Category:
+            Error Tracking
+        """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
@@ -703,7 +944,15 @@ class Client(object):
             return None
 
     def flush(self):
-        """Forces a flush from the internal queue to the server"""
+        """
+        Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
+
+        Examples:
+            ```python
+            posthog.capture('event_name')
+            posthog.flush()  # Ensures the event is sent immediately
+            ```
+        """
         queue = self.queue
         size = queue.qsize()
         queue.join()
@@ -711,8 +960,13 @@ class Client(object):
         self.log.debug("successfully flushed about %s items.", size)
 
     def join(self):
-        """Ends the consumer thread once the queue is empty.
-        Blocks execution until finished
+        """
+        End the consumer thread once the queue is empty. Do not use directly, call `shutdown()` instead.
+
+        Examples:
+            ```python
+            posthog.join()
+            ```
         """
         for consumer in self.consumers:
             consumer.pause()
@@ -726,7 +980,14 @@ class Client(object):
             self.poller.stop()
 
     def shutdown(self):
-        """Flush all messages and cleanly shutdown the client"""
+        """
+        Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
+
+        Examples:
+            ```python
+            posthog.shutdown()
+            ```
+        """
         self.flush()
         self.join()
 
@@ -799,6 +1060,17 @@ class Client(object):
         self._last_feature_flag_poll = datetime.now(tz=tzutc())
 
     def load_feature_flags(self):
+        """
+        Load feature flags for local evaluation.
+
+        Examples:
+            ```python
+            posthog.load_feature_flags()
+            ```
+
+        Category:
+            Feature Flags
+        """
         if not self.personal_api_key:
             self.log.warning(
                 "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
@@ -876,6 +1148,31 @@ class Client(object):
         send_feature_flag_events=True,
         disable_geoip=None,
     ):
+        """
+        Check if a feature flag is enabled for a user.
+
+        Args:
+            key: The feature flag key.
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: Whether to only evaluate locally.
+            send_feature_flag_events: Whether to send feature flag events.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            is_my_flag_enabled = posthog.feature_enabled('flag-key', 'distinct_id_of_your_user')
+            if is_my_flag_enabled:
+                # Do something differently for this user
+                # Optional: fetch the payload
+                matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+            ```
+
+        Category:
+            Feature Flags
+        """
         response = self.get_feature_flag(
             key,
             distinct_id,
@@ -1003,10 +1300,7 @@ class Client(object):
         disable_geoip=None,
     ) -> Optional[FeatureFlagResult]:
         """
-        Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
-        depending on whether local evaluation is enabled and the flag can be locally evaluated.
-
-        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
+        Get a FeatureFlagResult object
         """
         return self._get_feature_flag_result(
             key,
@@ -1032,11 +1326,29 @@ class Client(object):
         disable_geoip=None,
     ) -> Optional[FlagValue]:
         """
-        Get a feature flag value for a key by evaluating locally or remotely
-        depending on whether local evaluation is enabled and the flag can be
-        locally evaluated.
+        Get multivariate feature flag value for a user.
 
-        This also captures the $feature_flag_called event unless send_feature_flag_events is False.
+        Args:
+            key: The feature flag key.
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: Whether to only evaluate locally.
+            send_feature_flag_events: Whether to send feature flag events.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            enabled_variant = posthog.get_feature_flag('flag-key', 'distinct_id_of_your_user')
+            if enabled_variant == 'variant-key': # replace 'variant-key' with the key of your variant
+                # Do something differently for this user
+                # Optional: fetch the payload
+                matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+            ```
+
+        Category:
+            Feature Flags
         """
         feature_flag_result = self.get_feature_flag_result(
             key,
@@ -1101,6 +1413,33 @@ class Client(object):
         send_feature_flag_events=True,
         disable_geoip=None,
     ):
+        """
+        Get the payload for a feature flag.
+
+        Args:
+            key: The feature flag key.
+            distinct_id: The distinct ID of the user.
+            match_value: The specific flag value to get payload for.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: Whether to only evaluate locally.
+            send_feature_flag_events: Whether to send feature flag events.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            is_my_flag_enabled = posthog.feature_enabled('flag-key', 'distinct_id_of_your_user')
+
+            if is_my_flag_enabled:
+                # Do something differently for this user
+                # Optional: fetch the payload
+                matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+            ```
+
+        Category:
+            Feature Flags
+        """
         feature_flag_result = self._get_feature_flag_result(
             key,
             distinct_id,
@@ -1243,6 +1582,25 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
     ) -> Optional[dict[str, Union[bool, str]]]:
+        """
+        Get all feature flags for a user.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: Whether to only evaluate locally.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            posthog.get_all_flags('distinct_id_of_your_user')
+            ```
+
+        Category:
+            Feature Flags
+        """
         response = self.get_all_flags_and_payloads(
             distinct_id,
             groups=groups,
@@ -1264,6 +1622,25 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
     ) -> FlagsAndPayloads:
+        """
+        Get all feature flags and their payloads for a user.
+
+        Args:
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: Whether to only evaluate locally.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Examples:
+            ```python
+            posthog.get_all_flags_and_payloads('distinct_id_of_your_user')
+            ```
+
+        Category:
+            Feature Flags
+        """
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}
 
