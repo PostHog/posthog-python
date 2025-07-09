@@ -22,11 +22,11 @@ __version__ = VERSION
 def new_context(fresh=False, capture_exceptions=True):
     """
     Create a new context scope that will be active for the duration of the with block.
-    
+
     Args:
         fresh: Whether to start with a fresh context (default: False)
         capture_exceptions: Whether to capture exceptions raised within the context (default: True)
-    
+
     Examples:
         ```python
         from posthog import new_context, tag, capture
@@ -34,7 +34,7 @@ def new_context(fresh=False, capture_exceptions=True):
             tag("request_id", "123")
             capture("event_name", properties={"property": "value"})
         ```
-    
+
     Category:
         Contexts
     """
@@ -44,11 +44,11 @@ def new_context(fresh=False, capture_exceptions=True):
 def scoped(fresh=False, capture_exceptions=True):
     """
     Decorator that creates a new context for the function.
-    
+
     Args:
         fresh: Whether to start with a fresh context (default: False)
         capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
-    
+
     Examples:
         ```python
         from posthog import scoped, tag, capture
@@ -57,7 +57,7 @@ def scoped(fresh=False, capture_exceptions=True):
             tag("payment_id", payment_id)
             capture("payment_started")
         ```
-    
+
     Category:
         Contexts
     """
@@ -67,16 +67,16 @@ def scoped(fresh=False, capture_exceptions=True):
 def set_context_session(session_id: str):
     """
     Set the session ID for the current context.
-    
+
     Args:
         session_id: The session ID to associate with the current context and its children
-    
+
     Examples:
         ```python
         from posthog import set_context_session
         set_context_session("session_123")
         ```
-    
+
     Category:
         Contexts
     """
@@ -86,16 +86,16 @@ def set_context_session(session_id: str):
 def identify_context(distinct_id: str):
     """
     Identify the current context with a distinct ID.
-    
+
     Args:
         distinct_id: The distinct ID to associate with the current context and its children
-    
+
     Examples:
         ```python
         from posthog import identify_context
         identify_context("user_123")
         ```
-    
+
     Category:
         Identification
     """
@@ -105,17 +105,17 @@ def identify_context(distinct_id: str):
 def tag(name: str, value: Any):
     """
     Add a tag to the current context.
-    
+
     Args:
         name: The tag key
         value: The tag value
-    
+
     Examples:
         ```python
         from posthog import tag
         tag("user_id", "123")
         ```
-    
+
     Category:
         Contexts
     """

@@ -113,7 +113,7 @@ def new_context(
             raise ValueError("Something went wrong")
         ```
 
-    Category: 
+    Category:
         Contexts
     """
     from posthog import capture_exception
@@ -145,11 +145,11 @@ def tag(key: str, value: Any) -> None:
         value: The tag value
 
     Example:
-        ```python   
+        ```python
         posthog.tag("user_id", "123")
         ```
 
-    Category: 
+    Category:
         Contexts
     """
     current_context = _get_current_context()
@@ -165,7 +165,7 @@ def get_tags() -> Dict[str, Any]:
     Returns:
         Dict of all tags in the current context
 
-    Category: 
+    Category:
         Contexts
     """
     current_context = _get_current_context()
@@ -186,7 +186,7 @@ def identify_context(distinct_id: str) -> None:
     Args:
         distinct_id: The distinct ID to associate with the current context and its children.
 
-    Category: 
+    Category:
         Contexts
     """
     current_context = _get_current_context()
@@ -203,7 +203,7 @@ def set_context_session(session_id: str) -> None:
     Args:
         session_id: The session ID to associate with the current context and its children. See https://posthog.com/docs/data/sessions
 
-    Category: 
+    Category:
         Contexts
     """
     current_context = _get_current_context()
@@ -218,7 +218,7 @@ def get_context_session_id() -> Optional[str]:
     Returns:
         The session ID if set, None otherwise
 
-    Category: 
+    Category:
         Contexts
     """
     current_context = _get_current_context()
@@ -234,7 +234,7 @@ def get_context_distinct_id() -> Optional[str]:
     Returns:
         The distinct ID if set, None otherwise
 
-    Category: 
+    Category:
         Contexts
     """
     current_context = _get_current_context()
@@ -267,7 +267,7 @@ def scoped(fresh: bool = False, capture_exceptions: bool = True):
             # and then re-raised
             some_risky_function()
 
-    Category: 
+    Category:
         Contexts
     """
 

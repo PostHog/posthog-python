@@ -98,9 +98,9 @@ def add_context_tags(properties):
 
 class Client(object):
     """
-    This is the SDK reference for the PostHog Python SDK. 
-    You can learn more about example usage in the [Python SDK documentation](/docs/libraries/python). 
-    You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django) 
+    This is the SDK reference for the PostHog Python SDK.
+    You can learn more about example usage in the [Python SDK documentation](/docs/libraries/python).
+    You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django)
     guides to integrate PostHog into your project.
 
     Examples:
@@ -158,7 +158,7 @@ class Client(object):
 
             posthog = Posthog('<ph_project_api_key>', host='<ph_app_host>')
             ```
-        
+
         Category:
             Initialization
         """
