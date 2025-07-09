@@ -157,6 +157,12 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
 
     Args:
         event: The event name to specify the event
+        **kwargs: Optional arguments including:
+            distinct_id: Unique identifier for the user
+            properties: Dict of event properties
+            timestamp: When the event occurred
+            groups: Dict of group types and IDs
+            disable_geoip: Whether to disable GeoIP lookup
 
     Details:
         Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up. A capture call requires an event name to specify the event. We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on. Capture takes a number of optional arguments, which are defined by the `OptionalCaptureArgs` type.
@@ -193,9 +199,9 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
         # Set event properties
         from posthog import capture
         capture(
-            "distinct_id_of_the_user",
             "user_signed_up",
-            {
+            distinct_id="distinct_id_of_the_user",
+            properties={
                 "login_type": "email",
                 "is_free_trial": "true"
             }

@@ -64,7 +64,11 @@ DOCSTRING_PATTERNS = {
 }
 
 # Output file configuration
-OUTPUT_CONFIG = {"filename": "posthog-python-references.json", "indent": 2}
+OUTPUT_CONFIG = {
+    "output_dir": ".",
+    "filename": "posthog-python-references.json",
+    "indent": 2,
+}
 
 # Documentation structure defaults
 DOC_DEFAULTS = {

@@ -17,6 +17,7 @@ from doc_constant import (
     OUTPUT_CONFIG,
     DOC_DEFAULTS,
 )
+import os
 
 
 def extract_examples_from_docstring(docstring: str) -> list:
@@ -439,7 +440,9 @@ if __name__ == "__main__":
         documentation = generate_sdk_documentation()
 
         # Write to file
-        output_file = OUTPUT_CONFIG["filename"]
+        output_file = os.path.join(
+            OUTPUT_CONFIG["output_dir"], OUTPUT_CONFIG["filename"]
+        )
         with open(output_file, "w") as f:
             json.dump(documentation, f, indent=OUTPUT_CONFIG["indent"])
 

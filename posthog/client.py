@@ -1300,7 +1300,31 @@ class Client(object):
         disable_geoip=None,
     ) -> Optional[FeatureFlagResult]:
         """
-        Get a FeatureFlagResult object
+        Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
+        depending on whether local evaluation is enabled and the flag can be locally evaluated.
+        This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+
+        Examples:
+            ```python
+            flag_result = posthog.get_feature_flag_result('flag-key', 'distinct_id_of_your_user')
+            if flag_result and flag_result.get_value() == 'variant-key':
+                # Do something differently for this user
+                # Optional: fetch the payload
+                matched_flag_payload = flag_result.payload
+            ```
+
+        Args:
+            key: The feature flag key.
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: Whether to only evaluate locally.
+            send_feature_flag_events: Whether to send feature flag events.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Returns:
+            Optional[FeatureFlagResult]: The feature flag result or None if disabled/not found.
         """
         return self._get_feature_flag_result(
             key,
