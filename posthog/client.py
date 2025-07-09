@@ -697,7 +697,7 @@ class Client(object):
         # group_identify is purposefully always personful
         distinct_id = get_identity_state(distinct_id)[0]
 
-        msg = {
+        msg: Dict[str, Any] = {
             "event": "$groupidentify",
             "properties": {
                 "$group_type": group_type,
@@ -711,7 +711,7 @@ class Client(object):
 
         # NOTE - group_identify doesn't generally use context properties - should it?
         if get_context_session_id():
-            msg["properties"]["$session_id"] = get_context_session_id()
+            msg["properties"]["$session_id"] = str(get_context_session_id())
 
         return self._enqueue(msg, disable_geoip)
 
@@ -758,7 +758,7 @@ class Client(object):
         }
 
         if get_context_session_id():
-            msg["properties"]["$session_id"] = get_context_session_id()
+            msg["properties"]["$session_id"] = str(get_context_session_id())
 
         return self._enqueue(msg, disable_geoip)
 
