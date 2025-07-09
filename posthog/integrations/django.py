@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, cast
 from posthog import contexts
+from posthog.client import Client
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
@@ -16,7 +17,8 @@ class PosthogContextMiddleware:
     - Request Method as $request_method
 
     The context will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
-    `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings.
+    `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings. The exceptions are captured using the
+    global client, unless the setting `POSTHOG_MW_CLIENT` is set to a custom client instance
 
     The middleware behaviour is customisable through 3 additional functions:
     - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
@@ -73,6 +75,13 @@ class PosthogContextMiddleware:
             self.capture_exceptions = settings.POSTHOG_MW_CAPTURE_EXCEPTIONS
         else:
             self.capture_exceptions = True
+
+        if hasattr(settings, "POSTHOG_MW_CLIENT") and isinstance(
+            settings.POSTHOG_MW_CLIENT, Client
+        ):
+            self.client = cast("Optional[Client]", settings.POSTHOG_MW_CLIENT)
+        else:
+            self.client = None
 
     def extract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
@@ -153,7 +162,7 @@ class PosthogContextMiddleware:
         if self.request_filter and not self.request_filter(request):
             return self.get_response(request)
 
-        with contexts.new_context(self.capture_exceptions):
+        with contexts.new_context(self.capture_exceptions, client=self.client):
             for k, v in self.extract_tags(request).items():
                 contexts.tag(k, v)
 
