@@ -34,7 +34,6 @@ NO_DOCS_TYPES = [
     "Annotated",
     "NotRequired",
     "Required",
-    "void",
     "None",
     "NoneType",
     "object",
@@ -71,6 +70,6 @@ OUTPUT_CONFIG = {"filename": "posthog-python-references.json", "indent": 2}
 DOC_DEFAULTS = {
     "showDocs": True,
     "releaseTag": "public",
-    "return_type_void": "void",
+    "return_type_void": "None",
     "max_optional_params": 3,
 }
