@@ -2,6 +2,8 @@
 Constants for PostHog Python SDK documentation generation.
 """
 
+from typing import Dict, Union
+
 # Types that are built-in to Python and don't need to be documented
 NO_DOCS_TYPES = [
     "Client",
@@ -64,7 +66,7 @@ DOCSTRING_PATTERNS = {
 }
 
 # Output file configuration
-OUTPUT_CONFIG = {
+OUTPUT_CONFIG: Dict[str, Union[str, int]] = {
     "output_dir": ".",
     "filename": "posthog-python-references.json",
     "indent": 2,

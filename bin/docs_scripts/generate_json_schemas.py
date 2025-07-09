@@ -441,10 +441,10 @@ if __name__ == "__main__":
 
         # Write to file
         output_file = os.path.join(
-            OUTPUT_CONFIG["output_dir"], OUTPUT_CONFIG["filename"]
+            str(OUTPUT_CONFIG["output_dir"]), str(OUTPUT_CONFIG["filename"])
         )
         with open(output_file, "w") as f:
-            json.dump(documentation, f, indent=OUTPUT_CONFIG["indent"])
+            json.dump(documentation, f, indent=int(OUTPUT_CONFIG["indent"]))
 
         print(f"✓ Generated {output_file}")
 
