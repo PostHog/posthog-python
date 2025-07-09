@@ -79,7 +79,7 @@ class PosthogContextMiddleware:
         if hasattr(settings, "POSTHOG_MW_CLIENT") and isinstance(
             settings.POSTHOG_MW_CLIENT, Client
         ):
-            self.client = settings.POSTHOG_MW_CLIENT
+            self.client = cast("Optional[Client]", settings.POSTHOG_MW_CLIENT)
         else:
             self.client = None
 
