@@ -663,12 +663,12 @@ class Client(object):
         self,
         group_type: str,
         group_key: str,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-        distinct_id=None,
-    ):
+        properties: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[Union[datetime, str]] = None,
+        uuid: Optional[str] = None,
+        disable_geoip: Optional[bool] = None,
+        distinct_id: Optional[ID_TYPES] = None,
+    ) -> Optional[str]:
         """
         Identify a group and set its properties.
 
