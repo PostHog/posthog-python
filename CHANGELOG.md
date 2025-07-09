@@ -1,3 +1,7 @@
+# 6.0.4 - 2025-07-09
+
+- fix: add POSTHOG_MW_CLIENT setting to django middleware, to support custom clients for exception capture.
+
 # 6.0.3 - 2025-07-07
 
 - feat: add a feature flag evaluation cache (local storage or redis) to support returning flag evaluations when the service is down
