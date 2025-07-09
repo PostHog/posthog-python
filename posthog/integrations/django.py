@@ -18,7 +18,7 @@ class PosthogContextMiddleware:
 
     The context will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
     `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings. The exceptions are captured using the
-    global client, unless the setting `POSTHOG_MW_CLIENT` is set to a custom client instant.
+    global client, unless the setting `POSTHOG_MW_CLIENT` is set to a custom client instance
 
     The middleware behaviour is customisable through 3 additional functions:
     - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
