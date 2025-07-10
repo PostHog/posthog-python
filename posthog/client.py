@@ -397,11 +397,53 @@ class Client(object):
 
         extra_properties: dict[str, Any] = {}
         feature_variants: Optional[dict[str, Union[bool, str]]] = {}
-        if send_feature_flags:
+
+        # Parse send_feature_flags parameter
+        should_send_flags = False
+        only_evaluate_locally = None
+        flag_person_properties = None
+        flag_group_properties = None
+
+        if isinstance(send_feature_flags, dict):
+            # SendFeatureFlagsOptions object
+            should_send_flags = True
+            only_evaluate_locally = send_feature_flags.get("only_evaluate_locally")
+            flag_person_properties = send_feature_flags.get("person_properties")
+            flag_group_properties = send_feature_flags.get("group_properties")
+        elif send_feature_flags:
+            # Boolean True
+            should_send_flags = True
+
+        if should_send_flags:
             try:
-                feature_variants = self.get_feature_variants(
-                    distinct_id, groups, disable_geoip=disable_geoip
-                )
+                if only_evaluate_locally is True:
+                    # Only use local evaluation
+                    feature_variants = self.get_all_flags(
+                        distinct_id,
+                        groups=(groups or {}),
+                        person_properties=flag_person_properties,
+                        group_properties=flag_group_properties,
+                        disable_geoip=disable_geoip,
+                        only_evaluate_locally=True,
+                    )
+                elif only_evaluate_locally is False:
+                    # Force remote evaluation via /decide
+                    feature_variants = self.get_feature_variants(
+                        distinct_id,
+                        groups,
+                        person_properties=flag_person_properties,
+                        group_properties=flag_group_properties,
+                        disable_geoip=disable_geoip,
+                    )
+                else:
+                    # Default behavior - use remote evaluation
+                    feature_variants = self.get_feature_variants(
+                        distinct_id,
+                        groups,
+                        person_properties=flag_person_properties,
+                        group_properties=flag_group_properties,
+                        disable_geoip=disable_geoip,
+                    )
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature variants: {e}"
