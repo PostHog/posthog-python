@@ -152,6 +152,7 @@ class Client(object):
         privacy_mode=False,
         before_send=None,
         flag_fallback_cache_url=None,
+        enable_local_evaluation=True,
     ):
         self.queue = queue.Queue(max_queue_size)
 
@@ -187,6 +188,7 @@ class Client(object):
         self.log_captured_exceptions = log_captured_exceptions
         self.exception_capture = None
         self.privacy_mode = privacy_mode
+        self.enable_local_evaluation = enable_local_evaluation
 
         if project_root is None:
             try:
@@ -807,7 +809,11 @@ class Client(object):
             return
 
         self._load_feature_flags()
-        if not (self.poller and self.poller.is_alive()):
+
+        # Only start the poller if local evaluation is enabled
+        if self.enable_local_evaluation and not (
+            self.poller and self.poller.is_alive()
+        ):
             self.poller = Poller(
                 interval=timedelta(seconds=self.poll_interval),
                 execute=self._load_feature_flags,

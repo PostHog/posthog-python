@@ -1,3 +1,7 @@
+# 6.1.0 - 2025-01-07
+
+1. feat: decouple feature flag local evaluation from personal API keys; support decrypting remote config payloads without relying on the feature flags poller
+
 # 6.0.4 - 2025-07-09
 
 - fix: add POSTHOG_MW_CLIENT setting to django middleware, to support custom clients for exception capture.

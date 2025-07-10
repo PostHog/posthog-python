@@ -1903,3 +1903,93 @@ class TestClient(unittest.TestCase):
                 self.assertEqual(
                     msg["properties"]["$session_id"], "explicit-session-override"
                 )
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_enable_local_evaluation_false_disables_poller(
+        self, patch_get, patch_poller
+    ):
+        """Test that when enable_local_evaluation=False, the poller is not started"""
+        patch_get.return_value = {
+            "flags": [
+                {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True}
+            ],
+            "group_type_mapping": {},
+            "cohorts": {},
+        }
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test-personal-key",
+            enable_local_evaluation=False,
+        )
+
+        # Load feature flags should not start the poller
+        client.load_feature_flags()
+
+        # Assert that the poller was not created/started
+        patch_poller.assert_not_called()
+        # But the feature flags should still be loaded
+        patch_get.assert_called_once()
+        self.assertEqual(len(client.feature_flags), 1)
+        self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_enable_local_evaluation_true_starts_poller(self, patch_get, patch_poller):
+        """Test that when enable_local_evaluation=True (default), the poller is started"""
+        patch_get.return_value = {
+            "flags": [
+                {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True}
+            ],
+            "group_type_mapping": {},
+            "cohorts": {},
+        }
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test-personal-key",
+            enable_local_evaluation=True,
+        )
+
+        # Load feature flags should start the poller
+        client.load_feature_flags()
+
+        # Assert that the poller was created and started
+        patch_poller.assert_called_once()
+        patch_get.assert_called_once()
+        self.assertEqual(len(client.feature_flags), 1)
+        self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
+
+    @mock.patch("posthog.client.remote_config")
+    def test_get_remote_config_payload_works_without_poller(self, patch_remote_config):
+        """Test that get_remote_config_payload works without local evaluation enabled"""
+        patch_remote_config.return_value = {"test": "payload"}
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test-personal-key",
+            enable_local_evaluation=False,
+        )
+
+        # Should work without poller
+        result = client.get_remote_config_payload("test-flag")
+
+        self.assertEqual(result, {"test": "payload"})
+        patch_remote_config.assert_called_once_with(
+            "test-personal-key",
+            client.host,
+            "test-flag",
+            timeout=client.feature_flags_request_timeout_seconds,
+        )
+
+    def test_get_remote_config_payload_requires_personal_api_key(self):
+        """Test that get_remote_config_payload requires personal API key"""
+        client = Client(
+            FAKE_TEST_API_KEY,
+            enable_local_evaluation=False,
+        )
+
+        result = client.get_remote_config_payload("test-flag")
+
+        self.assertIsNone(result)
