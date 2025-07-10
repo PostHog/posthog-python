@@ -528,6 +528,48 @@ def get_all_flags(
     )
 
 
+def get_feature_flag_result(
+    key,
+    distinct_id,
+    groups={},
+    person_properties={},
+    group_properties={},
+    only_evaluate_locally=False,
+    send_feature_flag_events=True,
+    disable_geoip=None,  # type: Optional[bool]
+):  # type: ignore
+    """
+    Get a FeatureFlagResult object which contains the flag result and payload.
+    
+    This method evaluates a feature flag and returns a FeatureFlagResult object containing:
+    - enabled: Whether the flag is enabled
+    - variant: The variant value if the flag has variants
+    - payload: The payload associated with the flag (automatically deserialized from JSON)
+    - key: The flag key
+    - reason: Why the flag was enabled/disabled
+    
+    Example:
+    ```python
+    result = posthog.get_feature_flag_result('beta-feature', 'distinct_id')
+    if result and result.enabled:
+        # Use the variant and payload
+        print(f"Variant: {result.variant}")
+        print(f"Payload: {result.payload}")
+    ```
+    """
+    return _proxy(
+        "get_feature_flag_result",
+        key=key,
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
+        disable_geoip=disable_geoip,
+    )
+
+
 def get_feature_flag_payload(
     key,
     distinct_id,
