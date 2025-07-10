@@ -60,6 +60,9 @@ log_captured_exceptions = False  # type: bool
 project_root = None  # type: Optional[str]
 # Used for our AI observability feature to not capture any prompt or output just usage + metadata
 privacy_mode = False  # type: bool
+# Whether to enable feature flag polling for local evaluation by default. Defaults to True.
+# We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
+enable_local_evaluation = True  # type: bool
 
 default_client = None  # type: Optional[Client]
 
@@ -465,6 +468,7 @@ def setup():
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
+            enable_local_evaluation=enable_local_evaluation,
         )
 
     # always set incase user changes it
