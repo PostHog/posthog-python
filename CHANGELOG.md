@@ -1,6 +1,6 @@
-# 6.1.0 - 2025-01-07
+# 6.1.0 - 2025-07-10
 
-1. feat: decouple feature flag local evaluation from personal API keys; support decrypting remote config payloads without relying on the feature flags poller
+- feat: decouple feature flag local evaluation from personal API keys; support decrypting remote config payloads without relying on the feature flags poller
 
 # 6.0.4 - 2025-07-09
 
