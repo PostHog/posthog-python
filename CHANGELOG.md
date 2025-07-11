@@ -1,3 +1,7 @@
+# 6.2.0 - 2025-07-10
+
+- feat: Enhanced `send_feature_flags` parameter to accept `SendFeatureFlagsOptions` object for declarative control over local/remote evaluation and custom properties
+
 # 6.1.0 - 2025-07-10
 
 - feat: decouple feature flag local evaluation from personal API keys; support decrypting remote config payloads without relying on the feature flags poller
