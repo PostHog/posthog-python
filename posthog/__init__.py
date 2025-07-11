@@ -537,7 +537,7 @@ def get_feature_flag_result(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
-):  # type: ignore
+) -> Optional[FeatureFlagResult]:  # type hint for feature flag result
     """
     Get a FeatureFlagResult object which contains the flag result and payload.
     
