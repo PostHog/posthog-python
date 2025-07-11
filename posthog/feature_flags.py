@@ -109,6 +109,14 @@ def is_condition_match(
             property_type = prop.get("type")
             if property_type == "cohort":
                 matches = match_cohort(prop, properties, cohort_properties)
+            elif property_type == "flag":
+                log.warning(
+                    "Flag dependency filters are not supported in local evaluation. "
+                    "Skipping condition for flag '%s' with dependency on flag '%s'",
+                    feature_flag.get("key", "unknown"),
+                    prop.get("key", "unknown"),
+                )
+                continue
             else:
                 matches = match_property(prop, properties)
             if not matches:
@@ -317,6 +325,13 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
             try:
                 if prop.get("type") == "cohort":
                     matches = match_cohort(prop, property_values, cohort_properties)
+                elif prop.get("type") == "flag":
+                    log.warning(
+                        "Flag dependency filters are not supported in local evaluation. "
+                        "Skipping condition with dependency on flag '%s'",
+                        prop.get("key", "unknown"),
+                    )
+                    continue
                 else:
                     matches = match_property(prop, property_values)
 
