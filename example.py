@@ -60,15 +60,18 @@ print(posthog.feature_enabled("beta-feature", "distinct_id"))
 print(posthog.get_feature_flag_payload("beta-feature", "distinct_id"))
 print(posthog.get_all_flags_and_payloads("distinct_id"))
 
-# get feature flag result with all details (enabled, variant, payload)
+# get feature flag result with all details (enabled, variant, payload, key, reason)
 result = posthog.get_feature_flag_result("beta-feature", "distinct_id")
 if result:
+    print(f"Flag key: {result.key}")
     print(f"Flag enabled: {result.enabled}")
     print(f"Variant: {result.variant}")
     print(f"Payload: {result.payload}")
+    print(f"Reason: {result.reason}")
+    # get_value() returns the variant if it exists, otherwise the enabled value
+    print(f"Value (variant or enabled): {result.get_value()}")
 
-exit()
-# # Alias a previous distinct id with a new one
+# Alias a previous distinct id with a new one
 
 posthog.alias("distinct_id", "new_distinct_id")
 
