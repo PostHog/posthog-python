@@ -71,7 +71,9 @@ def _get_current_context() -> Optional[ContextScope]:
 
 @contextmanager
 def new_context(
-    fresh=False, capture_exceptions=True, client: Optional["Client"] = None
+    fresh: bool = False,
+    capture_exceptions: bool = True,
+    client: Optional["Client"] = None,
 ):
     """
     Create a new context scope that will be active for the duration of the with block.
@@ -94,20 +96,25 @@ def new_context(
                 the global one, in the case of `posthog.capture`)
 
     Examples:
+        ```python
         # Inherit parent context tags
         with posthog.new_context():
             posthog.tag("request_id", "123")
             # Both this event and the exception will be tagged with the context tags
             posthog.capture("event_name", {"property": "value"})
             raise ValueError("Something went wrong")
-
+        ```
+        ```python
         # Start with fresh context (no inherited tags)
         with posthog.new_context(fresh=True):
             posthog.tag("request_id", "123")
             # Both this event and the exception will be tagged with the context tags
             posthog.capture("event_name", {"property": "value"})
             raise ValueError("Something went wrong")
+        ```
 
+    Category:
+        Contexts
     """
     from posthog import capture_exception
 
@@ -138,7 +145,12 @@ def tag(key: str, value: Any) -> None:
         value: The tag value
 
     Example:
+        ```python
         posthog.tag("user_id", "123")
+        ```
+
+    Category:
+        Contexts
     """
     current_context = _get_current_context()
     if current_context:
@@ -152,6 +164,9 @@ def get_tags() -> Dict[str, Any]:
 
     Returns:
         Dict of all tags in the current context
+
+    Category:
+        Contexts
     """
     current_context = _get_current_context()
     if current_context:
@@ -170,6 +185,9 @@ def identify_context(distinct_id: str) -> None:
 
     Args:
         distinct_id: The distinct ID to associate with the current context and its children.
+
+    Category:
+        Contexts
     """
     current_context = _get_current_context()
     if current_context:
@@ -184,6 +202,9 @@ def set_context_session(session_id: str) -> None:
 
     Args:
         session_id: The session ID to associate with the current context and its children. See https://posthog.com/docs/data/sessions
+
+    Category:
+        Contexts
     """
     current_context = _get_current_context()
     if current_context:
@@ -196,6 +217,9 @@ def get_context_session_id() -> Optional[str]:
 
     Returns:
         The session ID if set, None otherwise
+
+    Category:
+        Contexts
     """
     current_context = _get_current_context()
     if current_context:
@@ -209,6 +233,9 @@ def get_context_distinct_id() -> Optional[str]:
 
     Returns:
         The distinct ID if set, None otherwise
+
+    Category:
+        Contexts
     """
     current_context = _get_current_context()
     if current_context:
@@ -219,7 +246,7 @@ def get_context_distinct_id() -> Optional[str]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(fresh=False, capture_exceptions=True):
+def scoped(fresh: bool = False, capture_exceptions: bool = True):
     """
     Decorator that creates a new context for the function. Simply wraps
     the function in a with posthog.new_context(): block.
@@ -239,6 +266,9 @@ def scoped(fresh=False, capture_exceptions=True):
             # If this raises an exception, it will be captured with tags
             # and then re-raised
             some_risky_function()
+
+    Category:
+        Contexts
     """
 
     def decorator(func: F) -> F:

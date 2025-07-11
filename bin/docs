@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#/ Usage: bin/docs
+#/ Description: Generate documentation for the PostHog Python SDK
+source bin/helpers/_utils.sh
+set_source_and_root_dir
+ensure_virtual_env
+
+exec python3 "$(dirname "$0")/docs_scripts/generate_json_schemas.py" "$@" 
