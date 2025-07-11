@@ -245,9 +245,9 @@ def capture_exception(
 def feature_enabled(
     key,  # type: str
     distinct_id,  # type: str
-    groups={},  # type: dict
-    person_properties={},  # type: dict
-    group_properties={},  # type: dict
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
@@ -270,9 +270,9 @@ def feature_enabled(
         "feature_enabled",
         key=key,
         distinct_id=distinct_id,
-        groups=groups,
-        person_properties=person_properties,
-        group_properties=group_properties,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
@@ -282,9 +282,9 @@ def feature_enabled(
 def get_feature_flag(
     key,  # type: str
     distinct_id,  # type: str
-    groups={},  # type: dict
-    person_properties={},  # type: dict
-    group_properties={},  # type: dict
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
@@ -315,9 +315,9 @@ def get_feature_flag(
         "get_feature_flag",
         key=key,
         distinct_id=distinct_id,
-        groups=groups,
-        person_properties=person_properties,
-        group_properties=group_properties,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
@@ -326,9 +326,9 @@ def get_feature_flag(
 
 def get_all_flags(
     distinct_id,  # type: str
-    groups={},  # type: dict
-    person_properties={},  # type: dict
-    group_properties={},  # type: dict
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
 ) -> Optional[dict[str, FeatureFlag]]:
@@ -344,9 +344,9 @@ def get_all_flags(
     return _proxy(
         "get_all_flags",
         distinct_id=distinct_id,
-        groups=groups,
-        person_properties=person_properties,
-        group_properties=group_properties,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
     )
@@ -355,23 +355,23 @@ def get_all_flags(
 def get_feature_flag_result(
     key,
     distinct_id,
-    groups={},
-    person_properties={},
-    group_properties={},
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
 ) -> Optional[FeatureFlagResult]:  # type hint for feature flag result
     """
     Get a FeatureFlagResult object which contains the flag result and payload.
-    
+
     This method evaluates a feature flag and returns a FeatureFlagResult object containing:
     - enabled: Whether the flag is enabled
     - variant: The variant value if the flag has variants
     - payload: The payload associated with the flag (automatically deserialized from JSON)
     - key: The flag key
     - reason: Why the flag was enabled/disabled
-    
+
     Example:
     ```python
     result = posthog.get_feature_flag_result('beta-feature', 'distinct_id')
@@ -385,9 +385,9 @@ def get_feature_flag_result(
         "get_feature_flag_result",
         key=key,
         distinct_id=distinct_id,
-        groups=groups,
-        person_properties=person_properties,
-        group_properties=group_properties,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
@@ -398,9 +398,9 @@ def get_feature_flag_payload(
     key,
     distinct_id,
     match_value=None,
-    groups={},
-    person_properties={},
-    group_properties={},
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
@@ -410,9 +410,9 @@ def get_feature_flag_payload(
         key=key,
         distinct_id=distinct_id,
         match_value=match_value,
-        groups=groups,
-        person_properties=person_properties,
-        group_properties=group_properties,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
@@ -441,18 +441,18 @@ def get_remote_config_payload(
 
 def get_all_flags_and_payloads(
     distinct_id,
-    groups={},
-    person_properties={},
-    group_properties={},
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,
     disable_geoip=None,  # type: Optional[bool]
 ) -> FlagsAndPayloads:
     return _proxy(
         "get_all_flags_and_payloads",
         distinct_id=distinct_id,
-        groups=groups,
-        person_properties=person_properties,
-        group_properties=group_properties,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
     )
