@@ -1355,6 +1355,77 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
+    @mock.patch("posthog.feature_flags.log")
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_feature_flags_with_flag_dependencies(
+        self, patch_get, patch_flags, mock_log
+    ):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag with Dependencies",
+                "key": "flag-with-dependencies",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "beta-feature",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                },
+                                {
+                                    "key": "email",
+                                    "operator": "icontains",
+                                    "value": "@example.com",
+                                    "type": "person",
+                                },
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # Test that flag evaluation doesn't fail when encountering a flag dependency
+        # The flag should evaluate based on other conditions (email contains @example.com)
+        # Since flag dependencies aren't implemented, it should skip the flag condition
+        # and evaluate based on the email condition only
+        feature_flag_match = client.get_feature_flag(
+            "flag-with-dependencies",
+            "test-user",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertEqual(feature_flag_match, True)
+        self.assertEqual(patch_flags.call_count, 0)
+        self.assertEqual(patch_get.call_count, 0)
+
+        # Verify warning was logged for flag dependency
+        mock_log.warning.assert_called_with(
+            "Flag dependency filters are not supported in local evaluation. "
+            "Skipping condition for flag '%s' with dependency on flag '%s'",
+            "flag-with-dependencies",
+            "beta-feature",
+        )
+
+        # Test with email that doesn't match
+        feature_flag_match = client.get_feature_flag(
+            "flag-with-dependencies",
+            "test-user-2",
+            person_properties={"email": "test@other.com"},
+        )
+        self.assertEqual(feature_flag_match, False)
+        self.assertEqual(patch_flags.call_count, 0)
+        self.assertEqual(patch_get.call_count, 0)
+
+        # Verify warning was logged again for the second evaluation
+        self.assertEqual(mock_log.warning.call_count, 2)
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
