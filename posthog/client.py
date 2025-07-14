@@ -83,6 +83,7 @@ def get_identity_state(passed) -> tuple[str, bool]:
 
 
 def add_context_tags(properties):
+    properties = properties or {}
     current_context = _get_current_context()
     if current_context:
         context_tags = current_context.collect_tags()
@@ -327,7 +328,7 @@ class Client(object):
     def get_flags_decision(
         self,
         distinct_id: Optional[ID_TYPES] = None,
-        groups: Optional[dict] = {},
+        groups: Optional[dict] = None,
         person_properties=None,
         group_properties=None,
         disable_geoip=None,
@@ -335,6 +336,9 @@ class Client(object):
         """
         Get feature flags decision, using either flags() or decide() API based on rollout.
         """
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
 
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
@@ -376,6 +380,7 @@ class Client(object):
         properties = {**(properties or {}), **system_context()}
 
         properties = add_context_tags(properties)
+        assert properties is not None  # Type hint for mypy
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
@@ -391,7 +396,7 @@ class Client(object):
         }
 
         if groups:
-            msg["properties"]["$groups"] = groups
+            properties["$groups"] = groups
 
         extra_properties: dict[str, Any] = {}
         feature_variants: Optional[dict[str, Union[bool, str]]] = {}
@@ -426,7 +431,8 @@ class Client(object):
             extra_properties["$active_feature_flags"] = active_feature_flags
 
         if extra_properties:
-            msg["properties"] = {**extra_properties, **msg["properties"]}
+            properties = {**extra_properties, **properties}
+            msg["properties"] = properties
 
         return self._enqueue(msg, disable_geoip)
 
@@ -819,11 +825,15 @@ class Client(object):
         feature_flag,
         distinct_id,
         *,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         warn_on_unknown_groups=True,
     ) -> FlagValue:
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
+
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
@@ -869,9 +879,9 @@ class Client(object):
         key,
         distinct_id,
         *,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
@@ -897,9 +907,9 @@ class Client(object):
         distinct_id: ID_TYPES,
         *,
         override_match_value: Optional[FlagValue] = None,
-        groups: Dict[str, str] = {},
-        person_properties={},
-        group_properties={},
+        groups: Optional[Dict[str, str]] = None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
@@ -909,9 +919,16 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id, groups, person_properties, group_properties
+                distinct_id,
+                groups or {},
+                person_properties or {},
+                group_properties or {},
             )
         )
+        # Ensure non-None values for type checking
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
 
         flag_result = None
         flag_details = None
@@ -995,9 +1012,9 @@ class Client(object):
         key,
         distinct_id,
         *,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
@@ -1024,9 +1041,9 @@ class Client(object):
         key,
         distinct_id,
         *,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
@@ -1094,9 +1111,9 @@ class Client(object):
         distinct_id,
         *,
         match_value: Optional[FlagValue] = None,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
@@ -1237,9 +1254,9 @@ class Client(object):
         self,
         distinct_id,
         *,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         disable_geoip=None,
     ) -> Optional[dict[str, Union[bool, str]]]:
@@ -1258,9 +1275,9 @@ class Client(object):
         self,
         distinct_id,
         *,
-        groups={},
-        person_properties={},
-        group_properties={},
+        groups=None,
+        person_properties=None,
+        group_properties=None,
         only_evaluate_locally=False,
         disable_geoip=None,
     ) -> FlagsAndPayloads:
@@ -1302,10 +1319,13 @@ class Client(object):
         distinct_id: ID_TYPES,
         *,
         groups: Dict[str, Union[str, int]],
-        person_properties={},
-        group_properties={},
+        person_properties=None,
+        group_properties=None,
         warn_on_unknown_groups=False,
     ) -> tuple[FlagsAndPayloads, bool]:
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
+
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
 
