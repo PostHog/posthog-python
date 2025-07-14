@@ -11,7 +11,7 @@ from posthog.contexts import (
     set_context_session as inner_set_context_session,
     identify_context as inner_identify_context,
 )
-from posthog.types import FeatureFlag, FlagsAndPayloads
+from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -537,7 +537,8 @@ def get_feature_flag_result(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
-) -> Optional[FeatureFlagResult]:  # type hint for feature flag result
+):
+    # type: (...) -> Optional[FeatureFlagResult]
     """
     Get a FeatureFlagResult object which contains the flag result and payload.
 
