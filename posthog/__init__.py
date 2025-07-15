@@ -626,7 +626,7 @@ def load_feature_flags():
 
 def flush():
     """
-    Tell the client to flush.
+    Tell the client to flush all queued events.
 
     Examples:
         ```python
@@ -642,7 +642,7 @@ def flush():
 
 def join():
     """
-    Block program until the client clears the queue.
+    Block program until the client clears the queue. Used during program shutdown. You should use `shutdown()` directly in most cases.
 
     Examples:
         ```python
