@@ -20,22 +20,105 @@ __version__ = VERSION
 
 
 def new_context(fresh=False, capture_exceptions=True):
+    """
+    Create a new context scope that will be active for the duration of the with block.
+
+    Args:
+        fresh: Whether to start with a fresh context (default: False)
+        capture_exceptions: Whether to capture exceptions raised within the context (default: True)
+
+    Examples:
+        ```python
+        from posthog import new_context, tag, capture
+        with new_context():
+            tag("request_id", "123")
+            capture("event_name", properties={"property": "value"})
+        ```
+
+    Category:
+        Contexts
+    """
     return inner_new_context(fresh=fresh, capture_exceptions=capture_exceptions)
 
 
 def scoped(fresh=False, capture_exceptions=True):
+    """
+    Decorator that creates a new context for the function.
+
+    Args:
+        fresh: Whether to start with a fresh context (default: False)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+
+    Examples:
+        ```python
+        from posthog import scoped, tag, capture
+        @scoped()
+        def process_payment(payment_id):
+            tag("payment_id", payment_id)
+            capture("payment_started")
+        ```
+
+    Category:
+        Contexts
+    """
     return inner_scoped(fresh=fresh, capture_exceptions=capture_exceptions)
 
 
 def set_context_session(session_id: str):
+    """
+    Set the session ID for the current context.
+
+    Args:
+        session_id: The session ID to associate with the current context and its children
+
+    Examples:
+        ```python
+        from posthog import set_context_session
+        set_context_session("session_123")
+        ```
+
+    Category:
+        Contexts
+    """
     return inner_set_context_session(session_id)
 
 
 def identify_context(distinct_id: str):
+    """
+    Identify the current context with a distinct ID.
+
+    Args:
+        distinct_id: The distinct ID to associate with the current context and its children
+
+    Examples:
+        ```python
+        from posthog import identify_context
+        identify_context("user_123")
+        ```
+
+    Category:
+        Identification
+    """
     return inner_identify_context(distinct_id)
 
 
 def tag(name: str, value: Any):
+    """
+    Add a tag to the current context.
+
+    Args:
+        name: The tag key
+        value: The tag value
+
+    Examples:
+        ```python
+        from posthog import tag
+        tag("user_id", "123")
+        ```
+
+    Category:
+        Contexts
+    """
     return inner_tag(name, value)
 
 
@@ -73,40 +156,62 @@ default_client = None  # type: Optional[Client]
 # versions, without a breaking change, to get back the type information in function signatures
 def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
     """
-    Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up.
+    Capture anything a user does within your system.
 
-    A `capture` call requires
-    - `event name` to specify the event
-    - We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on.
+    Args:
+        event: The event name to specify the event
+        **kwargs: Optional arguments including:
+            distinct_id: Unique identifier for the user
+            properties: Dict of event properties
+            timestamp: When the event occurred
+            groups: Dict of group types and IDs
+            disable_geoip: Whether to disable GeoIP lookup
 
-    Capture takes a number of optional arguments, which are defined by the `OptionalCaptureArgs` type.
+    Details:
+        Capture allows you to capture anything a user does within your system, which you can later use in PostHog to find patterns in usage, work out which features to improve or where people are giving up. A capture call requires an event name to specify the event. We recommend using [verb] [noun], like `movie played` or `movie updated` to easily identify what your events mean later on. Capture takes a number of optional arguments, which are defined by the `OptionalCaptureArgs` type.
 
-    For example:
-    ```python
-    # Enter a new context (e.g. a request/response cycle, an instance of a background job, etc)
-    with posthog.new_context():
-        # Associate this context with some user, by distinct_id
-        posthog.identify_context('some user')
+    Examples:
+        ```python
+        # Context and capture usage
+        from posthog import new_context, identify_context, tag_context, capture
+        # Enter a new context (e.g. a request/response cycle, an instance of a background job, etc)
+        with new_context():
+            # Associate this context with some user, by distinct_id
+            identify_context('some user')
 
-        # Capture an event, associated with the context-level distinct ID ('some user')
-        posthog.capture('movie started')
+            # Capture an event, associated with the context-level distinct ID ('some user')
+            capture('movie started')
 
-        # Capture an event associated with some other user (overriding the context-level distinct ID)
-        posthog.capture('movie joined', distinct_id='some-other-user')
+            # Capture an event associated with some other user (overriding the context-level distinct ID)
+            capture('movie joined', distinct_id='some-other-user')
 
-        # Capture an event with some properties
-        posthog.capture('movie played', properties={'movie_id': '123', 'category': 'romcom'})
+            # Capture an event with some properties
+            capture('movie played', properties={'movie_id': '123', 'category': 'romcom'})
 
-        # Capture an event with some properties
-        posthog.capture('purchase', properties={'product_id': '123', 'category': 'romcom'})
-        # Capture an event with some associated group
-        posthog.capture('purchase', groups={'company': 'id:5'})
+            # Capture an event with some properties
+            capture('purchase', properties={'product_id': '123', 'category': 'romcom'})
+            # Capture an event with some associated group
+            capture('purchase', groups={'company': 'id:5'})
 
-        # Adding a tag to the current context will cause it to appear on all subsequent events
-        posthog.tag_context('some-tag', 'some-value')
+            # Adding a tag to the current context will cause it to appear on all subsequent events
+            tag_context('some-tag', 'some-value')
 
-        posthog.capture('another-event') # Will be captured with `'some-tag': 'some-value'` in the properties dict
-    ```
+            capture('another-event') # Will be captured with `'some-tag': 'some-value'` in the properties dict
+        ```
+        ```python
+        # Set event properties
+        from posthog import capture
+        capture(
+            "user_signed_up",
+            distinct_id="distinct_id_of_the_user",
+            properties={
+                "login_type": "email",
+                "is_free_trial": "true"
+            }
+        )
+        ```
+    Category:
+        Events
     """
 
     return _proxy("capture", event, **kwargs)
@@ -115,21 +220,25 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
 def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record.
-    This will overwrite previous people property values. Generally operates similar to `capture`, with
-    distinct_id being an optional argument, defaulting to the current context's distinct ID.
 
-    If there is no context-level distinct ID, and no override distinct_id is passed, this function
-    will do nothing.
+    Details:
+        This will overwrite previous people property values. Generally operates similar to `capture`, with distinct_id being an optional argument, defaulting to the current context's distinct ID. If there is no context-level distinct ID, and no override distinct_id is passed, this function will do nothing. Context tags are folded into $set properties, so tagging the current context and then calling `set` will cause those tags to be set on the user (unlike capture, which causes them to just be set on the event).
 
-    Context tags are folded into $set properties, so tagging the current context and then calling `set` will
-    cause those tags to be set on the user (unlike capture, which causes them to just be set on the event).
-
-     For example:
-     ```python
-     posthog.set(distinct_id='distinct id', properties={
-         'current_browser': 'Chrome',
-     })
-     ```
+    Examples:
+        ```python
+        # Set person properties
+        from posthog import capture
+        capture(
+            'distinct_id',
+            event='event_name',
+            properties={
+                '$set': {'name': 'Max Hedgehog'},
+                '$set_once': {'initial_url': '/blog'}
+            }
+        )
+        ```
+    Category:
+        Identification
     """
 
     return _proxy("set", **kwargs)
@@ -138,10 +247,26 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
 def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record, only if they do not yet exist.
-    This will not overwrite previous people property values, unlike `set`.
 
-    Otherwise, operates in an identical manner to `set`.
-     ```
+    Details:
+        This will not overwrite previous people property values, unlike `set`. Otherwise, operates in an identical manner to `set`.
+
+    Examples:
+        ```python
+        # Set property once
+        from posthog import capture
+        capture(
+            'distinct_id',
+            event='event_name',
+            properties={
+                '$set': {'name': 'Max Hedgehog'},
+                '$set_once': {'initial_url': '/blog'}
+            }
+        )
+
+        ```
+    Category:
+        Identification
     """
     return _proxy("set_once", **kwargs)
 
@@ -156,18 +281,27 @@ def group_identify(
 ):
     # type: (...) -> Optional[str]
     """
-    Set properties on a group
+    Set properties on a group.
 
-     A `group_identify` call requires
-     - `group_type` type of your group
-     - `group_key` unique identifier of the group
+    Args:
+        group_type: Type of your group
+        group_key: Unique identifier of the group
+        properties: Properties to set on the group
+        timestamp: Optional timestamp for the event
+        uuid: Optional UUID for the event
+        disable_geoip: Whether to disable GeoIP lookup
 
-     For example:
-     ```python
-     posthog.group_identify('company', 5, {
-         'employees': 11,
-     })
-     ```
+    Examples:
+        ```python
+        # Group identify
+        from posthog import group_identify
+        group_identify('company', 'company_id_in_your_db', {
+            'name': 'Awesome Inc.',
+            'employees': 11
+        })
+        ```
+    Category:
+        Identification
     """
 
     return _proxy(
@@ -190,19 +324,26 @@ def alias(
 ):
     # type: (...) -> Optional[str]
     """
-    To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call.
-    This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or
-    "What do users do on our website before signing up?". Particularly useful for associating user behaviour before and after
-    they e.g. register, login, or perform some other identifying action.
+    Associate user behaviour before and after they e.g. register, login, or perform some other identifying action.
 
-    An `alias` call requires
-    - `previous distinct id` the unique ID of the user before
-    - `distinct id` the current unique id
+    Args:
+        previous_id: The unique ID of the user before
+        distinct_id: The current unique id
+        timestamp: Optional timestamp for the event
+        uuid: Optional UUID for the event
+        disable_geoip: Whether to disable GeoIP lookup
 
-    For example:
-    ```python
-    posthog.alias('anonymous session id', 'distinct id')
-    ```
+    Details:
+        To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?". Particularly useful for associating user behaviour before and after they e.g. register, login, or perform some other identifying action.
+
+    Examples:
+        ```python
+        # Alias user
+        from posthog import alias
+        alias(previous_id='distinct_id', distinct_id='alias_id')
+        ```
+    Category:
+        Identification
     """
 
     return _proxy(
@@ -220,26 +361,25 @@ def capture_exception(
     **kwargs: Unpack[OptionalCaptureArgs],
 ):
     """
-    capture_exception allows you to capture exceptions that happen in your code.
+    Capture exceptions that happen in your code.
 
-    Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog.
-    This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception,
-    if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context
-    boundary (e.g. by existing a `with posthog.new_context():` block already)
+    Args:
+        exception: The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
 
-    A `capture_exception` call does not require any fields, but we recommend passing an exception of some kind:
-    - `exception` to specify the exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
+    Details:
+        Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog. This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception, if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context boundary (e.g. by existing a `with posthog.new_context():` block already). If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised and the point at which it is captured (the "traceback"). If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace captured will be the full stack trace at the moment the exception was captured. Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently, which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason. `capture_exception` takes the same set of optional arguments as `capture`.
 
-    If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised
-    and the point at which it is captured (the "traceback").
-
-    If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace
-    captured will be the full stack trace at the moment the exception was captured.
-
-    Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently,
-    which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason.
-
-    `capture_exception` takes the same set of optional arguments as `capture`.
+    Examples:
+        ```python
+        # Capture exception
+        from posthog import capture_exception
+        try:
+            risky_operation()
+        except Exception as e:
+            capture_exception(e)
+        ```
+    Category:
+        Events
     """
 
     return _proxy("capture_exception", exception=exception, **kwargs)
@@ -259,15 +399,29 @@ def feature_enabled(
     """
     Use feature flags to enable or disable features for users.
 
-    For example:
-    ```python
-    if posthog.feature_enabled('beta feature', 'distinct id'):
-        # do something
-    if posthog.feature_enabled('groups feature', 'distinct id', groups={"organization": "5"}):
-        # do something
-    ```
+    Args:
+        key: The feature flag key
+        distinct_id: The user's distinct ID
+        groups: Groups mapping
+        person_properties: Person properties
+        group_properties: Group properties
+        only_evaluate_locally: Whether to evaluate only locally
+        send_feature_flag_events: Whether to send feature flag events
+        disable_geoip: Whether to disable GeoIP lookup
 
-    You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
+    Details:
+        You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
+
+    Examples:
+        ```python
+        # Boolean feature flag
+        from posthog import feature_enabled, get_feature_flag_payload
+        is_my_flag_enabled = feature_enabled('flag-key', 'distinct_id_of_your_user')
+        if is_my_flag_enabled:
+            matched_flag_payload = get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+        ```
+    Category:
+        Feature flags
     """
     return _proxy(
         "feature_enabled",
@@ -294,25 +448,30 @@ def get_feature_flag(
 ) -> Optional[FeatureFlag]:
     """
     Get feature flag variant for users. Used with experiments.
-    Example:
-    ```python
-    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'test-variant':
-        # do test variant code
-    if posthog.get_feature_flag('beta-feature', 'distinct_id') == 'control':
-        # do control code
-    ```
 
-    `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5",
-    you would pass groups={"organization": "5"}.
+    Args:
+        key: The feature flag key
+        distinct_id: The user's distinct ID
+        groups: Groups mapping from group type to group key
+        person_properties: Person properties
+        group_properties: Group properties in format { group_type_name: { group_properties } }
+        only_evaluate_locally: Whether to evaluate only locally
+        send_feature_flag_events: Whether to send feature flag events
+        disable_geoip: Whether to disable GeoIP lookup
 
-    `group_properties` take the format: { group_type_name: { group_properties } }
+    Details:
+        `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5", you would pass groups={"organization": "5"}. `group_properties` take the format: { group_type_name: { group_properties } }. So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count, you'll send these as: group_properties={"organization": {"name": "PostHog", "employees": 11}}.
 
-    So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count,
-    you'll send these as:
-
-    ```python
-        group_properties={"organization": {"name": "PostHog", "employees": 11}}
-    ```
+    Examples:
+        ```python
+        # Multivariate feature flag
+        from posthog import get_feature_flag, get_feature_flag_payload
+        enabled_variant = get_feature_flag('flag-key', 'distinct_id_of_your_user')
+        if enabled_variant == 'variant-key':
+            matched_flag_payload = get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+        ```
+    Category:
+        Feature flags
     """
     return _proxy(
         "get_feature_flag",
@@ -337,12 +496,26 @@ def get_all_flags(
 ) -> Optional[dict[str, FeatureFlag]]:
     """
     Get all flags for a given user.
-    Example:
-    ```python
-    flags = posthog.get_all_flags('distinct_id')
-    ```
 
-    flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
+    Args:
+        distinct_id: The user's distinct ID
+        groups: Groups mapping
+        person_properties: Person properties
+        group_properties: Group properties
+        only_evaluate_locally: Whether to evaluate only locally
+        disable_geoip: Whether to disable GeoIP lookup
+
+    Details:
+        Flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
+
+    Examples:
+        ```python
+        # All flags for user
+        from posthog import get_all_flags
+        get_all_flags('distinct_id_of_your_user')
+        ```
+    Category:
+        Feature flags
     """
     return _proxy(
         "get_all_flags",
@@ -420,27 +593,85 @@ def get_all_flags_and_payloads(
 
 
 def feature_flag_definitions():
-    """Returns loaded feature flags, if any. Helpful for debugging what flag information you have loaded."""
+    """
+    Returns loaded feature flags.
+
+    Details:
+        Returns loaded feature flags, if any. Helpful for debugging what flag information you have loaded.
+
+    Examples:
+        ```python
+        from posthog import feature_flag_definitions
+        definitions = feature_flag_definitions()
+        ```
+
+    Category:
+        Feature flags
+    """
     return _proxy("feature_flag_definitions")
 
 
 def load_feature_flags():
-    """Load feature flag definitions from PostHog."""
+    """
+    Load feature flag definitions from PostHog.
+
+    Examples:
+        ```python
+        from posthog import load_feature_flags
+        load_feature_flags()
+        ```
+
+    Category:
+        Feature flags
+    """
     return _proxy("load_feature_flags")
 
 
 def flush():
-    """Tell the client to flush."""
+    """
+    Tell the client to flush all queued events.
+
+    Examples:
+        ```python
+        from posthog import flush
+        flush()
+        ```
+
+    Category:
+        Client management
+    """
     _proxy("flush")
 
 
 def join():
-    """Block program until the client clears the queue"""
+    """
+    Block program until the client clears the queue. Used during program shutdown. You should use `shutdown()` directly in most cases.
+
+    Examples:
+        ```python
+        from posthog import join
+        join()
+        ```
+
+    Category:
+        Client management
+    """
     _proxy("join")
 
 
 def shutdown():
-    """Flush all messages and cleanly shutdown the client"""
+    """
+    Flush all messages and cleanly shutdown the client.
+
+    Examples:
+        ```python
+        from posthog import shutdown
+        shutdown()
+        ```
+
+    Category:
+        Client management
+    """
     _proxy("flush")
     _proxy("join")
 
