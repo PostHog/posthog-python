@@ -2173,3 +2173,76 @@ class TestClient(unittest.TestCase):
         result = client.get_remote_config_payload("test-flag")
 
         self.assertIsNone(result)
+
+    def test_parse_send_feature_flags_method(self):
+        """Test the _parse_send_feature_flags helper method"""
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+
+        # Test boolean True
+        result = client._parse_send_feature_flags(True)
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": None,
+            "person_properties": None,
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test boolean False
+        result = client._parse_send_feature_flags(False)
+        expected = {
+            "should_send": False,
+            "only_evaluate_locally": None,
+            "person_properties": None,
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test options dict with all fields
+        options = {
+            "only_evaluate_locally": True,
+            "person_properties": {"plan": "premium"},
+            "group_properties": {"company": {"type": "enterprise"}},
+        }
+        result = client._parse_send_feature_flags(options)
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": True,
+            "person_properties": {"plan": "premium"},
+            "group_properties": {"company": {"type": "enterprise"}},
+        }
+        self.assertEqual(result, expected)
+
+        # Test options dict with partial fields
+        options = {"person_properties": {"user_id": "123"}}
+        result = client._parse_send_feature_flags(options)
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": None,
+            "person_properties": {"user_id": "123"},
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test empty dict
+        result = client._parse_send_feature_flags({})
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": None,
+            "person_properties": None,
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test invalid types
+        with self.assertRaises(TypeError) as cm:
+            client._parse_send_feature_flags("invalid")
+        self.assertIn("Invalid type for send_feature_flags", str(cm.exception))
+
+        with self.assertRaises(TypeError) as cm:
+            client._parse_send_feature_flags(123)
+        self.assertIn("Invalid type for send_feature_flags", str(cm.exception))
+
+        with self.assertRaises(TypeError) as cm:
+            client._parse_send_feature_flags(None)
+        self.assertIn("Invalid type for send_feature_flags", str(cm.exception))

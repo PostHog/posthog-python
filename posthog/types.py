@@ -15,7 +15,7 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
     Args:
         only_evaluate_locally: Whether to only use local evaluation for feature flags.
             If True, only flags that can be evaluated locally will be included.
-            If False, remote evaluation via /decide API will be used when needed.
+            If False, remote evaluation via /flags API will be used when needed.
         person_properties: Properties to use for feature flag evaluation specific to this event.
             These properties will be merged with any existing person properties.
         group_properties: Group properties to use for feature flag evaluation specific to this event.
