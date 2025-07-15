@@ -18,3 +18,4 @@ posthog-analytics
 pyrightconfig.json
 .env
 .DS_Store
+posthog-python-references.json
