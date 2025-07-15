@@ -1,4 +1,4 @@
-# 6.2.0 - 2025-07-10
+# 6.2.0 - 2025-07-15
 
 - feat: Enhanced `send_feature_flags` parameter to accept `SendFeatureFlagsOptions` object for declarative control over local/remote evaluation and custom properties
 
