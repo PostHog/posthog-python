@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING, cast
-from posthog import contexts
+from posthog import contexts, capture_exception
 from posthog.client import Client
 
 if TYPE_CHECKING:
@@ -167,3 +167,15 @@ class PosthogContextMiddleware:
                 contexts.tag(k, v)
 
             return self.get_response(request)
+
+    def process_exception(self, request, exception):
+        if self.request_filter and not self.request_filter(request):
+            return
+
+        if not self.capture_exceptions:
+            return
+
+        if self.client:
+            self.client.capture_exception(exception)
+        else:
+            capture_exception(exception)
