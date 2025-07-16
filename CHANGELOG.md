@@ -1,3 +1,7 @@
+# 6.1.1 - 2025-07-16
+
+- fix: correctly capture exceptions processed by Django from views or middleware
+
 # 6.1.0 - 2025-07-10
 
 - feat: decouple feature flag local evaluation from personal API keys; support decrypting remote config payloads without relying on the feature flags poller
@@ -21,12 +25,14 @@
 # 6.0.0
 
 This release contains a number of major breaking changes:
+
 - feat: make distinct_id an optional parameter in posthog.capture and related functions
 - feat: make capture and related functions return `Optional[str]`, which is the UUID of the sent event, if it was sent
 - fix: remove `identify` (prefer `posthog.set()`), and `page` and `screen` (prefer `posthog.capture()`)
 - fix: delete exception-capture specific integrations module. Prefer the general-purpose django middleware as a replacement for the django `Integration`.
 
 To migrate to this version, you'll mostly just need to switch to using named keyword arguments, rather than positional ones. For example:
+
 ```python
 # Old calling convention
 posthog.capture("user123", "button_clicked", {"button_id": "123"})
