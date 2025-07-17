@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#/ Usage: bin/run_integration_tests [--debug]
+#/ Description: Runs integration tests for PostHog Python SDK
+#/ Options:
+#/   --debug    Enable debug mode for verbose output
+source bin/helpers/_utils.sh
+set_source_and_root_dir
+
+ensure_virtual_env
+
+# Parse arguments
+DEBUG_MODE=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --debug)
+            DEBUG_MODE=true
+            shift
+            ;;
+        --help|-h)
+            grep '^#/' "$0" | cut -c4-
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+echo "🚀 PostHog Python SDK Integration Tests"
+echo "=" | head -c 40 | tr '\n' '='
+echo
+
+# Check if the integration test file exists
+INTEGRATION_TEST_FILE="posthog/test/manual_integration/test_flag_dependencies.py"
+if [ ! -f "$INTEGRATION_TEST_FILE" ]; then
+    fatal "❌ Integration test file not found: $INTEGRATION_TEST_FILE"
+fi
+
+echo "📋 Running flag dependencies integration test..."
+if [ "$DEBUG_MODE" = true ]; then
+    echo "🔍 Debug mode enabled"
+    export POSTHOG_DEBUG=true
+fi
+echo
+
+# Run the integration test
+if python "$INTEGRATION_TEST_FILE"; then
+    echo
+    echo "🎉 All integration tests passed!"
+    exit 0
+else
+    echo
+    error "💥 Integration tests failed!"
+    exit 1
+fi
