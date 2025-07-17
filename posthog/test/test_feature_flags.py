@@ -1355,16 +1355,34 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
-    @mock.patch("posthog.feature_flags.log")
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
-    def test_feature_flags_with_flag_dependencies(
-        self, patch_get, patch_flags, mock_log
-    ):
+    def test_feature_flags_with_flag_dependencies(self, patch_get, patch_flags):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
+                "name": "Beta Feature",
+                "key": "beta-feature",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "operator": "icontains",
+                                    "value": "@example.com",
+                                    "type": "person",
+                                },
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
                 "name": "Flag with Dependencies",
                 "key": "flag-with-dependencies",
                 "active": True,
@@ -1373,8 +1391,8 @@ class TestLocalEvaluation(unittest.TestCase):
                         {
                             "properties": [
                                 {
-                                    "key": "beta-feature",
-                                    "operator": "exact",
+                                    "key": "1",  # ID of beta-feature flag
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                 },
@@ -1389,13 +1407,11 @@ class TestLocalEvaluation(unittest.TestCase):
                         }
                     ],
                 },
-            }
+            },
         ]
 
-        # Test that flag evaluation doesn't fail when encountering a flag dependency
-        # The flag should evaluate based on other conditions (email contains @example.com)
-        # Since flag dependencies aren't implemented, it should skip the flag condition
-        # and evaluate based on the email condition only
+        # Test that flag evaluation works correctly with flag dependencies
+        # Both the beta-feature and flag-with-dependencies should be True for @example.com
         feature_flag_match = client.get_feature_flag(
             "flag-with-dependencies",
             "test-user",
@@ -1404,14 +1420,6 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
-
-        # Verify warning was logged for flag dependency
-        mock_log.warning.assert_called_with(
-            "Flag dependency filters are not supported in local evaluation. "
-            "Skipping condition for flag '%s' with dependency on flag '%s'",
-            "flag-with-dependencies",
-            "beta-feature",
-        )
 
         # Test with email that doesn't match
         feature_flag_match = client.get_feature_flag(
@@ -1423,8 +1431,13 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
         self.assertEqual(patch_get.call_count, 0)
 
-        # Verify warning was logged again for the second evaluation
-        self.assertEqual(mock_log.warning.call_count, 2)
+        # Test that the beta-feature flag works independently
+        beta_feature_match = client.get_feature_flag(
+            "beta-feature",
+            "test-user",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertEqual(beta_feature_match, True)
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
