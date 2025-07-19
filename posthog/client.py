@@ -20,7 +20,12 @@ from posthog.exception_utils import (
     exception_is_already_captured,
     mark_exception_as_captured,
 )
-from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
+from posthog.feature_flags import (
+    InconclusiveMatchError,
+    match_feature_flag_properties,
+    build_dependency_graph,
+    evaluate_flags_with_dependencies,
+)
 from posthog.poller import Poller
 from posthog.request import (
     DEFAULT_HOST,
@@ -82,7 +87,10 @@ def get_identity_state(passed) -> tuple[str, bool]:
     return (str(uuid4()), True)
 
 
-def add_context_tags(properties):
+def add_context_tags(properties: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if properties is None:
+        properties = {}
+
     current_context = _get_current_context()
     if current_context:
         context_tags = current_context.collect_tags()
@@ -179,6 +187,8 @@ class Client(object):
         self.timeout = timeout
         self._feature_flags = None  # private variable to store flags
         self.feature_flags_by_key = None
+        self.dependency_graph = None  # for flag dependencies
+        self.id_to_key_mapping = None  # maps flag ID to flag key
         self.group_type_mapping = None
         self.cohorts = None
         self.poll_interval = poll_interval
@@ -303,6 +313,20 @@ class Client(object):
         assert self.feature_flags_by_key is not None, (
             "feature_flags_by_key should be initialized when feature_flags is set"
         )
+
+        # Build dependency graph for flag dependencies
+        try:
+            self.dependency_graph, self.id_to_key_mapping = build_dependency_graph(
+                self._feature_flags
+            )
+            self.log.debug(
+                f"Built dependency graph with {len(self.dependency_graph.flags)} flags"
+            )
+            self.log.debug(f"ID to key mapping: {self.id_to_key_mapping}")
+        except Exception as e:
+            self.log.warning(f"Failed to build dependency graph: {e}")
+            self.dependency_graph = None
+            self.id_to_key_mapping = None
 
     def get_feature_variants(
         self,
@@ -511,7 +535,7 @@ class Client(object):
         if personless and "$process_person_profile" not in properties:
             properties["$process_person_profile"] = False
 
-        msg = {
+        msg: Dict[str, Any] = {
             "properties": properties,
             "timestamp": timestamp,
             "distinct_id": distinct_id,
@@ -970,13 +994,14 @@ class Client(object):
             posthog.join()
             ```
         """
-        for consumer in self.consumers:
-            consumer.pause()
-            try:
-                consumer.join()
-            except RuntimeError:
-                # consumer thread has not started
-                pass
+        if self.consumers:
+            for consumer in self.consumers:
+                consumer.pause()
+                try:
+                    consumer.join()
+                except RuntimeError:
+                    # consumer thread has not started
+                    pass
 
         if self.poller:
             self.poller.stop()
@@ -1135,11 +1160,21 @@ class Client(object):
 
             focused_group_properties = group_properties[group_name]
             return match_feature_flag_properties(
-                feature_flag, groups[group_name], focused_group_properties
+                feature_flag,
+                groups[group_name],
+                focused_group_properties,
+                self.cohorts,
+                self.dependency_graph,
+                self.id_to_key_mapping,
             )
         else:
             return match_feature_flag_properties(
-                feature_flag, distinct_id, person_properties, self.cohorts
+                feature_flag,
+                distinct_id,
+                person_properties,
+                self.cohorts,
+                self.dependency_graph,
+                self.id_to_key_mapping,
             )
 
     def feature_enabled(
@@ -1408,8 +1443,40 @@ class Client(object):
             assert self.feature_flags_by_key is not None, (
                 "feature_flags_by_key should be initialized when feature_flags is set"
             )
-            # Local evaluation
+
             flag = self.feature_flags_by_key.get(key)
+            if flag and flag.get("ensure_experience_continuity", False):
+                # Experience continuity flags cannot be evaluated locally
+                self.log.debug(
+                    f"Flag {key} has experience continuity enabled, skipping local evaluation"
+                )
+                return None
+
+            # Check if any flags have dependencies
+            if self.dependency_graph and len(self.dependency_graph.flags) > 0:
+                # If we have dependencies, use the dependency-aware evaluation
+                try:
+                    # Evaluate all flags with dependencies to ensure dependencies are available
+                    all_results = evaluate_flags_with_dependencies(
+                        self.feature_flags,
+                        distinct_id,
+                        person_properties,
+                        self.cohorts,
+                        requested_flag_keys={
+                            key
+                        },  # Only evaluate the requested flag and its dependencies
+                    )
+                    response = all_results.get(key)
+                    if response is not None:
+                        self.log.debug(
+                            f"Successfully computed flag with dependencies: {key} -> {response}"
+                        )
+                        return response
+                except Exception as e:
+                    self.log.warning(f"Failed to evaluate flag with dependencies: {e}")
+                    # Fall back to individual evaluation
+
+            # Fall back to individual flag evaluation
             if flag:
                 try:
                     response = self._compute_flag_locally(
@@ -1588,7 +1655,7 @@ class Client(object):
         if self.feature_flags_by_key is None:
             return payload
 
-        flag_definition = self.feature_flags_by_key.get(key)
+        flag_definition = self.feature_flags_by_key.get(key)  # type: ignore[unreachable]
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
