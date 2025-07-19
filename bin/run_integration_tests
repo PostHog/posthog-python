@@ -32,6 +32,14 @@ echo "🚀 PostHog Python SDK Integration Tests"
 echo "=" | head -c 40 | tr '\n' '='
 echo
 
+# Load .env file if it exists
+if [ -f ".env" ]; then
+    echo "📝 Loading environment variables from .env file..."
+    set -a  # automatically export all variables
+    source .env
+    set +a  # disable auto-export
+fi
+
 # Check if the integration test file exists
 INTEGRATION_TEST_FILE="posthog/test/manual_integration/test_flag_dependencies.py"
 if [ ! -f "$INTEGRATION_TEST_FILE" ]; then
