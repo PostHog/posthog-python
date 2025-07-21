@@ -5,6 +5,8 @@ except ImportError:
         "Please install the Anthropic SDK to use this feature: 'pip install anthropic'"
     )
 
+from typing import Optional, cast
+
 from posthog.ai.anthropic.anthropic import WrappedMessages
 from posthog.ai.anthropic.anthropic_async import AsyncWrappedMessages
 from posthog.client import Client as PostHogClient
@@ -17,9 +19,15 @@ class AnthropicBedrock(anthropic.AnthropicBedrock):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
         self.messages = WrappedMessages(self)
 
 
@@ -30,9 +38,15 @@ class AsyncAnthropicBedrock(anthropic.AsyncAnthropicBedrock):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
         self.messages = AsyncWrappedMessages(self)
 
 
@@ -43,9 +57,15 @@ class AnthropicVertex(anthropic.AnthropicVertex):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
         self.messages = WrappedMessages(self)
 
 
@@ -56,7 +76,13 @@ class AsyncAnthropicVertex(anthropic.AsyncAnthropicVertex):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
         self.messages = AsyncWrappedMessages(self)

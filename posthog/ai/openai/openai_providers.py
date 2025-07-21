@@ -15,6 +15,8 @@ from posthog.ai.openai.openai_async import WrappedBeta as AsyncWrappedBeta
 from posthog.ai.openai.openai_async import WrappedChat as AsyncWrappedChat
 from posthog.ai.openai.openai_async import WrappedEmbeddings as AsyncWrappedEmbeddings
 from posthog.ai.openai.openai_async import WrappedResponses as AsyncWrappedResponses
+from typing import Optional, cast
+
 from posthog.client import Client as PostHogClient
 
 
@@ -25,7 +27,7 @@ class AzureOpenAI(openai.AzureOpenAI):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
             api_key: Azure OpenAI API key.
@@ -34,7 +36,13 @@ class AzureOpenAI(openai.AzureOpenAI):
             **openai_config: Any additional keyword args to set on Azure OpenAI (e.g. azure_endpoint="xxx").
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)
@@ -63,7 +71,7 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
             api_key: Azure OpenAI API key.
@@ -72,7 +80,13 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
             **openai_config: Any additional keyword args to set on Azure OpenAI (e.g. azure_endpoint="xxx").
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)

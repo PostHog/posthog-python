@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 try:
     import openai
@@ -24,16 +24,20 @@ class OpenAI(openai.OpenAI):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
             api_key: OpenAI API key.
-            posthog_client: If provided, events will be captured via this client instead
-                            of the global posthog.
+            posthog_client: If provided, events will be captured via this client instead of the global `posthog`.
             **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        if posthog_client is None:
+            import posthog
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)
