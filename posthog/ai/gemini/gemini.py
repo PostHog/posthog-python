@@ -65,7 +65,7 @@ class Client:
             self._ph_client = cast(PostHogClient, posthog.default_client)
         else:
             self._ph_client = posthog_client
-        
+
         if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")
 
