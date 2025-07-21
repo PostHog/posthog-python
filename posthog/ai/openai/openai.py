@@ -34,6 +34,7 @@ class OpenAI(openai.OpenAI):
         super().__init__(**kwargs)
         if posthog_client is None:
             import posthog
+
             posthog.setup()
             self._ph_client = cast(PostHogClient, posthog.default_client)
         else:
