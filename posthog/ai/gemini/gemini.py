@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 try:
     from google import genai
@@ -36,6 +36,8 @@ class Client:
         )
     """
 
+    _ph_client: PostHogClient
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -57,11 +59,19 @@ class Client:
             **kwargs: Additional arguments (for future compatibility)
         """
         if posthog_client is None:
+            import posthog
+
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
+        
+        if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")
 
         self.models = Models(
             api_key=api_key,
-            posthog_client=posthog_client,
+            posthog_client=self._ph_client,
             posthog_distinct_id=posthog_distinct_id,
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
@@ -98,9 +108,15 @@ class Models:
             **kwargs: Additional arguments (for future compatibility)
         """
         if posthog_client is None:
-            raise ValueError("posthog_client is required for PostHog tracking")
+            import posthog
 
-        self._ph_client = posthog_client
+            posthog.setup()
+            self._ph_client = cast(PostHogClient, posthog.default_client)
+        else:
+            self._ph_client = posthog_client
+
+        if self._ph_client is None:
+            raise ValueError("posthog_client is required for PostHog tracking")
 
         # Store default PostHog settings
         self._default_distinct_id = posthog_distinct_id
