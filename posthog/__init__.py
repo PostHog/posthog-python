@@ -676,7 +676,7 @@ def shutdown():
     _proxy("join")
 
 
-def setup():
+def setup() -> Client:
     global default_client
     if not default_client:
         if not api_key:
@@ -705,6 +705,8 @@ def setup():
     # always set incase user changes it
     default_client.disabled = disabled
     default_client.debug = debug
+
+    return default_client
 
 
 def _proxy(method, *args, **kwargs):

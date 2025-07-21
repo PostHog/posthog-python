@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
 try:
     import openai
@@ -15,6 +15,7 @@ from posthog.ai.utils import (
     with_privacy_mode,
 )
 from posthog.client import Client as PostHogClient
+from posthog import setup
 
 
 class OpenAI(openai.OpenAI):
@@ -32,13 +33,7 @@ class OpenAI(openai.OpenAI):
             **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
         super().__init__(**kwargs)
-        if posthog_client is None:
-            import posthog
-
-            posthog.setup()
-            self._ph_client = cast(PostHogClient, posthog.default_client)
-        else:
-            self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)

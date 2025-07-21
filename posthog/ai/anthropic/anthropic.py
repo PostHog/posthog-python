@@ -17,6 +17,7 @@ from posthog.ai.utils import (
     with_privacy_mode,
 )
 from posthog.client import Client as PostHogClient
+from posthog import setup
 
 
 class Anthropic(anthropic.Anthropic):
@@ -33,13 +34,7 @@ class Anthropic(anthropic.Anthropic):
             **kwargs: Additional arguments passed to the Anthropic client
         """
         super().__init__(**kwargs)
-        if posthog_client is None:
-            import posthog
-
-            posthog.setup()
-            self._ph_client = cast(PostHogClient, posthog.default_client)
-        else:
-            self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
         self.messages = WrappedMessages(self)
 
 

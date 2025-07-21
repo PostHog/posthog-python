@@ -8,8 +8,9 @@ except ImportError:
 
 import time
 import uuid
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional
 
+from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     get_model_params,
@@ -33,13 +34,7 @@ class AsyncAnthropic(anthropic.AsyncAnthropic):
             **kwargs: Additional arguments passed to the Anthropic client
         """
         super().__init__(**kwargs)
-        if posthog_client is None:
-            import posthog
-
-            posthog.setup()
-            self._ph_client = cast(PostHogClient, posthog.default_client)
-        else:
-            self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
         self.messages = AsyncWrappedMessages(self)
 
 

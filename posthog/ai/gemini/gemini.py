@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional
 
 try:
     from google import genai
@@ -10,6 +10,7 @@ except ImportError:
         "Please install the Google Gemini SDK to use this feature: 'pip install google-genai'"
     )
 
+from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage,
     get_model_params,
@@ -58,13 +59,7 @@ class Client:
             posthog_groups: Default groups for all calls (can be overridden per call)
             **kwargs: Additional arguments (for future compatibility)
         """
-        if posthog_client is None:
-            import posthog
-
-            posthog.setup()
-            self._ph_client = cast(PostHogClient, posthog.default_client)
-        else:
-            self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
 
         if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")
@@ -107,13 +102,7 @@ class Models:
             posthog_groups: Default groups for all calls
             **kwargs: Additional arguments (for future compatibility)
         """
-        if posthog_client is None:
-            import posthog
-
-            posthog.setup()
-            self._ph_client = cast(PostHogClient, posthog.default_client)
-        else:
-            self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
 
         if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")

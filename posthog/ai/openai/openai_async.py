@@ -9,6 +9,7 @@ except ImportError:
         "Please install the OpenAI SDK to use this feature: 'pip install openai'"
     )
 
+from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     get_model_params,
@@ -33,13 +34,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
             **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
         super().__init__(**kwargs)
-        if posthog_client is None:
-            import posthog
-
-            posthog.setup()
-            self._ph_client = cast(PostHogClient, posthog.default_client)
-        else:
-            self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)
