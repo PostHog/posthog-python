@@ -1,3 +1,7 @@
+# 6.2.1 - 2025-06-21
+
+- feat: support using default client for posthog ai client
+
 # 6.1.1 - 2025-07-16
 
 - fix: correctly capture exceptions processed by Django from views or middleware
