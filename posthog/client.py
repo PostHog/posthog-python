@@ -524,11 +524,31 @@ class Client(object):
 
         extra_properties: dict[str, Any] = {}
         feature_variants: Optional[dict[str, Union[bool, str]]] = {}
-        if send_feature_flags:
+
+        # Parse and normalize send_feature_flags parameter
+        flag_options = self._parse_send_feature_flags(send_feature_flags)
+
+        if flag_options["should_send"]:
             try:
-                feature_variants = self.get_feature_variants(
-                    distinct_id, groups, disable_geoip=disable_geoip
-                )
+                if flag_options["only_evaluate_locally"] is True:
+                    # Only use local evaluation
+                    feature_variants = self.get_all_flags(
+                        distinct_id,
+                        groups=(groups or {}),
+                        person_properties=flag_options["person_properties"],
+                        group_properties=flag_options["group_properties"],
+                        disable_geoip=disable_geoip,
+                        only_evaluate_locally=True,
+                    )
+                else:
+                    # Default behavior - use remote evaluation
+                    feature_variants = self.get_feature_variants(
+                        distinct_id,
+                        groups,
+                        person_properties=flag_options["person_properties"],
+                        group_properties=flag_options["group_properties"],
+                        disable_geoip=disable_geoip,
+                    )
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature variants: {e}"
@@ -558,6 +578,42 @@ class Client(object):
             msg["properties"] = {**extra_properties, **msg["properties"]}
 
         return self._enqueue(msg, disable_geoip)
+
+    def _parse_send_feature_flags(self, send_feature_flags) -> dict:
+        """
+        Parse and normalize send_feature_flags parameter into a standard format.
+
+        Args:
+            send_feature_flags: Either bool or SendFeatureFlagsOptions dict
+
+        Returns:
+            dict: Normalized options with keys: should_send, only_evaluate_locally,
+                  person_properties, group_properties
+
+        Raises:
+            TypeError: If send_feature_flags is not bool or dict
+        """
+        if isinstance(send_feature_flags, dict):
+            return {
+                "should_send": True,
+                "only_evaluate_locally": send_feature_flags.get(
+                    "only_evaluate_locally"
+                ),
+                "person_properties": send_feature_flags.get("person_properties"),
+                "group_properties": send_feature_flags.get("group_properties"),
+            }
+        elif isinstance(send_feature_flags, bool):
+            return {
+                "should_send": send_feature_flags,
+                "only_evaluate_locally": None,
+                "person_properties": None,
+                "group_properties": None,
+            }
+        else:
+            raise TypeError(
+                f"Invalid type for send_feature_flags: {type(send_feature_flags)}. "
+                f"Expected bool or dict."
+            )
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         """

@@ -751,6 +751,186 @@ class TestClient(unittest.TestCase):
 
             self.assertEqual(patch_flags.call_count, 0)
 
+    @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_options_only_evaluate_locally_true(
+        self, patch_flags
+    ):
+        """Test that SendFeatureFlagsOptions with only_evaluate_locally=True uses local evaluation"""
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+
+            # Set up local flags
+            client.feature_flags = [
+                {
+                    "id": 1,
+                    "key": "local-flag",
+                    "active": True,
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [{"key": "region", "value": "US"}],
+                                "rollout_percentage": 100,
+                            }
+                        ],
+                    },
+                }
+            ]
+
+            send_options = {
+                "only_evaluate_locally": True,
+                "person_properties": {"region": "US"},
+            }
+
+            msg_uuid = client.capture(
+                "test event", distinct_id="distinct_id", send_feature_flags=send_options
+            )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Verify flags() was not called (no remote evaluation)
+            patch_flags.assert_not_called()
+
+            # Check the message includes the local flag
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$feature/local-flag"], True)
+            self.assertEqual(msg["properties"]["$active_feature_flags"], ["local-flag"])
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_options_only_evaluate_locally_false(
+        self, patch_flags
+    ):
+        """Test that SendFeatureFlagsOptions with only_evaluate_locally=False forces remote evaluation"""
+        patch_flags.return_value = {"featureFlags": {"remote-flag": "remote-value"}}
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+
+            send_options = {
+                "only_evaluate_locally": False,
+                "person_properties": {"plan": "premium"},
+                "group_properties": {"company": {"type": "enterprise"}},
+            }
+
+            msg_uuid = client.capture(
+                "test event",
+                distinct_id="distinct_id",
+                groups={"company": "acme"},
+                send_feature_flags=send_options,
+            )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Verify flags() was called with the correct properties
+            patch_flags.assert_called_once()
+            call_args = patch_flags.call_args[1]
+            self.assertEqual(call_args["person_properties"], {"plan": "premium"})
+            self.assertEqual(
+                call_args["group_properties"], {"company": {"type": "enterprise"}}
+            )
+
+            # Check the message includes the remote flag
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$feature/remote-flag"], "remote-value")
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_options_default_behavior(
+        self, patch_flags
+    ):
+        """Test that SendFeatureFlagsOptions without only_evaluate_locally defaults to remote evaluation"""
+        patch_flags.return_value = {"featureFlags": {"default-flag": "default-value"}}
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+
+            send_options = {
+                "person_properties": {"subscription": "pro"},
+            }
+
+            msg_uuid = client.capture(
+                "test event", distinct_id="distinct_id", send_feature_flags=send_options
+            )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Verify flags() was called (default to remote evaluation)
+            patch_flags.assert_called_once()
+            call_args = patch_flags.call_args[1]
+            self.assertEqual(call_args["person_properties"], {"subscription": "pro"})
+
+            # Check the message includes the flag
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(
+                msg["properties"]["$feature/default-flag"], "default-value"
+            )
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_exception_with_send_feature_flags_options(self, patch_flags):
+        """Test that capture_exception also supports SendFeatureFlagsOptions"""
+        patch_flags.return_value = {"featureFlags": {"exception-flag": True}}
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+
+            send_options = {
+                "only_evaluate_locally": False,
+                "person_properties": {"user_type": "admin"},
+            }
+
+            try:
+                raise ValueError("Test exception")
+            except ValueError as e:
+                msg_uuid = client.capture_exception(
+                    e, distinct_id="distinct_id", send_feature_flags=send_options
+                )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Verify flags() was called with the correct properties
+            patch_flags.assert_called_once()
+            call_args = patch_flags.call_args[1]
+            self.assertEqual(call_args["person_properties"], {"user_type": "admin"})
+
+            # Check the message includes the flag
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "$exception")
+            self.assertEqual(msg["properties"]["$feature/exception-flag"], True)
+
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800
@@ -1591,7 +1771,7 @@ class TestClient(unittest.TestCase):
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
-    def test_call_identify_fails(self, patch_get, patch_poll):
+    def test_call_identify_fails(self, patch_get, patch_poller):
         def raise_effect():
             raise Exception("http exception")
 
@@ -1993,3 +2173,76 @@ class TestClient(unittest.TestCase):
         result = client.get_remote_config_payload("test-flag")
 
         self.assertIsNone(result)
+
+    def test_parse_send_feature_flags_method(self):
+        """Test the _parse_send_feature_flags helper method"""
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+
+        # Test boolean True
+        result = client._parse_send_feature_flags(True)
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": None,
+            "person_properties": None,
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test boolean False
+        result = client._parse_send_feature_flags(False)
+        expected = {
+            "should_send": False,
+            "only_evaluate_locally": None,
+            "person_properties": None,
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test options dict with all fields
+        options = {
+            "only_evaluate_locally": True,
+            "person_properties": {"plan": "premium"},
+            "group_properties": {"company": {"type": "enterprise"}},
+        }
+        result = client._parse_send_feature_flags(options)
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": True,
+            "person_properties": {"plan": "premium"},
+            "group_properties": {"company": {"type": "enterprise"}},
+        }
+        self.assertEqual(result, expected)
+
+        # Test options dict with partial fields
+        options = {"person_properties": {"user_id": "123"}}
+        result = client._parse_send_feature_flags(options)
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": None,
+            "person_properties": {"user_id": "123"},
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test empty dict
+        result = client._parse_send_feature_flags({})
+        expected = {
+            "should_send": True,
+            "only_evaluate_locally": None,
+            "person_properties": None,
+            "group_properties": None,
+        }
+        self.assertEqual(result, expected)
+
+        # Test invalid types
+        with self.assertRaises(TypeError) as cm:
+            client._parse_send_feature_flags("invalid")
+        self.assertIn("Invalid type for send_feature_flags", str(cm.exception))
+
+        with self.assertRaises(TypeError) as cm:
+            client._parse_send_feature_flags(123)
+        self.assertIn("Invalid type for send_feature_flags", str(cm.exception))
+
+        with self.assertRaises(TypeError) as cm:
+            client._parse_send_feature_flags(None)
+        self.assertIn("Invalid type for send_feature_flags", str(cm.exception))

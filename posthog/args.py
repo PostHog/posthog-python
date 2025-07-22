@@ -5,6 +5,8 @@ from datetime import datetime
 import numbers
 from uuid import UUID
 
+from posthog.types import SendFeatureFlagsOptions
+
 ID_TYPES = Union[numbers.Number, str, UUID, int]
 
 
@@ -22,7 +24,8 @@ class OptionalCaptureArgs(TypedDict):
             error ID if you capture an exception).
         groups: Group identifiers to associate with this event (format: {group_type: group_key})
         send_feature_flags: Whether to include currently active feature flags in the event properties.
-            Defaults to False
+            Can be a boolean (True/False) or a SendFeatureFlagsOptions object for advanced configuration.
+            Defaults to False.
         disable_geoip: Whether to disable GeoIP lookup for this event. Defaults to False.
     """
 
@@ -32,8 +35,8 @@ class OptionalCaptureArgs(TypedDict):
     uuid: NotRequired[Optional[str]]
     groups: NotRequired[Optional[Dict[str, str]]]
     send_feature_flags: NotRequired[
-        Optional[bool]
-    ]  # Optional so we can tell if the user is intentionally overriding a client setting or not
+        Optional[Union[bool, SendFeatureFlagsOptions]]
+    ]  # Updated to support both boolean and options object
     disable_geoip: NotRequired[
         Optional[bool]
     ]  # As above, optional so we can tell if the user is intentionally overriding a client setting or not
