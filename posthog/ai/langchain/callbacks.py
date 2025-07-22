@@ -547,7 +547,9 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.provider,
             "$ai_model": run.model,
             "$ai_model_parameters": run.model_params,
-            "$ai_input": with_privacy_mode(self._ph_client, self._privacy_mode, run.input),
+            "$ai_input": with_privacy_mode(
+                self._ph_client, self._privacy_mode, run.input
+            ),
             "$ai_http_status": 200,
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
