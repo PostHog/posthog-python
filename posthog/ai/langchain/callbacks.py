@@ -33,7 +33,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
-from posthog import default_client
+from posthog import setup
 from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
 
@@ -81,7 +81,7 @@ class CallbackHandler(BaseCallbackHandler):
     The PostHog LLM observability callback handler for LangChain.
     """
 
-    _client: Client
+    _ph_client: Client
     """PostHog client instance."""
 
     _distinct_id: Optional[Union[str, int, UUID]]
@@ -127,10 +127,7 @@ class CallbackHandler(BaseCallbackHandler):
             privacy_mode: Whether to redact the input and output of the trace.
             groups: Optional additional PostHog groups to use for the trace.
         """
-        posthog_client = client or default_client
-        if posthog_client is None:
-            raise ValueError("PostHog client is required")
-        self._client = posthog_client
+        self._ph_client = client or setup()
         self._distinct_id = distinct_id
         self._trace_id = trace_id
         self._properties = properties or {}
@@ -481,7 +478,7 @@ class CallbackHandler(BaseCallbackHandler):
         event_properties = {
             "$ai_trace_id": trace_id,
             "$ai_input_state": with_privacy_mode(
-                self._client, self._privacy_mode, run.input
+                self._ph_client, self._privacy_mode, run.input
             ),
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
@@ -497,13 +494,13 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_is_error"] = True
         elif outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(
-                self._client, self._privacy_mode, outputs
+                self._ph_client, self._privacy_mode, outputs
             )
 
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
 
-        self._client.capture(
+        self._ph_client.capture(
             distinct_id=self._distinct_id or run_id,
             event=event_name,
             properties=event_properties,
@@ -550,14 +547,16 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.provider,
             "$ai_model": run.model,
             "$ai_model_parameters": run.model_params,
-            "$ai_input": with_privacy_mode(self._client, self._privacy_mode, run.input),
+            "$ai_input": with_privacy_mode(
+                self._ph_client, self._privacy_mode, run.input
+            ),
             "$ai_http_status": 200,
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
         }
         if run.tools:
             event_properties["$ai_tools"] = with_privacy_mode(
-                self._client,
+                self._ph_client,
                 self._privacy_mode,
                 run.tools,
             )
@@ -589,7 +588,7 @@ class CallbackHandler(BaseCallbackHandler):
                     _extract_raw_esponse(generation) for generation in generation_result
                 ]
             event_properties["$ai_output_choices"] = with_privacy_mode(
-                self._client, self._privacy_mode, completions
+                self._ph_client, self._privacy_mode, completions
             )
 
         if self._properties:
@@ -598,7 +597,7 @@ class CallbackHandler(BaseCallbackHandler):
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
 
-        self._client.capture(
+        self._ph_client.capture(
             distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
             properties=event_properties,
