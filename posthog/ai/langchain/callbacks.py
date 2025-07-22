@@ -655,11 +655,11 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     if isinstance(message, HumanMessage):
         message_dict = {"role": "user", "content": message.content}
     elif isinstance(message, AIMessage):
-        message_dict = {
-            "role": "assistant",
-            "content": message.content,
-            "tool_calls": _convert_lc_tool_calls_to_oai(message.tool_calls),
-        }
+        message_dict = {"role": "assistant", "content": message.content}
+        if message.tool_calls:
+            message_dict["tool_calls"] = _convert_lc_tool_calls_to_oai(
+                message.tool_calls
+            )
     elif isinstance(message, SystemMessage):
         message_dict = {"role": "system", "content": message.content}
     elif isinstance(message, ToolMessage):
