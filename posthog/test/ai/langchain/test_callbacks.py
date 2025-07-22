@@ -1727,3 +1727,29 @@ def test_openai_reasoning_tokens(mock_client):
     assert call["properties"]["$ai_reasoning_tokens"] is not None
     assert call["properties"]["$ai_input_tokens"] is not None
     assert call["properties"]["$ai_output_tokens"] is not None
+
+
+def test_callback_handler_without_client():
+    """Test that CallbackHandler works properly when no PostHog client is passed."""
+    with patch("posthog.ai.langchain.callbacks.setup") as mock_setup:
+        mock_client = mock_setup.return_value
+
+        callbacks = CallbackHandler()
+
+        # Verify that setup() was called
+        mock_setup.assert_called_once()
+
+        # Verify that the client was set to the result of setup()
+        assert callbacks._ph_client == mock_client
+
+        # Test that the callback handler works with a simple chain
+        prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+        model = FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+        chain = prompt | model
+
+        # This should work and call the mock client
+        result = chain.invoke({}, config={"callbacks": [callbacks]})
+        assert result.content == "Bar"
+
+        # Verify that the mock client was used for capturing events
+        assert mock_client.capture.call_count == 3

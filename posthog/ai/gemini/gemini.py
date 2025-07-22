@@ -10,6 +10,7 @@ except ImportError:
         "Please install the Google Gemini SDK to use this feature: 'pip install google-genai'"
     )
 
+from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage,
     get_model_params,
@@ -36,6 +37,8 @@ class Client:
         )
     """
 
+    _ph_client: PostHogClient
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -56,12 +59,14 @@ class Client:
             posthog_groups: Default groups for all calls (can be overridden per call)
             **kwargs: Additional arguments (for future compatibility)
         """
-        if posthog_client is None:
+        self._ph_client = posthog_client or setup()
+
+        if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")
 
         self.models = Models(
             api_key=api_key,
-            posthog_client=posthog_client,
+            posthog_client=self._ph_client,
             posthog_distinct_id=posthog_distinct_id,
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
@@ -97,10 +102,10 @@ class Models:
             posthog_groups: Default groups for all calls
             **kwargs: Additional arguments (for future compatibility)
         """
-        if posthog_client is None:
-            raise ValueError("posthog_client is required for PostHog tracking")
+        self._ph_client = posthog_client or setup()
 
-        self._ph_client = posthog_client
+        if self._ph_client is None:
+            raise ValueError("posthog_client is required for PostHog tracking")
 
         # Store default PostHog settings
         self._default_distinct_id = posthog_distinct_id

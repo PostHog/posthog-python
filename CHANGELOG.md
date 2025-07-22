@@ -1,6 +1,14 @@
-# 6.2.0 - 2025-07-15
+# 6.3.0 - 2025-07-22
 
 - feat: Enhanced `send_feature_flags` parameter to accept `SendFeatureFlagsOptions` object for declarative control over local/remote evaluation and custom properties
+
+# 6.2.1 - 2025-07-21
+
+- feat: make `posthog_client` an optional argument in PostHog AI providers wrappers (`posthog.ai.*`), intuitively using the default client as the default
+
+# 6.1.1 - 2025-07-16
+
+- fix: correctly capture exceptions processed by Django from views or middleware
 
 # 6.1.0 - 2025-07-10
 
@@ -25,12 +33,14 @@
 # 6.0.0
 
 This release contains a number of major breaking changes:
+
 - feat: make distinct_id an optional parameter in posthog.capture and related functions
 - feat: make capture and related functions return `Optional[str]`, which is the UUID of the sent event, if it was sent
 - fix: remove `identify` (prefer `posthog.set()`), and `page` and `screen` (prefer `posthog.capture()`)
 - fix: delete exception-capture specific integrations module. Prefer the general-purpose django middleware as a replacement for the django `Integration`.
 
 To migrate to this version, you'll mostly just need to switch to using named keyword arguments, rather than positional ones. For example:
+
 ```python
 # Old calling convention
 posthog.capture("user123", "button_clicked", {"button_id": "123"})
