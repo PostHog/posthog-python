@@ -1,6 +1,6 @@
 # 6.2.1 - 2025-06-21
 
-- feat: make `posthog_client` a optional in PostHog AI providers wrappers (`posthog.ai.*`), intuitively using the default client as the default
+- feat: make `posthog_client` an optional argument in PostHog AI providers wrappers (`posthog.ai.*`), intuitively using the default client as the default
 
 # 6.1.1 - 2025-07-16
 
