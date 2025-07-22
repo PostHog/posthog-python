@@ -10,6 +10,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
+from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     get_model_params,
@@ -26,14 +27,14 @@ class AsyncAnthropic(anthropic.AsyncAnthropic):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: PostHogClient, **kwargs):
+    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
             posthog_client: PostHog client for tracking usage
             **kwargs: Additional arguments passed to the Anthropic client
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client
+        self._ph_client = posthog_client or setup()
         self.messages = AsyncWrappedMessages(self)
 
 
