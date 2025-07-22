@@ -1753,3 +1753,40 @@ def test_callback_handler_without_client():
 
         # Verify that the mock client was used for capturing events
         assert mock_client.capture.call_count == 3
+
+
+def test_convert_message_to_dict_tool_calls():
+    """Test that _convert_message_to_dict properly converts tool calls in AIMessage."""
+    from posthog.ai.langchain.callbacks import _convert_message_to_dict
+    from langchain_core.messages import AIMessage
+    from langchain_core.messages.tool import ToolCall
+
+    # Create an AIMessage with tool calls
+    tool_calls = [
+        ToolCall(
+            id="call_123",
+            name="get_weather",
+            args={"city": "San Francisco", "units": "celsius"},
+        )
+    ]
+
+    ai_message = AIMessage(
+        content="I'll check the weather for you.", tool_calls=tool_calls
+    )
+
+    # Convert to dict
+    result = _convert_message_to_dict(ai_message)
+
+    # Verify the conversion
+    assert result["role"] == "assistant"
+    assert result["content"] == "I'll check the weather for you."
+    assert result["tool_calls"] == [
+        {
+            "type": "function",
+            "id": "call_123",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "San Francisco", "units": "celsius"}',
+            },
+        }
+    ]
