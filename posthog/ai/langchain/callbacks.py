@@ -5,6 +5,7 @@ except ImportError:
         "Please install LangChain to use this feature: 'pip install langchain'"
     )
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     ToolMessage,
+    ToolCall,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
@@ -629,12 +631,35 @@ def _extract_raw_esponse(last_response):
         return ""
 
 
-def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
+def _convert_lc_tool_calls_to_oai(
+    tool_calls: list[ToolCall],
+) -> list[dict[str, Any]]:
+    try:
+        return [
+            {
+                "type": "function",
+                "id": tool_call["id"],
+                "function": {
+                    "name": tool_call["name"],
+                    "arguments": json.dumps(tool_call["args"]),
+                },
+            }
+            for tool_call in tool_calls
+        ]
+    except KeyError:
+        return tool_calls
+
+
+def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     # assistant message
     if isinstance(message, HumanMessage):
         message_dict = {"role": "user", "content": message.content}
     elif isinstance(message, AIMessage):
         message_dict = {"role": "assistant", "content": message.content}
+        if message.tool_calls:
+            message_dict["tool_calls"] = _convert_lc_tool_calls_to_oai(
+                message.tool_calls
+            )
     elif isinstance(message, SystemMessage):
         message_dict = {"role": "system", "content": message.content}
     elif isinstance(message, ToolMessage):
@@ -646,6 +671,9 @@ def _convert_message_to_dict(message: BaseMessage) -> Dict[str, Any]:
 
     if message.additional_kwargs:
         message_dict.update(message.additional_kwargs)
+
+    if "content" in message_dict and not message_dict["content"]:
+        message_dict["content"] = ""
 
     return message_dict
 
