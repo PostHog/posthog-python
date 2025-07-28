@@ -891,6 +891,143 @@ class TestClient(unittest.TestCase):
             )
 
     @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_flag_keys_filter(self, patch_flags):
+        """Test that flag_keys filters the feature flags that are evaluated"""
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+
+            # Set up multiple local flags
+            client.feature_flags = [
+                {
+                    "id": 1,
+                    "key": "flag-one",
+                    "active": True,
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": 100,
+                            }
+                        ],
+                    },
+                },
+                {
+                    "id": 2,
+                    "key": "flag-two",
+                    "active": True,
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": 100,
+                            }
+                        ],
+                    },
+                },
+                {
+                    "id": 3,
+                    "key": "flag-three",
+                    "active": True,
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": 100,
+                            }
+                        ],
+                    },
+                },
+            ]
+
+            # Only evaluate flag-one and flag-three
+            send_options = {
+                "only_evaluate_locally": True,
+                "flag_keys": ["flag-one", "flag-three"],
+            }
+
+            msg_uuid = client.capture(
+                "test event", distinct_id="distinct_id", send_feature_flags=send_options
+            )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Check the message only includes flag-one and flag-three
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            # Should have flag-one and flag-three, but not flag-two
+            self.assertEqual(msg["properties"]["$feature/flag-one"], True)
+            self.assertEqual(msg["properties"]["$feature/flag-three"], True)
+            self.assertNotIn("$feature/flag-two", msg["properties"])
+
+            # Active flags should only include flag-one and flag-three
+            self.assertEqual(
+                sorted(msg["properties"]["$active_feature_flags"]),
+                ["flag-one", "flag-three"],
+            )
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_flag_keys_remote_evaluation(
+        self, patch_flags
+    ):
+        """Test that flag_keys filters remote evaluation results"""
+        # Mock remote flags response with multiple flags
+        patch_flags.return_value = {
+            "featureFlags": {
+                "remote-flag-one": "value-one",
+                "remote-flag-two": "value-two",
+                "remote-flag-three": "value-three",
+            }
+        }
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                sync_mode=True,
+            )
+
+            # Only evaluate remote-flag-one and remote-flag-three
+            send_options = {
+                "flag_keys": ["remote-flag-one", "remote-flag-three"],
+            }
+
+            msg_uuid = client.capture(
+                "test event", distinct_id="distinct_id", send_feature_flags=send_options
+            )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Verify flags() was called
+            patch_flags.assert_called_once()
+
+            # Check the message only includes remote-flag-one and remote-flag-three
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            # Should have remote-flag-one and remote-flag-three, but not remote-flag-two
+            self.assertEqual(msg["properties"]["$feature/remote-flag-one"], "value-one")
+            self.assertEqual(
+                msg["properties"]["$feature/remote-flag-three"], "value-three"
+            )
+            self.assertNotIn("$feature/remote-flag-two", msg["properties"])
+
+            # Active flags should only include remote-flag-one and remote-flag-three
+            self.assertEqual(
+                sorted(msg["properties"]["$active_feature_flags"]),
+                ["remote-flag-one", "remote-flag-three"],
+            )
+
+    @mock.patch("posthog.client.flags")
     def test_capture_exception_with_send_feature_flags_options(self, patch_flags):
         """Test that capture_exception also supports SendFeatureFlagsOptions"""
         patch_flags.return_value = {"featureFlags": {"exception-flag": True}}
@@ -2185,6 +2322,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys": None,
         }
         self.assertEqual(result, expected)
 
@@ -2195,6 +2333,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys": None,
         }
         self.assertEqual(result, expected)
 
@@ -2203,6 +2342,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": True,
             "person_properties": {"plan": "premium"},
             "group_properties": {"company": {"type": "enterprise"}},
+            "flag_keys": ["beta-feature", "my-flag"],
         }
         result = client._parse_send_feature_flags(options)
         expected = {
@@ -2210,6 +2350,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": True,
             "person_properties": {"plan": "premium"},
             "group_properties": {"company": {"type": "enterprise"}},
+            "flag_keys": ["beta-feature", "my-flag"],
         }
         self.assertEqual(result, expected)
 
@@ -2221,6 +2362,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": {"user_id": "123"},
             "group_properties": None,
+            "flag_keys": None,
         }
         self.assertEqual(result, expected)
 
@@ -2231,6 +2373,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys": None,
         }
         self.assertEqual(result, expected)
 
