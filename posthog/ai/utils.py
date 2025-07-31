@@ -118,7 +118,12 @@ def format_response(response, provider: str):
 def format_response_anthropic(response):
     output = []
     for choice in response.content:
-        if hasattr(choice, "type") and choice.type == "text" and hasattr(choice, "text") and choice.text:
+        if (
+            hasattr(choice, "type")
+            and choice.type == "text"
+            and hasattr(choice, "text")
+            and choice.text
+        ):
             output.append(
                 {
                     "role": "assistant",
@@ -230,8 +235,14 @@ def format_tool_calls(response, provider: str):
 
             for content_item in response.content:
                 if hasattr(content_item, "type") and content_item.type == "tool_use":
-                    tool_call_dict = vars(content_item)
-                    tool_calls.append(tool_call_dict)
+                    tool_calls.append(
+                        {
+                            "type": content_item.type,
+                            "id": content_item.id,
+                            "name": content_item.name,
+                            "input": content_item.input,
+                        }
+                    )
 
             return tool_calls if tool_calls else None
     elif provider == "openai":

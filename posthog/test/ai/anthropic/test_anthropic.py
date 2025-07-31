@@ -96,7 +96,12 @@ def mock_anthropic_response_with_tool_use():
         role="assistant",
         content=[
             {"type": "text", "text": "I'll help you with that."},
-            {"type": "tool_use", "id": "tool_1", "name": "get_weather", "input": {"location": "New York"}}
+            {
+                "type": "tool_use",
+                "id": "tool_1",
+                "name": "get_weather",
+                "input": {"location": "New York"},
+            },
         ],
         model="claude-3-opus-20240229",
         usage=Usage(
@@ -479,7 +484,9 @@ def test_tool_use_response(mock_client, mock_anthropic_response_with_tool_use):
         assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "anthropic"
         assert props["$ai_model"] == "claude-3-opus-20240229"
-        assert props["$ai_input"] == [{"role": "user", "content": "What's the weather like?"}]
+        assert props["$ai_input"] == [
+            {"role": "user", "content": "What's the weather like?"}
+        ]
         # Should only include text content, not tool_use content
         assert props["$ai_output_choices"] == [
             {"role": "assistant", "content": "I'll help you with that."}
@@ -490,4 +497,11 @@ def test_tool_use_response(mock_client, mock_anthropic_response_with_tool_use):
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
         # Verify that tools are captured separately
-        assert props["$ai_tools"] == [{"type": "tool_use", "id": "tool_1", "name": "get_weather", "input": {"location": "New York"}}]
+        assert props["$ai_tools"] == [
+            {
+                "type": "tool_use",
+                "id": "tool_1",
+                "name": "get_weather",
+                "input": {"location": "New York"},
+            }
+        ]
