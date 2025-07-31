@@ -1,4 +1,4 @@
-# 6.3.2
+# 6.3.2 - 2025-07-31
 
 - fix: Anthropic's tool calls are now handled properly
 
