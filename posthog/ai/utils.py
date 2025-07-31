@@ -225,8 +225,15 @@ def format_response_gemini(response):
 
 def format_tool_calls(response, provider: str):
     if provider == "anthropic":
-        if hasattr(response, "tools") and response.tools and len(response.tools) > 0:
-            return response.tools
+        if hasattr(response, "content") and response.content:
+            tool_calls = []
+
+            for content_item in response.content:
+                if hasattr(content_item, "type") and content_item.type == "tool_use":
+                    tool_call_dict = vars(content_item)
+                    tool_calls.append(tool_call_dict)
+
+            return tool_calls if tool_calls else None
     elif provider == "openai":
         # Handle both Chat Completions and Responses API
         if hasattr(response, "choices") and response.choices:
@@ -378,6 +385,7 @@ def call_llm_and_track_usage(
         }
 
         tool_calls = format_tool_calls(response, provider)
+
         if tool_calls:
             event_properties["$ai_tools"] = with_privacy_mode(
                 ph_client, posthog_privacy_mode, tool_calls

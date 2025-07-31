@@ -88,6 +88,26 @@ def mock_anthropic_response_with_cached_tokens():
     )
 
 
+@pytest.fixture
+def mock_anthropic_response_with_tool_use():
+    return Message(
+        id="msg_123",
+        type="message",
+        role="assistant",
+        content=[
+            {"type": "text", "text": "I'll help you with that."},
+            {"type": "tool_use", "id": "tool_1", "name": "get_weather", "input": {"location": "New York"}}
+        ],
+        model="claude-3-opus-20240229",
+        usage=Usage(
+            input_tokens=20,
+            output_tokens=10,
+        ),
+        stop_reason="end_turn",
+        stop_sequence=None,
+    )
+
+
 def test_basic_completion(mock_client, mock_anthropic_response):
     with patch(
         "anthropic.resources.Messages.create", return_value=mock_anthropic_response
@@ -434,3 +454,40 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_tool_use_response(mock_client, mock_anthropic_response_with_tool_use):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response_with_tool_use,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "What's the weather like?"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_anthropic_response_with_tool_use
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "anthropic"
+        assert props["$ai_model"] == "claude-3-opus-20240229"
+        assert props["$ai_input"] == [{"role": "user", "content": "What's the weather like?"}]
+        # Should only include text content, not tool_use content
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "I'll help you with that."}
+        ]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+        # Verify that tools are captured separately
+        assert props["$ai_tools"] == [{"type": "tool_use", "id": "tool_1", "name": "get_weather", "input": {"location": "New York"}}]
