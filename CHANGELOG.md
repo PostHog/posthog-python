@@ -1,3 +1,7 @@
+# 6.3.2 - 2025-07-31
+
+- fix: Anthropic's tool calls are now handled properly
+
 # 6.3.0 - 2025-07-22
 
 - feat: Enhanced `send_feature_flags` parameter to accept `SendFeatureFlagsOptions` object for declarative control over local/remote evaluation and custom properties
