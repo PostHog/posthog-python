@@ -118,7 +118,7 @@ def format_response(response, provider: str):
 def format_response_anthropic(response):
     output = []
     for choice in response.content:
-        if choice.text:
+        if hasattr(choice, "type") and choice.type == "text" and hasattr(choice, "text") and choice.text:
             output.append(
                 {
                     "role": "assistant",
