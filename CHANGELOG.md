@@ -1,3 +1,7 @@
+# 6.3.3 - 2025-08-01
+
+- fix: `get_feature_flag_result` now correctly returns FeatureFlagResult when payload is empty string instead of None
+
 # 6.3.2 - 2025-07-31
 
 - fix: Anthropic's tool calls are now handled properly

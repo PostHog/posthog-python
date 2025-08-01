@@ -2246,3 +2246,112 @@ class TestClient(unittest.TestCase):
         with self.assertRaises(TypeError) as cm:
             client._parse_send_feature_flags(None)
         self.assertIn("Invalid type for send_feature_flags", str(cm.exception))
+
+    @mock.patch("posthog.client.batch_post")
+    def test_get_feature_flag_result_with_empty_string_payload(self, patch_batch_post):
+        """Test that get_feature_flag_result returns a FeatureFlagResult when payload is empty string"""
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test_personal_api_key",
+            sync_mode=True,
+        )
+
+        # Set up local evaluation with a flag that has empty string payload
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Test flag",
+                "key": "test-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": None,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": None,
+                            "variant": "empty-variant",
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {
+                                "key": "empty-variant",
+                                "name": "Empty Variant",
+                                "rollout_percentage": 100,
+                            }
+                        ]
+                    },
+                    "payloads": {
+                        "empty-variant": ""  # Empty string payload
+                    },
+                },
+            }
+        ]
+
+        # Test get_feature_flag_result
+        result = client.get_feature_flag_result(
+            "test-flag", "test-user", only_evaluate_locally=True
+        )
+
+        # Should return a FeatureFlagResult, not None
+        self.assertIsNotNone(result)
+        self.assertEqual(result.key, "test-flag")
+        self.assertEqual(result.get_value(), "empty-variant")
+        self.assertEqual(result.payload, "")  # Should be empty string, not None
+
+    @mock.patch("posthog.client.batch_post")
+    def test_get_all_flags_and_payloads_with_empty_string(self, patch_batch_post):
+        """Test that get_all_flags_and_payloads includes flags with empty string payloads"""
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test_personal_api_key",
+            sync_mode=True,
+        )
+
+        # Set up multiple flags with different payload types
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag with empty payload",
+                "key": "empty-payload-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "variant": "variant1"}],
+                    "multivariate": {
+                        "variants": [{"key": "variant1", "rollout_percentage": 100}]
+                    },
+                    "payloads": {"variant1": ""},  # Empty string
+                },
+            },
+            {
+                "id": 2,
+                "name": "Flag with normal payload",
+                "key": "normal-payload-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "variant": "variant2"}],
+                    "multivariate": {
+                        "variants": [{"key": "variant2", "rollout_percentage": 100}]
+                    },
+                    "payloads": {"variant2": "normal payload"},
+                },
+            },
+        ]
+
+        result = client.get_all_flags_and_payloads(
+            "test-user", only_evaluate_locally=True
+        )
+
+        # Check that both flags are included
+        self.assertEqual(result["featureFlags"]["empty-payload-flag"], "variant1")
+        self.assertEqual(result["featureFlags"]["normal-payload-flag"], "variant2")
+
+        # Check that empty string payload is included (not filtered out)
+        self.assertIn("empty-payload-flag", result["featureFlagPayloads"])
+        self.assertEqual(result["featureFlagPayloads"]["empty-payload-flag"], "")
+        self.assertEqual(
+            result["featureFlagPayloads"]["normal-payload-flag"], "normal payload"
+        )

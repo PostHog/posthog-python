@@ -1285,7 +1285,7 @@ class Client(object):
             lookup_match_value = override_match_value or flag_value
             payload = (
                 self._compute_payload_locally(key, lookup_match_value)
-                if lookup_match_value
+                if lookup_match_value is not None
                 else None
             )
             flag_result = FeatureFlagResult.from_value_and_payload(
@@ -1586,7 +1586,7 @@ class Client(object):
                 f"$feature/{key}": response,
             }
 
-            if payload:
+            if payload is not None:
                 # if payload is not a string, json serialize it to a string
                 properties["$feature_flag_payload"] = payload
 
@@ -1790,7 +1790,7 @@ class Client(object):
                     matched_payload = self._compute_payload_locally(
                         flag["key"], flags[flag["key"]]
                     )
-                    if matched_payload:
+                    if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload
                 except InconclusiveMatchError:
                     # No need to log this, since it's just telling us to fall back to `/decide`
