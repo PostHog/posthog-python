@@ -8,7 +8,7 @@ except ImportError:
 
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from posthog.ai.utils import (
     call_llm_and_track_usage,
