@@ -185,7 +185,7 @@ class WrappedResponses:
         usage_stats: Dict[str, int],
         latency: float,
         output: Any,
-        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
@@ -215,12 +215,8 @@ class WrappedResponses:
             **(posthog_properties or {}),
         }
 
-        if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                tool_calls,
-            )
+        if available_tool_calls:
+            event_properties["$ai_tools"] = available_tool_calls
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -425,7 +421,7 @@ class WrappedCompletions:
         usage_stats: Dict[str, int],
         latency: float,
         output: Any,
-        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
@@ -455,12 +451,8 @@ class WrappedCompletions:
             **(posthog_properties or {}),
         }
 
-        if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                tool_calls,
-            )
+        if available_tool_calls:
+            event_properties["$ai_tools"] = available_tool_calls
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
