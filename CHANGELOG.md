@@ -1,3 +1,7 @@
+# 6.3.4 - 2025-08-04
+
+- fix: Set `$ai_tools` properly for all providers
+
 # 6.3.3 - 2025-08-01
 
 - fix: `get_feature_flag_result` now correctly returns FeatureFlagResult when payload is empty string instead of None
