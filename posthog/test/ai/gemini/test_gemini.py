@@ -318,3 +318,62 @@ def test_new_client_override_defaults(
     assert props["team"] == "ai"  # from defaults
     assert props["feature"] == "chat"  # from call
     assert props["urgent"] is True  # from call
+
+
+def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_response):
+    """Test that tools defined in config are captured in $ai_tools property"""
+    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    # Create mock tools configuration
+    mock_tool = MagicMock()
+    mock_tool.function_declarations = [
+        MagicMock(
+            name="get_current_weather",
+            description="Gets the current weather for a given location.",
+            parameters=MagicMock(
+                type="OBJECT",
+                properties={
+                    "location": MagicMock(
+                        type="STRING",
+                        description="The city and state, e.g. San Francisco, CA"
+                    )
+                },
+                required=["location"]
+            )
+        )
+    ]
+
+    mock_config = MagicMock()
+    mock_config.tools = [mock_tool]
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=["hey"],
+        config=mock_config,
+        posthog_distinct_id="test-id",
+        posthog_properties={"foo": "bar"},
+    )
+
+    assert response == mock_gemini_response
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_model"] == "gemini-2.5-flash"
+    assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+    assert props["$ai_output_choices"] == [
+        {"role": "assistant", "content": "Test response from Gemini"}
+    ]
+    assert props["$ai_input_tokens"] == 20
+    assert props["$ai_output_tokens"] == 10
+    assert props["$ai_http_status"] == 200
+    assert props["foo"] == "bar"
+    assert isinstance(props["$ai_latency"], float)
+    # Verify that tools are captured in the $ai_tools property
+    assert props["$ai_tools"] == [mock_tool]

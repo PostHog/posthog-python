@@ -11,6 +11,7 @@ except ImportError:
 
 from posthog.ai.utils import (
     call_llm_and_track_usage,
+    extract_available_tool_calls,
     get_model_params,
     with_privacy_mode,
 )
@@ -167,6 +168,7 @@ class WrappedResponses:
                     usage_stats,
                     latency,
                     output,
+                    extract_available_tool_calls("openai", kwargs),
                 )
 
         return generator()
@@ -341,7 +343,6 @@ class WrappedCompletions:
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
-        accumulated_tools = {}
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
@@ -350,7 +351,6 @@ class WrappedCompletions:
         def generator():
             nonlocal usage_stats
             nonlocal accumulated_content  # noqa: F824
-            nonlocal accumulated_tools  # noqa: F824
 
             try:
                 for chunk in response:
@@ -389,31 +389,12 @@ class WrappedCompletions:
                             if content:
                                 accumulated_content.append(content)
 
-                        # Process tool calls
-                        tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None)
-                        if tool_calls:
-                            for tool_call in tool_calls:
-                                index = tool_call.index
-                                if index not in accumulated_tools:
-                                    accumulated_tools[index] = tool_call
-                                else:
-                                    # Append arguments for existing tool calls
-                                    if hasattr(tool_call, "function") and hasattr(
-                                        tool_call.function, "arguments"
-                                    ):
-                                        accumulated_tools[
-                                            index
-                                        ].function.arguments += (
-                                            tool_call.function.arguments
-                                        )
-
                     yield chunk
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                tools = list(accumulated_tools.values()) if accumulated_tools else None
                 self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -424,7 +405,7 @@ class WrappedCompletions:
                     usage_stats,
                     latency,
                     output,
-                    tools,
+                    extract_available_tool_calls("openai", kwargs),
                 )
 
         return generator()

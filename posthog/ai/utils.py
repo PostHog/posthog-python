@@ -228,41 +228,22 @@ def format_response_gemini(response):
     return output
 
 
-def format_tool_calls(response, provider: str):
+def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     if provider == "anthropic":
-        if hasattr(response, "content") and response.content:
-            tool_calls = []
+        if "tools" in kwargs:
+            return kwargs["tools"]
 
-            for content_item in response.content:
-                if hasattr(content_item, "type") and content_item.type == "tool_use":
-                    tool_calls.append(
-                        {
-                            "type": content_item.type,
-                            "id": content_item.id,
-                            "name": content_item.name,
-                            "input": content_item.input,
-                        }
-                    )
+        return None
+    elif provider == "gemini":
+        if "config" in kwargs and hasattr(kwargs["config"], "tools"):
+            return kwargs["config"].tools
 
-            return tool_calls if tool_calls else None
+        return None
     elif provider == "openai":
-        # Handle both Chat Completions and Responses API
-        if hasattr(response, "choices") and response.choices:
-            # Check for tool_calls in message (Chat Completions format)
-            if (
-                hasattr(response.choices[0], "message")
-                and hasattr(response.choices[0].message, "tool_calls")
-                and response.choices[0].message.tool_calls
-            ):
-                return response.choices[0].message.tool_calls
+        if "tools" in kwargs:
+            return kwargs["tools"]
 
-            # Check for tool_calls directly in response (Responses API format)
-            if (
-                hasattr(response.choices[0], "tool_calls")
-                and response.choices[0].tool_calls
-            ):
-                return response.choices[0].tool_calls
-    return None
+        return None
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
@@ -395,11 +376,11 @@ def call_llm_and_track_usage(
             **(error_params or {}),
         }
 
-        tool_calls = format_tool_calls(response, provider)
+        available_tool_calls = extract_available_tool_calls(provider, kwargs)
 
-        if tool_calls:
+        if available_tool_calls:
             event_properties["$ai_tools"] = with_privacy_mode(
-                ph_client, posthog_privacy_mode, tool_calls
+                ph_client, posthog_privacy_mode, available_tool_calls
             )
 
         if (
@@ -511,10 +492,11 @@ async def call_llm_and_track_usage_async(
             **(error_params or {}),
         }
 
-        tool_calls = format_tool_calls(response, provider)
-        if tool_calls:
+        available_tool_calls = extract_available_tool_calls(provider, kwargs)
+
+        if available_tool_calls:
             event_properties["$ai_tools"] = with_privacy_mode(
-                ph_client, posthog_privacy_mode, tool_calls
+                ph_client, posthog_privacy_mode, available_tool_calls
             )
 
         if (

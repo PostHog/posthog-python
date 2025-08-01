@@ -478,21 +478,17 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
             {"role": "assistant", "content": "I'll check the weather for you."}
         ]
 
-        # Check that tool calls are properly captured
+        # Check that defined tools are properly captured in $ai_tools
         assert "$ai_tools" in props
-        tool_calls = props["$ai_tools"]
-        assert len(tool_calls) == 1
+        defined_tools = props["$ai_tools"]
+        assert len(defined_tools) == 1
 
-        # Verify the tool call details
-        tool_call = tool_calls[0]
-        assert tool_call.id == "call_abc123"
-        assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
-
-        # Verify the arguments
-        arguments = tool_call.function.arguments
-        parsed_args = json.loads(arguments)
-        assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
+        # Verify the defined tool details
+        defined_tool = defined_tools[0]
+        assert defined_tool["type"] == "function"
+        assert defined_tool["function"]["name"] == "get_weather"
+        assert defined_tool["function"]["description"] == "Get weather"
+        assert defined_tool["function"]["parameters"] == {}
 
         # Check token usage
         assert props["$ai_input_tokens"] == 20
@@ -644,21 +640,17 @@ def test_streaming_with_tool_calls(mock_client):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
 
-        # Check that the tool calls were properly accumulated
+        # Check that defined tools are properly captured in $ai_tools
         assert "$ai_tools" in props
-        tool_calls = props["$ai_tools"]
-        assert len(tool_calls) == 1
+        defined_tools = props["$ai_tools"]
+        assert len(defined_tools) == 1
 
-        # Verify the complete tool call was properly assembled
-        tool_call = tool_calls[0]
-        assert tool_call.id == "call_abc123"
-        assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
-
-        # Verify the arguments were concatenated correctly
-        arguments = tool_call.function.arguments
-        parsed_args = json.loads(arguments)
-        assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
+        # Verify the defined tool details
+        defined_tool = defined_tools[0]
+        assert defined_tool["type"] == "function"
+        assert defined_tool["function"]["name"] == "get_weather"
+        assert defined_tool["function"]["description"] == "Get weather"
+        assert defined_tool["function"]["parameters"] == {}
 
         # Check that the content was also accumulated
         assert (
@@ -774,3 +766,63 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_tool_definition(mock_client, mock_openai_response):
+    """Test that tools defined in the create function are captured in $ai_tools property"""
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        
+        # Define tools to be passed to the create function
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather for a specific location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city or location name to get weather for"
+                            }
+                        },
+                        "required": ["location"]
+                    }
+                }
+            }
+        ]
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hey"}],
+            tools=tools,
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4o-mini"
+        assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+        assert props["$ai_output_choices"] == [
+            {"role": "assistant", "content": "Test response"}
+        ]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+        # Verify that tools are captured in the $ai_tools property
+        assert props["$ai_tools"] == tools

@@ -556,6 +556,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
         }
+
         if run.tools:
             event_properties["$ai_tools"] = with_privacy_mode(
                 self._ph_client,
