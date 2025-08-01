@@ -1796,7 +1796,7 @@ def test_tool_definition(mock_client):
     """Test that tools defined in invocation parameters are captured in $ai_tools property"""
     callbacks = CallbackHandler(mock_client)
     run_id = uuid.uuid4()
-    
+
     # Define tools to be passed to the invocation parameters
     tools = [
         {
@@ -1809,15 +1809,15 @@ def test_tool_definition(mock_client):
                     "properties": {
                         "location": {
                             "type": "string",
-                            "description": "The city or location name to get weather for"
+                            "description": "The city or location name to get weather for",
                         }
                     },
-                    "required": ["location"]
-                }
-            }
+                    "required": ["location"],
+                },
+            },
         }
     ]
-    
+
     with patch("time.time", return_value=1234567890):
         callbacks._set_llm_metadata(
             {"kwargs": {"openai_api_base": "https://api.openai.com/v1"}},
@@ -1827,7 +1827,7 @@ def test_tool_definition(mock_client):
             metadata={"ls_model_name": "gpt-4o-mini", "ls_provider": "openai"},
             name="test",
         )
-    
+
     expected = GenerationMetadata(
         model="gpt-4o-mini",
         input=[{"role": "user", "content": "hey"}],
@@ -1840,17 +1840,17 @@ def test_tool_definition(mock_client):
         end_time=None,
     )
     assert callbacks._runs[run_id] == expected
-    
+
     with patch("time.time", return_value=1234567891):
         run = callbacks._pop_run_metadata(run_id)
     expected.end_time = 1234567891
     assert run == expected
     assert callbacks._runs == {}
-    
+
     # Now test that the tools are properly captured in the PostHog event
     mock_response = MagicMock()
     mock_response.generations = [[MagicMock()]]
-    
+
     callbacks._capture_generation(
         trace_id=run_id,
         run_id=run_id,
@@ -1858,11 +1858,11 @@ def test_tool_definition(mock_client):
         output=mock_response,
         parent_run_id=None,
     )
-    
+
     assert mock_client.capture.call_count == 1
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
-    
+
     assert call_args["distinct_id"] == run_id
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "openai"

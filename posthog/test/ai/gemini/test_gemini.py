@@ -337,11 +337,11 @@ def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_re
                 properties={
                     "location": MagicMock(
                         type="STRING",
-                        description="The city and state, e.g. San Francisco, CA"
+                        description="The city and state, e.g. San Francisco, CA",
                     )
                 },
-                required=["location"]
-            )
+                required=["location"],
+            ),
         )
     ]
 

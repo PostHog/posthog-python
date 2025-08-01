@@ -442,7 +442,7 @@ def test_tool_definition(mock_client, mock_anthropic_response):
         return_value=mock_anthropic_response,
     ):
         client = Anthropic(api_key="test-key", posthog_client=mock_client)
-        
+
         tools = [
             {
                 "name": "get_weather",
@@ -452,14 +452,14 @@ def test_tool_definition(mock_client, mock_anthropic_response):
                     "properties": {
                         "location": {
                             "type": "string",
-                            "description": "The city or location name to get weather for"
+                            "description": "The city or location name to get weather for",
                         }
                     },
-                    "required": ["location"]
-                }
+                    "required": ["location"],
+                },
             }
         ]
-        
+
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=200,

@@ -775,7 +775,7 @@ def test_tool_definition(mock_client, mock_openai_response):
         return_value=mock_openai_response,
     ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
-        
+
         # Define tools to be passed to the create function
         tools = [
             {
@@ -788,15 +788,15 @@ def test_tool_definition(mock_client, mock_openai_response):
                         "properties": {
                             "location": {
                                 "type": "string",
-                                "description": "The city or location name to get weather for"
+                                "description": "The city or location name to get weather for",
                             }
                         },
-                        "required": ["location"]
-                    }
-                }
+                        "required": ["location"],
+                    },
+                },
             }
         ]
-        
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hey"}],
