@@ -457,12 +457,6 @@ if __name__ == "__main__":
         print(f"   • {classes_count} classes documented")
         print(f"   • {total_functions} functions documented")
 
-        no_docs = documentation["noDocsTypes"]
-        if no_docs:
-            print(
-                f"   • {len(no_docs)} types without documentation: {', '.join(no_docs[:5])}{'...' if len(no_docs) > 5 else ''}"
-            )
-
     except Exception as e:
         print(f"❌ Error generating documentation: {e}")
         import traceback
