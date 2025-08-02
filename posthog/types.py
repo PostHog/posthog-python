@@ -110,7 +110,7 @@ class FeatureFlag:
             variant=variant,
             reason=None,
             metadata=LegacyFlagMetadata(
-                payload=payload if payload else None,
+                payload=payload,
             ),
         )
 
@@ -178,7 +178,9 @@ class FeatureFlagResult:
             key=key,
             enabled=enabled,
             variant=variant,
-            payload=json.loads(payload) if isinstance(payload, str) else payload,
+            payload=json.loads(payload)
+            if isinstance(payload, str) and payload
+            else payload,
             reason=None,
         )
 
@@ -219,6 +221,7 @@ class FeatureFlagResult:
             payload=(
                 json.loads(details.metadata.payload)
                 if isinstance(details.metadata.payload, str)
+                and details.metadata.payload
                 else details.metadata.payload
             ),
             reason=details.reason.description if details.reason else None,
@@ -296,5 +299,7 @@ def to_payloads(response: FlagsResponse) -> Optional[dict[str, str]]:
     return {
         key: value.metadata.payload
         for key, value in response.get("flags", {}).items()
-        if isinstance(value, FeatureFlag) and value.enabled and value.metadata.payload
+        if isinstance(value, FeatureFlag)
+        and value.enabled
+        and value.metadata.payload is not None
     }
