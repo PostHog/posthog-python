@@ -117,10 +117,10 @@ def format_response(response, provider: str):
 
 def format_response_anthropic(response):
     output = []
-    
+
     content_text = ""
     tool_calls = []
-    
+
     for choice in response.content:
         if (
             hasattr(choice, "type")
@@ -145,7 +145,7 @@ def format_response_anthropic(response):
             }
 
             tool_calls.append(tool_call)
-    
+
     if content_text or tool_calls:
         message = {
             "role": "assistant",
@@ -156,7 +156,7 @@ def format_response_anthropic(response):
             message["tool_calls"] = tool_calls
 
         output.append(message)
-    
+
     return output
 
 
@@ -171,20 +171,22 @@ def format_response_openai(response):
                     "role": choice.message.role,
                     "content": choice.message.content,
                 }
-                
+
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     tool_calls = []
                     for tool_call in choice.message.tool_calls:
-                        tool_calls.append({
-                            "type": "function",
-                            "id": tool_call.id,
-                            "function": {
-                                "name": tool_call.function.name,
-                                "arguments": tool_call.function.arguments,
-                            },
-                        })
+                        tool_calls.append(
+                            {
+                                "type": "function",
+                                "id": tool_call.id,
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        )
                     message["tool_calls"] = tool_calls
-                
+
                 output.append(message)
 
     # Handle Responses API format
@@ -193,7 +195,7 @@ def format_response_openai(response):
         tool_calls = []
         images = []
         role = "assistant"
-        
+
         for item in response.output:
             if item.type == "message":
                 role = item.role
@@ -213,13 +215,15 @@ def format_response_openai(response):
                             and content_item.type == "input_image"
                             and hasattr(content_item, "image_url")
                         ):
-                            images.append({
-                                "type": "image",
-                                "image": content_item.image_url,
-                            })
+                            images.append(
+                                {
+                                    "type": "image",
+                                    "image": content_item.image_url,
+                                }
+                            )
                 elif hasattr(item, "content"):
                     content_text += str(item.content)
-            
+
             elif hasattr(item, "type") and item.type == "function_call":
                 tool_call = {
                     "type": "function",
@@ -231,7 +235,7 @@ def format_response_openai(response):
                 }
 
                 tool_calls.append(tool_call)
-        
+
         if content_text or tool_calls:
             message = {
                 "role": role,
@@ -242,12 +246,14 @@ def format_response_openai(response):
                 message["tool_calls"] = tool_calls
 
             output.append(message)
-        
+
         for image in images:
-            output.append({
-                "content": image,
-                "role": role,
-            })
+            output.append(
+                {
+                    "content": image,
+                    "role": role,
+                }
+            )
 
     return output
 
@@ -260,7 +266,7 @@ def format_response_gemini(response):
             if hasattr(candidate, "content") and candidate.content:
                 content_text = ""
                 tool_calls = []
-                
+
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
@@ -277,7 +283,7 @@ def format_response_gemini(response):
                             }
 
                             tool_calls.append(tool_call)
-                
+
                 if content_text or tool_calls:
                     message = {
                         "role": "assistant",
@@ -288,7 +294,7 @@ def format_response_gemini(response):
                         message["tool_calls"] = tool_calls
 
                     output.append(message)
-                    
+
             elif hasattr(candidate, "text") and candidate.text:
                 output.append(
                     {

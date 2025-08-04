@@ -100,8 +100,8 @@ def mock_anthropic_response_with_tool_calls():
                 "type": "tool_use",
                 "id": "toolu_abc123",
                 "name": "get_weather",
-                "input": {"location": "San Francisco"}
-            }
+                "input": {"location": "San Francisco"},
+            },
         ],
         model="claude-3-5-sonnet-20241022",
         usage=Usage(
@@ -124,7 +124,7 @@ def mock_anthropic_response_tool_calls_only():
                 "type": "tool_use",
                 "id": "toolu_def456",
                 "name": "get_weather",
-                "input": {"location": "New York", "unit": "fahrenheit"}
+                "input": {"location": "New York", "unit": "fahrenheit"},
             }
         ],
         model="claude-3-5-sonnet-20241022",
@@ -542,7 +542,9 @@ def test_tool_definition(mock_client, mock_anthropic_response):
         assert props["$ai_tools"] == tools
 
 
-def test_tool_calls_in_output_choices(mock_client, mock_anthropic_response_with_tool_calls):
+def test_tool_calls_in_output_choices(
+    mock_client, mock_anthropic_response_with_tool_calls
+):
     with patch(
         "anthropic.resources.Messages.create",
         return_value=mock_anthropic_response_with_tool_calls,
@@ -560,10 +562,8 @@ def test_tool_calls_in_output_choices(mock_client, mock_anthropic_response_with_
                     "description": "Get weather",
                     "input_schema": {
                         "type": "object",
-                        "properties": {
-                            "location": {"type": "string"}
-                        },
-                        "required": ["location"]
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
                     },
                 }
             ],
@@ -590,10 +590,10 @@ def test_tool_calls_in_output_choices(mock_client, mock_anthropic_response_with_
                         "id": "toolu_abc123",
                         "function": {
                             "name": "get_weather",
-                            "arguments": {"location": "San Francisco"}
-                        }
+                            "arguments": {"location": "San Francisco"},
+                        },
                     }
-                ]
+                ],
             }
         ]
 
@@ -603,7 +603,9 @@ def test_tool_calls_in_output_choices(mock_client, mock_anthropic_response_with_
         assert props["$ai_http_status"] == 200
 
 
-def test_tool_calls_only_no_content(mock_client, mock_anthropic_response_tool_calls_only):
+def test_tool_calls_only_no_content(
+    mock_client, mock_anthropic_response_tool_calls_only
+):
     with patch(
         "anthropic.resources.Messages.create",
         return_value=mock_anthropic_response_tool_calls_only,
@@ -612,9 +614,7 @@ def test_tool_calls_only_no_content(mock_client, mock_anthropic_response_tool_ca
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=200,
-            messages=[
-                {"role": "user", "content": "Get weather for New York"}
-            ],
+            messages=[{"role": "user", "content": "Get weather for New York"}],
             tools=[
                 {
                     "name": "get_weather",
@@ -623,9 +623,9 @@ def test_tool_calls_only_no_content(mock_client, mock_anthropic_response_tool_ca
                         "type": "object",
                         "properties": {
                             "location": {"type": "string"},
-                            "unit": {"type": "string"}
+                            "unit": {"type": "string"},
                         },
-                        "required": ["location"]
+                        "required": ["location"],
                     },
                 }
             ],
@@ -652,10 +652,10 @@ def test_tool_calls_only_no_content(mock_client, mock_anthropic_response_tool_ca
                         "id": "toolu_def456",
                         "function": {
                             "name": "get_weather",
-                            "arguments": {"location": "New York", "unit": "fahrenheit"}
-                        }
+                            "arguments": {"location": "New York", "unit": "fahrenheit"},
+                        },
                     }
-                ]
+                ],
             }
         ]
 
@@ -665,18 +665,20 @@ def test_tool_calls_only_no_content(mock_client, mock_anthropic_response_tool_ca
         assert props["$ai_http_status"] == 200
 
 
-def test_async_tool_calls_in_output_choices(mock_client, mock_anthropic_response_with_tool_calls):
+def test_async_tool_calls_in_output_choices(
+    mock_client, mock_anthropic_response_with_tool_calls
+):
     import asyncio
-    
+
     async def mock_async_create(**kwargs):
         return mock_anthropic_response_with_tool_calls
-    
+
     with patch(
         "anthropic.resources.AsyncMessages.create",
         side_effect=mock_async_create,
     ):
         async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
-        
+
         async def run_test():
             return await async_client.messages.create(
                 model="claude-3-5-sonnet-20241022",
@@ -690,16 +692,14 @@ def test_async_tool_calls_in_output_choices(mock_client, mock_anthropic_response
                         "description": "Get weather",
                         "input_schema": {
                             "type": "object",
-                            "properties": {
-                                "location": {"type": "string"}
-                            },
-                            "required": ["location"]
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
                         },
                     }
                 ],
                 posthog_distinct_id="test-id",
             )
-        
+
         response = asyncio.run(run_test())
 
         assert response == mock_anthropic_response_with_tool_calls
@@ -722,10 +722,10 @@ def test_async_tool_calls_in_output_choices(mock_client, mock_anthropic_response
                         "id": "toolu_abc123",
                         "function": {
                             "name": "get_weather",
-                            "arguments": {"location": "San Francisco"}
-                        }
+                            "arguments": {"location": "San Francisco"},
+                        },
                     }
-                ]
+                ],
             }
         ]
 

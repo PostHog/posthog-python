@@ -584,7 +584,8 @@ class CallbackHandler(BaseCallbackHandler):
                 ]
             else:
                 completions = [
-                    _extract_raw_response(generation) for generation in generation_result
+                    _extract_raw_response(generation)
+                    for generation in generation_result
                 ]
             event_properties["$ai_output_choices"] = with_privacy_mode(
                 self._ph_client, self._privacy_mode, completions

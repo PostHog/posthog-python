@@ -562,7 +562,7 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         ]
         assert props["$ai_output_choices"] == [
             {
-                "role": "assistant", 
+                "role": "assistant",
                 "content": "I'll check the weather for you.",
                 "tool_calls": [
                     {
@@ -570,10 +570,10 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
                         "id": "call_abc123",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "San Francisco", "unit": "celsius"}'
-                        }
+                            "arguments": '{"location": "San Francisco", "unit": "celsius"}',
+                        },
                     }
-                ]
+                ],
             }
         ]
 
@@ -603,9 +603,7 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=[
-                {"role": "user", "content": "Get weather for New York"}
-            ],
+            messages=[{"role": "user", "content": "Get weather for New York"}],
             tools=[
                 {
                     "type": "function",
@@ -631,7 +629,7 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_output_choices"] == [
             {
-                "role": "assistant", 
+                "role": "assistant",
                 "content": None,
                 "tool_calls": [
                     {
@@ -639,10 +637,10 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
                         "id": "call_def456",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "New York"}'
-                        }
+                            "arguments": '{"location": "New York"}',
+                        },
                     }
-                ]
+                ],
             }
         ]
 
@@ -660,9 +658,7 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         response = client.responses.create(
             model="gpt-4o-mini",
-            input=[
-                {"role": "user", "content": "What's the weather in Chicago?"}
-            ],
+            input=[{"role": "user", "content": "What's the weather in Chicago?"}],
             tools=[
                 {
                     "name": "get_weather",
@@ -689,7 +685,7 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_output_choices"] == [
             {
-                "role": "assistant", 
+                "role": "assistant",
                 "content": "I'll help you with the weather.",
                 "tool_calls": [
                     {
@@ -697,10 +693,10 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
                         "id": "call_xyz789",
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location": "Chicago"}'
-                        }
+                            "arguments": '{"location": "Chicago"}',
+                        },
                     }
-                ]
+                ],
             }
         ]
 
