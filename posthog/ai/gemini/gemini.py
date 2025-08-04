@@ -144,7 +144,7 @@ class Models:
         self._default_groups = posthog_groups
 
         # Build genai.Client arguments
-        client_args = {}
+        client_args: Dict[str, Any] = {}
 
         # Add Vertex AI parameters if provided
         if vertexai is not None:
