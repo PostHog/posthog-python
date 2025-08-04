@@ -117,6 +117,10 @@ def format_response(response, provider: str):
 
 def format_response_anthropic(response):
     output = []
+    
+    content_text = ""
+    tool_calls = []
+    
     for choice in response.content:
         if (
             hasattr(choice, "type")
@@ -124,32 +128,76 @@ def format_response_anthropic(response):
             and hasattr(choice, "text")
             and choice.text
         ):
-            output.append(
-                {
-                    "role": "assistant",
-                    "content": choice.text,
-                }
-            )
+            content_text += choice.text
+        elif (
+            hasattr(choice, "type")
+            and choice.type == "tool_use"
+            and hasattr(choice, "name")
+            and hasattr(choice, "id")
+        ):
+            tool_call = {
+                "type": "function",
+                "id": choice.id,
+                "function": {
+                    "name": choice.name,
+                    "arguments": getattr(choice, "input", {}),
+                },
+            }
+
+            tool_calls.append(tool_call)
+    
+    if content_text or tool_calls:
+        message = {
+            "role": "assistant",
+            "content": content_text if content_text else None,
+        }
+
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
+        output.append(message)
+    
     return output
 
 
 def format_response_openai(response):
     output = []
+
     if hasattr(response, "choices"):
         for choice in response.choices:
             # Handle Chat Completions response format
-            if hasattr(choice, "message") and choice.message and choice.message.content:
-                output.append(
-                    {
-                        "content": choice.message.content,
-                        "role": choice.message.role,
-                    }
-                )
+            if hasattr(choice, "message") and choice.message:
+                message = {
+                    "role": choice.message.role,
+                    "content": choice.message.content,
+                }
+                
+                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+                    tool_calls = []
+                    for tool_call in choice.message.tool_calls:
+                        tool_calls.append({
+                            "type": "function",
+                            "id": tool_call.id,
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments,
+                            },
+                        })
+                    message["tool_calls"] = tool_calls
+                
+                output.append(message)
+
     # Handle Responses API format
     if hasattr(response, "output"):
+        content_text = ""
+        tool_calls = []
+        images = []
+        role = "assistant"
+        
         for item in response.output:
             if item.type == "message":
-                # Extract text content from the content list
+                role = item.role
+
                 if hasattr(item, "content") and isinstance(item.content, list):
                     for content_item in item.content:
                         if (
@@ -157,60 +205,90 @@ def format_response_openai(response):
                             and content_item.type == "output_text"
                             and hasattr(content_item, "text")
                         ):
-                            output.append(
-                                {
-                                    "content": content_item.text,
-                                    "role": item.role,
-                                }
-                            )
+                            content_text += content_item.text
                         elif hasattr(content_item, "text"):
-                            output.append(
-                                {
-                                    "content": content_item.text,
-                                    "role": item.role,
-                                }
-                            )
+                            content_text += content_item.text
                         elif (
                             hasattr(content_item, "type")
                             and content_item.type == "input_image"
                             and hasattr(content_item, "image_url")
                         ):
-                            output.append(
-                                {
-                                    "content": {
-                                        "type": "image",
-                                        "image": content_item.image_url,
-                                    },
-                                    "role": item.role,
-                                }
-                            )
-                else:
-                    output.append(
-                        {
-                            "content": item.content,
-                            "role": item.role,
-                        }
-                    )
+                            images.append({
+                                "type": "image",
+                                "image": content_item.image_url,
+                            })
+                elif hasattr(item, "content"):
+                    content_text += str(item.content)
+            
+            elif hasattr(item, "type") and item.type == "function_call":
+                tool_call = {
+                    "type": "function",
+                    "id": getattr(item, "call_id", getattr(item, "id", "")),
+                    "function": {
+                        "name": item.name,
+                        "arguments": getattr(item, "arguments", {}),
+                    },
+                }
+
+                tool_calls.append(tool_call)
+        
+        if content_text or tool_calls:
+            message = {
+                "role": role,
+                "content": content_text if content_text else None,
+            }
+
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+
+            output.append(message)
+        
+        for image in images:
+            output.append({
+                "content": image,
+                "role": role,
+            })
+
     return output
 
 
 def format_response_gemini(response):
     output = []
+
     if hasattr(response, "candidates") and response.candidates:
         for candidate in response.candidates:
             if hasattr(candidate, "content") and candidate.content:
                 content_text = ""
+                tool_calls = []
+                
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
                             content_text += part.text
-                if content_text:
-                    output.append(
-                        {
-                            "role": "assistant",
-                            "content": content_text,
-                        }
-                    )
+                        elif hasattr(part, "function_call") and part.function_call:
+                            function_call = part.function_call
+
+                            tool_call = {
+                                "type": "function",
+                                "function": {
+                                    "name": function_call.name,
+                                    "arguments": function_call.args,
+                                },
+                            }
+
+                            tool_calls.append(tool_call)
+                
+                if content_text or tool_calls:
+                    message = {
+                        "role": "assistant",
+                        "content": content_text if content_text else None,
+                    }
+
+                    if tool_calls:
+                        message["tool_calls"] = tool_calls
+
+                    output.append(message)
+                    
             elif hasattr(candidate, "text") and candidate.text:
                 output.append(
                     {
@@ -225,6 +303,7 @@ def format_response_gemini(response):
                 "content": response.text,
             }
         )
+
     return output
 
 

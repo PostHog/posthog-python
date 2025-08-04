@@ -56,6 +56,82 @@ def mock_google_genai_client():
         yield mock_client_instance
 
 
+@pytest.fixture
+def mock_gemini_response_with_function_calls():
+    mock_response = MagicMock()
+    
+    # Mock usage metadata
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 25
+    mock_usage.candidates_token_count = 15
+    mock_response.usage_metadata = mock_usage
+    
+    # Mock function call
+    mock_function_call = MagicMock()
+    mock_function_call.name = "get_current_weather"
+    mock_function_call.args = {"location": "San Francisco"}
+    
+    # Mock text part - need to ensure hasattr() works correctly
+    mock_text_part = MagicMock()
+    mock_text_part.text = "I'll check the weather for you."
+    # Make hasattr(part, "text") return True
+    type(mock_text_part).text = mock_text_part.text
+    
+    # Mock function call part - need to ensure hasattr() works correctly
+    mock_function_part = MagicMock()
+    mock_function_part.function_call = mock_function_call
+    # Make hasattr(part, "function_call") return True
+    type(mock_function_part).function_call = mock_function_part.function_call
+    # Ensure hasattr(part, "text") returns False for the function part
+    del mock_function_part.text
+    
+    # Mock content with both text and function call parts
+    mock_content = MagicMock()
+    mock_content.parts = [mock_text_part, mock_function_part]
+    
+    # Mock candidate
+    mock_candidate = MagicMock()
+    mock_candidate.content = mock_content
+    mock_response.candidates = [mock_candidate]
+    
+    return mock_response
+
+
+@pytest.fixture
+def mock_gemini_response_function_calls_only():
+    mock_response = MagicMock()
+    
+    # Mock usage metadata
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 30
+    mock_usage.candidates_token_count = 12
+    mock_response.usage_metadata = mock_usage
+    
+    # Mock function call
+    mock_function_call = MagicMock()
+    mock_function_call.name = "get_current_weather"
+    mock_function_call.args = {"location": "New York", "unit": "fahrenheit"}
+    
+    # Mock function call part (no text part) - need to ensure hasattr() works correctly
+    mock_function_part = MagicMock()
+    mock_function_part.function_call = mock_function_call
+    # Make hasattr(part, "function_call") return True
+    type(mock_function_part).function_call = mock_function_part.function_call
+    # Ensure hasattr(part, "text") returns False for the function part
+    del mock_function_part.text
+    
+    # Mock content with only function call part
+    mock_content = MagicMock()
+    mock_content.parts = [mock_function_part]
+    
+    # Mock candidate
+    mock_candidate = MagicMock()
+    mock_candidate.content = mock_content
+    mock_response.candidates = [mock_candidate]
+    
+    return mock_response
+
+
 def test_new_client_basic_generation(
     mock_client, mock_google_genai_client, mock_gemini_response
 ):
@@ -377,3 +453,91 @@ def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_re
     assert isinstance(props["$ai_latency"], float)
     # Verify that tools are captured in the $ai_tools property
     assert props["$ai_tools"] == [mock_tool]
+
+
+def test_function_calls_in_output_choices(mock_client, mock_google_genai_client, mock_gemini_response_with_function_calls):
+    """Test that function calls are properly included in $ai_output_choices"""
+    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response_with_function_calls
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=["What's the weather in San Francisco?"],
+        posthog_distinct_id="test-id",
+    )
+
+    assert response == mock_gemini_response_with_function_calls
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_model"] == "gemini-2.5-flash"
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": "I'll check the weather for you.",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "arguments": {"location": "San Francisco"}
+                    }
+                }
+            ]
+        }
+    ]
+
+    # Check token usage
+    assert props["$ai_input_tokens"] == 25
+    assert props["$ai_output_tokens"] == 15
+    assert props["$ai_http_status"] == 200
+
+
+def test_function_calls_only_no_content(mock_client, mock_google_genai_client, mock_gemini_response_function_calls_only):
+    """Test function calls without text content in $ai_output_choices"""
+    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response_function_calls_only
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=["Get weather for New York"],
+        posthog_distinct_id="test-id",
+    )
+
+    assert response == mock_gemini_response_function_calls_only
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_model"] == "gemini-2.5-flash"
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "arguments": {"location": "New York", "unit": "fahrenheit"}
+                    }
+                }
+            ]
+        }
+    ]
+
+    # Check token usage
+    assert props["$ai_input_tokens"] == 30
+    assert props["$ai_output_tokens"] == 12
+    assert props["$ai_http_status"] == 200
