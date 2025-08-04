@@ -320,10 +320,12 @@ def test_new_client_override_defaults(
     assert props["urgent"] is True  # from call
 
 
-def test_vertex_ai_parameters_passed_through(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_vertex_ai_parameters_passed_through(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test that Vertex AI parameters are properly passed to genai.Client"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
-    
+
     # Mock credentials object
     mock_credentials = MagicMock()
     mock_debug_config = MagicMock()
@@ -347,13 +349,13 @@ def test_vertex_ai_parameters_passed_through(mock_client, mock_google_genai_clie
         project="test-project",
         location="us-central1",
         debug_config=mock_debug_config,
-        http_options=mock_http_options
+        http_options=mock_http_options,
     )
 
 
 def test_api_key_mode(mock_client, mock_google_genai_client):
     """Test API key authentication mode"""
-    
+
     # Create client with just API key (traditional mode)
     Client(
         api_key="test-api-key",
@@ -364,10 +366,12 @@ def test_api_key_mode(mock_client, mock_google_genai_client):
     google_genai.Client.assert_called_once_with(api_key="test-api-key")
 
 
-def test_vertex_ai_mode_with_optional_api_key(mock_client, mock_google_genai_client, mock_gemini_response):
+def test_vertex_ai_mode_with_optional_api_key(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
     """Test Vertex AI mode with optional API key"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
-    
+
     mock_credentials = MagicMock()
 
     # Create client with Vertex AI + API key
@@ -384,5 +388,5 @@ def test_vertex_ai_mode_with_optional_api_key(mock_client, mock_google_genai_cli
         vertexai=True,
         api_key="test-api-key",
         credentials=mock_credentials,
-        project="test-project"
+        project="test-project",
     )

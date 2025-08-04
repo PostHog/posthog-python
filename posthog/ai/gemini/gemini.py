@@ -145,7 +145,7 @@ class Models:
 
         # Build genai.Client arguments
         client_args = {}
-        
+
         # Add Vertex AI parameters if provided
         if vertexai is not None:
             client_args["vertexai"] = vertexai
