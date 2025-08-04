@@ -147,7 +147,7 @@ def format_response_anthropic(response):
             tool_calls.append(tool_call)
 
     if content_text or tool_calls:
-        message = {
+        message: Dict[str, Any] = {
             "role": "assistant",
             "content": content_text if content_text else None,
         }
@@ -285,7 +285,7 @@ def format_response_gemini(response):
                             tool_calls.append(tool_call)
 
                 if content_text or tool_calls:
-                    message = {
+                    message: Dict[str, Any] = {
                         "role": "assistant",
                         "content": content_text if content_text else None,
                     }
