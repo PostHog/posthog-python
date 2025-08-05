@@ -1,4 +1,3 @@
-import json
 import time
 from unittest.mock import patch
 
@@ -26,6 +25,7 @@ try:
         ResponseOutputMessage,
         ResponseOutputText,
         ResponseUsage,
+        ResponseFunctionToolCall,
         ParsedResponse,
     )
     from openai.types.responses.parsed_response import (
@@ -227,10 +227,26 @@ def mock_openai_response_with_tool_calls():
         created=int(time.time()),
         choices=[
             Choice(
-                finish_reason="tool_calls",
+                finish_reason="stop",
                 index=0,
                 message=ChatCompletionMessage(
                     content="I'll check the weather for you.",
+                    role="assistant",
+                ),
+            ),
+            Choice(
+                finish_reason="stop",
+                index=1,
+                message=ChatCompletionMessage(
+                    content=" Let me look that up.",
+                    role="assistant",
+                ),
+            ),
+            Choice(
+                finish_reason="tool_calls",
+                index=2,
+                message=ChatCompletionMessage(
+                    content=None,
                     role="assistant",
                     tool_calls=[
                         ChatCompletionMessageToolCall(
@@ -243,13 +259,104 @@ def mock_openai_response_with_tool_calls():
                         )
                     ],
                 ),
-            )
+            ),
         ],
         usage=CompletionUsage(
             completion_tokens=15,
             prompt_tokens=20,
             total_tokens=35,
         ),
+    )
+
+
+@pytest.fixture
+def mock_openai_response_tool_calls_only():
+    return ChatCompletion(
+        id="test",
+        model="gpt-4",
+        object="chat.completion",
+        created=int(time.time()),
+        choices=[
+            Choice(
+                finish_reason="tool_calls",
+                index=0,
+                message=ChatCompletionMessage(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_def456",
+                            type="function",
+                            function=Function(
+                                name="get_weather",
+                                arguments='{"location": "New York"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        usage=CompletionUsage(
+            completion_tokens=10,
+            prompt_tokens=25,
+            total_tokens=35,
+        ),
+    )
+
+
+@pytest.fixture
+def mock_responses_api_with_tool_calls():
+    return Response(
+        id="resp_123",
+        object="response",
+        created_at=int(time.time()),
+        model="gpt-4o-mini",
+        status="completed",
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        max_output_tokens=None,
+        tools=[],
+        tool_choice="auto",
+        parallel_tool_calls=True,
+        output=[
+            ResponseOutputMessage(
+                id="msg_456",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    ResponseOutputText(
+                        type="output_text",
+                        text="I'll help you with the weather.",
+                        annotations=[],
+                    ),
+                    ResponseOutputText(
+                        type="output_text",
+                        text=" Let me check that for you.",
+                        annotations=[],
+                    ),
+                ],
+            ),
+            ResponseFunctionToolCall(
+                id="fc_789",
+                type="function_call",
+                name="get_weather",
+                call_id="call_xyz789",
+                arguments='{"location": "Chicago"}',
+                status="completed",
+            ),
+        ],
+        usage=ResponseUsage(
+            input_tokens=30,
+            output_tokens=20,
+            input_tokens_details={"prompt_tokens": 30, "cached_tokens": 0},
+            output_tokens_details={"reasoning_tokens": 0},
+            total_tokens=50,
+        ),
+        previous_response_id=None,
+        user=None,
+        metadata={},
     )
 
 
@@ -278,7 +385,10 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -427,7 +537,10 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -475,28 +588,149 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
             {"role": "user", "content": "What's the weather in San Francisco?"}
         ]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "I'll check the weather for you."}
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll check the weather for you."},
+                    {"type": "text", "text": " Let me look that up."},
+                    {
+                        "type": "function",
+                        "id": "call_abc123",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "San Francisco", "unit": "celsius"}',
+                        },
+                    },
+                ],
+            }
         ]
 
-        # Check that tool calls are properly captured
+        # Check that defined tools are properly captured in $ai_tools
         assert "$ai_tools" in props
-        tool_calls = props["$ai_tools"]
-        assert len(tool_calls) == 1
+        defined_tools = props["$ai_tools"]
+        assert len(defined_tools) == 1
 
-        # Verify the tool call details
-        tool_call = tool_calls[0]
-        assert tool_call.id == "call_abc123"
-        assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
-
-        # Verify the arguments
-        arguments = tool_call.function.arguments
-        parsed_args = json.loads(arguments)
-        assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
+        # Verify the defined tool details
+        defined_tool = defined_tools[0]
+        assert defined_tool["type"] == "function"
+        assert defined_tool["function"]["name"] == "get_weather"
+        assert defined_tool["function"]["description"] == "Get weather"
+        assert defined_tool["function"]["parameters"] == {}
 
         # Check token usage
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 15
+        assert props["$ai_http_status"] == 200
+
+
+def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls_only):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response_tool_calls_only,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Get weather for New York"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {},
+                    },
+                }
+            ],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_openai_response_tool_calls_only
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4"
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "function",
+                        "id": "call_def456",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "New York"}',
+                        },
+                    }
+                ],
+            }
+        ]
+
+        # Check token usage
+        assert props["$ai_input_tokens"] == 25
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_http_status"] == 200
+
+
+def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_calls):
+    with patch(
+        "openai.resources.responses.Responses.create",
+        return_value=mock_responses_api_with_tool_calls,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": "What's the weather in Chicago?"}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {},
+                    },
+                }
+            ],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_responses_api_with_tool_calls
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4o-mini"
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll help you with the weather."},
+                    {"type": "text", "text": " Let me check that for you."},
+                    {
+                        "type": "function",
+                        "id": "call_xyz789",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "Chicago"}',
+                        },
+                    },
+                ],
+            }
+        ]
+
+        # Check token usage
+        assert props["$ai_input_tokens"] == 30
+        assert props["$ai_output_tokens"] == 20
         assert props["$ai_http_status"] == 200
 
 
@@ -644,21 +878,17 @@ def test_streaming_with_tool_calls(mock_client):
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
 
-        # Check that the tool calls were properly accumulated
+        # Check that defined tools are properly captured in $ai_tools
         assert "$ai_tools" in props
-        tool_calls = props["$ai_tools"]
-        assert len(tool_calls) == 1
+        defined_tools = props["$ai_tools"]
+        assert len(defined_tools) == 1
 
-        # Verify the complete tool call was properly assembled
-        tool_call = tool_calls[0]
-        assert tool_call.id == "call_abc123"
-        assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
-
-        # Verify the arguments were concatenated correctly
-        arguments = tool_call.function.arguments
-        parsed_args = json.loads(arguments)
-        assert parsed_args == {"location": "San Francisco", "unit": "celsius"}
+        # Verify the defined tool details
+        defined_tool = defined_tools[0]
+        assert defined_tool["type"] == "function"
+        assert defined_tool["function"]["name"] == "get_weather"
+        assert defined_tool["function"]["description"] == "Get weather"
+        assert defined_tool["function"]["parameters"] == {}
 
         # Check that the content was also accumulated
         assert (
@@ -696,7 +926,10 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
@@ -765,7 +998,12 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+                    }
+                ],
             }
         ]
         assert props["$ai_input_tokens"] == 15
@@ -774,3 +1012,66 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_tool_definition(mock_client, mock_openai_response):
+    """Test that tools defined in the create function are captured in $ai_tools property"""
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Define tools to be passed to the create function
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather for a specific location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city or location name to get weather for",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hey"}],
+            tools=tools,
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4o-mini"
+        assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
+        ]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+        # Verify that tools are captured in the $ai_tools property
+        assert props["$ai_tools"] == tools

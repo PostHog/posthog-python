@@ -117,6 +117,8 @@ def format_response(response, provider: str):
 
 def format_response_anthropic(response):
     output = []
+    content = []
+
     for choice in response.content:
         if (
             hasattr(choice, "type")
@@ -124,32 +126,78 @@ def format_response_anthropic(response):
             and hasattr(choice, "text")
             and choice.text
         ):
-            output.append(
-                {
-                    "role": "assistant",
-                    "content": choice.text,
-                }
-            )
+            content.append({"type": "text", "text": choice.text})
+        elif (
+            hasattr(choice, "type")
+            and choice.type == "tool_use"
+            and hasattr(choice, "name")
+            and hasattr(choice, "id")
+        ):
+            tool_call = {
+                "type": "function",
+                "id": choice.id,
+                "function": {
+                    "name": choice.name,
+                    "arguments": getattr(choice, "input", {}),
+                },
+            }
+            content.append(tool_call)
+
+    if content:
+        message = {
+            "role": "assistant",
+            "content": content,
+        }
+        output.append(message)
+
     return output
 
 
 def format_response_openai(response):
     output = []
+
     if hasattr(response, "choices"):
+        content = []
+        role = "assistant"
+
         for choice in response.choices:
             # Handle Chat Completions response format
-            if hasattr(choice, "message") and choice.message and choice.message.content:
-                output.append(
-                    {
-                        "content": choice.message.content,
-                        "role": choice.message.role,
-                    }
-                )
+            if hasattr(choice, "message") and choice.message:
+                if choice.message.role:
+                    role = choice.message.role
+
+                if choice.message.content:
+                    content.append({"type": "text", "text": choice.message.content})
+
+                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+                    for tool_call in choice.message.tool_calls:
+                        content.append(
+                            {
+                                "type": "function",
+                                "id": tool_call.id,
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        )
+
+        if content:
+            message = {
+                "role": role,
+                "content": content,
+            }
+            output.append(message)
+
     # Handle Responses API format
     if hasattr(response, "output"):
+        content = []
+        role = "assistant"
+
         for item in response.output:
             if item.type == "message":
-                # Extract text content from the content list
+                role = item.role
+
                 if hasattr(item, "content") and isinstance(item.content, list):
                     for content_item in item.content:
                         if (
@@ -157,112 +205,110 @@ def format_response_openai(response):
                             and content_item.type == "output_text"
                             and hasattr(content_item, "text")
                         ):
-                            output.append(
-                                {
-                                    "content": content_item.text,
-                                    "role": item.role,
-                                }
-                            )
+                            content.append({"type": "text", "text": content_item.text})
                         elif hasattr(content_item, "text"):
-                            output.append(
-                                {
-                                    "content": content_item.text,
-                                    "role": item.role,
-                                }
-                            )
+                            content.append({"type": "text", "text": content_item.text})
                         elif (
                             hasattr(content_item, "type")
                             and content_item.type == "input_image"
                             and hasattr(content_item, "image_url")
                         ):
-                            output.append(
+                            content.append(
                                 {
-                                    "content": {
-                                        "type": "image",
-                                        "image": content_item.image_url,
-                                    },
-                                    "role": item.role,
+                                    "type": "image",
+                                    "image": content_item.image_url,
                                 }
                             )
-                else:
-                    output.append(
-                        {
-                            "content": item.content,
-                            "role": item.role,
-                        }
-                    )
+                elif hasattr(item, "content"):
+                    content.append({"type": "text", "text": str(item.content)})
+
+            elif hasattr(item, "type") and item.type == "function_call":
+                content.append(
+                    {
+                        "type": "function",
+                        "id": getattr(item, "call_id", getattr(item, "id", "")),
+                        "function": {
+                            "name": item.name,
+                            "arguments": getattr(item, "arguments", {}),
+                        },
+                    }
+                )
+
+        if content:
+            message = {
+                "role": role,
+                "content": content,
+            }
+            output.append(message)
+
     return output
 
 
 def format_response_gemini(response):
     output = []
+
     if hasattr(response, "candidates") and response.candidates:
         for candidate in response.candidates:
             if hasattr(candidate, "content") and candidate.content:
-                content_text = ""
+                content = []
+
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
-                            content_text += part.text
-                if content_text:
-                    output.append(
-                        {
-                            "role": "assistant",
-                            "content": content_text,
-                        }
-                    )
+                            content.append({"type": "text", "text": part.text})
+                        elif hasattr(part, "function_call") and part.function_call:
+                            function_call = part.function_call
+                            content.append(
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_call.name,
+                                        "arguments": function_call.args,
+                                    },
+                                }
+                            )
+
+                if content:
+                    message = {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                    output.append(message)
+
             elif hasattr(candidate, "text") and candidate.text:
                 output.append(
                     {
                         "role": "assistant",
-                        "content": candidate.text,
+                        "content": [{"type": "text", "text": candidate.text}],
                     }
                 )
     elif hasattr(response, "text") and response.text:
         output.append(
             {
                 "role": "assistant",
-                "content": response.text,
+                "content": [{"type": "text", "text": response.text}],
             }
         )
+
     return output
 
 
-def format_tool_calls(response, provider: str):
+def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     if provider == "anthropic":
-        if hasattr(response, "content") and response.content:
-            tool_calls = []
+        if "tools" in kwargs:
+            return kwargs["tools"]
 
-            for content_item in response.content:
-                if hasattr(content_item, "type") and content_item.type == "tool_use":
-                    tool_calls.append(
-                        {
-                            "type": content_item.type,
-                            "id": content_item.id,
-                            "name": content_item.name,
-                            "input": content_item.input,
-                        }
-                    )
+        return None
+    elif provider == "gemini":
+        if "config" in kwargs and hasattr(kwargs["config"], "tools"):
+            return kwargs["config"].tools
 
-            return tool_calls if tool_calls else None
+        return None
     elif provider == "openai":
-        # Handle both Chat Completions and Responses API
-        if hasattr(response, "choices") and response.choices:
-            # Check for tool_calls in message (Chat Completions format)
-            if (
-                hasattr(response.choices[0], "message")
-                and hasattr(response.choices[0].message, "tool_calls")
-                and response.choices[0].message.tool_calls
-            ):
-                return response.choices[0].message.tool_calls
+        if "tools" in kwargs:
+            return kwargs["tools"]
 
-            # Check for tool_calls directly in response (Responses API format)
-            if (
-                hasattr(response.choices[0], "tool_calls")
-                and response.choices[0].tool_calls
-            ):
-                return response.choices[0].tool_calls
-    return None
+        return None
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
@@ -395,12 +441,10 @@ def call_llm_and_track_usage(
             **(error_params or {}),
         }
 
-        tool_calls = format_tool_calls(response, provider)
+        available_tool_calls = extract_available_tool_calls(provider, kwargs)
 
-        if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                ph_client, posthog_privacy_mode, tool_calls
-            )
+        if available_tool_calls:
+            event_properties["$ai_tools"] = available_tool_calls
 
         if (
             usage.get("cache_read_input_tokens") is not None
@@ -511,11 +555,10 @@ async def call_llm_and_track_usage_async(
             **(error_params or {}),
         }
 
-        tool_calls = format_tool_calls(response, provider)
-        if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                ph_client, posthog_privacy_mode, tool_calls
-            )
+        available_tool_calls = extract_available_tool_calls(provider, kwargs)
+
+        if available_tool_calls:
+            event_properties["$ai_tools"] = available_tool_calls
 
         if (
             usage.get("cache_read_input_tokens") is not None

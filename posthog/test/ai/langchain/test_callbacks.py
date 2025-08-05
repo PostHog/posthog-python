@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 from typing import List, Literal, Optional, TypedDict, Union
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -1790,3 +1790,89 @@ def test_convert_message_to_dict_tool_calls():
             },
         }
     ]
+
+
+def test_tool_definition(mock_client):
+    """Test that tools defined in invocation parameters are captured in $ai_tools property"""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    # Define tools to be passed to the invocation parameters
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a specific location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city or location name to get weather for",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com/v1"}},
+            run_id,
+            messages=[{"role": "user", "content": "hey"}],
+            invocation_params={"temperature": 0.7, "tools": tools},
+            metadata={"ls_model_name": "gpt-4o-mini", "ls_provider": "openai"},
+            name="test",
+        )
+
+    expected = GenerationMetadata(
+        model="gpt-4o-mini",
+        input=[{"role": "user", "content": "hey"}],
+        start_time=1234567890,
+        model_params={"temperature": 0.7},
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+        name="test",
+        tools=tools,
+        end_time=None,
+    )
+    assert callbacks._runs[run_id] == expected
+
+    with patch("time.time", return_value=1234567891):
+        run = callbacks._pop_run_metadata(run_id)
+    expected.end_time = 1234567891
+    assert run == expected
+    assert callbacks._runs == {}
+
+    # Now test that the tools are properly captured in the PostHog event
+    mock_response = MagicMock()
+    mock_response.generations = [[MagicMock()]]
+
+    callbacks._capture_generation(
+        trace_id=run_id,
+        run_id=run_id,
+        run=run,
+        output=mock_response,
+        parent_run_id=None,
+    )
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == run_id
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "gpt-4o-mini"
+    assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+    assert props["$ai_model_parameters"] == {"temperature": 0.7}
+    assert props["$ai_base_url"] == "https://api.openai.com/v1"
+    assert props["$ai_span_name"] == "test"
+    assert props["$ai_span_id"] == run_id
+    assert props["$ai_trace_id"] == run_id
+    assert props["$ai_latency"] == 1.0
+    # Verify that tools are captured in the $ai_tools property
+    assert props["$ai_tools"] == tools

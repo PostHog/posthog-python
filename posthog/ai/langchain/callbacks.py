@@ -556,12 +556,9 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
         }
+
         if run.tools:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                self._ph_client,
-                self._privacy_mode,
-                run.tools,
-            )
+            event_properties["$ai_tools"] = run.tools
 
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
@@ -587,7 +584,8 @@ class CallbackHandler(BaseCallbackHandler):
                 ]
             else:
                 completions = [
-                    _extract_raw_esponse(generation) for generation in generation_result
+                    _extract_raw_response(generation)
+                    for generation in generation_result
                 ]
             event_properties["$ai_output_choices"] = with_privacy_mode(
                 self._ph_client, self._privacy_mode, completions
@@ -618,7 +616,7 @@ class CallbackHandler(BaseCallbackHandler):
         )
 
 
-def _extract_raw_esponse(last_response):
+def _extract_raw_response(last_response):
     """Extract the response from the last response of the LLM call."""
     # We return the text of the response if not empty
     if last_response.text is not None and last_response.text.strip() != "":

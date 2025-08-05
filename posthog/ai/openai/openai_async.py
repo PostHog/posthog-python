@@ -12,6 +12,7 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
+    extract_available_tool_calls,
     get_model_params,
     with_privacy_mode,
 )
@@ -168,6 +169,7 @@ class WrappedResponses:
                     usage_stats,
                     latency,
                     output,
+                    extract_available_tool_calls("openai", kwargs),
                 )
 
         return async_generator()
@@ -183,7 +185,7 @@ class WrappedResponses:
         usage_stats: Dict[str, int],
         latency: float,
         output: Any,
-        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
@@ -213,12 +215,8 @@ class WrappedResponses:
             **(posthog_properties or {}),
         }
 
-        if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                tool_calls,
-            )
+        if available_tool_calls:
+            event_properties["$ai_tools"] = available_tool_calls
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -344,7 +342,6 @@ class WrappedCompletions:
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
-        accumulated_tools = {}
 
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
@@ -354,7 +351,6 @@ class WrappedCompletions:
         async def async_generator():
             nonlocal usage_stats
             nonlocal accumulated_content  # noqa: F824
-            nonlocal accumulated_tools  # noqa: F824
 
             try:
                 async for chunk in response:
@@ -393,31 +389,12 @@ class WrappedCompletions:
                             if content:
                                 accumulated_content.append(content)
 
-                        # Process tool calls
-                        tool_calls = getattr(chunk.choices[0].delta, "tool_calls", None)
-                        if tool_calls:
-                            for tool_call in tool_calls:
-                                index = tool_call.index
-                                if index not in accumulated_tools:
-                                    accumulated_tools[index] = tool_call
-                                else:
-                                    # Append arguments for existing tool calls
-                                    if hasattr(tool_call, "function") and hasattr(
-                                        tool_call.function, "arguments"
-                                    ):
-                                        accumulated_tools[
-                                            index
-                                        ].function.arguments += (
-                                            tool_call.function.arguments
-                                        )
-
                     yield chunk
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
                 output = "".join(accumulated_content)
-                tools = list(accumulated_tools.values()) if accumulated_tools else None
                 await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -428,7 +405,7 @@ class WrappedCompletions:
                     usage_stats,
                     latency,
                     output,
-                    tools,
+                    extract_available_tool_calls("openai", kwargs),
                 )
 
         return async_generator()
@@ -444,7 +421,7 @@ class WrappedCompletions:
         usage_stats: Dict[str, int],
         latency: float,
         output: Any,
-        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
@@ -474,12 +451,8 @@ class WrappedCompletions:
             **(posthog_properties or {}),
         }
 
-        if tool_calls:
-            event_properties["$ai_tools"] = with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                tool_calls,
-            )
+        if available_tool_calls:
+            event_properties["$ai_tools"] = available_tool_calls
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
