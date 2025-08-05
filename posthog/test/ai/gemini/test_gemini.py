@@ -472,6 +472,7 @@ def test_vertex_ai_mode_with_optional_api_key(
         project="test-project",
     )
 
+
 def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_response):
     """Test that tools defined in config are captured in $ai_tools property"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
