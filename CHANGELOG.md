@@ -1,6 +1,10 @@
+# 6.4.0 - 2025-08-05
+
+- feat: support Vertex AI for Gemini
+
 # 6.3.4 - 2025-08-04
 
-- fix: Set `$ai_tools` for all providers and `$ai_output_choices` for all non-streaming provider flows properly
+- fix: set `$ai_tools` for all providers and `$ai_output_choices` for all non-streaming provider flows properly
 
 # 6.3.3 - 2025-08-01
 
