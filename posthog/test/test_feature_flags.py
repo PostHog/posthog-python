@@ -215,7 +215,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 0)
 
-        # Now group type mappings are gone, so fall back to /decide/
+        # Now group type mappings are gone, so fall back to /flags/
         patch_flags.return_value = {
             "featureFlags": {"group-flag": "decide-fallback-value"}
         }

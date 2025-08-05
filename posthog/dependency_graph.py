@@ -433,8 +433,13 @@ def evaluate_flags_with_dependencies(
                 _group_type_mapping = group_type_mapping or {}
 
                 group_name = _group_type_mapping.get(str(aggregation_group_type_index))
-                if not group_name or group_name not in _groups:
-                    # Can't evaluate group flag without proper group info
+                if not group_name:
+                    # Unknown group type index, failover to /flags/
+                    raise InconclusiveMatchError("Flag has unknown group type index")
+
+                if group_name not in _groups:
+                    # Group flags are never enabled if groups aren't passed in
+                    # Don't failover to /flags/, since response will be the same
                     results[flag_key] = False
                     dependency_graph.cache_result(flag_key, False)
                     continue

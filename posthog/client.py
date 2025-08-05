@@ -1205,12 +1205,12 @@ class Client(object):
                 self.log.warning(
                     f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
                 )
-                # failover to `/decide/`
+                # failover to `/flags/`
                 raise InconclusiveMatchError("Flag has unknown group type index")
 
             if group_name not in groups:
                 # Group flags are never enabled in `groups` aren't passed in
-                # don't failover to `/decide/`, since response will be the same
+                # don't failover to `/flags/`, since response will be the same
                 if warn_on_unknown_groups:
                     self.log.warning(
                         f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
