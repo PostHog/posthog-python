@@ -19,7 +19,7 @@ Configuration:
   - POSTHOG_TEST_EMAIL_DISABLED: Email that should disable both flags
 
 Usage:
-  python -m posthog.test.integrations.test_flag_dependencies
+  python -m posthog.test.manual_integration.test_flag_dependencies
 """
 
 import os
