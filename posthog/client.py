@@ -1535,6 +1535,9 @@ class Client(object):
                         requested_flag_keys={
                             key
                         },  # Only evaluate the requested flag and its dependencies
+                        groups=groups,
+                        group_properties=group_properties,
+                        group_type_mapping=self.group_type_mapping,
                     )
                     response = all_results.get(key)
                     if response is not None:

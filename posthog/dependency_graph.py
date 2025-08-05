@@ -340,6 +340,9 @@ def evaluate_flags_with_dependencies(
     properties: Dict,
     cohort_properties: Optional[Dict] = None,
     requested_flag_keys: Optional[Set[str]] = None,
+    groups: Optional[Dict] = None,
+    group_properties: Optional[Dict] = None,
+    group_type_mapping: Optional[Dict] = None,
 ) -> Dict[str, FlagValue]:
     """
     Evaluate feature flags with dependency support.
@@ -353,6 +356,9 @@ def evaluate_flags_with_dependencies(
         properties: Properties for evaluation
         cohort_properties: Cohort properties for evaluation
         requested_flag_keys: Set of flag keys to evaluate (None for all)
+        groups: Group information for group-level flag evaluation
+        group_properties: Group properties for group-level flag evaluation
+        group_type_mapping: Mapping from group type index to group name
 
     Returns:
         Dict[str, FlagValue]: Map of flag keys to their evaluation results
@@ -389,14 +395,43 @@ def evaluate_flags_with_dependencies(
             continue
 
         try:
-            result = match_feature_flag_properties(
-                flag_def,
-                distinct_id,
-                properties,
-                cohort_properties,
-                dependency_graph,
-                id_to_key,
-            )
+            # Check if this is a group-level flag
+            flag_filters = flag_def.get("filters", {})
+            aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+            
+            if aggregation_group_type_index is not None:
+                # This is a group-level flag
+                _groups = groups or {}
+                _group_properties = group_properties or {}
+                _group_type_mapping = group_type_mapping or {}
+                
+                group_name = _group_type_mapping.get(str(aggregation_group_type_index))
+                if not group_name or group_name not in _groups:
+                    # Can't evaluate group flag without proper group info
+                    results[flag_key] = False
+                    dependency_graph.cache_result(flag_key, False)
+                    continue
+                
+                focused_group_properties = _group_properties.get(group_name, {})
+                result = match_feature_flag_properties(
+                    flag_def,
+                    _groups[group_name],
+                    focused_group_properties,
+                    cohort_properties,
+                    dependency_graph,
+                    id_to_key,
+                )
+            else:
+                # Person-level flag
+                result = match_feature_flag_properties(
+                    flag_def,
+                    distinct_id,
+                    properties,
+                    cohort_properties,
+                    dependency_graph,
+                    id_to_key,
+                )
+            
             results[flag_key] = result
             dependency_graph.cache_result(flag_key, result)
         except InconclusiveMatchError:
