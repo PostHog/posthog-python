@@ -413,7 +413,7 @@ def evaluate_flags_with_dependencies(
     flag_lookup = {flag.get("key"): flag for flag in feature_flags if flag.get("key")}
 
     # Evaluate flags in dependency order
-    results = {}
+    results: Dict[str, FlagValue] = {}
     for flag_key in evaluation_order:
         flag_def = flag_lookup.get(flag_key)
         if not flag_def:

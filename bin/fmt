@@ -10,3 +10,5 @@ if [[ "$1" == "--check" ]]; then
 else
   ruff format .
 fi
+
+mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
