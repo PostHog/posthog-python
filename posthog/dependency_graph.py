@@ -227,6 +227,31 @@ def match_flag_dependency(
 
     Returns:
         bool: True if the flag result matches the filter value
+
+    Examples:
+        >>> # Boolean True filter matches any enabled state
+        >>> match_flag_dependency(True, True)
+        True
+        >>> match_flag_dependency(True, "variant-a")
+        True
+        >>> match_flag_dependency(True, False)
+        False
+        
+        >>> # Boolean False filter matches only disabled state
+        >>> match_flag_dependency(False, False)
+        True
+        >>> match_flag_dependency(False, True)
+        False
+        >>> match_flag_dependency(False, "variant-a")
+        False
+        
+        >>> # String filter matches exact variant name
+        >>> match_flag_dependency("variant-a", "variant-a")
+        True
+        >>> match_flag_dependency("variant-a", "variant-b")
+        False
+        >>> match_flag_dependency("variant-a", True)
+        False
     """
     if filter_value is True:
         # True matches any enabled state (not false)
