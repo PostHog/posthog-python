@@ -39,7 +39,7 @@ class TestClientFlagDependencies(unittest.TestCase):
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@example.com",
+                                    "value": ["test@example.com"],
                                     "operator": "exact",
                                 }
                             ],
@@ -114,7 +114,7 @@ class TestClientFlagDependencies(unittest.TestCase):
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@example.com",
+                                    "value": ["test@example.com"],
                                     "operator": "exact",
                                 }
                             ],
@@ -188,7 +188,7 @@ class TestClientFlagDependencies(unittest.TestCase):
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@example.com",
+                                    "value": ["test@example.com"],
                                     "operator": "exact",
                                 }
                             ],
@@ -304,7 +304,7 @@ class TestClientFlagDependencies(unittest.TestCase):
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@example.com",
+                                    "value": ["test@example.com"],
                                     "operator": "exact",
                                 }
                             ],
