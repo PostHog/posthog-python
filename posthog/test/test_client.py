@@ -647,8 +647,8 @@ class TestClient(unittest.TestCase):
                 timeout=3,
                 distinct_id="distinct_id",
                 groups={},
-                person_properties=None,
-                group_properties=None,
+                person_properties={},
+                group_properties={},
                 geoip_disable=True,
             )
 
@@ -711,8 +711,8 @@ class TestClient(unittest.TestCase):
                 timeout=12,
                 distinct_id="distinct_id",
                 groups={},
-                person_properties=None,
-                group_properties=None,
+                person_properties={},
+                group_properties={},
                 geoip_disable=False,
             )
 
