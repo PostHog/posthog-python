@@ -449,7 +449,10 @@ def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_re
     assert props["$ai_model"] == "gemini-2.5-flash"
     assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
     assert props["$ai_output_choices"] == [
-        {"role": "assistant", "content": ["Test response from Gemini"]}
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Test response from Gemini"}],
+        }
     ]
     assert props["$ai_input_tokens"] == 20
     assert props["$ai_output_tokens"] == 10
@@ -490,8 +493,8 @@ def test_function_calls_in_output_choices(
         {
             "role": "assistant",
             "content": [
-                "I'll check the weather for you.",
-                " Let me look that up.",
+                {"type": "text", "text": "I'll check the weather for you."},
+                {"type": "text", "text": " Let me look that up."},
                 {
                     "type": "function",
                     "function": {

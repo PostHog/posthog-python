@@ -126,7 +126,7 @@ def format_response_anthropic(response):
             and hasattr(choice, "text")
             and choice.text
         ):
-            content.append(choice.text)
+            content.append({"type": "text", "text": choice.text})
         elif (
             hasattr(choice, "type")
             and choice.type == "tool_use"
@@ -167,7 +167,7 @@ def format_response_openai(response):
                     role = choice.message.role
 
                 if choice.message.content:
-                    content.append(choice.message.content)
+                    content.append({"type": "text", "text": choice.message.content})
 
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
@@ -205,9 +205,9 @@ def format_response_openai(response):
                             and content_item.type == "output_text"
                             and hasattr(content_item, "text")
                         ):
-                            content.append(content_item.text)
+                            content.append({"type": "text", "text": content_item.text})
                         elif hasattr(content_item, "text"):
-                            content.append(content_item.text)
+                            content.append({"type": "text", "text": content_item.text})
                         elif (
                             hasattr(content_item, "type")
                             and content_item.type == "input_image"
@@ -220,7 +220,7 @@ def format_response_openai(response):
                                 }
                             )
                 elif hasattr(item, "content"):
-                    content.append(str(item.content))
+                    content.append({"type": "text", "text": str(item.content)})
 
             elif hasattr(item, "type") and item.type == "function_call":
                 content.append(
@@ -255,7 +255,7 @@ def format_response_gemini(response):
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
-                            content.append(part.text)
+                            content.append({"type": "text", "text": part.text})
                         elif hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
                             content.append(
@@ -279,14 +279,14 @@ def format_response_gemini(response):
                 output.append(
                     {
                         "role": "assistant",
-                        "content": [candidate.text],
+                        "content": [{"type": "text", "text": candidate.text}],
                     }
                 )
     elif hasattr(response, "text") and response.text:
         output.append(
             {
                 "role": "assistant",
-                "content": [response.text],
+                "content": [{"type": "text", "text": response.text}],
             }
         )
 

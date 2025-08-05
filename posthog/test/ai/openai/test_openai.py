@@ -385,7 +385,10 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -534,7 +537,10 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -585,8 +591,8 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
             {
                 "role": "assistant",
                 "content": [
-                    "I'll check the weather for you.",
-                    " Let me look that up.",
+                    {"type": "text", "text": "I'll check the weather for you."},
+                    {"type": "text", "text": " Let me look that up."},
                     {
                         "type": "function",
                         "id": "call_abc123",
@@ -708,8 +714,8 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
             {
                 "role": "assistant",
                 "content": [
-                    "I'll help you with the weather.",
-                    " Let me check that for you.",
+                    {"type": "text", "text": "I'll help you with the weather."},
+                    {"type": "text", "text": " Let me check that for you."},
                     {
                         "type": "function",
                         "id": "call_xyz789",
@@ -920,7 +926,10 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
@@ -990,7 +999,10 @@ def test_responses_parse(mock_client, mock_parsed_response):
             {
                 "role": "assistant",
                 "content": [
-                    '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}'
+                    {
+                        "type": "text",
+                        "text": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+                    }
                 ],
             }
         ]
@@ -1051,7 +1063,10 @@ def test_tool_definition(mock_client, mock_openai_response):
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10

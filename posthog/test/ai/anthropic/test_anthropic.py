@@ -162,7 +162,10 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -336,7 +339,9 @@ def test_basic_integration(mock_client):
         {"role": "user", "content": "Foo"},
     ]
     assert props["$ai_output_choices"][0]["role"] == "assistant"
-    assert props["$ai_output_choices"][0]["content"] == "Bar"
+    assert props["$ai_output_choices"][0]["content"] == [
+        {"type": "text", "text": "Bar"}
+    ]
     assert props["$ai_input_tokens"] == 18
     assert props["$ai_output_tokens"] == 1
     assert props["$ai_http_status"] == 200
@@ -475,7 +480,10 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -532,7 +540,10 @@ def test_tool_definition(mock_client, mock_anthropic_response):
         assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
         assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": ["Test response"]}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -585,8 +596,8 @@ def test_tool_calls_in_output_choices(
             {
                 "role": "assistant",
                 "content": [
-                    "I'll help you check the weather.",
-                    " Let me look that up.",
+                    {"type": "text", "text": "I'll help you check the weather."},
+                    {"type": "text", "text": " Let me look that up."},
                     {
                         "type": "function",
                         "id": "toolu_abc123",
@@ -717,8 +728,8 @@ def test_async_tool_calls_in_output_choices(
             {
                 "role": "assistant",
                 "content": [
-                    "I'll help you check the weather.",
-                    " Let me look that up.",
+                    {"type": "text", "text": "I'll help you check the weather."},
+                    {"type": "text", "text": " Let me look that up."},
                     {
                         "type": "function",
                         "id": "toolu_abc123",
