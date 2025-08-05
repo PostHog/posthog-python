@@ -167,9 +167,7 @@ class FlagDependenciesIntegrationTest(unittest.TestCase):
     def setUpClass(cls):
         """Set up the test environment."""
         # Configuration with environment variable overrides
-        cls.API_KEY = os.environ.get(
-            "POSTHOG_API_KEY", "YOUR_API_KEY_HERE"
-        )
+        cls.API_KEY = os.environ.get("POSTHOG_API_KEY", "YOUR_API_KEY_HERE")
         cls.FEATURE_FLAGS_API_KEY = os.environ.get(
             "POSTHOG_FEATURE_FLAGS_API_KEY",
             "YOUR_FEATURE_FLAGS_API_KEY_HERE",

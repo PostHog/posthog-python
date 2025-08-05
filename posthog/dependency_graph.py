@@ -236,7 +236,7 @@ def match_flag_dependency(
         True
         >>> match_flag_dependency(True, False)
         False
-        
+
         >>> # Boolean False filter matches only disabled state
         >>> match_flag_dependency(False, False)
         True
@@ -244,7 +244,7 @@ def match_flag_dependency(
         False
         >>> match_flag_dependency(False, "variant-a")
         False
-        
+
         >>> # String filter matches exact variant name
         >>> match_flag_dependency("variant-a", "variant-a")
         True
@@ -422,21 +422,23 @@ def evaluate_flags_with_dependencies(
         try:
             # Check if this is a group-level flag
             flag_filters = flag_def.get("filters", {})
-            aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
-            
+            aggregation_group_type_index = flag_filters.get(
+                "aggregation_group_type_index"
+            )
+
             if aggregation_group_type_index is not None:
                 # This is a group-level flag
                 _groups = groups or {}
                 _group_properties = group_properties or {}
                 _group_type_mapping = group_type_mapping or {}
-                
+
                 group_name = _group_type_mapping.get(str(aggregation_group_type_index))
                 if not group_name or group_name not in _groups:
                     # Can't evaluate group flag without proper group info
                     results[flag_key] = False
                     dependency_graph.cache_result(flag_key, False)
                     continue
-                
+
                 focused_group_properties = _group_properties.get(group_name, {})
                 result = match_feature_flag_properties(
                     flag_def,
@@ -456,7 +458,7 @@ def evaluate_flags_with_dependencies(
                     dependency_graph,
                     id_to_key,
                 )
-            
+
             results[flag_key] = result
             dependency_graph.cache_result(flag_key, result)
         except InconclusiveMatchError:
