@@ -594,7 +594,7 @@ def test_tool_calls_in_output_choices(
                             "name": "get_weather",
                             "arguments": {"location": "San Francisco"},
                         },
-                    }
+                    },
                 ],
             }
         ]
@@ -726,7 +726,7 @@ def test_async_tool_calls_in_output_choices(
                             "name": "get_weather",
                             "arguments": {"location": "San Francisco"},
                         },
-                    }
+                    },
                 ],
             }
         ]

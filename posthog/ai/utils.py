@@ -159,27 +159,29 @@ def format_response_openai(response):
     if hasattr(response, "choices"):
         content = []
         role = "assistant"
-        
+
         for choice in response.choices:
             # Handle Chat Completions response format
             if hasattr(choice, "message") and choice.message:
                 if choice.message.role:
                     role = choice.message.role
-                    
+
                 if choice.message.content:
                     content.append(choice.message.content)
 
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
-                        content.append({
-                            "type": "function",
-                            "id": tool_call.id,
-                            "function": {
-                                "name": tool_call.function.name,
-                                "arguments": tool_call.function.arguments,
-                            },
-                        })
-        
+                        content.append(
+                            {
+                                "type": "function",
+                                "id": tool_call.id,
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        )
+
         if content:
             message = {
                 "role": role,
@@ -211,22 +213,26 @@ def format_response_openai(response):
                             and content_item.type == "input_image"
                             and hasattr(content_item, "image_url")
                         ):
-                            content.append({
-                                "type": "image",
-                                "image": content_item.image_url,
-                            })
+                            content.append(
+                                {
+                                    "type": "image",
+                                    "image": content_item.image_url,
+                                }
+                            )
                 elif hasattr(item, "content"):
                     content.append(str(item.content))
 
             elif hasattr(item, "type") and item.type == "function_call":
-                content.append({
-                    "type": "function",
-                    "id": getattr(item, "call_id", getattr(item, "id", "")),
-                    "function": {
-                        "name": item.name,
-                        "arguments": getattr(item, "arguments", {}),
-                    },
-                })
+                content.append(
+                    {
+                        "type": "function",
+                        "id": getattr(item, "call_id", getattr(item, "id", "")),
+                        "function": {
+                            "name": item.name,
+                            "arguments": getattr(item, "arguments", {}),
+                        },
+                    }
+                )
 
         if content:
             message = {
@@ -252,13 +258,15 @@ def format_response_gemini(response):
                             content.append(part.text)
                         elif hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
-                            content.append({
-                                "type": "function",
-                                "function": {
-                                    "name": function_call.name,
-                                    "arguments": function_call.args,
-                                },
-                            })
+                            content.append(
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_call.name,
+                                        "arguments": function_call.args,
+                                    },
+                                }
+                            )
 
                 if content:
                     message = {

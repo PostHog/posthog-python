@@ -498,7 +498,7 @@ def test_function_calls_in_output_choices(
                         "name": "get_current_weather",
                         "arguments": {"location": "San Francisco"},
                     },
-                }
+                },
             ],
         }
     ]

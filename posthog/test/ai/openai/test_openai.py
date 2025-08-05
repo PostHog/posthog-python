@@ -259,7 +259,7 @@ def mock_openai_response_with_tool_calls():
                         )
                     ],
                 ),
-            )
+            ),
         ],
         usage=CompletionUsage(
             completion_tokens=15,
@@ -335,7 +335,7 @@ def mock_responses_api_with_tool_calls():
                         type="output_text",
                         text=" Let me check that for you.",
                         annotations=[],
-                    )
+                    ),
                 ],
             ),
             ResponseFunctionToolCall(
@@ -594,7 +594,7 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
                             "name": "get_weather",
                             "arguments": '{"location": "San Francisco", "unit": "celsius"}',
                         },
-                    }
+                    },
                 ],
             }
         ]
@@ -717,7 +717,7 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
                             "name": "get_weather",
                             "arguments": '{"location": "Chicago"}',
                         },
-                    }
+                    },
                 ],
             }
         ]
@@ -885,7 +885,10 @@ def test_streaming_with_tool_calls(mock_client):
         assert defined_tool["function"]["parameters"] == {}
 
         # Check that the content was also accumulated
-        assert props["$ai_output_choices"][0]["content"] == "The weather in San Francisco is 15°C."
+        assert (
+            props["$ai_output_choices"][0]["content"]
+            == "The weather in San Francisco is 15°C."
+        )
 
         # Check token usage
         assert props["$ai_input_tokens"] == 20
@@ -986,7 +989,9 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": ['{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}'],
+                "content": [
+                    '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}'
+                ],
             }
         ]
         assert props["$ai_input_tokens"] == 15
