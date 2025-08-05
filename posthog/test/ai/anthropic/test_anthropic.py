@@ -96,6 +96,7 @@ def mock_anthropic_response_with_tool_calls():
         role="assistant",
         content=[
             {"type": "text", "text": "I'll help you check the weather."},
+            {"type": "text", "text": " Let me look that up."},
             {
                 "type": "tool_use",
                 "id": "toolu_abc123",
@@ -161,7 +162,7 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -474,7 +475,7 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -531,7 +532,7 @@ def test_tool_definition(mock_client, mock_anthropic_response):
         assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
         assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -583,8 +584,9 @@ def test_tool_calls_in_output_choices(
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": "I'll help you check the weather.",
-                "tool_calls": [
+                "content": [
+                    "I'll help you check the weather.",
+                    " Let me look that up.",
                     {
                         "type": "function",
                         "id": "toolu_abc123",
@@ -645,8 +647,7 @@ def test_tool_calls_only_no_content(
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": None,
-                "tool_calls": [
+                "content": [
                     {
                         "type": "function",
                         "id": "toolu_def456",
@@ -715,8 +716,9 @@ def test_async_tool_calls_in_output_choices(
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": "I'll help you check the weather.",
-                "tool_calls": [
+                "content": [
+                    "I'll help you check the weather.",
+                    " Let me look that up.",
                     {
                         "type": "function",
                         "id": "toolu_abc123",

@@ -71,11 +71,16 @@ def mock_gemini_response_with_function_calls():
     mock_function_call.name = "get_current_weather"
     mock_function_call.args = {"location": "San Francisco"}
 
-    # Mock text part - need to ensure hasattr() works correctly
-    mock_text_part = MagicMock()
-    mock_text_part.text = "I'll check the weather for you."
+    # Mock text part 1
+    mock_text_part1 = MagicMock()
+    mock_text_part1.text = "I'll check the weather for you."
     # Make hasattr(part, "text") return True
-    type(mock_text_part).text = mock_text_part.text
+    type(mock_text_part1).text = mock_text_part1.text
+
+    # Mock text part 2
+    mock_text_part2 = MagicMock()
+    mock_text_part2.text = " Let me look that up."
+    type(mock_text_part2).text = mock_text_part2.text
 
     # Mock function call part - need to ensure hasattr() works correctly
     mock_function_part = MagicMock()
@@ -85,9 +90,9 @@ def mock_gemini_response_with_function_calls():
     # Ensure hasattr(part, "text") returns False for the function part
     del mock_function_part.text
 
-    # Mock content with both text and function call parts
+    # Mock content with 2 text parts and 1 function call part
     mock_content = MagicMock()
-    mock_content.parts = [mock_text_part, mock_function_part]
+    mock_content.parts = [mock_text_part1, mock_text_part2, mock_function_part]
 
     # Mock candidate
     mock_candidate = MagicMock()
@@ -444,7 +449,7 @@ def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_re
     assert props["$ai_model"] == "gemini-2.5-flash"
     assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
     assert props["$ai_output_choices"] == [
-        {"role": "assistant", "content": "Test response from Gemini"}
+        {"role": "assistant", "content": ["Test response from Gemini"]}
     ]
     assert props["$ai_input_tokens"] == 20
     assert props["$ai_output_tokens"] == 10
@@ -484,8 +489,9 @@ def test_function_calls_in_output_choices(
     assert props["$ai_output_choices"] == [
         {
             "role": "assistant",
-            "content": "I'll check the weather for you.",
-            "tool_calls": [
+            "content": [
+                "I'll check the weather for you.",
+                " Let me look that up.",
                 {
                     "type": "function",
                     "function": {
@@ -532,8 +538,7 @@ def test_function_calls_only_no_content(
     assert props["$ai_output_choices"] == [
         {
             "role": "assistant",
-            "content": None,
-            "tool_calls": [
+            "content": [
                 {
                     "type": "function",
                     "function": {

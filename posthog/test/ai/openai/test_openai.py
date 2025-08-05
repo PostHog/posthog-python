@@ -227,10 +227,26 @@ def mock_openai_response_with_tool_calls():
         created=int(time.time()),
         choices=[
             Choice(
-                finish_reason="tool_calls",
+                finish_reason="stop",
                 index=0,
                 message=ChatCompletionMessage(
                     content="I'll check the weather for you.",
+                    role="assistant",
+                ),
+            ),
+            Choice(
+                finish_reason="stop",
+                index=1,
+                message=ChatCompletionMessage(
+                    content=" Let me look that up.",
+                    role="assistant",
+                ),
+            ),
+            Choice(
+                finish_reason="tool_calls",
+                index=2,
+                message=ChatCompletionMessage(
+                    content=None,
                     role="assistant",
                     tool_calls=[
                         ChatCompletionMessageToolCall(
@@ -314,6 +330,11 @@ def mock_responses_api_with_tool_calls():
                         type="output_text",
                         text="I'll help you with the weather.",
                         annotations=[],
+                    ),
+                    ResponseOutputText(
+                        type="output_text",
+                        text=" Let me check that for you.",
+                        annotations=[],
                     )
                 ],
             ),
@@ -364,7 +385,7 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -513,7 +534,7 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -563,8 +584,9 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": "I'll check the weather for you.",
-                "tool_calls": [
+                "content": [
+                    "I'll check the weather for you.",
+                    " Let me look that up.",
                     {
                         "type": "function",
                         "id": "call_abc123",
@@ -630,8 +652,7 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": None,
-                "tool_calls": [
+                "content": [
                     {
                         "type": "function",
                         "id": "call_def456",
@@ -686,8 +707,9 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": "I'll help you with the weather.",
-                "tool_calls": [
+                "content": [
+                    "I'll help you with the weather.",
+                    " Let me check that for you.",
                     {
                         "type": "function",
                         "id": "call_xyz789",
@@ -863,10 +885,7 @@ def test_streaming_with_tool_calls(mock_client):
         assert defined_tool["function"]["parameters"] == {}
 
         # Check that the content was also accumulated
-        assert (
-            props["$ai_output_choices"][0]["content"]
-            == "The weather in San Francisco is 15°C."
-        )
+        assert props["$ai_output_choices"][0]["content"] == "The weather in San Francisco is 15°C."
 
         # Check token usage
         assert props["$ai_input_tokens"] == 20
@@ -898,7 +917,7 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 10
         assert props["$ai_output_tokens"] == 10
@@ -967,7 +986,7 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert props["$ai_output_choices"] == [
             {
                 "role": "assistant",
-                "content": '{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}',
+                "content": ['{"name": "Science Fair", "date": "Friday", "participants": ["Alice", "Bob"]}'],
             }
         ]
         assert props["$ai_input_tokens"] == 15
@@ -1027,7 +1046,7 @@ def test_tool_definition(mock_client, mock_openai_response):
         assert props["$ai_model"] == "gpt-4o-mini"
         assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {"role": "assistant", "content": ["Test response"]}
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
