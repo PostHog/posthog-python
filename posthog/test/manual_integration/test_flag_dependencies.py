@@ -168,11 +168,11 @@ class FlagDependenciesIntegrationTest(unittest.TestCase):
         """Set up the test environment."""
         # Configuration with environment variable overrides
         cls.API_KEY = os.environ.get(
-            "POSTHOG_API_KEY", "phc_zKpz2SQ32LaNyftKL8hpMSMChgnyXW4Di5JlmRexXpw"
+            "POSTHOG_API_KEY", "YOUR_API_KEY_HERE"
         )
         cls.FEATURE_FLAGS_API_KEY = os.environ.get(
             "POSTHOG_FEATURE_FLAGS_API_KEY",
-            "phs_wOywoyl6AB6JJF48ngUMSD8Pk9CJh7UYSrjrEqIgbCocyL4",
+            "YOUR_FEATURE_FLAGS_API_KEY_HERE",
         )
         cls.PERSONAL_API_KEY = os.environ.get("POSTHOG_PERSONAL_API_KEY", "")
         cls.POSTHOG_HOST = os.environ.get("POSTHOG_HOST", "http://localhost:8000")
