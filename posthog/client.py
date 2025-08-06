@@ -1644,6 +1644,7 @@ class Client(object):
         try:
             return remote_config(
                 self.personal_api_key,
+                self.api_key,
                 self.host,
                 key,
                 timeout=self.feature_flags_request_timeout_seconds,

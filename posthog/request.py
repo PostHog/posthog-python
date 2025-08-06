@@ -132,12 +132,16 @@ def flags(
 
 
 def remote_config(
-    personal_api_key: str, host: Optional[str] = None, key: str = "", timeout: int = 15
+    personal_api_key: str,
+    project_api_key: str,
+    host: Optional[str] = None,
+    key: str = "",
+    timeout: int = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
     return get(
         personal_api_key,
-        f"/api/projects/@current/feature_flags/{key}/remote_config/",
+        f"/api/projects/@current/feature_flags/{key}/remote_config?token={project_api_key}",
         host,
         timeout,
     )

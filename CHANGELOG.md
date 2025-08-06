@@ -1,3 +1,7 @@
+# 6.4.1 - 2025-08-06
+
+- fix: Always pass project API key in `remote_config` requests for deterministic project routing
+
 # 6.4.0 - 2025-08-05
 
 - feat: support Vertex AI for Gemini
