@@ -87,6 +87,7 @@ def add_context_tags(properties):
     current_context = _get_current_context()
     if current_context:
         context_tags = current_context.collect_tags()
+        properties["$context_tags"] = set(context_tags.keys())
         # We want explicitly passed properties to override context tags
         context_tags.update(properties)
         properties = context_tags
