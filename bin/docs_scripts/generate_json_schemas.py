@@ -11,7 +11,6 @@ from dataclasses import is_dataclass, fields
 from typing import get_origin, get_args, Union
 from textwrap import dedent
 from doc_constant import (
-    NO_DOCS_TYPES,
     DOCUMENTATION_METADATA,
     DOCSTRING_PATTERNS,
     OUTPUT_CONFIG,
@@ -187,7 +186,7 @@ def analyze_parameter(param: inspect.Parameter, docstring: str = "") -> dict:
         param_type = get_type_name(type(param.default))
 
     # Extract parameter description from Args section
-    param_description = f"Parameter: {param.name}"
+    param_description = ""
     if docstring:
         # Look for Args section and extract description for this parameter
         args_section_match = re.search(
@@ -425,7 +424,6 @@ def generate_sdk_documentation():
         "id": "posthog-python",
         "hogRef": DOCUMENTATION_METADATA["hogRef"],
         "info": sdk_info,
-        "noDocsTypes": NO_DOCS_TYPES,
         "types": types_list,
         "classes": classes_list,
     }
@@ -458,12 +456,6 @@ if __name__ == "__main__":
         print(f"   • {types_count} types documented")
         print(f"   • {classes_count} classes documented")
         print(f"   • {total_functions} functions documented")
-
-        no_docs = documentation["noDocsTypes"]
-        if no_docs:
-            print(
-                f"   • {len(no_docs)} types without documentation: {', '.join(no_docs[:5])}{'...' if len(no_docs) > 5 else ''}"
-            )
 
     except Exception as e:
         print(f"❌ Error generating documentation: {e}")

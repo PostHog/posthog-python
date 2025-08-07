@@ -4,49 +4,9 @@ Constants for PostHog Python SDK documentation generation.
 
 from typing import Dict, Union
 
-# Types that are built-in to Python and don't need to be documented
-NO_DOCS_TYPES = [
-    "Client",
-    "any",
-    "int",
-    "float",
-    "bool",
-    "dict",
-    "list",
-    "str",
-    "tuple",
-    "set",
-    "frozenset",
-    "bytes",
-    "bytearray",
-    "memoryview",
-    "range",
-    "slice",
-    "complex",
-    "Union",
-    "Optional",
-    "Any",
-    "Callable",
-    "Type",
-    "TypeVar",
-    "Generic",
-    "Literal",
-    "ClassVar",
-    "Final",
-    "Annotated",
-    "NotRequired",
-    "Required",
-    "None",
-    "NoneType",
-    "object",
-    "Unpack",
-    "BaseException",
-    "Exception",
-]
-
 # Documentation generation metadata
 DOCUMENTATION_METADATA = {
-    "hogRef": "0.1",
+    "hogRef": "0.2",
     "slugPrefix": "posthog-python",
     "specUrl": "https://github.com/PostHog/posthog-python",
 }
