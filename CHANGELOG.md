@@ -1,3 +1,7 @@
+# 6.5.0 - 2025-08-08
+
+- feat: Add `$context_tags` to an event to know which properties were included as tags
+
 # 6.4.1 - 2025-08-06
 
 - fix: Always pass project API key in `remote_config` requests for deterministic project routing

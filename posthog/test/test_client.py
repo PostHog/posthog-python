@@ -13,6 +13,7 @@ from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
+from posthog.contexts import tag
 
 
 class TestClient(unittest.TestCase):
@@ -2354,3 +2355,15 @@ class TestClient(unittest.TestCase):
         self.assertEqual(
             result["featureFlagPayloads"]["normal-payload-flag"], "normal payload"
         )
+
+    def test_context_tags_added(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+
+            with new_context():
+                tag("random_tag", 12345)
+                client.capture("python test event", distinct_id="distinct_id")
+
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+            self.assertEqual(msg["properties"]["$context_tags"], ["random_tag"])
