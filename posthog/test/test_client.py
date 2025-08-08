@@ -2,13 +2,13 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
-from posthog.contexts import get_context_session_id, set_context_session, new_context
 
 import mock
 import six
 from parameterized import parameterized
 
 from posthog.client import Client
+from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
@@ -2058,7 +2058,7 @@ class TestClient(unittest.TestCase):
 
     def test_set_context_session_override_in_capture(self):
         """Test that explicit session ID overrides context session ID in capture"""
-        from posthog.contexts import set_context_session, new_context
+        from posthog.contexts import new_context, set_context_session
 
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
@@ -2159,6 +2159,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(result, {"test": "payload"})
         patch_remote_config.assert_called_once_with(
             "test-personal-key",
+            FAKE_TEST_API_KEY,
             client.host,
             "test-flag",
             timeout=client.feature_flags_request_timeout_seconds,
