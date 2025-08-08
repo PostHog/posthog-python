@@ -8,6 +8,16 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 
 from posthog import utils
+from posthog.dependency_graph import (
+    CyclicDependencyError,
+    DependencyGraph,
+    DependencyGraphError,
+    MissingDependencyError,
+    build_dependency_graph,
+    evaluate_flags_with_dependencies,
+    match_flag_dependency,
+    match_flag_property,
+)
 from posthog.types import FlagValue
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
@@ -56,7 +66,12 @@ def variant_lookup_table(feature_flag):
 
 
 def match_feature_flag_properties(
-    flag, distinct_id, properties, cohort_properties=None
+    flag,
+    distinct_id,
+    properties,
+    cohort_properties=None,
+    dependency_graph=None,
+    id_to_key=None,
 ) -> FlagValue:
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
@@ -79,7 +94,13 @@ def match_feature_flag_properties(
             # if any one condition resolves to True, we can shortcircuit and return
             # the matching variant
             if is_condition_match(
-                flag, distinct_id, condition, properties, cohort_properties
+                flag,
+                distinct_id,
+                condition,
+                properties,
+                cohort_properties,
+                dependency_graph,
+                id_to_key,
             ):
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
@@ -101,22 +122,33 @@ def match_feature_flag_properties(
 
 
 def is_condition_match(
-    feature_flag, distinct_id, condition, properties, cohort_properties
+    feature_flag,
+    distinct_id,
+    condition,
+    properties,
+    cohort_properties,
+    dependency_graph=None,
+    id_to_key=None,
 ) -> bool:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
         for prop in condition.get("properties"):
             property_type = prop.get("type")
             if property_type == "cohort":
-                matches = match_cohort(prop, properties, cohort_properties)
-            elif property_type == "flag":
-                log.warning(
-                    "Flag dependency filters are not supported in local evaluation. "
-                    "Skipping condition for flag '%s' with dependency on flag '%s'",
-                    feature_flag.get("key", "unknown"),
-                    prop.get("key", "unknown"),
+                matches = match_cohort(
+                    prop, properties, cohort_properties, dependency_graph, id_to_key
                 )
-                continue
+            elif property_type == "flag":
+                flag_matches = match_flag_property(prop, dependency_graph, id_to_key)
+                if flag_matches is None:
+                    # Dependency not available, skip this condition
+                    log.warning(
+                        "Flag dependency on '%s' not available for flag '%s'. Skipping condition.",
+                        prop.get("key", "unknown"),
+                        feature_flag.get("key", "unknown"),
+                    )
+                    continue
+                matches = flag_matches
             else:
                 matches = match_property(prop, properties)
             if not matches:
@@ -264,7 +296,9 @@ def match_property(property, property_values) -> bool:
     raise InconclusiveMatchError(f"Unknown operator {operator}")
 
 
-def match_cohort(property, property_values, cohort_properties) -> bool:
+def match_cohort(
+    property, property_values, cohort_properties, dependency_graph=None, id_to_key=None
+) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
     #     "cohort_id": {
@@ -281,10 +315,18 @@ def match_cohort(property, property_values, cohort_properties) -> bool:
         )
 
     property_group = cohort_properties[cohort_id]
-    return match_property_group(property_group, property_values, cohort_properties)
+    return match_property_group(
+        property_group, property_values, cohort_properties, dependency_graph, id_to_key
+    )
 
 
-def match_property_group(property_group, property_values, cohort_properties) -> bool:
+def match_property_group(
+    property_group,
+    property_values,
+    cohort_properties,
+    dependency_graph=None,
+    id_to_key=None,
+) -> bool:
     if not property_group:
         return True
 
@@ -301,7 +343,13 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
         # a nested property group
         for prop in properties:
             try:
-                matches = match_property_group(prop, property_values, cohort_properties)
+                matches = match_property_group(
+                    prop,
+                    property_values,
+                    cohort_properties,
+                    dependency_graph,
+                    id_to_key,
+                )
                 if property_group_type == "AND":
                     if not matches:
                         return False
@@ -324,14 +372,25 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
         for prop in properties:
             try:
                 if prop.get("type") == "cohort":
-                    matches = match_cohort(prop, property_values, cohort_properties)
-                elif prop.get("type") == "flag":
-                    log.warning(
-                        "Flag dependency filters are not supported in local evaluation. "
-                        "Skipping condition with dependency on flag '%s'",
-                        prop.get("key", "unknown"),
+                    matches = match_cohort(
+                        prop,
+                        property_values,
+                        cohort_properties,
+                        dependency_graph,
+                        id_to_key,
                     )
-                    continue
+                elif prop.get("type") == "flag":
+                    flag_matches = match_flag_property(
+                        prop, dependency_graph, id_to_key
+                    )
+                    if flag_matches is None:
+                        # Dependency not available, skip this condition
+                        log.warning(
+                            "Flag dependency on '%s' not available. Skipping condition.",
+                            prop.get("key", "unknown"),
+                        )
+                        continue
+                    matches = flag_matches
                 else:
                     matches = match_property(prop, property_values)
 
@@ -392,3 +451,20 @@ def relative_date_parse_for_feature_flag_matching(
         return parsed_dt
     else:
         return None
+
+
+# Re-export dependency graph functions for backward compatibility
+__all__ = [
+    "InconclusiveMatchError",
+    "CyclicDependencyError",
+    "DependencyGraph",
+    "DependencyGraphError",
+    "MissingDependencyError",
+    "build_dependency_graph",
+    "evaluate_flags_with_dependencies",
+    "match_flag_dependency",
+    "match_flag_property",
+    "match_feature_flag_properties",
+    "match_property",
+    "relative_date_parse_for_feature_flag_matching",
+]
