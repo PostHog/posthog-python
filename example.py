@@ -39,12 +39,27 @@ print(
 )
 
 
-# Capture an event
+# Capture an event with all feature flags
 posthog.capture(
     "event",
     distinct_id="distinct_id",
     properties={"property1": "value", "property2": "value"},
     send_feature_flags=True,
+)
+
+# Capture an event with specific feature flags using flag_keys
+posthog.capture(
+    "event-with-specific-flags",
+    distinct_id="distinct_id",
+    properties={"property1": "value", "property2": "value"},
+    send_feature_flags={
+        "only_evaluate_locally": True,
+        "flag_keys": [
+            "beta-feature",
+            "person-on-events-enabled",
+        ],  # Only evaluate these two flags
+        "person_properties": {"plan": "premium"},
+    },
 )
 
 print(posthog.feature_enabled("beta-feature", "distinct_id"))

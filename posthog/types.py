@@ -20,11 +20,14 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
             These properties will be merged with any existing person properties.
         group_properties: Group properties to use for feature flag evaluation specific to this event.
             Format: { group_type_name: { group_properties } }
+        flag_keys: List of specific feature flag keys to evaluate. Only these flags will be evaluated
+            and included in the event. If not provided, all flags will be evaluated.
     """
 
     only_evaluate_locally: Optional[bool]
     person_properties: Optional[dict[str, Any]]
     group_properties: Optional[dict[str, dict[str, Any]]]
+    flag_keys: Optional[list[str]]
 
 
 @dataclass(frozen=True)
