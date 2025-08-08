@@ -21,7 +21,7 @@ We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
 1. Run `uv venv env` (creates virtual environment called "env")
     * or `python3 -m venv env`
 2. Run `source env/bin/activate` (activates the virtual environment)
-3. Run `uv sync --extra dev --extra test` (installs the package in develop mode, along with test dependencies)
+3. Run `uv sync --extra dev --extra test --active` (installs the package in develop mode, along with test dependencies)
     * or `pip install -e ".[dev,test]"`
 4. you have to run `pre-commit install` to have auto linting pre commit
 5. Run `make test`
@@ -32,9 +32,9 @@ We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
 ```bash
 uv python install 3.9.19
 uv python pin 3.9.19
-uv venv
+uv venv env
 source env/bin/activate
-uv sync --extra dev --extra test
+uv sync --extra dev --extra test --active
 pre-commit install
 make test
 ```
