@@ -1,3 +1,8 @@
+# 6.6.0 - 2025-08-15
+
+- feat: Add `flag_keys_to_evaluate` parameter to optimize feature flag evaluation performance by only evaluating specified flags
+- feat: Add `flag_keys_filter` option to `send_feature_flags` for selective flag evaluation in capture events
+
 # 6.5.0 - 2025-08-08
 
 - feat: Add `$context_tags` to an event to know which properties were included as tags
