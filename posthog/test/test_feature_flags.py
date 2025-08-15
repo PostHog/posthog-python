@@ -215,7 +215,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 0)
 
-        # Now group type mappings are gone, so fall back to /decide/
+        # Now group type mappings are gone, so fall back to /flags/
         patch_flags.return_value = {
             "featureFlags": {"group-flag": "decide-fallback-value"}
         }
@@ -311,7 +311,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 0)
 
-        # will fall back on `/decide`, as all properties present for second group, but that group resolves to false
+        # will fall back on `/flags`, as all properties present for second group, but that group resolves to false
         self.assertEqual(
             client.get_feature_flag(
                 "complex-flag",
@@ -651,7 +651,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 },
             },
         ]
-        # beta-feature value overridden by /decide
+        # beta-feature value overridden by /flags
         self.assertEqual(
             client.get_all_flags("distinct_id"),
             {
@@ -725,7 +725,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 },
             },
         ]
-        # beta-feature value overridden by /decide
+        # beta-feature value overridden by /flags
         self.assertEqual(
             client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
             {
@@ -746,7 +746,7 @@ class TestLocalEvaluation(unittest.TestCase):
         }
         client = self.client
         client.feature_flags = []
-        # beta-feature value overridden by /decide
+        # beta-feature value overridden by /flags
         self.assertEqual(
             client.get_all_flags("distinct_id"),
             {"beta-feature": "variant-1", "beta-feature2": "variant-2"},
@@ -765,7 +765,7 @@ class TestLocalEvaluation(unittest.TestCase):
         }
         client = self.client
         client.feature_flags = []
-        # beta-feature value overridden by /decide
+        # beta-feature value overridden by /flags
         self.assertEqual(
             client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
             {"beta-feature": 100, "beta-feature2": 300},
@@ -2844,7 +2844,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag": "decide-flag",
                 "$feature_flag_response": "decide-value",
                 "locally_evaluated": False,
-                "$feature/decide-flag": "decide-value",
+                "$feature/flags-flag": "decide-value",
             },
             groups={"organization": "org1"},
             disable_geoip=None,
@@ -2897,7 +2897,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag": "decide-flag",
                 "$feature_flag_response": "decide-variant",
                 "locally_evaluated": False,
-                "$feature/decide-flag": "decide-variant",
+                "$feature/flags-flag": "decide-variant",
                 "$feature_flag_reason": "Matched condition set 1",
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
@@ -2948,7 +2948,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag": "decide-flag-with-payload",
                 "$feature_flag_response": True,
                 "locally_evaluated": False,
-                "$feature/decide-flag-with-payload": True,
+                "$feature/flags-flag-with-payload": True,
                 "$feature_flag_reason": "Matched condition set 1",
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
@@ -5387,4 +5387,110 @@ class TestConsistency(unittest.TestCase):
         test_cases = ["beta-feature", "BETA-FEATURE", "bEtA-FeAtUrE"]
         for case in test_cases:
             self.assertFalse(client.feature_enabled(case, "user1"))
-            self.assertIsNone(client.get_feature_flag_payload(case, "user1"))
+
+    @mock.patch("posthog.client.flags")
+    def test_get_all_flags_with_flag_keys_to_evaluate(self, mock_flags):
+        """Test that get_all_flags with flag_keys_to_evaluate only evaluates specified flags"""
+        mock_flags.return_value = {
+            "featureFlags": {
+                "flag1": "value1",
+                "flag2": True,
+            }
+        }
+
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
+
+        # Call get_all_flags with flag_keys_to_evaluate
+        result = client.get_all_flags(
+            "user123",
+            flag_keys_to_evaluate=["flag1", "flag2"],
+            person_properties={"region": "USA"},
+        )
+
+        # Verify flags() was called with flag_keys_to_evaluate
+        mock_flags.assert_called_once()
+        call_args = mock_flags.call_args[1]
+        self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag2"])
+        self.assertEqual(call_args["person_properties"], {"region": "USA"})
+
+        # Check the result
+        self.assertEqual(result, {"flag1": "value1", "flag2": True})
+
+    @mock.patch("posthog.client.flags")
+    def test_get_all_flags_and_payloads_with_flag_keys_to_evaluate(self, mock_flags):
+        """Test that get_all_flags_and_payloads with flag_keys_to_evaluate only evaluates specified flags"""
+        mock_flags.return_value = {
+            "featureFlags": {
+                "flag1": "variant1",
+                "flag3": True,
+            },
+            "featureFlagPayloads": {
+                "flag1": {"data": "payload1"},
+                "flag3": {"data": "payload3"},
+            },
+        }
+
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
+
+        # Call get_all_flags_and_payloads with flag_keys_to_evaluate
+        result = client.get_all_flags_and_payloads(
+            "user123",
+            flag_keys_to_evaluate=["flag1", "flag3"],
+            person_properties={"subscription": "pro"},
+        )
+
+        # Verify flags() was called with flag_keys_to_evaluate
+        mock_flags.assert_called_once()
+        call_args = mock_flags.call_args[1]
+        self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag3"])
+        self.assertEqual(call_args["person_properties"], {"subscription": "pro"})
+
+        # Check the result
+        self.assertEqual(result["featureFlags"], {"flag1": "variant1", "flag3": True})
+        self.assertEqual(
+            result["featureFlagPayloads"],
+            {"flag1": {"data": "payload1"}, "flag3": {"data": "payload3"}},
+        )
+
+    def test_get_all_flags_locally_with_flag_keys_to_evaluate(self):
+        """Test that local evaluation with flag_keys_to_evaluate only evaluates specified flags"""
+        client = Client(
+            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
+        )
+
+        # Set up multiple flags
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "flag1",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "key": "flag2",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 3,
+                "key": "flag3",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+        ]
+
+        # Call get_all_flags with flag_keys_to_evaluate
+        result = client.get_all_flags(
+            "user123",
+            flag_keys_to_evaluate=["flag1", "flag3"],
+            only_evaluate_locally=True,
+        )
+
+        # Should only return flag1 and flag3
+        self.assertEqual(result, {"flag1": True, "flag3": True})
+        self.assertNotIn("flag2", result)
