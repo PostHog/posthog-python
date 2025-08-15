@@ -2844,7 +2844,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag": "decide-flag",
                 "$feature_flag_response": "decide-value",
                 "locally_evaluated": False,
-                "$feature/flags-flag": "decide-value",
+                "$feature/decide-flag": "decide-value",
             },
             groups={"organization": "org1"},
             disable_geoip=None,
@@ -2897,7 +2897,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag": "decide-flag",
                 "$feature_flag_response": "decide-variant",
                 "locally_evaluated": False,
-                "$feature/flags-flag": "decide-variant",
+                "$feature/decide-flag": "decide-variant",
                 "$feature_flag_reason": "Matched condition set 1",
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
@@ -2948,7 +2948,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag": "decide-flag-with-payload",
                 "$feature_flag_response": True,
                 "locally_evaluated": False,
-                "$feature/flags-flag-with-payload": True,
+                "$feature/decide-flag-with-payload": True,
                 "$feature_flag_reason": "Matched condition set 1",
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
@@ -5413,7 +5413,9 @@ class TestConsistency(unittest.TestCase):
         mock_flags.assert_called_once()
         call_args = mock_flags.call_args[1]
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag2"])
-        self.assertEqual(call_args["person_properties"], {"region": "USA"})
+        self.assertEqual(
+            call_args["person_properties"], {"distinct_id": "user123", "region": "USA"}
+        )
 
         # Check the result
         self.assertEqual(result, {"flag1": "value1", "flag2": True})
@@ -5447,7 +5449,10 @@ class TestConsistency(unittest.TestCase):
         mock_flags.assert_called_once()
         call_args = mock_flags.call_args[1]
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag3"])
-        self.assertEqual(call_args["person_properties"], {"subscription": "pro"})
+        self.assertEqual(
+            call_args["person_properties"],
+            {"distinct_id": "user123", "subscription": "pro"},
+        )
 
         # Check the result
         self.assertEqual(result["featureFlags"], {"flag1": "variant1", "flag3": True})

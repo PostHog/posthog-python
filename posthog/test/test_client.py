@@ -1742,6 +1742,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "some_id"},
             group_properties={},
             geoip_disable=True,
+            flag_keys_to_evaluate=["random_key"],
         )
         patch_flags.reset_mock()
         client.feature_enabled(
@@ -1756,6 +1757,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "feature_enabled_distinct_id"},
             group_properties={},
             geoip_disable=True,
+            flag_keys_to_evaluate=["random_key"],
         )
         patch_flags.reset_mock()
         client.get_all_flags_and_payloads("all_flags_payloads_id")
@@ -1816,6 +1818,7 @@ class TestClient(unittest.TestCase):
                 "instance": {"$group_key": "app.posthog.com"},
             },
             geoip_disable=False,
+            flag_keys_to_evaluate=["random_key"],
         )
 
         patch_flags.reset_mock()
@@ -1842,6 +1845,7 @@ class TestClient(unittest.TestCase):
                 "instance": {"$group_key": "app.posthog.com"},
             },
             geoip_disable=False,
+            flag_keys_to_evaluate=["random_key"],
         )
 
         patch_flags.reset_mock()
@@ -2187,6 +2191,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2197,6 +2202,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2212,6 +2218,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": True,
             "person_properties": {"plan": "premium"},
             "group_properties": {"company": {"type": "enterprise"}},
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2223,6 +2230,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": {"user_id": "123"},
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2233,6 +2241,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
