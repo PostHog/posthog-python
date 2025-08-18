@@ -44,6 +44,7 @@ from posthog.types import (
     FlagsAndPayloads,
     FlagsResponse,
     FlagValue,
+    SendFeatureFlagsOptions,
     normalize_flags_response,
     to_flags_and_payloads,
     to_payloads,
@@ -618,7 +619,7 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
-    def _parse_send_feature_flags(self, send_feature_flags) -> dict:
+    def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
         """
         Parse and normalize send_feature_flags parameter into a standard format.
 
@@ -626,7 +627,7 @@ class Client(object):
             send_feature_flags: Either bool or SendFeatureFlagsOptions dict
 
         Returns:
-            dict: Normalized options with keys: should_send, only_evaluate_locally,
+            SendFeatureFlagsOptions: Normalized options with keys: should_send, only_evaluate_locally,
                   person_properties, group_properties, flag_keys_filter
 
         Raises:

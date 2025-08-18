@@ -9,6 +9,7 @@ FlagValue = Union[bool, str]
 BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 
 
+# Type alias for the send_feature_flags parameter
 class SendFeatureFlagsOptions(TypedDict, total=False):
     """Options for sending feature flags with capture events.
 
@@ -22,9 +23,11 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
             Format: { group_type_name: { group_properties } }
     """
 
+    should_send: bool
     only_evaluate_locally: Optional[bool]
     person_properties: Optional[dict[str, Any]]
     group_properties: Optional[dict[str, dict[str, Any]]]
+    flag_keys_filter: Optional[list[str]]
 
 
 @dataclass(frozen=True)
