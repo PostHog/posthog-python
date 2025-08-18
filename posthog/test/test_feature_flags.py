@@ -1361,6 +1361,8 @@ class TestLocalEvaluation(unittest.TestCase):
     def test_feature_flags_with_flag_dependencies(
         self, patch_get, patch_flags, mock_log
     ):
+        # Mock remote flags call to return empty for this flag (fallback returns None)
+        patch_flags.return_value = {"featureFlags": {}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -1377,6 +1379,7 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "operator": "exact",
                                     "value": True,
                                     "type": "flag",
+                                    "dependency_chain": ["beta-feature"],
                                 },
                                 {
                                     "key": "email",
@@ -1392,39 +1395,445 @@ class TestLocalEvaluation(unittest.TestCase):
             }
         ]
 
-        # Test that flag evaluation doesn't fail when encountering a flag dependency
-        # The flag should evaluate based on other conditions (email contains @example.com)
-        # Since flag dependencies aren't implemented, it should skip the flag condition
-        # and evaluate based on the email condition only
+        # Test that flag evaluation handles flag dependencies properly
+        # The flag has a dependency on "beta-feature" which doesn't exist locally
+        # Since the dependency doesn't exist, local evaluation should fail and fall back to remote
+        # Remote returns empty result, so final result is None
         feature_flag_match = client.get_feature_flag(
             "flag-with-dependencies",
             "test-user",
             person_properties={"email": "test@example.com"},
         )
-        self.assertEqual(feature_flag_match, True)
-        self.assertEqual(patch_flags.call_count, 0)
+        self.assertIsNone(feature_flag_match)
+        self.assertEqual(patch_flags.call_count, 1)
         self.assertEqual(patch_get.call_count, 0)
 
-        # Verify warning was logged for flag dependency
-        mock_log.warning.assert_called_with(
-            "Flag dependency filters are not supported in local evaluation. "
-            "Skipping condition for flag '%s' with dependency on flag '%s'",
-            "flag-with-dependencies",
-            "beta-feature",
-        )
-
-        # Test with email that doesn't match
+        # Test with email that doesn't match (should also fall back to remote due to missing dependency)
         feature_flag_match = client.get_feature_flag(
             "flag-with-dependencies",
             "test-user-2",
             person_properties={"email": "test@other.com"},
         )
-        self.assertEqual(feature_flag_match, False)
-        self.assertEqual(patch_flags.call_count, 0)
+        self.assertIsNone(feature_flag_match)
+        self.assertEqual(patch_flags.call_count, 2)  # Called twice now
         self.assertEqual(patch_get.call_count, 0)
 
-        # Verify warning was logged again for the second evaluation
-        self.assertEqual(mock_log.warning.call_count, 2)
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_simple_chain(self, patch_get, patch_flags):
+        """Test basic flag dependency: flag-b depends on flag-a"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag A",
+                "key": "flag-a",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "operator": "icontains",
+                                    "value": "@example.com",
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Flag B",
+                "key": "flag-b",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-a",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["flag-a"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # Test when dependency is satisfied
+        result = client.get_feature_flag(
+            "flag-b",
+            "test-user",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertEqual(result, True)
+
+        # Test when dependency is not satisfied
+        result = client.get_feature_flag(
+            "flag-b",
+            "test-user-2",
+            person_properties={"email": "test@other.com"},
+        )
+        self.assertEqual(result, False)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_circular_dependency(self, patch_get, patch_flags):
+        """Test circular dependency handling: flag-a depends on flag-b, flag-b depends on flag-a"""
+        # Mock remote flags call to return empty for these flags (fallback returns None)
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag A",
+                "key": "flag-a",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-b",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": [],  # Empty chain indicates circular dependency
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Flag B",
+                "key": "flag-b",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-a",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": [],  # Empty chain indicates circular dependency
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # Both flags should fall back to remote evaluation due to circular dependency
+        # Since we're not mocking the remote call, both should return None
+        result_a = client.get_feature_flag("flag-a", "test-user")
+        self.assertIsNone(result_a)
+
+        result_b = client.get_feature_flag("flag-b", "test-user")
+        self.assertIsNone(result_b)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_missing_flag(self, patch_get, patch_flags):
+        """Test handling of missing flag dependency"""
+        # Mock remote flags call to return empty for this flag (fallback returns None)
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag A",
+                "key": "flag-a",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "non-existent-flag",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["non-existent-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # Should fall back to remote evaluation because dependency doesn't exist
+        # Since we're not mocking the remote call, should return None
+        result = client.get_feature_flag("flag-a", "test-user")
+        self.assertIsNone(result)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_complex_chain(self, patch_get, patch_flags):
+        """Test complex dependency chain: flag-d -> flag-c -> [flag-a, flag-b]"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag A",
+                "key": "flag-a",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Flag B",
+                "key": "flag-b",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 3,
+                "name": "Flag C",
+                "key": "flag-c",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-a",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["flag-a"],
+                                },
+                                {
+                                    "key": "flag-b",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["flag-b"],
+                                },
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 4,
+                "name": "Flag D",
+                "key": "flag-d",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-c",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["flag-a", "flag-b", "flag-c"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # All dependencies satisfied - should return True
+        result = client.get_feature_flag("flag-d", "test-user")
+        self.assertEqual(result, True)
+
+        # Make flag-a inactive - should break the chain
+        client.feature_flags[0]["active"] = False
+        result = client.get_feature_flag("flag-d", "test-user")
+        self.assertEqual(result, False)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_mixed_conditions(self, patch_get, patch_flags):
+        """Test flag dependency mixed with other property conditions"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Mixed Flag",
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                },
+                                {
+                                    "key": "email",
+                                    "operator": "icontains",
+                                    "value": "@example.com",
+                                    "type": "person",
+                                },
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # Both flag dependency and email condition satisfied
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "test-user",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertEqual(result, True)
+
+        # Flag dependency satisfied but email condition not satisfied
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "test-user-2",
+            person_properties={"email": "test@other.com"},
+        )
+        self.assertEqual(result, False)
+
+        # Email condition satisfied but flag dependency not satisfied
+        client.feature_flags[0]["active"] = False
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "test-user-3",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertEqual(result, False)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_malformed_chain(self, patch_get, patch_flags):
+        """Test handling of malformed dependency chains"""
+        # Mock remote flags call to return empty for this flag (fallback returns None)
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Missing Chain Flag",
+                "key": "missing-chain-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    # No dependency_chain property - should handle gracefully
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # Should fall back to remote evaluation when dependency_chain is missing
+        # Since we're not mocking the remote call, should return None
+        result = client.get_feature_flag("missing-chain-flag", "test-user")
+        self.assertIsNone(result)
+
+    def test_flag_dependencies_without_context_raises_inconclusive(self):
+        """Test that missing flags_by_key raises InconclusiveMatchError"""
+        from posthog.feature_flags import (
+            evaluate_flag_dependency,
+            InconclusiveMatchError,
+        )
+
+        property_with_flag_dep = {
+            "key": "some-flag",
+            "operator": "exact",
+            "value": True,
+            "type": "flag",
+            "dependency_chain": ["some-flag"],
+        }
+
+        # Should raise InconclusiveMatchError when flags_by_key is None
+        with self.assertRaises(InconclusiveMatchError) as cm:
+            evaluate_flag_dependency(
+                property_with_flag_dep,
+                flags_by_key=None,  # This should trigger the error
+                evaluation_cache={},
+                distinct_id="test-user",
+                properties={},
+                cohort_properties={},
+            )
+
+        self.assertIn("Cannot evaluate flag dependency", str(cm.exception))
+        self.assertIn("some-flag", str(cm.exception))
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
