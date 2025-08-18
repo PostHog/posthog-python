@@ -1,7 +1,32 @@
 # PostHog Python library example
+#
+# Configuration:
+# 1. Copy .env.example to .env
+# 2. Update .env with your actual PostHog API keys and host
+# 3. Run this script - it will automatically load values from .env
+#
+# The script will fall back to default values if .env is not found.
+
 import argparse
+import os
 
 import posthog
+
+
+def load_env_file():
+    """Load environment variables from .env file if it exists."""
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ.setdefault(key.strip(), value.strip())
+
+
+# Load .env file if it exists
+load_env_file()
 
 # Add argument parsing
 parser = argparse.ArgumentParser(description="PostHog Python library example")
@@ -14,13 +39,14 @@ args = parser.parse_args()
 
 posthog.debug = True
 
-# You can find this key on the /setup page in PostHog
-posthog.project_api_key = "phc_gtWmTq3Pgl06u4sZY3TRcoQfp42yfuXHKoe8ZVSR6Kh"
-posthog.personal_api_key = "phx_fiRCOQkTA3o2ePSdLrFDAILLHjMu2Mv52vUi8MNruIm"
+# Load configuration from environment variables with fallbacks
+# You can find your project API key on the /setup page in PostHog
+posthog.project_api_key = os.getenv("POSTHOG_PROJECT_API_KEY", "phc_gtWmTq3Pgl06u4sZY3TRcoQfp42yfuXHKoe8ZVSR6Kh")
+posthog.personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "phx_fiRCOQkTA3o2ePSdLrFDAILLHjMu2Mv52vUi8MNruIm")
 
 # Where you host PostHog, with no trailing /.
 # You can remove this line if you're using posthog.com
-posthog.host = "http://localhost:8000"
+posthog.host = os.getenv("POSTHOG_HOST", "http://localhost:8000")
 posthog.poll_interval = 10
 
 print(
