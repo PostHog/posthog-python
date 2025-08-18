@@ -112,7 +112,7 @@ posthog.set(distinct_id="new_distinct_id", properties={"current_browser": "Firef
 
 # Local Evaluation
 
-# If flag has City=Sydney, this call doesn't go to `/decide`
+# If flag has City=Sydney, this call doesn't go to `/flags`
 print(
     posthog.feature_enabled(
         "test-flag",
