@@ -41,7 +41,9 @@ posthog.debug = True
 
 # Load configuration from environment variables with fallbacks
 # You can find your project API key on the /setup page in PostHog
-posthog.project_api_key = os.getenv("POSTHOG_PROJECT_API_KEY", "phc_gtWmTq3Pgl06u4sZY3TRcoQfp42yfuXHKoe8ZVSR6Kh")
+project_key = os.getenv("POSTHOG_PROJECT_API_KEY", "phc_gtWmTq3Pgl06u4sZY3TRcoQfp42yfuXHKoe8ZVSR6Kh")
+posthog.api_key = project_key  # Required for module-level functions
+posthog.project_api_key = project_key  # Used for local evaluation and other features
 posthog.personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "phx_fiRCOQkTA3o2ePSdLrFDAILLHjMu2Mv52vUi8MNruIm")
 
 # Where you host PostHog, with no trailing /.
