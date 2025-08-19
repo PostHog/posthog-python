@@ -63,7 +63,7 @@ try:
     # If we get here without exception, credentials work
     print("✅ Authentication successful!")
     print(f"   Project API Key: {project_key[:9]}...")
-    print(f"   Personal API Key: {personal_api_key[:9]}...")
+    print("   Personal API Key: [REDACTED]")
     print(f"   Host: {host}\n\n")
 
 except Exception as e:
