@@ -1204,6 +1204,9 @@ class Client(object):
         person_properties = person_properties or {}
         group_properties = group_properties or {}
 
+        # Create evaluation cache for flag dependencies
+        evaluation_cache: dict[str, Optional[FlagValue]] = {}
+
         if feature_flag.get("ensure_experience_continuity", False):
             raise InconclusiveMatchError("Flag has experience continuity enabled")
 
@@ -1237,11 +1240,20 @@ class Client(object):
 
             focused_group_properties = group_properties[group_name]
             return match_feature_flag_properties(
-                feature_flag, groups[group_name], focused_group_properties
+                feature_flag,
+                groups[group_name],
+                focused_group_properties,
+                self.feature_flags_by_key,
+                evaluation_cache,
             )
         else:
             return match_feature_flag_properties(
-                feature_flag, distinct_id, person_properties, self.cohorts
+                feature_flag,
+                distinct_id,
+                person_properties,
+                self.cohorts,
+                self.feature_flags_by_key,
+                evaluation_cache,
             )
 
     def feature_enabled(

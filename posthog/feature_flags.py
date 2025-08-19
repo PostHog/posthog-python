@@ -55,8 +55,100 @@ def variant_lookup_table(feature_flag):
     return lookup_table
 
 
+def evaluate_flag_dependency(
+    property, flags_by_key, evaluation_cache, distinct_id, properties, cohort_properties
+):
+    """
+    Evaluate a flag dependency property according to the dependency chain algorithm.
+
+    Args:
+        property: Flag property with type="flag" and dependency_chain
+        flags_by_key: Dictionary of all flags by their key
+        evaluation_cache: Cache for storing evaluation results
+        distinct_id: The distinct ID being evaluated
+        properties: Person properties for evaluation
+        cohort_properties: Cohort properties for evaluation
+
+    Returns:
+        bool: True if all dependencies in the chain evaluate to True, False otherwise
+    """
+    if flags_by_key is None or evaluation_cache is None:
+        # Cannot evaluate flag dependencies without required context
+        raise InconclusiveMatchError(
+            f"Cannot evaluate flag dependency on '{property.get('key', 'unknown')}' without flags_by_key and evaluation_cache"
+        )
+
+    # Check if dependency_chain is present - it should always be provided for flag dependencies
+    if "dependency_chain" not in property:
+        # Missing dependency_chain indicates malformed server data
+        raise InconclusiveMatchError(
+            f"Flag dependency property for '{property.get('key', 'unknown')}' is missing required 'dependency_chain' field"
+        )
+
+    dependency_chain = property["dependency_chain"]
+
+    # Handle circular dependency (empty chain means circular)
+    if len(dependency_chain) == 0:
+        log.debug(f"Circular dependency detected for flag: {property.get('key')}")
+        raise InconclusiveMatchError(
+            f"Circular dependency detected for flag '{property.get('key', 'unknown')}'"
+        )
+
+    # Evaluate all dependencies in the chain order
+    for dep_flag_key in dependency_chain:
+        if dep_flag_key not in evaluation_cache:
+            # Need to evaluate this dependency first
+            dep_flag = flags_by_key.get(dep_flag_key)
+            if not dep_flag:
+                # Missing flag dependency - cannot evaluate locally
+                evaluation_cache[dep_flag_key] = None
+                raise InconclusiveMatchError(
+                    f"Cannot evaluate flag dependency '{dep_flag_key}' - flag not found in local flags"
+                )
+            else:
+                # Check if the flag is active (same check as in client._compute_flag_locally)
+                if not dep_flag.get("active"):
+                    evaluation_cache[dep_flag_key] = False
+                else:
+                    # Recursively evaluate the dependency
+                    try:
+                        dep_result = match_feature_flag_properties(
+                            dep_flag,
+                            distinct_id,
+                            properties,
+                            cohort_properties,
+                            flags_by_key,
+                            evaluation_cache,
+                        )
+                        evaluation_cache[dep_flag_key] = dep_result
+                    except InconclusiveMatchError as e:
+                        # If we can't evaluate a dependency, store None and propagate the error
+                        evaluation_cache[dep_flag_key] = None
+                        raise InconclusiveMatchError(
+                            f"Cannot evaluate flag dependency '{dep_flag_key}': {e}"
+                        ) from e
+
+        # Check the cached result
+        cached_result = evaluation_cache[dep_flag_key]
+        if cached_result is None:
+            # Previously inconclusive - raise error again
+            raise InconclusiveMatchError(
+                f"Flag dependency '{dep_flag_key}' was previously inconclusive"
+            )
+        elif not cached_result:
+            # Definitive False result - dependency failed
+            return False
+
+    return True
+
+
 def match_feature_flag_properties(
-    flag, distinct_id, properties, cohort_properties=None
+    flag,
+    distinct_id,
+    properties,
+    cohort_properties=None,
+    flags_by_key=None,
+    evaluation_cache=None,
 ) -> FlagValue:
     flag_conditions = (flag.get("filters") or {}).get("groups") or []
     is_inconclusive = False
@@ -79,7 +171,13 @@ def match_feature_flag_properties(
             # if any one condition resolves to True, we can shortcircuit and return
             # the matching variant
             if is_condition_match(
-                flag, distinct_id, condition, properties, cohort_properties
+                flag,
+                distinct_id,
+                condition,
+                properties,
+                cohort_properties,
+                flags_by_key,
+                evaluation_cache,
             ):
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
@@ -101,22 +199,36 @@ def match_feature_flag_properties(
 
 
 def is_condition_match(
-    feature_flag, distinct_id, condition, properties, cohort_properties
+    feature_flag,
+    distinct_id,
+    condition,
+    properties,
+    cohort_properties,
+    flags_by_key=None,
+    evaluation_cache=None,
 ) -> bool:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
         for prop in condition.get("properties"):
             property_type = prop.get("type")
             if property_type == "cohort":
-                matches = match_cohort(prop, properties, cohort_properties)
-            elif property_type == "flag":
-                log.warning(
-                    "Flag dependency filters are not supported in local evaluation. "
-                    "Skipping condition for flag '%s' with dependency on flag '%s'",
-                    feature_flag.get("key", "unknown"),
-                    prop.get("key", "unknown"),
+                matches = match_cohort(
+                    prop,
+                    properties,
+                    cohort_properties,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
                 )
-                continue
+            elif property_type == "flag":
+                matches = evaluate_flag_dependency(
+                    prop,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
+                    properties,
+                    cohort_properties,
+                )
             else:
                 matches = match_property(prop, properties)
             if not matches:
@@ -264,7 +376,14 @@ def match_property(property, property_values) -> bool:
     raise InconclusiveMatchError(f"Unknown operator {operator}")
 
 
-def match_cohort(property, property_values, cohort_properties) -> bool:
+def match_cohort(
+    property,
+    property_values,
+    cohort_properties,
+    flags_by_key=None,
+    evaluation_cache=None,
+    distinct_id=None,
+) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
     #     "cohort_id": {
@@ -281,10 +400,24 @@ def match_cohort(property, property_values, cohort_properties) -> bool:
         )
 
     property_group = cohort_properties[cohort_id]
-    return match_property_group(property_group, property_values, cohort_properties)
+    return match_property_group(
+        property_group,
+        property_values,
+        cohort_properties,
+        flags_by_key,
+        evaluation_cache,
+        distinct_id,
+    )
 
 
-def match_property_group(property_group, property_values, cohort_properties) -> bool:
+def match_property_group(
+    property_group,
+    property_values,
+    cohort_properties,
+    flags_by_key=None,
+    evaluation_cache=None,
+    distinct_id=None,
+) -> bool:
     if not property_group:
         return True
 
@@ -301,7 +434,14 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
         # a nested property group
         for prop in properties:
             try:
-                matches = match_property_group(prop, property_values, cohort_properties)
+                matches = match_property_group(
+                    prop,
+                    property_values,
+                    cohort_properties,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
+                )
                 if property_group_type == "AND":
                     if not matches:
                         return False
@@ -324,14 +464,23 @@ def match_property_group(property_group, property_values, cohort_properties) -> 
         for prop in properties:
             try:
                 if prop.get("type") == "cohort":
-                    matches = match_cohort(prop, property_values, cohort_properties)
-                elif prop.get("type") == "flag":
-                    log.warning(
-                        "Flag dependency filters are not supported in local evaluation. "
-                        "Skipping condition with dependency on flag '%s'",
-                        prop.get("key", "unknown"),
+                    matches = match_cohort(
+                        prop,
+                        property_values,
+                        cohort_properties,
+                        flags_by_key,
+                        evaluation_cache,
+                        distinct_id,
                     )
-                    continue
+                elif prop.get("type") == "flag":
+                    matches = evaluate_flag_dependency(
+                        prop,
+                        flags_by_key,
+                        evaluation_cache,
+                        distinct_id,
+                        property_values,
+                        cohort_properties,
+                    )
                 else:
                     matches = match_property(prop, property_values)
 

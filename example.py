@@ -82,10 +82,11 @@ print("🚀 PostHog Python SDK Demo - Choose an example to run:\n")
 print("1. Identify and capture examples")
 print("2. Feature flag local evaluation examples")
 print("3. Feature flag payload examples")
-print("4. Context management and tagging examples")
-print("5. Run all examples")
-print("6. Exit")
-choice = input("\nEnter your choice (1-6): ").strip()
+print("4. Flag dependencies examples")
+print("5. Context management and tagging examples")
+print("6. Run all examples")
+print("7. Exit")
+choice = input("\nEnter your choice (1-7): ").strip()
 
 if choice == "1":
     print("\n" + "=" * 60)
@@ -215,6 +216,66 @@ elif choice == "3":
 
 elif choice == "4":
     print("\n" + "=" * 60)
+    print("FLAG DEPENDENCIES EXAMPLES")
+    print("=" * 60)
+    print("🔗 Testing flag dependencies with local evaluation...")
+    print(
+        "   Flag structure: 'test-flag-dependency' depends on 'beta-feature' being enabled"
+    )
+    print("")
+    print("📋 Required setup (if 'test-flag-dependency' doesn't exist):")
+    print("   1. Create feature flag 'beta-feature':")
+    print("      - Condition: email contains '@example.com'")
+    print("      - Rollout: 100%")
+    print("   2. Create feature flag 'test-flag-dependency':")
+    print("      - Condition: flag 'beta-feature' is enabled")
+    print("      - Rollout: 100%")
+    print("")
+
+    posthog.debug = True
+
+    # Test @example.com user (should satisfy dependency if flags exist)
+    result1 = posthog.feature_enabled(
+        "test-flag-dependency",
+        "example_user",
+        person_properties={"email": "user@example.com"},
+        only_evaluate_locally=True,
+    )
+    print(f"✅ @example.com user (test-flag-dependency): {result1}")
+
+    # Test non-example.com user (dependency should not be satisfied)
+    result2 = posthog.feature_enabled(
+        "test-flag-dependency",
+        "regular_user",
+        person_properties={"email": "user@other.com"},
+        only_evaluate_locally=True,
+    )
+    print(f"❌ Regular user (test-flag-dependency): {result2}")
+
+    # Test beta-feature directly for comparison
+    beta1 = posthog.feature_enabled(
+        "beta-feature",
+        "example_user",
+        person_properties={"email": "user@example.com"},
+        only_evaluate_locally=True,
+    )
+    beta2 = posthog.feature_enabled(
+        "beta-feature",
+        "regular_user",
+        person_properties={"email": "user@other.com"},
+        only_evaluate_locally=True,
+    )
+    print(f"📊 Beta feature comparison - @example.com: {beta1}, regular: {beta2}")
+
+    print("\n🎯 Results Summary:")
+    print(
+        f"   - Flag dependencies evaluated locally: {'✅ YES' if result1 != result2 else '❌ NO'}"
+    )
+    print("   - Zero API calls needed: ✅ YES (all evaluated locally)")
+    print("   - Python SDK supports flag dependencies: ✅ YES")
+
+elif choice == "5":
+    print("\n" + "=" * 60)
     print("CONTEXT MANAGEMENT AND TAGGING EXAMPLES")
     print("=" * 60)
 
@@ -274,7 +335,7 @@ elif choice == "4":
     process_order("12345")
     process_payment("67890")
 
-elif choice == "5":
+elif choice == "6":
     print("\n🔄 Running all examples...")
 
     # Run example 1
@@ -308,6 +369,23 @@ elif choice == "5":
     print(f"Payload: {posthog.get_feature_flag_payload('beta-feature', 'distinct_id')}")
 
     # Run example 4
+    print(f"\n{'🔸' * 20} FLAG DEPENDENCIES {'🔸' * 20}")
+    print("🔗 Testing flag dependencies...")
+    result1 = posthog.feature_enabled(
+        "test-flag-dependency",
+        "demo_user",
+        person_properties={"email": "user@example.com"},
+        only_evaluate_locally=True,
+    )
+    result2 = posthog.feature_enabled(
+        "test-flag-dependency",
+        "demo_user2",
+        person_properties={"email": "user@other.com"},
+        only_evaluate_locally=True,
+    )
+    print(f"✅ @example.com user: {result1}, regular user: {result2}")
+
+    # Run example 5
     print(f"\n{'🔸' * 20} CONTEXT MANAGEMENT {'🔸' * 20}")
     print("🏷️ Testing context management...")
     with posthog.new_context():
@@ -315,13 +393,13 @@ elif choice == "5":
         posthog.capture("demo_completed")
         print("✅ Demo completed with context tags")
 
-elif choice == "6":
+elif choice == "7":
     print("👋 Goodbye!")
     posthog.shutdown()
     exit()
 
 else:
-    print("❌ Invalid choice. Please run again and select 1-6.")
+    print("❌ Invalid choice. Please run again and select 1-7.")
     posthog.shutdown()
     exit()
 
