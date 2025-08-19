@@ -2009,7 +2009,7 @@ class Client(object):
             for group_name in groups:
                 all_group_properties[group_name] = {
                     "$group_key": groups[group_name],
-                    **(group_properties.get(group_name) or {}),
+                    **((group_properties or {}).get(group_name) or {}),
                 }
 
         return all_person_properties, all_group_properties
