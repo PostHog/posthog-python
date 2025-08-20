@@ -380,12 +380,8 @@ def generate_sdk_documentation():
     # Clean types of empty types
 
     # Remove types that have no properties and no examples
-    for type_info in types_list[:]:
-        has_properties = len(type_info["properties"]) > 0
-        has_example = type_info["example"] != ""
-
-        if not (has_properties or has_example):
-            types_list.remove(type_info)
+    # Remove types that have no properties and no examples
+    types_list = [t for t in types_list if len(t['properties']) > 0 or t['example'] != '']
 
     # Collect classes
     classes_list = []
