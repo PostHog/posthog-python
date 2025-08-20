@@ -329,7 +329,7 @@ class Client(object):
                 only these flags will be evaluated, improving performance.
 
         Category:
-            Feature Flags
+            Feature flags
         """
         resp_data = self.get_flags_decision(
             distinct_id,
@@ -368,7 +368,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         resp_data = self.get_flags_decision(
             distinct_id,
@@ -407,7 +407,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         resp = self.get_flags_decision(
             distinct_id,
@@ -446,7 +446,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         groups = groups or {}
         person_properties = person_properties or {}
@@ -1169,7 +1169,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         if not self.personal_api_key:
             self.log.warning(
@@ -1291,7 +1291,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         response = self.get_feature_flag(
             key,
@@ -1499,7 +1499,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         feature_flag_result = self.get_feature_flag_result(
             key,
@@ -1589,7 +1589,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         feature_flag_result = self._get_feature_flag_result(
             key,
@@ -1759,7 +1759,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         response = self.get_all_flags_and_payloads(
             distinct_id,
@@ -1803,7 +1803,7 @@ class Client(object):
             ```
 
         Category:
-            Feature Flags
+            Feature flags
         """
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}

@@ -377,6 +377,16 @@ def generate_sdk_documentation():
             except Exception as e:
                 print(f"Error analyzing type {name}: {e}")
 
+    # Clean types of empty types
+
+    # Remove types that have no properties and no examples
+    for type_info in types_list[:]:
+        has_properties = len(type_info["properties"]) > 0
+        has_example = type_info["example"] != ""
+
+        if not (has_properties or has_example):
+            types_list.remove(type_info)
+
     # Collect classes
     classes_list = []
 
@@ -419,6 +429,19 @@ def generate_sdk_documentation():
             }
         )
 
+    # Collect categories from functions
+    categories = ["Initialization", "Identification", "Capture"]
+    for class_info in classes_list:
+        if "functions" in class_info:
+            for func in class_info["functions"]:
+                # I know this is O(n^2) but we're dealing with a script at known finite limits :)
+                if (
+                    "category" in func
+                    and func["category"] not in categories
+                    and func["category"]
+                ):
+                    categories.append(func["category"])
+
     # Create the final structure
     result = {
         "id": "posthog-python",
@@ -426,6 +449,7 @@ def generate_sdk_documentation():
         "info": sdk_info,
         "types": types_list,
         "classes": classes_list,
+        "categories": categories,
     }
 
     return result
