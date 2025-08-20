@@ -36,7 +36,6 @@ posthog/client.py:0: error: "None" has no attribute "start"  [attr-defined]
 posthog/client.py:0: error: "None" has no attribute "get"  [attr-defined]
 posthog/client.py:0: error: Statement is unreachable  [unreachable]
 posthog/client.py:0: error: Statement is unreachable  [unreachable]
-example.py:0: error: Statement is unreachable  [unreachable]
 posthog/ai/utils.py:0: error: Need type annotation for "output" (hint: "output: list[<type>] = ...")  [var-annotated]
 posthog/ai/utils.py:0: error: Function "builtins.any" is not valid as a type  [valid-type]
 posthog/ai/utils.py:0: note: Perhaps you meant "typing.Any" instead of "any"?

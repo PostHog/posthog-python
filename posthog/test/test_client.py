@@ -2,17 +2,18 @@ import time
 import unittest
 from datetime import datetime
 from uuid import uuid4
-from posthog.contexts import get_context_session_id, set_context_session, new_context
 
 import mock
 import six
 from parameterized import parameterized
 
 from posthog.client import Client
+from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
+from posthog.contexts import tag
 
 
 class TestClient(unittest.TestCase):
@@ -647,8 +648,8 @@ class TestClient(unittest.TestCase):
                 timeout=3,
                 distinct_id="distinct_id",
                 groups={},
-                person_properties=None,
-                group_properties=None,
+                person_properties={},
+                group_properties={},
                 geoip_disable=True,
             )
 
@@ -711,8 +712,8 @@ class TestClient(unittest.TestCase):
                 timeout=12,
                 distinct_id="distinct_id",
                 groups={},
-                person_properties=None,
-                group_properties=None,
+                person_properties={},
+                group_properties={},
                 geoip_disable=False,
             )
 
@@ -1741,6 +1742,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "some_id"},
             group_properties={},
             geoip_disable=True,
+            flag_keys_to_evaluate=["random_key"],
         )
         patch_flags.reset_mock()
         client.feature_enabled(
@@ -1755,6 +1757,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "feature_enabled_distinct_id"},
             group_properties={},
             geoip_disable=True,
+            flag_keys_to_evaluate=["random_key"],
         )
         patch_flags.reset_mock()
         client.get_all_flags_and_payloads("all_flags_payloads_id")
@@ -1815,6 +1818,7 @@ class TestClient(unittest.TestCase):
                 "instance": {"$group_key": "app.posthog.com"},
             },
             geoip_disable=False,
+            flag_keys_to_evaluate=["random_key"],
         )
 
         patch_flags.reset_mock()
@@ -1841,6 +1845,7 @@ class TestClient(unittest.TestCase):
                 "instance": {"$group_key": "app.posthog.com"},
             },
             geoip_disable=False,
+            flag_keys_to_evaluate=["random_key"],
         )
 
         patch_flags.reset_mock()
@@ -2057,7 +2062,7 @@ class TestClient(unittest.TestCase):
 
     def test_set_context_session_override_in_capture(self):
         """Test that explicit session ID overrides context session ID in capture"""
-        from posthog.contexts import set_context_session, new_context
+        from posthog.contexts import new_context, set_context_session
 
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
@@ -2158,6 +2163,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(result, {"test": "payload"})
         patch_remote_config.assert_called_once_with(
             "test-personal-key",
+            FAKE_TEST_API_KEY,
             client.host,
             "test-flag",
             timeout=client.feature_flags_request_timeout_seconds,
@@ -2185,6 +2191,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2195,6 +2202,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2210,6 +2218,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": True,
             "person_properties": {"plan": "premium"},
             "group_properties": {"company": {"type": "enterprise"}},
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2221,6 +2230,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": {"user_id": "123"},
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2231,6 +2241,7 @@ class TestClient(unittest.TestCase):
             "only_evaluate_locally": None,
             "person_properties": None,
             "group_properties": None,
+            "flag_keys_filter": None,
         }
         self.assertEqual(result, expected)
 
@@ -2246,3 +2257,169 @@ class TestClient(unittest.TestCase):
         with self.assertRaises(TypeError) as cm:
             client._parse_send_feature_flags(None)
         self.assertIn("Invalid type for send_feature_flags", str(cm.exception))
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_flag_keys_filter(self, patch_flags):
+        """Test that SendFeatureFlagsOptions with flag_keys_filter only evaluates specified flags"""
+        # When flag_keys_to_evaluate is provided, the API should only return the requested flags
+        patch_flags.return_value = {
+            "featureFlags": {
+                "flag1": "value1",
+                "flag3": "value3",
+            }
+        }
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+
+            send_options = {
+                "flag_keys_filter": ["flag1", "flag3"],
+                "person_properties": {"subscription": "pro"},
+            }
+
+            msg_uuid = client.capture(
+                "test event", distinct_id="distinct_id", send_feature_flags=send_options
+            )
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Verify flags() was called with flag_keys_to_evaluate
+            patch_flags.assert_called_once()
+            call_args = patch_flags.call_args[1]
+            self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag3"])
+            self.assertEqual(call_args["person_properties"], {"subscription": "pro"})
+
+            # Check the message includes only the filtered flags
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["properties"]["$feature/flag1"], "value1")
+            self.assertEqual(msg["properties"]["$feature/flag3"], "value3")
+            # flag2 should not be included since it wasn't requested
+            self.assertNotIn("$feature/flag2", msg["properties"])
+
+    @mock.patch("posthog.client.batch_post")
+    def test_get_feature_flag_result_with_empty_string_payload(self, patch_batch_post):
+        """Test that get_feature_flag_result returns a FeatureFlagResult when payload is empty string"""
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test_personal_api_key",
+            sync_mode=True,
+        )
+
+        # Set up local evaluation with a flag that has empty string payload
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Test flag",
+                "key": "test-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "rollout_percentage": None,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": None,
+                            "variant": "empty-variant",
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {
+                                "key": "empty-variant",
+                                "name": "Empty Variant",
+                                "rollout_percentage": 100,
+                            }
+                        ]
+                    },
+                    "payloads": {"empty-variant": ""},  # Empty string payload
+                },
+            }
+        ]
+
+        # Test get_feature_flag_result
+        result = client.get_feature_flag_result(
+            "test-flag", "test-user", only_evaluate_locally=True
+        )
+
+        # Should return a FeatureFlagResult, not None
+        self.assertIsNotNone(result)
+        self.assertEqual(result.key, "test-flag")
+        self.assertEqual(result.get_value(), "empty-variant")
+        self.assertEqual(result.payload, "")  # Should be empty string, not None
+
+    @mock.patch("posthog.client.batch_post")
+    def test_get_all_flags_and_payloads_with_empty_string(self, patch_batch_post):
+        """Test that get_all_flags_and_payloads includes flags with empty string payloads"""
+        client = Client(
+            FAKE_TEST_API_KEY,
+            personal_api_key="test_personal_api_key",
+            sync_mode=True,
+        )
+
+        # Set up multiple flags with different payload types
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag with empty payload",
+                "key": "empty-payload-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "variant": "variant1"}],
+                    "multivariate": {
+                        "variants": [{"key": "variant1", "rollout_percentage": 100}]
+                    },
+                    "payloads": {"variant1": ""},  # Empty string
+                },
+            },
+            {
+                "id": 2,
+                "name": "Flag with normal payload",
+                "key": "normal-payload-flag",
+                "is_simple_flag": False,
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "variant": "variant2"}],
+                    "multivariate": {
+                        "variants": [{"key": "variant2", "rollout_percentage": 100}]
+                    },
+                    "payloads": {"variant2": "normal payload"},
+                },
+            },
+        ]
+
+        result = client.get_all_flags_and_payloads(
+            "test-user", only_evaluate_locally=True
+        )
+
+        # Check that both flags are included
+        self.assertEqual(result["featureFlags"]["empty-payload-flag"], "variant1")
+        self.assertEqual(result["featureFlags"]["normal-payload-flag"], "variant2")
+
+        # Check that empty string payload is included (not filtered out)
+        self.assertIn("empty-payload-flag", result["featureFlagPayloads"])
+        self.assertEqual(result["featureFlagPayloads"]["empty-payload-flag"], "")
+        self.assertEqual(
+            result["featureFlagPayloads"]["normal-payload-flag"], "normal payload"
+        )
+
+    def test_context_tags_added(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+
+            with new_context():
+                tag("random_tag", 12345)
+                client.capture("python test event", distinct_id="distinct_id")
+
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+            self.assertEqual(msg["properties"]["$context_tags"], ["random_tag"])

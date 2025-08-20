@@ -1,3 +1,32 @@
+# 6.6.0 - 2025-08-15
+
+- feat: Add `flag_keys_to_evaluate` parameter to optimize feature flag evaluation performance by only evaluating specified flags
+- feat: Add `flag_keys_filter` option to `send_feature_flags` for selective flag evaluation in capture events
+
+# 6.5.0 - 2025-08-08
+
+- feat: Add `$context_tags` to an event to know which properties were included as tags
+
+# 6.4.1 - 2025-08-06
+
+- fix: Always pass project API key in `remote_config` requests for deterministic project routing
+
+# 6.4.0 - 2025-08-05
+
+- feat: support Vertex AI for Gemini
+
+# 6.3.4 - 2025-08-04
+
+- fix: set `$ai_tools` for all providers and `$ai_output_choices` for all non-streaming provider flows properly
+
+# 6.3.3 - 2025-08-01
+
+- fix: `get_feature_flag_result` now correctly returns FeatureFlagResult when payload is empty string instead of None
+
+# 6.3.2 - 2025-07-31
+
+- fix: Anthropic's tool calls are now handled properly
+
 # 6.3.0 - 2025-07-22
 
 - feat: Enhanced `send_feature_flags` parameter to accept `SendFeatureFlagsOptions` object for declarative control over local/remote evaluation and custom properties

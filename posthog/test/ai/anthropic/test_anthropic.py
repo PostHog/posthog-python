@@ -88,6 +88,56 @@ def mock_anthropic_response_with_cached_tokens():
     )
 
 
+@pytest.fixture
+def mock_anthropic_response_with_tool_calls():
+    return Message(
+        id="msg_456",
+        type="message",
+        role="assistant",
+        content=[
+            {"type": "text", "text": "I'll help you check the weather."},
+            {"type": "text", "text": " Let me look that up."},
+            {
+                "type": "tool_use",
+                "id": "toolu_abc123",
+                "name": "get_weather",
+                "input": {"location": "San Francisco"},
+            },
+        ],
+        model="claude-3-5-sonnet-20241022",
+        usage=Usage(
+            input_tokens=25,
+            output_tokens=15,
+        ),
+        stop_reason="tool_use",
+        stop_sequence=None,
+    )
+
+
+@pytest.fixture
+def mock_anthropic_response_tool_calls_only():
+    return Message(
+        id="msg_789",
+        type="message",
+        role="assistant",
+        content=[
+            {
+                "type": "tool_use",
+                "id": "toolu_def456",
+                "name": "get_weather",
+                "input": {"location": "New York", "unit": "fahrenheit"},
+            }
+        ],
+        model="claude-3-5-sonnet-20241022",
+        usage=Usage(
+            input_tokens=30,
+            output_tokens=12,
+        ),
+        stop_reason="tool_use",
+        stop_sequence=None,
+    )
+
+
 def test_basic_completion(mock_client, mock_anthropic_response):
     with patch(
         "anthropic.resources.Messages.create", return_value=mock_anthropic_response
@@ -112,7 +162,10 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -286,7 +339,9 @@ def test_basic_integration(mock_client):
         {"role": "user", "content": "Foo"},
     ]
     assert props["$ai_output_choices"][0]["role"] == "assistant"
-    assert props["$ai_output_choices"][0]["content"] == "Bar"
+    assert props["$ai_output_choices"][0]["content"] == [
+        {"type": "text", "text": "Bar"}
+    ]
     assert props["$ai_input_tokens"] == 18
     assert props["$ai_output_tokens"] == 1
     assert props["$ai_http_status"] == 200
@@ -425,7 +480,10 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_model"] == "claude-3-opus-20240229"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
         assert props["$ai_output_choices"] == [
-            {"role": "assistant", "content": "Test response"}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
         ]
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 10
@@ -434,3 +492,257 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_tool_definition(mock_client, mock_anthropic_response):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+
+        tools = [
+            {
+                "name": "get_weather",
+                "description": "Get the current weather for a specific location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city or location name to get weather for",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            }
+        ]
+
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=200,
+            temperature=0.7,
+            tools=tools,
+            messages=[{"role": "user", "content": "hey"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_anthropic_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "anthropic"
+        assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
+        assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
+        ]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+        # Verify that tools are captured in the $ai_tools property
+        assert props["$ai_tools"] == tools
+
+
+def test_tool_calls_in_output_choices(
+    mock_client, mock_anthropic_response_with_tool_calls
+):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response_with_tool_calls,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=200,
+            messages=[
+                {"role": "user", "content": "What's the weather in San Francisco?"}
+            ],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                }
+            ],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_anthropic_response_with_tool_calls
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "anthropic"
+        assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll help you check the weather."},
+                    {"type": "text", "text": " Let me look that up."},
+                    {
+                        "type": "function",
+                        "id": "toolu_abc123",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "San Francisco"},
+                        },
+                    },
+                ],
+            }
+        ]
+
+        # Check token usage
+        assert props["$ai_input_tokens"] == 25
+        assert props["$ai_output_tokens"] == 15
+        assert props["$ai_http_status"] == 200
+
+
+def test_tool_calls_only_no_content(
+    mock_client, mock_anthropic_response_tool_calls_only
+):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response_tool_calls_only,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=200,
+            messages=[{"role": "user", "content": "Get weather for New York"}],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {"type": "string"},
+                        },
+                        "required": ["location"],
+                    },
+                }
+            ],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_anthropic_response_tool_calls_only
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "anthropic"
+        assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "function",
+                        "id": "toolu_def456",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "New York", "unit": "fahrenheit"},
+                        },
+                    }
+                ],
+            }
+        ]
+
+        # Check token usage
+        assert props["$ai_input_tokens"] == 30
+        assert props["$ai_output_tokens"] == 12
+        assert props["$ai_http_status"] == 200
+
+
+def test_async_tool_calls_in_output_choices(
+    mock_client, mock_anthropic_response_with_tool_calls
+):
+    import asyncio
+
+    async def mock_async_create(**kwargs):
+        return mock_anthropic_response_with_tool_calls
+
+    with patch(
+        "anthropic.resources.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+
+        async def run_test():
+            return await async_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=200,
+                messages=[
+                    {"role": "user", "content": "What's the weather in San Francisco?"}
+                ],
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    }
+                ],
+                posthog_distinct_id="test-id",
+            )
+
+        response = asyncio.run(run_test())
+
+        assert response == mock_anthropic_response_with_tool_calls
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "anthropic"
+        assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I'll help you check the weather."},
+                    {"type": "text", "text": " Let me look that up."},
+                    {
+                        "type": "function",
+                        "id": "toolu_abc123",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "San Francisco"},
+                        },
+                    },
+                ],
+            }
+        ]
+
+        # Check token usage
+        assert props["$ai_input_tokens"] == 25
+        assert props["$ai_output_tokens"] == 15
+        assert props["$ai_http_status"] == 200

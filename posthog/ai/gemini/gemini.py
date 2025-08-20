@@ -42,6 +42,12 @@ class Client:
     def __init__(
         self,
         api_key: Optional[str] = None,
+        vertexai: Optional[bool] = None,
+        credentials: Optional[Any] = None,
+        project: Optional[str] = None,
+        location: Optional[str] = None,
+        debug_config: Optional[Any] = None,
+        http_options: Optional[Any] = None,
         posthog_client: Optional[PostHogClient] = None,
         posthog_distinct_id: Optional[str] = None,
         posthog_properties: Optional[Dict[str, Any]] = None,
@@ -51,7 +57,13 @@ class Client:
     ):
         """
         Args:
-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable
+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)
+            vertexai: Whether to use Vertex AI authentication
+            credentials: Vertex AI credentials object
+            project: GCP project ID for Vertex AI
+            location: GCP location for Vertex AI
+            debug_config: Debug configuration for the client
+            http_options: HTTP options for the client
             posthog_client: PostHog client for tracking usage
             posthog_distinct_id: Default distinct ID for all calls (can be overridden per call)
             posthog_properties: Default properties for all calls (can be overridden per call)
@@ -66,6 +78,12 @@ class Client:
 
         self.models = Models(
             api_key=api_key,
+            vertexai=vertexai,
+            credentials=credentials,
+            project=project,
+            location=location,
+            debug_config=debug_config,
+            http_options=http_options,
             posthog_client=self._ph_client,
             posthog_distinct_id=posthog_distinct_id,
             posthog_properties=posthog_properties,
@@ -85,6 +103,12 @@ class Models:
     def __init__(
         self,
         api_key: Optional[str] = None,
+        vertexai: Optional[bool] = None,
+        credentials: Optional[Any] = None,
+        project: Optional[str] = None,
+        location: Optional[str] = None,
+        debug_config: Optional[Any] = None,
+        http_options: Optional[Any] = None,
         posthog_client: Optional[PostHogClient] = None,
         posthog_distinct_id: Optional[str] = None,
         posthog_properties: Optional[Dict[str, Any]] = None,
@@ -94,7 +118,13 @@ class Models:
     ):
         """
         Args:
-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable
+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)
+            vertexai: Whether to use Vertex AI authentication
+            credentials: Vertex AI credentials object
+            project: GCP project ID for Vertex AI
+            location: GCP location for Vertex AI
+            debug_config: Debug configuration for the client
+            http_options: HTTP options for the client
             posthog_client: PostHog client for tracking usage
             posthog_distinct_id: Default distinct ID for all calls
             posthog_properties: Default properties for all calls
@@ -113,16 +143,40 @@ class Models:
         self._default_privacy_mode = posthog_privacy_mode
         self._default_groups = posthog_groups
 
-        # Handle API key - try parameter first, then environment variables
-        if api_key is None:
-            api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
+        # Build genai.Client arguments
+        client_args: Dict[str, Any] = {}
 
-        if api_key is None:
-            raise ValueError(
-                "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
-            )
+        # Add Vertex AI parameters if provided
+        if vertexai is not None:
+            client_args["vertexai"] = vertexai
+        if credentials is not None:
+            client_args["credentials"] = credentials
+        if project is not None:
+            client_args["project"] = project
+        if location is not None:
+            client_args["location"] = location
+        if debug_config is not None:
+            client_args["debug_config"] = debug_config
+        if http_options is not None:
+            client_args["http_options"] = http_options
 
-        self._client = genai.Client(api_key=api_key)
+        # Handle API key authentication
+        if vertexai:
+            # For Vertex AI, api_key is optional
+            if api_key is not None:
+                client_args["api_key"] = api_key
+        else:
+            # For non-Vertex AI mode, api_key is required (backwards compatibility)
+            if api_key is None:
+                api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
+
+            if api_key is None:
+                raise ValueError(
+                    "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
+                )
+            client_args["api_key"] = api_key
+
+        self._client = genai.Client(**client_args)
         self._base_url = "https://generativelanguage.googleapis.com"
 
     def _merge_posthog_params(
