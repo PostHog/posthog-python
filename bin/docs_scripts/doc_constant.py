@@ -6,7 +6,7 @@ from typing import Dict, Union
 
 # Documentation generation metadata
 DOCUMENTATION_METADATA = {
-    "hogRef": "0.2",
+    "hogRef": "0.3",
     "slugPrefix": "posthog-python",
     "specUrl": "https://github.com/PostHog/posthog-python",
 }
