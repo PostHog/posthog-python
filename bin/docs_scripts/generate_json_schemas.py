@@ -381,7 +381,9 @@ def generate_sdk_documentation():
 
     # Remove types that have no properties and no examples
     # Remove types that have no properties and no examples
-    types_list = [t for t in types_list if len(t['properties']) > 0 or t['example'] != '']
+    types_list = [
+        t for t in types_list if len(t["properties"]) > 0 or t["example"] != ""
+    ]
 
     # Collect classes
     classes_list = []
@@ -427,16 +429,17 @@ def generate_sdk_documentation():
 
     # Collect categories from functions
     categories = ["Initialization", "Identification", "Capture"]
+    seen_categories = set(categories)
     for class_info in classes_list:
         if "functions" in class_info:
             for func in class_info["functions"]:
-                # I know this is O(n^2) but we're dealing with a script at known finite limits :)
                 if (
                     "category" in func
-                    and func["category"] not in categories
+                    and func["category"] not in seen_categories
                     and func["category"]
                 ):
                     categories.append(func["category"])
+                    seen_categories.add(func["category"])
 
     # Create the final structure
     result = {
