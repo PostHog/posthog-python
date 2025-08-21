@@ -1,3 +1,7 @@
+# 6.6.1 - 2025-08-21
+
+- fix: Prevent `NoneType` error when `group_properties` is `None`
+
 # 6.6.0 - 2025-08-15
 
 - feat: Add `flag_keys_to_evaluate` parameter to optimize feature flag evaluation performance by only evaluating specified flags
