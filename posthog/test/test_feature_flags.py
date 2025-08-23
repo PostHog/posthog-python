@@ -1835,6 +1835,270 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertIn("Cannot evaluate flag dependency", str(cm.exception))
         self.assertIn("some-flag", str(cm.exception))
 
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_multi_level_multivariate_dependency_chain(self, patch_get, patch_flags):
+        """Test multi-level multivariate dependency chain: dependent-flag -> intermediate-flag -> leaf-flag"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            # Leaf flag: multivariate with "control" and "test" variants using person property overrides
+            {
+                "id": 1,
+                "name": "Leaf Flag",
+                "key": "leaf-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": "control@example.com",
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "control",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": "test@example.com", 
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "test",
+                        },
+                        {"rollout_percentage": 50, "variant": "control"},  # Default fallback
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {
+                                "key": "control",
+                                "name": "Control", 
+                                "rollout_percentage": 50,
+                            },
+                            {"key": "test", "name": "Test", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            },
+            # Intermediate flag: multivariate with "blue" and "green" variants, depends on leaf-flag="control"
+            {
+                "id": 2,
+                "name": "Intermediate Flag",
+                "key": "intermediate-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "leaf-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": "control",
+                                    "type": "flag",
+                                    "dependency_chain": ["leaf-flag"],
+                                },
+                                {
+                                    "key": "variant_type",
+                                    "type": "person",
+                                    "value": "blue",
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "blue",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "leaf-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": "control",
+                                    "type": "flag",
+                                    "dependency_chain": ["leaf-flag"],
+                                },
+                                {
+                                    "key": "variant_type",
+                                    "type": "person",
+                                    "value": "green",
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "green",
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "blue", "name": "Blue", "rollout_percentage": 50},
+                            {"key": "green", "name": "Green", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            },
+            # Dependent flag: boolean flag that depends on intermediate-flag="blue"
+            {
+                "id": 3,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "intermediate-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": "blue",
+                                    "type": "flag",
+                                    "dependency_chain": [
+                                        "leaf-flag",
+                                        "intermediate-flag",
+                                    ],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # Test using person properties and variant overrides to ensure predictable variants
+
+        # Test 1: Make sure the leaf flag evaluates to the variant we expect using email overrides
+        self.assertEqual(
+            "control",
+            client.get_feature_flag(
+                "leaf-flag",
+                "any-user",
+                person_properties={"email": "control@example.com"},
+            ),
+        )
+        self.assertEqual(
+            "test",
+            client.get_feature_flag(
+                "leaf-flag",
+                "any-user",
+                person_properties={"email": "test@example.com"},
+            ),
+        )
+
+        # Test 2: Make sure the intermediate flag evaluates to the expected variants when dependency is satisfied
+        self.assertEqual(
+            "blue",
+            client.get_feature_flag(
+                "intermediate-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "blue"
+                },
+            ),
+        )
+
+        self.assertEqual(
+            "green",
+            client.get_feature_flag(
+                "intermediate-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "green"
+                },
+            ),
+        )
+
+        # Test 3: Make sure the intermediate flag evaluates to false when leaf dependency fails
+        self.assertEqual(
+            False,
+            client.get_feature_flag(
+                "intermediate-flag",
+                "any-user",
+                person_properties={
+                    "email": "test@example.com",  # This makes leaf-flag="test", breaking dependency
+                    "variant_type": "blue"
+                },
+            ),
+        )
+
+        # Test 4: When leaf-flag="control", intermediate="blue", dependent should be true
+        self.assertEqual(
+            True,
+            client.get_feature_flag(
+                "dependent-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "blue"
+                },
+            ),
+        )
+
+        # Test 5: When leaf-flag="control", intermediate="green", dependent should be false
+        self.assertEqual(
+            False,
+            client.get_feature_flag(
+                "dependent-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "green"
+                },
+            ),
+        )
+
+        # Test 6: When leaf-flag="test", intermediate is False, dependent should be false
+        self.assertEqual(
+            False,
+            client.get_feature_flag(
+                "dependent-flag",
+                "any-user",
+                person_properties={
+                    "email": "test@example.com",
+                    "variant_type": "blue"
+                },
+            ),
+        )
+
+    def test_matches_dependency_value(self):
+        """Test the matches_dependency_value function logic"""
+        from posthog.feature_flags import matches_dependency_value
+
+        # String variant matches string exactly (case-insensitive)
+        self.assertTrue(matches_dependency_value("control", "control"))
+        self.assertTrue(matches_dependency_value("Control", "control"))
+        self.assertTrue(matches_dependency_value("CONTROL", "control"))
+        self.assertFalse(matches_dependency_value("test", "control"))
+
+        # String variant matches boolean true (any variant is truthy)
+        self.assertTrue(matches_dependency_value("control", True))
+        self.assertTrue(matches_dependency_value("test", True))
+        self.assertFalse(matches_dependency_value("control", False))
+
+        # Boolean matches boolean exactly
+        self.assertTrue(matches_dependency_value(True, True))
+        self.assertTrue(matches_dependency_value(False, False))
+        self.assertFalse(matches_dependency_value(True, False))
+        self.assertFalse(matches_dependency_value(False, True))
+
+        # Empty string doesn't match
+        self.assertFalse(matches_dependency_value("", True))
+        self.assertFalse(matches_dependency_value("", "control"))
+
+        # Type mismatches
+        self.assertFalse(matches_dependency_value("control", 123))
+        self.assertFalse(matches_dependency_value(True, "control"))
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
