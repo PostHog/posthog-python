@@ -160,9 +160,10 @@ def evaluate_flag_dependency(
         if operator == "flag_evaluates_to":
             return matches_dependency_value(expected_value, actual_value)
         else:
-            # For backwards compatibility, treat other operators as exact comparison
-            # but flag dependencies should use flag_evaluates_to
-            return actual_value == expected_value
+            # This should never happen, but just to be defensive.
+            raise InconclusiveMatchError(
+                f"Flag dependency property for '{property.get('key', 'unknown')}' has invalid operator '{operator}'"
+            )
 
     # If no value check needed, return True (all dependencies passed)
     return True
