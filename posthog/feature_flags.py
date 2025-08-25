@@ -189,8 +189,8 @@ def matches_dependency_value(expected_value, actual_value):
             # Any variant matches boolean true
             return expected_value
         elif isinstance(expected_value, str):
-            # String comparison (case-insensitive to match C# StringComparison.OrdinalIgnoreCase)
-            return actual_value.lower() == expected_value.lower()
+            # variants are case-sensitive, hence our comparison is too
+            return actual_value == expected_value
         else:
             return False
 

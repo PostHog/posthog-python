@@ -2074,10 +2074,11 @@ class TestLocalEvaluation(unittest.TestCase):
         """Test the matches_dependency_value function logic"""
         from posthog.feature_flags import matches_dependency_value
 
-        # String variant matches string exactly (case-insensitive)
+        # String variant matches string exactly (case-sensitive)
         self.assertTrue(matches_dependency_value("control", "control"))
-        self.assertTrue(matches_dependency_value("control", "Control"))
-        self.assertTrue(matches_dependency_value("control", "CONTROL"))
+        self.assertTrue(matches_dependency_value("Control", "Control"))
+        self.assertFalse(matches_dependency_value("control", "Control"))
+        self.assertFalse(matches_dependency_value("Control", "CONTROL"))
         self.assertFalse(matches_dependency_value("control", "test"))
 
         # String variant matches boolean true (any variant is truthy)
