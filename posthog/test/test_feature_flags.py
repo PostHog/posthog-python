@@ -1376,7 +1376,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "beta-feature",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["beta-feature"],
@@ -1456,7 +1456,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-a",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-a"],
@@ -1504,7 +1504,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-b",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": [],  # Empty chain indicates circular dependency
@@ -1526,7 +1526,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-a",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": [],  # Empty chain indicates circular dependency
@@ -1566,7 +1566,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "non-existent-flag",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["non-existent-flag"],
@@ -1629,14 +1629,14 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-a",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-a"],
                                 },
                                 {
                                     "key": "flag-b",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-b"],
@@ -1658,7 +1658,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-c",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-a", "flag-b", "flag-c"],
@@ -1711,7 +1711,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "base-flag",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["base-flag"],
@@ -1788,10 +1788,10 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "base-flag",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
-                                    # No dependency_chain property - should handle gracefully
+                                    # No dependency_chain property - should evaluate as inconclusive
                                 }
                             ],
                             "rollout_percentage": 100,
@@ -1815,7 +1815,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         property_with_flag_dep = {
             "key": "some-flag",
-            "operator": "exact",
+            "operator": "flag_evaluates_to",
             "value": True,
             "type": "flag",
             "dependency_chain": ["some-flag"],
@@ -1834,6 +1834,516 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertIn("Cannot evaluate flag dependency", str(cm.exception))
         self.assertIn("some-flag", str(cm.exception))
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_multi_level_multivariate_dependency_chain(self, patch_get, patch_flags):
+        """Test multi-level multivariate dependency chain: dependent-flag -> intermediate-flag -> leaf-flag"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            # Leaf flag: multivariate with "control" and "test" variants using person property overrides
+            {
+                "id": 1,
+                "name": "Leaf Flag",
+                "key": "leaf-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": "control@example.com",
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "control",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": "test@example.com",
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "test",
+                        },
+                        {
+                            "rollout_percentage": 50,
+                            "variant": "control",
+                        },  # Default fallback
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {
+                                "key": "control",
+                                "name": "Control",
+                                "rollout_percentage": 50,
+                            },
+                            {"key": "test", "name": "Test", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            },
+            # Intermediate flag: multivariate with "blue" and "green" variants, depends on leaf-flag="control"
+            {
+                "id": 2,
+                "name": "Intermediate Flag",
+                "key": "intermediate-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "leaf-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": "control",
+                                    "type": "flag",
+                                    "dependency_chain": ["leaf-flag"],
+                                },
+                                {
+                                    "key": "variant_type",
+                                    "type": "person",
+                                    "value": "blue",
+                                    "operator": "exact",
+                                },
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "blue",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "leaf-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": "control",
+                                    "type": "flag",
+                                    "dependency_chain": ["leaf-flag"],
+                                },
+                                {
+                                    "key": "variant_type",
+                                    "type": "person",
+                                    "value": "green",
+                                    "operator": "exact",
+                                },
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "green",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "blue", "name": "Blue", "rollout_percentage": 50},
+                            {"key": "green", "name": "Green", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            },
+            # Dependent flag: boolean flag that depends on intermediate-flag="blue"
+            {
+                "id": 3,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "intermediate-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": "blue",
+                                    "type": "flag",
+                                    "dependency_chain": [
+                                        "leaf-flag",
+                                        "intermediate-flag",
+                                    ],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # Test using person properties and variant overrides to ensure predictable variants
+
+        # Test 1: Make sure the leaf flag evaluates to the variant we expect using email overrides
+        self.assertEqual(
+            "control",
+            client.get_feature_flag(
+                "leaf-flag",
+                "any-user",
+                person_properties={"email": "control@example.com"},
+            ),
+        )
+        self.assertEqual(
+            "test",
+            client.get_feature_flag(
+                "leaf-flag",
+                "any-user",
+                person_properties={"email": "test@example.com"},
+            ),
+        )
+
+        # Test 2: Make sure the intermediate flag evaluates to the expected variants when dependency is satisfied
+        self.assertEqual(
+            "blue",
+            client.get_feature_flag(
+                "intermediate-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "blue",
+                },
+            ),
+        )
+
+        self.assertEqual(
+            "green",
+            client.get_feature_flag(
+                "intermediate-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "green",
+                },
+            ),
+        )
+
+        # Test 3: Make sure the intermediate flag evaluates to false when leaf dependency fails
+        self.assertEqual(
+            False,
+            client.get_feature_flag(
+                "intermediate-flag",
+                "any-user",
+                person_properties={
+                    "email": "test@example.com",  # This makes leaf-flag="test", breaking dependency
+                    "variant_type": "blue",
+                },
+            ),
+        )
+
+        # Test 4: When leaf-flag="control", intermediate="blue", dependent should be true
+        self.assertEqual(
+            True,
+            client.get_feature_flag(
+                "dependent-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "blue",
+                },
+            ),
+        )
+
+        # Test 5: When leaf-flag="control", intermediate="green", dependent should be false
+        self.assertEqual(
+            False,
+            client.get_feature_flag(
+                "dependent-flag",
+                "any-user",
+                person_properties={
+                    "email": "control@example.com",
+                    "variant_type": "green",
+                },
+            ),
+        )
+
+        # Test 6: When leaf-flag="test", intermediate is False, dependent should be false
+        self.assertEqual(
+            False,
+            client.get_feature_flag(
+                "dependent-flag",
+                "any-user",
+                person_properties={"email": "test@example.com", "variant_type": "blue"},
+            ),
+        )
+
+    def test_matches_dependency_value(self):
+        """Test the matches_dependency_value function logic"""
+        from posthog.feature_flags import matches_dependency_value
+
+        # String variant matches string exactly (case-sensitive)
+        self.assertTrue(matches_dependency_value("control", "control"))
+        self.assertTrue(matches_dependency_value("Control", "Control"))
+        self.assertFalse(matches_dependency_value("control", "Control"))
+        self.assertFalse(matches_dependency_value("Control", "CONTROL"))
+        self.assertFalse(matches_dependency_value("control", "test"))
+
+        # String variant matches boolean true (any variant is truthy)
+        self.assertTrue(matches_dependency_value(True, "control"))
+        self.assertTrue(matches_dependency_value(True, "test"))
+        self.assertFalse(matches_dependency_value(False, "control"))
+
+        # Boolean matches boolean exactly
+        self.assertTrue(matches_dependency_value(True, True))
+        self.assertTrue(matches_dependency_value(False, False))
+        self.assertFalse(matches_dependency_value(False, True))
+        self.assertFalse(matches_dependency_value(True, False))
+
+        # Empty string doesn't match
+        self.assertFalse(matches_dependency_value(True, ""))
+        self.assertFalse(matches_dependency_value("control", ""))
+
+        # Type mismatches
+        self.assertFalse(matches_dependency_value(123, "control"))
+        self.assertFalse(matches_dependency_value("control", True))
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_production_style_multivariate_dependency_chain(
+        self, patch_get, patch_flags
+    ):
+        """Test production-style multivariate dependency chain: multivariate-root-flag -> multivariate-intermediate-flag -> multivariate-leaf-flag"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            # Leaf flag: multivariate with fruit variants
+            {
+                "id": 451,
+                "name": "Multivariate Leaf Flag (Base)",
+                "key": "multivariate-leaf-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["pineapple@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "pineapple",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["mango@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "mango",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["papaya@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "papaya",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["kiwi@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "kiwi",
+                        },
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,  # Force default to false for unknown emails
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "pineapple", "rollout_percentage": 25},
+                            {"key": "mango", "rollout_percentage": 25},
+                            {"key": "papaya", "rollout_percentage": 25},
+                            {"key": "kiwi", "rollout_percentage": 25},
+                        ]
+                    },
+                },
+            },
+            # Intermediate flag: multivariate with color variants, depends on fruit
+            {
+                "id": 467,
+                "name": "Multivariate Intermediate Flag (Depends on fruit)",
+                "key": "multivariate-intermediate-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-leaf-flag",
+                                    "type": "flag",
+                                    "value": "pineapple",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": ["multivariate-leaf-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "blue",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-leaf-flag",
+                                    "type": "flag",
+                                    "value": "mango",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": ["multivariate-leaf-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "red",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "blue", "rollout_percentage": 100},
+                            {"key": "red", "rollout_percentage": 0},
+                            {"key": "green", "rollout_percentage": 0},
+                            {"key": "black", "rollout_percentage": 0},
+                        ]
+                    },
+                },
+            },
+            # Root flag: multivariate with show variants, depends on color
+            {
+                "id": 468,
+                "name": "Multivariate Root Flag (Depends on color)",
+                "key": "multivariate-root-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-intermediate-flag",
+                                    "type": "flag",
+                                    "value": "blue",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": [
+                                        "multivariate-leaf-flag",
+                                        "multivariate-intermediate-flag",
+                                    ],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "breaking-bad",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-intermediate-flag",
+                                    "type": "flag",
+                                    "value": "red",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": [
+                                        "multivariate-leaf-flag",
+                                        "multivariate-intermediate-flag",
+                                    ],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "the-wire",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "breaking-bad", "rollout_percentage": 100},
+                            {"key": "the-wire", "rollout_percentage": 0},
+                            {"key": "game-of-thrones", "rollout_percentage": 0},
+                            {"key": "the-expanse", "rollout_percentage": 0},
+                        ]
+                    },
+                },
+            },
+        ]
+
+        # Test successful pineapple -> blue -> breaking-bad chain
+        leaf_result = client.get_feature_flag(
+            "multivariate-leaf-flag",
+            "test-user",
+            person_properties={"email": "pineapple@example.com"},
+        )
+        intermediate_result = client.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "test-user",
+            person_properties={"email": "pineapple@example.com"},
+        )
+        root_result = client.get_feature_flag(
+            "multivariate-root-flag",
+            "test-user",
+            person_properties={"email": "pineapple@example.com"},
+        )
+
+        self.assertEqual(leaf_result, "pineapple")
+        self.assertEqual(intermediate_result, "blue")
+        self.assertEqual(root_result, "breaking-bad")
+
+        # Test successful mango -> red -> the-wire chain
+        mango_leaf_result = client.get_feature_flag(
+            "multivariate-leaf-flag",
+            "test-user",
+            person_properties={"email": "mango@example.com"},
+        )
+        mango_intermediate_result = client.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "test-user",
+            person_properties={"email": "mango@example.com"},
+        )
+        mango_root_result = client.get_feature_flag(
+            "multivariate-root-flag",
+            "test-user",
+            person_properties={"email": "mango@example.com"},
+        )
+
+        self.assertEqual(mango_leaf_result, "mango")
+        self.assertEqual(mango_intermediate_result, "red")
+        self.assertEqual(mango_root_result, "the-wire")
+
+        # Test broken chain - user without matching email gets default/false results
+        unknown_leaf_result = client.get_feature_flag(
+            "multivariate-leaf-flag",
+            "test-user",
+            person_properties={"email": "unknown@example.com"},
+        )
+        unknown_intermediate_result = client.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "test-user",
+            person_properties={"email": "unknown@example.com"},
+        )
+        unknown_root_result = client.get_feature_flag(
+            "multivariate-root-flag",
+            "test-user",
+            person_properties={"email": "unknown@example.com"},
+        )
+
+        self.assertEqual(
+            unknown_leaf_result, False
+        )  # No matching email -> null variant -> false
+        self.assertEqual(unknown_intermediate_result, False)  # Dependency not satisfied
+        self.assertEqual(unknown_root_result, False)  # Chain broken
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")

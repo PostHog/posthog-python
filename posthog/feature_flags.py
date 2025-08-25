@@ -139,7 +139,68 @@ def evaluate_flag_dependency(
             # Definitive False result - dependency failed
             return False
 
+    # All dependencies in the chain have been evaluated successfully
+    # Now check if the final flag value matches the expected value in the property
+    flag_key = property.get("key")
+    expected_value = property.get("value")
+    operator = property.get("operator", "exact")
+
+    if flag_key and expected_value is not None:
+        # Get the actual value of the flag we're checking
+        actual_value = evaluation_cache.get(flag_key)
+
+        if actual_value is None:
+            # Flag wasn't evaluated - this shouldn't happen if dependency chain is correct
+            raise InconclusiveMatchError(
+                f"Flag '{flag_key}' was not evaluated despite being in dependency chain"
+            )
+
+        # For flag dependencies, we need to compare the actual flag result with expected value
+        # using the flag_evaluates_to operator logic
+        if operator == "flag_evaluates_to":
+            return matches_dependency_value(expected_value, actual_value)
+        else:
+            # This should never happen, but just to be defensive.
+            raise InconclusiveMatchError(
+                f"Flag dependency property for '{property.get('key', 'unknown')}' has invalid operator '{operator}'"
+            )
+
+    # If no value check needed, return True (all dependencies passed)
     return True
+
+
+def matches_dependency_value(expected_value, actual_value):
+    """
+    Check if the actual flag value matches the expected dependency value.
+
+    This follows the same logic as the C# MatchesDependencyValue function:
+    - String variant case: check for exact match or boolean true
+    - Boolean case: must match expected boolean value
+
+    Args:
+        expected_value: The expected value from the property
+        actual_value: The actual value returned by the flag evaluation
+
+    Returns:
+        bool: True if the values match according to flag dependency rules
+    """
+    # String variant case - check for exact match or boolean true
+    if isinstance(actual_value, str) and len(actual_value) > 0:
+        if isinstance(expected_value, bool):
+            # Any variant matches boolean true
+            return expected_value
+        elif isinstance(expected_value, str):
+            # variants are case-sensitive, hence our comparison is too
+            return actual_value == expected_value
+        else:
+            return False
+
+    # Boolean case - must match expected boolean value
+    elif isinstance(actual_value, bool) and isinstance(expected_value, bool):
+        return actual_value == expected_value
+
+    # Default case
+    return False
 
 
 def match_feature_flag_properties(
