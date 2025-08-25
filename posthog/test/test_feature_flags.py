@@ -1376,7 +1376,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "beta-feature",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["beta-feature"],
@@ -1456,7 +1456,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-a",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-a"],
@@ -1504,7 +1504,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-b",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": [],  # Empty chain indicates circular dependency
@@ -1526,7 +1526,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-a",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": [],  # Empty chain indicates circular dependency
@@ -1566,7 +1566,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "non-existent-flag",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["non-existent-flag"],
@@ -1629,14 +1629,14 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-a",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-a"],
                                 },
                                 {
                                     "key": "flag-b",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-b"],
@@ -1658,7 +1658,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "flag-c",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["flag-a", "flag-b", "flag-c"],
@@ -1711,7 +1711,7 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "base-flag",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
                                     "dependency_chain": ["base-flag"],
@@ -1788,10 +1788,10 @@ class TestLocalEvaluation(unittest.TestCase):
                             "properties": [
                                 {
                                     "key": "base-flag",
-                                    "operator": "exact",
+                                    "operator": "flag_evaluates_to",
                                     "value": True,
                                     "type": "flag",
-                                    # No dependency_chain property - should handle gracefully
+                                    # No dependency_chain property - should evaluate as inconclusive
                                 }
                             ],
                             "rollout_percentage": 100,
@@ -1815,7 +1815,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         property_with_flag_dep = {
             "key": "some-flag",
-            "operator": "exact",
+            "operator": "flag_evaluates_to",
             "value": True,
             "type": "flag",
             "dependency_chain": ["some-flag"],
