@@ -158,7 +158,7 @@ def evaluate_flag_dependency(
         # For flag dependencies, we need to compare the actual flag result with expected value
         # using the flag_evaluates_to operator logic
         if operator == "flag_evaluates_to":
-            return matches_dependency_value(actual_value, expected_value)
+            return matches_dependency_value(expected_value, actual_value)
         else:
             # For backwards compatibility, treat other operators as exact comparison
             # but flag dependencies should use flag_evaluates_to
@@ -168,7 +168,7 @@ def evaluate_flag_dependency(
     return True
 
 
-def matches_dependency_value(actual_value, expected_value):
+def matches_dependency_value(expected_value, actual_value):
     """
     Check if the actual flag value matches the expected dependency value.
 
@@ -177,8 +177,8 @@ def matches_dependency_value(actual_value, expected_value):
     - Boolean case: must match expected boolean value
 
     Args:
-        actual_value: The actual value returned by the flag evaluation
         expected_value: The expected value from the property
+        actual_value: The actual value returned by the flag evaluation
 
     Returns:
         bool: True if the values match according to flag dependency rules

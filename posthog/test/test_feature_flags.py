@@ -2076,28 +2076,28 @@ class TestLocalEvaluation(unittest.TestCase):
 
         # String variant matches string exactly (case-insensitive)
         self.assertTrue(matches_dependency_value("control", "control"))
-        self.assertTrue(matches_dependency_value("Control", "control"))
-        self.assertTrue(matches_dependency_value("CONTROL", "control"))
-        self.assertFalse(matches_dependency_value("test", "control"))
+        self.assertTrue(matches_dependency_value("control", "Control"))
+        self.assertTrue(matches_dependency_value("control", "CONTROL"))
+        self.assertFalse(matches_dependency_value("control", "test"))
 
         # String variant matches boolean true (any variant is truthy)
-        self.assertTrue(matches_dependency_value("control", True))
-        self.assertTrue(matches_dependency_value("test", True))
-        self.assertFalse(matches_dependency_value("control", False))
+        self.assertTrue(matches_dependency_value(True, "control"))
+        self.assertTrue(matches_dependency_value(True, "test"))
+        self.assertFalse(matches_dependency_value(False, "control"))
 
         # Boolean matches boolean exactly
         self.assertTrue(matches_dependency_value(True, True))
         self.assertTrue(matches_dependency_value(False, False))
-        self.assertFalse(matches_dependency_value(True, False))
         self.assertFalse(matches_dependency_value(False, True))
+        self.assertFalse(matches_dependency_value(True, False))
 
         # Empty string doesn't match
-        self.assertFalse(matches_dependency_value("", True))
-        self.assertFalse(matches_dependency_value("", "control"))
+        self.assertFalse(matches_dependency_value(True, ""))
+        self.assertFalse(matches_dependency_value("control", ""))
 
         # Type mismatches
-        self.assertFalse(matches_dependency_value("control", 123))
-        self.assertFalse(matches_dependency_value(True, "control"))
+        self.assertFalse(matches_dependency_value(123, "control"))
+        self.assertFalse(matches_dependency_value("control", True))
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
