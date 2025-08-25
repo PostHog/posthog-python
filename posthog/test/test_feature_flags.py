@@ -1867,20 +1867,23 @@ class TestLocalEvaluation(unittest.TestCase):
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@example.com", 
+                                    "value": "test@example.com",
                                     "operator": "exact",
                                 }
                             ],
                             "rollout_percentage": 100,
                             "variant": "test",
                         },
-                        {"rollout_percentage": 50, "variant": "control"},  # Default fallback
+                        {
+                            "rollout_percentage": 50,
+                            "variant": "control",
+                        },  # Default fallback
                     ],
                     "multivariate": {
                         "variants": [
                             {
                                 "key": "control",
-                                "name": "Control", 
+                                "name": "Control",
                                 "rollout_percentage": 50,
                             },
                             {"key": "test", "name": "Test", "rollout_percentage": 50},
@@ -1911,7 +1914,7 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "type": "person",
                                     "value": "blue",
                                     "operator": "exact",
-                                }
+                                },
                             ],
                             "rollout_percentage": 100,
                             "variant": "blue",
@@ -1930,11 +1933,11 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "type": "person",
                                     "value": "green",
                                     "operator": "exact",
-                                }
+                                },
                             ],
                             "rollout_percentage": 100,
                             "variant": "green",
-                        }
+                        },
                     ],
                     "multivariate": {
                         "variants": [
@@ -2001,7 +2004,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "any-user",
                 person_properties={
                     "email": "control@example.com",
-                    "variant_type": "blue"
+                    "variant_type": "blue",
                 },
             ),
         )
@@ -2013,7 +2016,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "any-user",
                 person_properties={
                     "email": "control@example.com",
-                    "variant_type": "green"
+                    "variant_type": "green",
                 },
             ),
         )
@@ -2026,7 +2029,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "any-user",
                 person_properties={
                     "email": "test@example.com",  # This makes leaf-flag="test", breaking dependency
-                    "variant_type": "blue"
+                    "variant_type": "blue",
                 },
             ),
         )
@@ -2039,7 +2042,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "any-user",
                 person_properties={
                     "email": "control@example.com",
-                    "variant_type": "blue"
+                    "variant_type": "blue",
                 },
             ),
         )
@@ -2052,7 +2055,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "any-user",
                 person_properties={
                     "email": "control@example.com",
-                    "variant_type": "green"
+                    "variant_type": "green",
                 },
             ),
         )
@@ -2063,10 +2066,7 @@ class TestLocalEvaluation(unittest.TestCase):
             client.get_feature_flag(
                 "dependent-flag",
                 "any-user",
-                person_properties={
-                    "email": "test@example.com",
-                    "variant_type": "blue"
-                },
+                person_properties={"email": "test@example.com", "variant_type": "blue"},
             ),
         )
 
@@ -2099,6 +2099,251 @@ class TestLocalEvaluation(unittest.TestCase):
         # Type mismatches
         self.assertFalse(matches_dependency_value(123, "control"))
         self.assertFalse(matches_dependency_value("control", True))
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_production_style_multivariate_dependency_chain(
+        self, patch_get, patch_flags
+    ):
+        """Test production-style multivariate dependency chain: multivariate-root-flag -> multivariate-intermediate-flag -> multivariate-leaf-flag"""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            # Leaf flag: multivariate with fruit variants
+            {
+                "id": 451,
+                "name": "Multivariate Leaf Flag (Base)",
+                "key": "multivariate-leaf-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["pineapple@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "pineapple",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["mango@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "mango",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["papaya@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "papaya",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "type": "person",
+                                    "value": ["kiwi@example.com"],
+                                    "operator": "exact",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "kiwi",
+                        },
+                        {
+                            "properties": [],
+                            "rollout_percentage": 0,  # Force default to false for unknown emails
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "pineapple", "rollout_percentage": 25},
+                            {"key": "mango", "rollout_percentage": 25},
+                            {"key": "papaya", "rollout_percentage": 25},
+                            {"key": "kiwi", "rollout_percentage": 25},
+                        ]
+                    },
+                },
+            },
+            # Intermediate flag: multivariate with color variants, depends on fruit
+            {
+                "id": 467,
+                "name": "Multivariate Intermediate Flag (Depends on fruit)",
+                "key": "multivariate-intermediate-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-leaf-flag",
+                                    "type": "flag",
+                                    "value": "pineapple",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": ["multivariate-leaf-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "blue",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-leaf-flag",
+                                    "type": "flag",
+                                    "value": "mango",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": ["multivariate-leaf-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "red",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "blue", "rollout_percentage": 100},
+                            {"key": "red", "rollout_percentage": 0},
+                            {"key": "green", "rollout_percentage": 0},
+                            {"key": "black", "rollout_percentage": 0},
+                        ]
+                    },
+                },
+            },
+            # Root flag: multivariate with show variants, depends on color
+            {
+                "id": 468,
+                "name": "Multivariate Root Flag (Depends on color)",
+                "key": "multivariate-root-flag",
+                "active": True,
+                "rollout_percentage": 100,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-intermediate-flag",
+                                    "type": "flag",
+                                    "value": "blue",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": [
+                                        "multivariate-leaf-flag",
+                                        "multivariate-intermediate-flag",
+                                    ],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "breaking-bad",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "multivariate-intermediate-flag",
+                                    "type": "flag",
+                                    "value": "red",
+                                    "operator": "flag_evaluates_to",
+                                    "dependency_chain": [
+                                        "multivariate-leaf-flag",
+                                        "multivariate-intermediate-flag",
+                                    ],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "the-wire",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "breaking-bad", "rollout_percentage": 100},
+                            {"key": "the-wire", "rollout_percentage": 0},
+                            {"key": "game-of-thrones", "rollout_percentage": 0},
+                            {"key": "the-expanse", "rollout_percentage": 0},
+                        ]
+                    },
+                },
+            },
+        ]
+
+        # Test successful pineapple -> blue -> breaking-bad chain
+        leaf_result = client.get_feature_flag(
+            "multivariate-leaf-flag",
+            "test-user",
+            person_properties={"email": "pineapple@example.com"},
+        )
+        intermediate_result = client.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "test-user",
+            person_properties={"email": "pineapple@example.com"},
+        )
+        root_result = client.get_feature_flag(
+            "multivariate-root-flag",
+            "test-user",
+            person_properties={"email": "pineapple@example.com"},
+        )
+
+        self.assertEqual(leaf_result, "pineapple")
+        self.assertEqual(intermediate_result, "blue")
+        self.assertEqual(root_result, "breaking-bad")
+
+        # Test successful mango -> red -> the-wire chain
+        mango_leaf_result = client.get_feature_flag(
+            "multivariate-leaf-flag",
+            "test-user",
+            person_properties={"email": "mango@example.com"},
+        )
+        mango_intermediate_result = client.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "test-user",
+            person_properties={"email": "mango@example.com"},
+        )
+        mango_root_result = client.get_feature_flag(
+            "multivariate-root-flag",
+            "test-user",
+            person_properties={"email": "mango@example.com"},
+        )
+
+        self.assertEqual(mango_leaf_result, "mango")
+        self.assertEqual(mango_intermediate_result, "red")
+        self.assertEqual(mango_root_result, "the-wire")
+
+        # Test broken chain - user without matching email gets default/false results
+        unknown_leaf_result = client.get_feature_flag(
+            "multivariate-leaf-flag",
+            "test-user",
+            person_properties={"email": "unknown@example.com"},
+        )
+        unknown_intermediate_result = client.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "test-user",
+            person_properties={"email": "unknown@example.com"},
+        )
+        unknown_root_result = client.get_feature_flag(
+            "multivariate-root-flag",
+            "test-user",
+            person_properties={"email": "unknown@example.com"},
+        )
+
+        self.assertEqual(
+            unknown_leaf_result, False
+        )  # No matching email -> null variant -> false
+        self.assertEqual(unknown_intermediate_result, False)  # Dependency not satisfied
+        self.assertEqual(unknown_root_result, False)  # Chain broken
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
