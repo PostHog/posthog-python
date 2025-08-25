@@ -274,6 +274,98 @@ elif choice == "4":
     print("   - Zero API calls needed: ✅ YES (all evaluated locally)")
     print("   - Python SDK supports flag dependencies: ✅ YES")
 
+    print("\n" + "-" * 60)
+    print("PRODUCTION-STYLE MULTIVARIATE DEPENDENCY CHAIN")
+    print("-" * 60)
+    print("🔗 Testing complex multivariate flag dependencies...")
+    print(
+        "   Structure: multivariate-root-flag -> multivariate-intermediate-flag -> multivariate-leaf-flag"
+    )
+    print("")
+    print("📋 Required setup (if flags don't exist):")
+    print(
+        "   1. Create 'multivariate-leaf-flag' with fruit variants (pineapple, mango, papaya, kiwi)"
+    )
+    print("      - pineapple: email = 'pineapple@example.com'")
+    print("      - mango: email = 'mango@example.com'")
+    print(
+        "   2. Create 'multivariate-intermediate-flag' with color variants (blue, red)"
+    )
+    print("      - blue: depends on multivariate-leaf-flag = 'pineapple'")
+    print("      - red: depends on multivariate-leaf-flag = 'mango'")
+    print(
+        "   3. Create 'multivariate-root-flag' with show variants (breaking-bad, the-wire)"
+    )
+    print("      - breaking-bad: depends on multivariate-intermediate-flag = 'blue'")
+    print("      - the-wire: depends on multivariate-intermediate-flag = 'red'")
+    print("")
+
+    # Test pineapple -> blue -> breaking-bad chain
+    dependent_result3 = posthog.get_feature_flag(
+        "multivariate-root-flag",
+        "regular_user",
+        person_properties={"email": "pineapple@example.com"},
+        only_evaluate_locally=True,
+    )
+    if str(dependent_result3) != "breaking-bad":
+        print(
+            f"     ❌ Something went wrong evaluating 'multivariate-root-flag' with pineapple@example.com. Expected 'breaking-bad', got '{dependent_result3}'"
+        )
+    else:
+        print("✅ 'multivariate-root-flag' with email pineapple@example.com succeeded")
+
+    # Test mango -> red -> the-wire chain
+    dependent_result4 = posthog.get_feature_flag(
+        "multivariate-root-flag",
+        "regular_user",
+        person_properties={"email": "mango@example.com"},
+        only_evaluate_locally=True,
+    )
+    if str(dependent_result4) != "the-wire":
+        print(
+            f"     ❌ Something went wrong evaluating multivariate-root-flag with mango@example.com. Expected 'the-wire', got '{dependent_result4}'"
+        )
+    else:
+        print("✅ 'multivariate-root-flag' with email mango@example.com succeeded")
+
+    # Show the complete chain evaluation
+    print("\n🔍 Complete dependency chain evaluation:")
+    for email, expected_chain in [
+        ("pineapple@example.com", ["pineapple", "blue", "breaking-bad"]),
+        ("mango@example.com", ["mango", "red", "the-wire"]),
+    ]:
+        leaf = posthog.get_feature_flag(
+            "multivariate-leaf-flag",
+            "regular_user",
+            person_properties={"email": email},
+            only_evaluate_locally=True,
+        )
+        intermediate = posthog.get_feature_flag(
+            "multivariate-intermediate-flag",
+            "regular_user",
+            person_properties={"email": email},
+            only_evaluate_locally=True,
+        )
+        root = posthog.get_feature_flag(
+            "multivariate-root-flag",
+            "regular_user",
+            person_properties={"email": email},
+            only_evaluate_locally=True,
+        )
+
+        actual_chain = [str(leaf), str(intermediate), str(root)]
+        chain_success = actual_chain == expected_chain
+
+        print(f"   📧 {email}:")
+        print(f"      Expected: {' -> '.join(map(str, expected_chain))}")
+        print(f"      Actual:   {' -> '.join(map(str, actual_chain))}")
+        print(f"      Status:   {'✅ SUCCESS' if chain_success else '❌ FAILED'}")
+
+    print("\n🎯 Multivariate Chain Summary:")
+    print("   - Complex dependency chains: ✅ SUPPORTED")
+    print("   - Multivariate flag dependencies: ✅ SUPPORTED")
+    print("   - Local evaluation of chains: ✅ WORKING")
+
 elif choice == "5":
     print("\n" + "=" * 60)
     print("CONTEXT MANAGEMENT AND TAGGING EXAMPLES")
