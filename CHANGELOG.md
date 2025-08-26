@@ -1,3 +1,7 @@
+# 6.7.0 - 2025-08-26
+
+- feat: Add support for feature flag dependencies
+
 # 6.6.1 - 2025-08-21
 
 - fix: Prevent `NoneType` error when `group_properties` is `None`

@@ -1,4 +1,4 @@
-VERSION = "6.6.1"
+VERSION = "6.7.0"
 
 if __name__ == "__main__":
     print(VERSION, end="")  # noqa: T201
