@@ -16,7 +16,7 @@ from posthog.ai.utils import (
     get_model_params,
     with_privacy_mode,
 )
-from posthog.ai.sanitization import sanitize_openai_response
+from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
 
 
@@ -434,7 +434,9 @@ class WrappedCompletions:
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
-                self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")
+                self._client._ph_client,
+                posthog_privacy_mode,
+                sanitize_openai(kwargs.get("messages")),
             ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
