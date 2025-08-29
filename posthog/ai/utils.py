@@ -156,12 +156,12 @@ def format_response_anthropic(response):
 def format_response_openai(response):
     output = []
 
+    # Handle Chat Completions response format
     if hasattr(response, "choices"):
         content = []
         role = "assistant"
 
         for choice in response.choices:
-            # Handle Chat Completions response format
             if hasattr(choice, "message") and choice.message:
                 if choice.message.role:
                     role = choice.message.role

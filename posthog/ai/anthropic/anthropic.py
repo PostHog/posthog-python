@@ -8,10 +8,11 @@ except ImportError:
 
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from posthog.ai.utils import (
     call_llm_and_track_usage,
+    extract_available_tool_calls,
     get_model_params,
     merge_system_prompt,
     with_privacy_mode,
@@ -119,34 +120,97 @@ class WrappedMessages(Messages):
     ):
         start_time = time.time()
         usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
-        accumulated_content = []
+        accumulated_content = ""
+        content_blocks: List[Dict[str, Any]] = []
+        tools_in_progress: Dict[str, Dict[str, Any]] = {}
+        current_text_block: Optional[Dict[str, Any]] = None
         response = super().create(**kwargs)
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_content
+            nonlocal content_blocks
+            nonlocal tools_in_progress
+            nonlocal current_text_block
             try:
                 for event in response:
-                    if hasattr(event, "usage") and event.usage:
-                        usage_stats = {
-                            k: getattr(event.usage, k, 0)
-                            for k in [
-                                "input_tokens",
-                                "output_tokens",
-                                "cache_read_input_tokens",
-                                "cache_creation_input_tokens",
-                            ]
-                        }
+                    # Handle usage stats from message_start event
+                    if hasattr(event, "type") and event.type == "message_start":
+                        if hasattr(event, "message") and hasattr(event.message, "usage"):
+                            usage_stats["input_tokens"] = getattr(event.message.usage, "input_tokens", 0)
+                            usage_stats["cache_creation_input_tokens"] = getattr(event.message.usage, "cache_creation_input_tokens", 0)
+                            usage_stats["cache_read_input_tokens"] = getattr(event.message.usage, "cache_read_input_tokens", 0)
 
-                    if hasattr(event, "content") and event.content:
-                        accumulated_content.append(event.content)
+                    # Handle usage stats from message_delta event
+                    if hasattr(event, "usage") and event.usage:
+                        usage_stats["output_tokens"] = getattr(event.usage, "output_tokens", 0)
+
+                    # Handle content block start events
+                    if hasattr(event, "type") and event.type == "content_block_start":
+                        if hasattr(event, "content_block"):
+                            block = event.content_block
+                            if hasattr(block, "type"):
+                                if block.type == "text":
+                                    current_text_block = {
+                                        "type": "text",
+                                        "text": ""
+                                    }
+                                    content_blocks.append(current_text_block)
+                                elif block.type == "tool_use":
+                                    tool_block = {
+                                        "type": "function",
+                                        "id": getattr(block, "id", ""),
+                                        "function": {
+                                            "name": getattr(block, "name", ""),
+                                            "arguments": {}
+                                        }
+                                    }
+                                    content_blocks.append(tool_block)
+                                    tools_in_progress[block.id] = {
+                                        "block": tool_block,
+                                        "input_string": ""
+                                    }
+                                    current_text_block = None
+
+                    # Handle text delta events
+                    if hasattr(event, "delta"):
+                        if hasattr(event.delta, "text"):
+                            delta_text = event.delta.text or ""
+                            accumulated_content += delta_text
+                            if current_text_block is not None:
+                                current_text_block["text"] += delta_text
+
+                    # Handle tool input delta events
+                    if hasattr(event, "type") and event.type == "content_block_delta":
+                        if hasattr(event, "delta") and hasattr(event.delta, "type") and event.delta.type == "input_json_delta":
+                            if hasattr(event, "index") and event.index < len(content_blocks):
+                                block = content_blocks[event.index]
+                                if block.get("type") == "function" and block.get("id") in tools_in_progress:
+                                    tool = tools_in_progress[block["id"]]
+                                    partial_json = getattr(event.delta, "partial_json", "")
+                                    tool["input_string"] += partial_json
+
+                    # Handle content block stop events
+                    if hasattr(event, "type") and event.type == "content_block_stop":
+                        current_text_block = None
+                        # Parse accumulated tool input
+                        if hasattr(event, "index") and event.index < len(content_blocks):
+                            block = content_blocks[event.index]
+                            if block.get("type") == "function" and block.get("id") in tools_in_progress:
+                                tool = tools_in_progress[block["id"]]
+                                try:
+                                    import json
+                                    block["function"]["arguments"] = json.loads(tool["input_string"])
+                                except (json.JSONDecodeError, Exception):
+                                    # Keep empty dict if parsing fails
+                                    pass
+                                del tools_in_progress[block["id"]]
 
                     yield event
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
-                output = "".join(accumulated_content)
 
                 self._capture_streaming_event(
                     posthog_distinct_id,
@@ -157,7 +221,8 @@ class WrappedMessages(Messages):
                     kwargs,
                     usage_stats,
                     latency,
-                    output,
+                    content_blocks,
+                    accumulated_content,
                 )
 
         return generator()
@@ -172,10 +237,25 @@ class WrappedMessages(Messages):
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
-        output: str,
+        content_blocks: List[Dict[str, Any]],
+        accumulated_content: str,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
+
+        # Format output to match non-streaming version
+        formatted_output = []
+        if content_blocks:
+            formatted_output = [{
+                "role": "assistant",
+                "content": content_blocks
+            }]
+        else:
+            # Fallback to accumulated content if no blocks
+            formatted_output = [{
+                "role": "assistant",
+                "content": [{"type": "text", "text": accumulated_content}]
+            }]
 
         event_properties = {
             "$ai_provider": "anthropic",
@@ -189,7 +269,7 @@ class WrappedMessages(Messages):
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                [{"content": output, "role": "assistant"}],
+                formatted_output,
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -205,6 +285,11 @@ class WrappedMessages(Messages):
             "$ai_base_url": str(self._client.base_url),
             **(posthog_properties or {}),
         }
+
+        # Add tools if available
+        available_tools = extract_available_tool_calls("anthropic", kwargs)
+        if available_tools:
+            event_properties["$ai_tools"] = available_tools
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
