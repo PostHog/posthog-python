@@ -5,33 +5,38 @@ This module handles the conversion of Anthropic API responses and inputs
 into standardized formats for PostHog tracking.
 """
 
-from typing import Any, Dict, List, Optional
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 from posthog.ai.types import (
     FormattedContentItem,
     FormattedFunctionCall,
     FormattedMessage,
     FormattedTextContent,
+    StreamingContentBlock,
+    StreamingUsageStats,
+    ToolInProgress,
 )
 
 
 def format_anthropic_response(response: Any) -> List[FormattedMessage]:
     """
     Format an Anthropic response into standardized message format.
-    
+
     Args:
         response: The response object from Anthropic API
-        
+
     Returns:
         List of formatted messages with role and content
     """
+
     output = []
-    
+
     if response is None:
         return output
-    
+
     content: List[FormattedContentItem] = []
-    
+
     # Process content blocks from the response
     if hasattr(response, "content"):
         for choice in response.content:
@@ -43,9 +48,10 @@ def format_anthropic_response(response: Any) -> List[FormattedMessage]:
             ):
                 text_content: FormattedTextContent = {
                     "type": "text",
-                    "text": choice.text
+                    "text": choice.text,
                 }
                 content.append(text_content)
+
             elif (
                 hasattr(choice, "type")
                 and choice.type == "tool_use"
@@ -58,93 +64,259 @@ def format_anthropic_response(response: Any) -> List[FormattedMessage]:
                     "function": {
                         "name": choice.name,
                         "arguments": getattr(choice, "input", {}),
-                    }
+                    },
                 }
                 content.append(function_call)
-    
+
     if content:
         message: FormattedMessage = {
             "role": "assistant",
             "content": content,
         }
         output.append(message)
-    
+
     return output
 
 
-def format_anthropic_input(messages: List[Dict[str, Any]], system: Optional[str] = None) -> List[FormattedMessage]:
+def format_anthropic_input(
+    messages: List[Dict[str, Any]], system: Optional[str] = None
+) -> List[FormattedMessage]:
     """
     Format Anthropic input messages with optional system prompt.
-    
+
     Args:
         messages: List of message dictionaries
         system: Optional system prompt to prepend
-        
+
     Returns:
         List of formatted messages
     """
+
     formatted_messages: List[FormattedMessage] = []
-    
+
     # Add system message if provided
     if system is not None:
-        formatted_messages.append({
-            "role": "system",
-            "content": system
-        })
-    
+        formatted_messages.append({"role": "system", "content": system})
+
     # Add user messages
     if messages:
         for msg in messages:
             # Messages are already in the correct format, just ensure type safety
             formatted_msg: FormattedMessage = {
                 "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
+                "content": msg.get("content", ""),
             }
             formatted_messages.append(formatted_msg)
-    
+
     return formatted_messages
 
 
 def extract_anthropic_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
     """
     Extract tool definitions from Anthropic API kwargs.
-    
+
     Args:
         kwargs: Keyword arguments passed to Anthropic API
-        
+
     Returns:
         Tool definitions if present, None otherwise
     """
+
     return kwargs.get("tools", None)
 
 
-def format_anthropic_streaming_content(content_blocks: List[Dict[str, Any]]) -> List[FormattedContentItem]:
+def format_anthropic_streaming_content(
+    content_blocks: List[Dict[str, Any]],
+) -> List[FormattedContentItem]:
     """
     Format content blocks from Anthropic streaming response.
-    
+
     Used by streaming handlers to format accumulated content blocks.
-    
+
     Args:
         content_blocks: List of content block dictionaries from streaming
-        
+
     Returns:
         List of formatted content items
     """
+
     formatted: List[FormattedContentItem] = []
-    
+
     for block in content_blocks:
         if block.get("type") == "text":
             text_content: FormattedTextContent = {
                 "type": "text",
-                "text": block.get("text", "")
+                "text": block.get("text", ""),
             }
             formatted.append(text_content)
+
         elif block.get("type") == "function":
             function_call: FormattedFunctionCall = {
                 "type": "function",
                 "id": block.get("id"),
-                "function": block.get("function", {})
+                "function": block.get("function", {}),
             }
             formatted.append(function_call)
-    
+
     return formatted
+
+
+def extract_anthropic_usage_from_event(event: Any) -> StreamingUsageStats:
+    """
+    Extract usage statistics from an Anthropic streaming event.
+
+    Args:
+        event: Streaming event from Anthropic API
+
+    Returns:
+        Dictionary of usage statistics
+    """
+
+    usage: StreamingUsageStats = {}
+
+    # Handle usage stats from message_start event
+    if hasattr(event, "type") and event.type == "message_start":
+        if hasattr(event, "message") and hasattr(event.message, "usage"):
+            usage["input_tokens"] = getattr(event.message.usage, "input_tokens", 0)
+            usage["cache_creation_input_tokens"] = getattr(
+                event.message.usage, "cache_creation_input_tokens", 0
+            )
+            usage["cache_read_input_tokens"] = getattr(
+                event.message.usage, "cache_read_input_tokens", 0
+            )
+
+    # Handle usage stats from message_delta event
+    if hasattr(event, "usage") and event.usage:
+        usage["output_tokens"] = getattr(event.usage, "output_tokens", 0)
+
+    return usage
+
+
+def handle_anthropic_content_block_start(
+    event: Any,
+) -> Tuple[Optional[StreamingContentBlock], Optional[ToolInProgress]]:
+    """
+    Handle content block start event from Anthropic streaming.
+
+    Args:
+        event: Content block start event
+
+    Returns:
+        Tuple of (content_block, tool_in_progress)
+    """
+
+    if not (hasattr(event, "type") and event.type == "content_block_start"):
+        return None, None
+
+    if not hasattr(event, "content_block"):
+        return None, None
+
+    block = event.content_block
+
+    if not hasattr(block, "type"):
+        return None, None
+
+    if block.type == "text":
+        content_block: StreamingContentBlock = {"type": "text", "text": ""}
+        return content_block, None
+
+    elif block.type == "tool_use":
+        content_block: StreamingContentBlock = {
+            "type": "function",
+            "id": getattr(block, "id", ""),
+            "function": {"name": getattr(block, "name", ""), "arguments": {}},
+        }
+        tool_in_progress: ToolInProgress = {"block": content_block, "input_string": ""}
+        return content_block, tool_in_progress
+
+    return None, None
+
+
+def handle_anthropic_text_delta(
+    event: Any, current_block: Optional[StreamingContentBlock]
+) -> Optional[str]:
+    """
+    Handle text delta event from Anthropic streaming.
+
+    Args:
+        event: Delta event
+        current_block: Current text block being accumulated
+
+    Returns:
+        Text delta if present
+    """
+
+    if hasattr(event, "delta") and hasattr(event.delta, "text"):
+        delta_text = event.delta.text or ""
+
+        if current_block is not None and current_block.get("type") == "text":
+            current_block["text"] = current_block.get("text", "") + delta_text
+
+        return delta_text
+
+    return None
+
+
+def handle_anthropic_tool_delta(
+    event: Any,
+    content_blocks: List[StreamingContentBlock],
+    tools_in_progress: Dict[str, ToolInProgress],
+) -> None:
+    """
+    Handle tool input delta event from Anthropic streaming.
+
+    Args:
+        event: Tool delta event
+        content_blocks: List of content blocks
+        tools_in_progress: Dictionary tracking tools being accumulated
+    """
+
+    if not (hasattr(event, "type") and event.type == "content_block_delta"):
+        return
+
+    if not (
+        hasattr(event, "delta")
+        and hasattr(event.delta, "type")
+        and event.delta.type == "input_json_delta"
+    ):
+        return
+
+    if hasattr(event, "index") and event.index < len(content_blocks):
+        block = content_blocks[event.index]
+
+        if block.get("type") == "function" and block.get("id") in tools_in_progress:
+            tool = tools_in_progress[block["id"]]
+            partial_json = getattr(event.delta, "partial_json", "")
+            tool["input_string"] += partial_json
+
+
+def finalize_anthropic_tool_input(
+    event: Any,
+    content_blocks: List[StreamingContentBlock],
+    tools_in_progress: Dict[str, ToolInProgress],
+) -> None:
+    """
+    Finalize tool input when content block stops.
+
+    Args:
+        event: Content block stop event
+        content_blocks: List of content blocks
+        tools_in_progress: Dictionary tracking tools being accumulated
+    """
+
+    if not (hasattr(event, "type") and event.type == "content_block_stop"):
+        return
+
+    if hasattr(event, "index") and event.index < len(content_blocks):
+        block = content_blocks[event.index]
+
+        if block.get("type") == "function" and block.get("id") in tools_in_progress:
+            tool = tools_in_progress[block["id"]]
+
+            try:
+                block["function"]["arguments"] = json.loads(tool["input_string"])
+            except (json.JSONDecodeError, Exception):
+                # Keep empty dict if parsing fails
+                pass
+
+            del tools_in_progress[block["id"]]

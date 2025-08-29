@@ -891,8 +891,9 @@ def test_streaming_with_tool_calls(mock_client):
         assert defined_tool["function"]["parameters"] == {}
 
         # Check that the content was also accumulated
+        assert props["$ai_output_choices"][0]["content"][0]["type"] == "text"
         assert (
-            props["$ai_output_choices"][0]["content"]
+            props["$ai_output_choices"][0]["content"][0]["text"]
             == "The weather in San Francisco is 15°C."
         )
 

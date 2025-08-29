@@ -18,6 +18,14 @@ from posthog.ai.utils import (
     merge_system_prompt,
     with_privacy_mode,
 )
+from posthog.ai.anthropic.anthropic_converter import (
+    format_anthropic_streaming_content,
+    extract_anthropic_usage_from_event,
+    handle_anthropic_content_block_start,
+    handle_anthropic_text_delta,
+    handle_anthropic_tool_delta,
+    finalize_anthropic_tool_input,
+)
 from posthog.client import Client as PostHogClient
 
 
@@ -62,6 +70,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups: Optional group analytics properties
             **kwargs: Arguments passed to Anthropic's messages.create
         """
+
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
@@ -124,7 +133,7 @@ class AsyncWrappedMessages(AsyncMessages):
         content_blocks: List[Dict[str, Any]] = []
         tools_in_progress: Dict[str, Dict[str, Any]] = {}
         current_text_block: Optional[Dict[str, Any]] = None
-        response = await super().create(**kwargs)
+        response = super().create(**kwargs)
 
         async def generator():
             nonlocal usage_stats
@@ -132,79 +141,45 @@ class AsyncWrappedMessages(AsyncMessages):
             nonlocal content_blocks
             nonlocal tools_in_progress
             nonlocal current_text_block
+
             try:
                 async for event in response:
-                    # Handle usage stats from message_start event
-                    if hasattr(event, "type") and event.type == "message_start":
-                        if hasattr(event, "message") and hasattr(event.message, "usage"):
-                            usage_stats["input_tokens"] = getattr(event.message.usage, "input_tokens", 0)
-                            usage_stats["cache_creation_input_tokens"] = getattr(event.message.usage, "cache_creation_input_tokens", 0)
-                            usage_stats["cache_read_input_tokens"] = getattr(event.message.usage, "cache_read_input_tokens", 0)
-
-                    # Handle usage stats from message_delta event
-                    if hasattr(event, "usage") and event.usage:
-                        usage_stats["output_tokens"] = getattr(event.usage, "output_tokens", 0)
+                    # Extract usage stats from event
+                    event_usage = extract_anthropic_usage_from_event(event)
+                    usage_stats.update(event_usage)
 
                     # Handle content block start events
                     if hasattr(event, "type") and event.type == "content_block_start":
-                        if hasattr(event, "content_block"):
-                            block = event.content_block
-                            if hasattr(block, "type"):
-                                if block.type == "text":
-                                    current_text_block = {
-                                        "type": "text",
-                                        "text": ""
-                                    }
-                                    content_blocks.append(current_text_block)
-                                elif block.type == "tool_use":
-                                    tool_block = {
-                                        "type": "function",
-                                        "id": getattr(block, "id", ""),
-                                        "function": {
-                                            "name": getattr(block, "name", ""),
-                                            "arguments": {}
-                                        }
-                                    }
-                                    content_blocks.append(tool_block)
-                                    tools_in_progress[block.id] = {
-                                        "block": tool_block,
-                                        "input_string": ""
-                                    }
-                                    current_text_block = None
+                        block, tool = handle_anthropic_content_block_start(event)
+
+                        if block:
+                            content_blocks.append(block)
+
+                            if block.get("type") == "text":
+                                current_text_block = block
+                            else:
+                                current_text_block = None
+
+                        if tool:
+                            tools_in_progress[tool["block"]["id"]] = tool
 
                     # Handle text delta events
-                    if hasattr(event, "delta"):
-                        if hasattr(event.delta, "text"):
-                            delta_text = event.delta.text or ""
-                            accumulated_content += delta_text
-                            if current_text_block is not None:
-                                current_text_block["text"] += delta_text
+                    delta_text = handle_anthropic_text_delta(event, current_text_block)
+
+                    if delta_text:
+                        accumulated_content += delta_text
 
                     # Handle tool input delta events
-                    if hasattr(event, "type") and event.type == "content_block_delta":
-                        if hasattr(event, "delta") and hasattr(event.delta, "type") and event.delta.type == "input_json_delta":
-                            if hasattr(event, "index") and event.index < len(content_blocks):
-                                block = content_blocks[event.index]
-                                if block.get("type") == "function" and block.get("id") in tools_in_progress:
-                                    tool = tools_in_progress[block["id"]]
-                                    partial_json = getattr(event.delta, "partial_json", "")
-                                    tool["input_string"] += partial_json
+                    handle_anthropic_tool_delta(
+                        event, content_blocks, tools_in_progress
+                    )
 
                     # Handle content block stop events
                     if hasattr(event, "type") and event.type == "content_block_stop":
                         current_text_block = None
-                        # Parse accumulated tool input
-                        if hasattr(event, "index") and event.index < len(content_blocks):
-                            block = content_blocks[event.index]
-                            if block.get("type") == "function" and block.get("id") in tools_in_progress:
-                                tool = tools_in_progress[block["id"]]
-                                try:
-                                    import json
-                                    block["function"]["arguments"] = json.loads(tool["input_string"])
-                                except (json.JSONDecodeError, Exception):
-                                    # Keep empty dict if parsing fails
-                                    pass
-                                del tools_in_progress[block["id"]]
+                        finalize_anthropic_tool_input(
+                            event, content_blocks, tools_in_progress
+                        )
 
                     yield event
 
@@ -243,19 +218,20 @@ class AsyncWrappedMessages(AsyncMessages):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        # Format output to match non-streaming version
+        # Format output using converter
+        formatted_content = format_anthropic_streaming_content(content_blocks)
         formatted_output = []
-        if content_blocks:
-            formatted_output = [{
-                "role": "assistant",
-                "content": content_blocks
-            }]
+
+        if formatted_content:
+            formatted_output = [{"role": "assistant", "content": formatted_content}]
         else:
             # Fallback to accumulated content if no blocks
-            formatted_output = [{
-                "role": "assistant",
-                "content": [{"type": "text", "text": accumulated_content}]
-            }]
+            formatted_output = [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": accumulated_content}],
+                }
+            ]
 
         event_properties = {
             "$ai_provider": "anthropic",
@@ -288,6 +264,7 @@ class AsyncWrappedMessages(AsyncMessages):
 
         # Add tools if available
         available_tools = extract_available_tool_calls("anthropic", kwargs)
+
         if available_tools:
             event_properties["$ai_tools"] = available_tools
 

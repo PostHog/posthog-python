@@ -16,7 +16,12 @@ from posthog.ai.utils import (
     get_model_params,
     with_privacy_mode,
 )
-from posthog.ai.gemini.gemini_converter import format_gemini_input
+from posthog.ai.gemini.gemini_converter import (
+    format_gemini_input,
+    extract_gemini_usage_from_chunk,
+    extract_gemini_content_from_chunk,
+    format_gemini_streaming_output,
+)
 from posthog.client import Client as PostHogClient
 
 
@@ -72,6 +77,7 @@ class Client:
             posthog_groups: Default groups for all calls (can be overridden per call)
             **kwargs: Additional arguments (for future compatibility)
         """
+
         self._ph_client = posthog_client or setup()
 
         if self._ph_client is None:
@@ -133,6 +139,7 @@ class Models:
             posthog_groups: Default groups for all calls
             **kwargs: Additional arguments (for future compatibility)
         """
+
         self._ph_client = posthog_client or setup()
 
         if self._ph_client is None:
@@ -150,14 +157,19 @@ class Models:
         # Add Vertex AI parameters if provided
         if vertexai is not None:
             client_args["vertexai"] = vertexai
+
         if credentials is not None:
             client_args["credentials"] = credentials
+
         if project is not None:
             client_args["project"] = project
+
         if location is not None:
             client_args["location"] = location
+
         if debug_config is not None:
             client_args["debug_config"] = debug_config
+
         if http_options is not None:
             client_args["http_options"] = http_options
 
@@ -175,6 +187,7 @@ class Models:
                 raise ValueError(
                     "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
                 )
+
             client_args["api_key"] = api_key
 
         self._client = genai.Client(**client_args)
@@ -189,6 +202,7 @@ class Models:
         call_groups: Optional[Dict[str, Any]],
     ):
         """Merge call-level PostHog parameters with client defaults."""
+
         # Use call-level values if provided, otherwise fall back to defaults
         distinct_id = (
             call_distinct_id
@@ -204,6 +218,7 @@ class Models:
 
         # Merge properties: default properties + call properties (call properties override)
         properties = dict(self._default_properties)
+
         if call_properties:
             properties.update(call_properties)
 
@@ -239,6 +254,7 @@ class Models:
             posthog_groups: Group analytics properties (overrides client default)
             **kwargs: Arguments passed to Gemini's generate_content
         """
+
         # Merge PostHog parameters
         distinct_id, trace_id, properties, privacy_mode, groups = (
             self._merge_posthog_params(
@@ -288,25 +304,23 @@ class Models:
             nonlocal accumulated_content  # noqa: F824
             try:
                 for chunk in response:
-                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                        usage_stats = {
-                            "input_tokens": getattr(
-                                chunk.usage_metadata, "prompt_token_count", 0
-                            ),
-                            "output_tokens": getattr(
-                                chunk.usage_metadata, "candidates_token_count", 0
-                            ),
-                        }
+                    # Extract usage stats from chunk
+                    chunk_usage = extract_gemini_usage_from_chunk(chunk)
 
-                    if hasattr(chunk, "text") and chunk.text:
-                        accumulated_content.append(chunk.text)
+                    if chunk_usage:
+                        usage_stats.update(chunk_usage)
+
+                    # Extract content from chunk
+                    content = extract_gemini_content_from_chunk(chunk)
+
+                    if content is not None:
+                        accumulated_content.append(content)
 
                     yield chunk
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
-                output = "".join(accumulated_content)
 
                 self._capture_streaming_event(
                     model,
@@ -319,7 +333,7 @@ class Models:
                     kwargs,
                     usage_stats,
                     latency,
-                    output,
+                    accumulated_content,
                 )
 
         return generator()
@@ -353,7 +367,7 @@ class Models:
             "$ai_output_choices": with_privacy_mode(
                 self._ph_client,
                 privacy_mode,
-                [{"content": output, "role": "assistant"}],
+                format_gemini_streaming_output(output),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -377,6 +391,7 @@ class Models:
 
     def _format_input(self, contents):
         """Format input contents for PostHog tracking"""
+
         return format_gemini_input(contents)
 
     def generate_content_stream(

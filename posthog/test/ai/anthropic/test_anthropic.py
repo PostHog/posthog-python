@@ -44,106 +44,101 @@ def mock_anthropic_response():
     )
 
 
-
-
 @pytest.fixture
 def mock_anthropic_stream_with_tools():
     """Mock stream events for tool calls."""
+
     class MockStreamEvent:
         def __init__(self, event_type=None, **kwargs):
             self.type = event_type
             for key, value in kwargs.items():
                 setattr(self, key, value)
-    
+
     class MockUsage:
         def __init__(self, **kwargs):
             for key, value in kwargs.items():
                 setattr(self, key, value)
-    
+
     class MockMessage:
         def __init__(self):
             self.usage = MockUsage(
                 input_tokens=50,
                 cache_creation_input_tokens=0,
-                cache_read_input_tokens=5
+                cache_read_input_tokens=5,
             )
-    
+
     class MockContentBlock:
         def __init__(self, block_type, **kwargs):
             self.type = block_type
             for key, value in kwargs.items():
                 setattr(self, key, value)
-    
+
     class MockDelta:
         def __init__(self, **kwargs):
             for key, value in kwargs.items():
                 setattr(self, key, value)
-    
+
     def stream_generator():
         # Message start with usage
         event = MockStreamEvent("message_start")
         event.message = MockMessage()
         yield event
-        
+
         # Text block start
         event = MockStreamEvent("content_block_start")
         event.content_block = MockContentBlock("text")
         event.index = 0
         yield event
-        
+
         # Text delta
         event = MockStreamEvent("content_block_delta")
         event.delta = MockDelta(text="I'll check the weather for you.")
         event.index = 0
         yield event
-        
+
         # Text block stop
         event = MockStreamEvent("content_block_stop")
         event.index = 0
         yield event
-        
+
         # Tool use block start
         event = MockStreamEvent("content_block_start")
         event.content_block = MockContentBlock(
-            "tool_use",
-            id="toolu_stream123",
-            name="get_weather"
+            "tool_use", id="toolu_stream123", name="get_weather"
         )
         event.index = 1
         yield event
-        
+
         # Tool input delta 1
         event = MockStreamEvent("content_block_delta")
         event.delta = MockDelta(
-            type="input_json_delta",
-            partial_json='{"location": "San'
+            type="input_json_delta", partial_json='{"location": "San'
         )
         event.index = 1
         yield event
-        
+
         # Tool input delta 2
         event = MockStreamEvent("content_block_delta")
         event.delta = MockDelta(
-            type="input_json_delta",
-            partial_json=' Francisco", "unit": "celsius"}'
+            type="input_json_delta", partial_json=' Francisco", "unit": "celsius"}'
         )
         event.index = 1
         yield event
-        
+
         # Tool block stop
         event = MockStreamEvent("content_block_stop")
         event.index = 1
         yield event
-        
+
         # Message delta with final usage
         event = MockStreamEvent("message_delta")
         event.usage = MockUsage(output_tokens=25)
         yield event
-        
+
         # Message stop
         event = MockStreamEvent("message_stop")
         yield event
-    
+
     return stream_generator()
 
 
@@ -253,7 +248,6 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
-
 
 
 def test_groups(mock_client, mock_anthropic_response):
@@ -384,8 +378,6 @@ async def test_basic_async_integration(mock_client):
     assert props["$ai_http_status"] == 200
     assert props["foo"] == "bar"
     assert isinstance(props["$ai_latency"], float)
-
-
 
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
@@ -736,7 +728,9 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             system="You are a helpful weather assistant.",
-            messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+            messages=[
+                {"role": "user", "content": "What's the weather in San Francisco?"}
+            ],
             tools=[
                 {
                     "name": "get_weather",
@@ -768,13 +762,13 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "anthropic"
         assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
-        
+
         # Verify system prompt is included in input
         assert props["$ai_input"] == [
             {"role": "system", "content": "You are a helpful weather assistant."},
-            {"role": "user", "content": "What's the weather in San Francisco?"}
+            {"role": "user", "content": "What's the weather in San Francisco?"},
         ]
-        
+
         # Verify that tools are captured in the properties
         assert props["$ai_tools"] == [
             {
@@ -790,23 +784,23 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
                 },
             }
         ]
-        
+
         # Verify output contains both text and tool call
         output_choices = props["$ai_output_choices"]
         assert len(output_choices) == 1
-        
+
         assistant_message = output_choices[0]
         assert assistant_message["role"] == "assistant"
-        
+
         content = assistant_message["content"]
         assert isinstance(content, list)
         assert len(content) == 2
-        
+
         # Verify text block
         text_block = content[0]
         assert text_block["type"] == "text"
         assert text_block["text"] == "I'll check the weather for you."
-        
+
         # Verify tool call block
         tool_block = content[1]
         assert tool_block["type"] == "function"
@@ -814,9 +808,9 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         assert tool_block["function"]["name"] == "get_weather"
         assert tool_block["function"]["arguments"] == {
             "location": "San Francisco",
-            "unit": "celsius"
+            "unit": "celsius",
         }
-        
+
         # Check token usage
         assert props["$ai_input_tokens"] == 50
         assert props["$ai_output_tokens"] == 25
@@ -827,23 +821,25 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
 def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools):
     """Test that tool calls are properly captured in async streaming mode."""
     import asyncio
-    
+
     async def mock_async_create(**kwargs):
         # Convert regular generator to async generator
         for event in mock_anthropic_stream_with_tools:
             yield event
-    
+
     with patch(
         "anthropic.resources.AsyncMessages.create",
         return_value=mock_async_create(),
     ):
         async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
-        
+
         async def run_test():
             response = await async_client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 system="You are a helpful weather assistant.",
-                messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
+                messages=[
+                    {"role": "user", "content": "What's the weather in San Francisco?"}
+                ],
                 tools=[
                     {
                         "name": "get_weather",
@@ -861,30 +857,30 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
                 stream=True,
                 posthog_distinct_id="test-id",
             )
-            
+
             # Consume the async stream
             [event async for event in response]
-        
+
         # asyncio.run() waits for all async operations to complete
         asyncio.run(run_test())
-        
+
         # Capture completes before asyncio.run() returns
         assert mock_client.capture.call_count == 1
-        
+
         call_args = mock_client.capture.call_args[1]
         props = call_args["properties"]
-        
+
         assert call_args["distinct_id"] == "test-id"
         assert call_args["event"] == "$ai_generation"
         assert props["$ai_provider"] == "anthropic"
         assert props["$ai_model"] == "claude-3-5-sonnet-20241022"
-        
+
         # Verify system prompt is included in input
         assert props["$ai_input"] == [
             {"role": "system", "content": "You are a helpful weather assistant."},
-            {"role": "user", "content": "What's the weather in San Francisco?"}
+            {"role": "user", "content": "What's the weather in San Francisco?"},
         ]
-        
+
         # Verify that tools are captured in the properties
         assert props["$ai_tools"] == [
             {
@@ -900,23 +896,23 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
                 },
             }
         ]
-        
+
         # Verify output contains both text and tool call
         output_choices = props["$ai_output_choices"]
         assert len(output_choices) == 1
-        
+
         assistant_message = output_choices[0]
         assert assistant_message["role"] == "assistant"
-        
+
         content = assistant_message["content"]
         assert isinstance(content, list)
         assert len(content) == 2
-        
+
         # Verify text block
         text_block = content[0]
         assert text_block["type"] == "text"
         assert text_block["text"] == "I'll check the weather for you."
-        
+
         # Verify tool call block
         tool_block = content[1]
         assert tool_block["type"] == "function"
@@ -924,9 +920,9 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
         assert tool_block["function"]["name"] == "get_weather"
         assert tool_block["function"]["arguments"] == {
             "location": "San Francisco",
-            "unit": "celsius"
+            "unit": "celsius",
         }
-        
+
         # Check token usage
         assert props["$ai_input_tokens"] == 50
         assert props["$ai_output_tokens"] == 25

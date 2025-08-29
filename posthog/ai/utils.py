@@ -105,23 +105,17 @@ def format_response(response, provider: str):
     """
     if provider == "anthropic":
         from posthog.ai.anthropic.anthropic_converter import format_anthropic_response
+
         return format_anthropic_response(response)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import format_openai_response
+
         return format_openai_response(response)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import format_gemini_response
+
         return format_gemini_response(response)
     return []
-
-
-# Moved to posthog.ai.anthropic.anthropic_converter
-
-
-# Moved to posthog.ai.openai.openai_converter
-
-
-# Moved to posthog.ai.gemini.gemini_converter
 
 
 def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
@@ -130,12 +124,15 @@ def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     """
     if provider == "anthropic":
         from posthog.ai.anthropic.anthropic_converter import extract_anthropic_tools
+
         return extract_anthropic_tools(kwargs)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import extract_gemini_tools
+
         return extract_gemini_tools(kwargs)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import extract_openai_tools
+
         return extract_openai_tools(kwargs)
 
 
@@ -145,36 +142,41 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
     """
     if provider == "anthropic":
         from posthog.ai.anthropic.anthropic_converter import format_anthropic_input
+
         messages = kwargs.get("messages") or []
         system = kwargs.get("system")
         return format_anthropic_input(messages, system)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import format_gemini_input
+
         contents = kwargs.get("contents", [])
         return format_gemini_input(contents)
     elif provider == "openai":
         # For OpenAI, handle both Chat Completions and Responses API
         from posthog.ai.openai.openai_converter import format_openai_input
-        
+
         messages_param = kwargs.get("messages")
         input_param = kwargs.get("input")
-        
+
         # Get base formatted messages
         messages = format_openai_input(messages_param, input_param)
-        
+
         # Check if system prompt is provided as a separate parameter
         if kwargs.get("system") is not None:
             has_system = any(msg.get("role") == "system" for msg in messages)
             if not has_system:
-                messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-        
+                messages = [
+                    {"role": "system", "content": kwargs.get("system")}
+                ] + messages
+
         # For Responses API, add instructions to the system prompt if provided
         if kwargs.get("instructions") is not None:
             # Find the system message if it exists
             system_idx = next(
-                (i for i, msg in enumerate(messages) if msg.get("role") == "system"), None
+                (i for i, msg in enumerate(messages) if msg.get("role") == "system"),
+                None,
             )
-            
+
             if system_idx is not None:
                 # Append instructions to existing system message
                 system_content = messages[system_idx].get("content", "")
@@ -186,9 +188,9 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
                 messages = [
                     {"role": "system", "content": kwargs.get("instructions")}
                 ] + messages
-        
+
         return messages
-    
+
     # Default case - return empty list
     return []
 

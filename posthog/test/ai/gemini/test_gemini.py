@@ -301,24 +301,24 @@ def test_new_client_different_input_formats(
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
-    
+
     # Test Gemini-specific format with parts array (like in the screenshot)
     mock_client.reset_mock()
     client.models.generate_content(
         model="gemini-2.0-flash",
         contents=[{"role": "user", "parts": [{"text": "hey"}]}],
-        posthog_distinct_id="test-id"
+        posthog_distinct_id="test-id",
     )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
-    
+
     # Test multiple parts in the parts array
     mock_client.reset_mock()
     client.models.generate_content(
         model="gemini-2.0-flash",
         contents=[{"role": "user", "parts": [{"text": "Hello "}, {"text": "world"}]}],
-        posthog_distinct_id="test-id"
+        posthog_distinct_id="test-id",
     )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
