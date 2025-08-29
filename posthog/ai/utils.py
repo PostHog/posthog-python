@@ -103,263 +103,94 @@ def format_response(response, provider: str):
     """
     Format a regular (non-streaming) response.
     """
-    output = []
-    if response is None:
-        return output
     if provider == "anthropic":
-        return format_response_anthropic(response)
+        from posthog.ai.anthropic.anthropic_converter import format_anthropic_response
+        return format_anthropic_response(response)
     elif provider == "openai":
-        return format_response_openai(response)
+        from posthog.ai.openai.openai_converter import format_openai_response
+        return format_openai_response(response)
     elif provider == "gemini":
-        return format_response_gemini(response)
-    return output
+        from posthog.ai.gemini.gemini_converter import format_gemini_response
+        return format_gemini_response(response)
+    return []
 
 
-def format_response_anthropic(response):
-    output = []
-    content = []
-
-    for choice in response.content:
-        if (
-            hasattr(choice, "type")
-            and choice.type == "text"
-            and hasattr(choice, "text")
-            and choice.text
-        ):
-            content.append({"type": "text", "text": choice.text})
-        elif (
-            hasattr(choice, "type")
-            and choice.type == "tool_use"
-            and hasattr(choice, "name")
-            and hasattr(choice, "id")
-        ):
-            tool_call = {
-                "type": "function",
-                "id": choice.id,
-                "function": {
-                    "name": choice.name,
-                    "arguments": getattr(choice, "input", {}),
-                },
-            }
-            content.append(tool_call)
-
-    if content:
-        message = {
-            "role": "assistant",
-            "content": content,
-        }
-        output.append(message)
-
-    return output
+# Moved to posthog.ai.anthropic.anthropic_converter
 
 
-def format_response_openai(response):
-    output = []
-
-    # Handle Chat Completions response format
-    if hasattr(response, "choices"):
-        content = []
-        role = "assistant"
-
-        for choice in response.choices:
-            if hasattr(choice, "message") and choice.message:
-                if choice.message.role:
-                    role = choice.message.role
-
-                if choice.message.content:
-                    content.append({"type": "text", "text": choice.message.content})
-
-                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                    for tool_call in choice.message.tool_calls:
-                        content.append(
-                            {
-                                "type": "function",
-                                "id": tool_call.id,
-                                "function": {
-                                    "name": tool_call.function.name,
-                                    "arguments": tool_call.function.arguments,
-                                },
-                            }
-                        )
-
-        if content:
-            message = {
-                "role": role,
-                "content": content,
-            }
-            output.append(message)
-
-    # Handle Responses API format
-    if hasattr(response, "output"):
-        content = []
-        role = "assistant"
-
-        for item in response.output:
-            if item.type == "message":
-                role = item.role
-
-                if hasattr(item, "content") and isinstance(item.content, list):
-                    for content_item in item.content:
-                        if (
-                            hasattr(content_item, "type")
-                            and content_item.type == "output_text"
-                            and hasattr(content_item, "text")
-                        ):
-                            content.append({"type": "text", "text": content_item.text})
-                        elif hasattr(content_item, "text"):
-                            content.append({"type": "text", "text": content_item.text})
-                        elif (
-                            hasattr(content_item, "type")
-                            and content_item.type == "input_image"
-                            and hasattr(content_item, "image_url")
-                        ):
-                            content.append(
-                                {
-                                    "type": "image",
-                                    "image": content_item.image_url,
-                                }
-                            )
-                elif hasattr(item, "content"):
-                    content.append({"type": "text", "text": str(item.content)})
-
-            elif hasattr(item, "type") and item.type == "function_call":
-                content.append(
-                    {
-                        "type": "function",
-                        "id": getattr(item, "call_id", getattr(item, "id", "")),
-                        "function": {
-                            "name": item.name,
-                            "arguments": getattr(item, "arguments", {}),
-                        },
-                    }
-                )
-
-        if content:
-            message = {
-                "role": role,
-                "content": content,
-            }
-            output.append(message)
-
-    return output
+# Moved to posthog.ai.openai.openai_converter
 
 
-def format_response_gemini(response):
-    output = []
-
-    if hasattr(response, "candidates") and response.candidates:
-        for candidate in response.candidates:
-            if hasattr(candidate, "content") and candidate.content:
-                content = []
-
-                if hasattr(candidate.content, "parts") and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, "text") and part.text:
-                            content.append({"type": "text", "text": part.text})
-                        elif hasattr(part, "function_call") and part.function_call:
-                            function_call = part.function_call
-                            content.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_call.name,
-                                        "arguments": function_call.args,
-                                    },
-                                }
-                            )
-
-                if content:
-                    message = {
-                        "role": "assistant",
-                        "content": content,
-                    }
-                    output.append(message)
-
-            elif hasattr(candidate, "text") and candidate.text:
-                output.append(
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": candidate.text}],
-                    }
-                )
-    elif hasattr(response, "text") and response.text:
-        output.append(
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": response.text}],
-            }
-        )
-
-    return output
+# Moved to posthog.ai.gemini.gemini_converter
 
 
 def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
+    """
+    Extract available tool calls for the given provider.
+    """
     if provider == "anthropic":
-        if "tools" in kwargs:
-            return kwargs["tools"]
-
-        return None
+        from posthog.ai.anthropic.anthropic_converter import extract_anthropic_tools
+        return extract_anthropic_tools(kwargs)
     elif provider == "gemini":
-        if "config" in kwargs and hasattr(kwargs["config"], "tools"):
-            return kwargs["config"].tools
-
-        return None
+        from posthog.ai.gemini.gemini_converter import extract_gemini_tools
+        return extract_gemini_tools(kwargs)
     elif provider == "openai":
-        if "tools" in kwargs:
-            return kwargs["tools"]
-
-        return None
+        from posthog.ai.openai.openai_converter import extract_openai_tools
+        return extract_openai_tools(kwargs)
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
-    messages: List[Dict[str, Any]] = []
+    """
+    Merge system prompts and format messages for the given provider.
+    """
     if provider == "anthropic":
+        from posthog.ai.anthropic.anthropic_converter import format_anthropic_input
         messages = kwargs.get("messages") or []
-        if kwargs.get("system") is None:
-            return messages
-        return [{"role": "system", "content": kwargs.get("system")}] + messages
+        system = kwargs.get("system")
+        return format_anthropic_input(messages, system)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import format_gemini_input
         contents = kwargs.get("contents", [])
         return format_gemini_input(contents)
-
-    # For OpenAI, handle both Chat Completions and Responses API
-    if kwargs.get("messages") is not None:
-        messages = list(kwargs.get("messages", []))
-
-    if kwargs.get("input") is not None:
-        input_data = kwargs.get("input")
-        if isinstance(input_data, list):
-            messages.extend(input_data)
-        else:
-            messages.append({"role": "user", "content": input_data})
-
-    # Check if system prompt is provided as a separate parameter
-    if kwargs.get("system") is not None:
-        has_system = any(msg.get("role") == "system" for msg in messages)
-        if not has_system:
-            messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-
-    # For Responses API, add instructions to the system prompt if provided
-    if kwargs.get("instructions") is not None:
-        # Find the system message if it exists
-        system_idx = next(
-            (i for i, msg in enumerate(messages) if msg.get("role") == "system"), None
-        )
-
-        if system_idx is not None:
-            # Append instructions to existing system message
-            system_content = messages[system_idx].get("content", "")
-            messages[system_idx]["content"] = (
-                f"{system_content}\n\n{kwargs.get('instructions')}"
+    elif provider == "openai":
+        # For OpenAI, handle both Chat Completions and Responses API
+        from posthog.ai.openai.openai_converter import format_openai_input
+        
+        messages_param = kwargs.get("messages")
+        input_param = kwargs.get("input")
+        
+        # Get base formatted messages
+        messages = format_openai_input(messages_param, input_param)
+        
+        # Check if system prompt is provided as a separate parameter
+        if kwargs.get("system") is not None:
+            has_system = any(msg.get("role") == "system" for msg in messages)
+            if not has_system:
+                messages = [{"role": "system", "content": kwargs.get("system")}] + messages
+        
+        # For Responses API, add instructions to the system prompt if provided
+        if kwargs.get("instructions") is not None:
+            # Find the system message if it exists
+            system_idx = next(
+                (i for i, msg in enumerate(messages) if msg.get("role") == "system"), None
             )
-        else:
-            # Create a new system message with instructions
-            messages = [
-                {"role": "system", "content": kwargs.get("instructions")}
-            ] + messages
-
-    return messages
+            
+            if system_idx is not None:
+                # Append instructions to existing system message
+                system_content = messages[system_idx].get("content", "")
+                messages[system_idx]["content"] = (
+                    f"{system_content}\n\n{kwargs.get('instructions')}"
+                )
+            else:
+                # Create a new system message with instructions
+                messages = [
+                    {"role": "system", "content": kwargs.get("instructions")}
+                ] + messages
+        
+        return messages
+    
+    # Default case - return empty list
+    return []
 
 
 def call_llm_and_track_usage(

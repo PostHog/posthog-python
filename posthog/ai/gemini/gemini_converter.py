@@ -1,11 +1,18 @@
 """
-Gemini input format converter module.
+Gemini-specific conversion utilities.
 
-This module handles the conversion of various Gemini input formats into a standardized
-format for PostHog tracking. It eliminates code duplication between gemini.py and utils.py.
+This module handles the conversion of Gemini API responses and inputs
+into standardized formats for PostHog tracking.
 """
 
-from typing import Any, Dict, List, TypedDict, Union
+from typing import Any, Dict, List, Optional, TypedDict, Union
+
+from posthog.ai.types import (
+    FormattedContentItem,
+    FormattedFunctionCall,
+    FormattedMessage,
+    FormattedTextContent,
+)
 
 
 class GeminiPart(TypedDict, total=False):
@@ -19,12 +26,6 @@ class GeminiMessage(TypedDict, total=False):
     parts: List[Union[GeminiPart, Dict[str, Any]]]
     content: Union[str, List[Any]]
     text: str
-
-
-class FormattedMessage(TypedDict):
-    """Standardized message format for PostHog tracking."""
-    role: str
-    content: str
 
 
 def _extract_text_from_parts(parts: List[Any]) -> str:
@@ -129,6 +130,85 @@ def _format_object_message(item: Any) -> FormattedMessage:
     
     # Fallback to string representation
     return {"role": "user", "content": str(item)}
+
+
+def format_gemini_response(response: Any) -> List[FormattedMessage]:
+    """
+    Format a Gemini response into standardized message format.
+    
+    Args:
+        response: The response object from Gemini API
+        
+    Returns:
+        List of formatted messages with role and content
+    """
+    output = []
+    
+    if response is None:
+        return output
+    
+    if hasattr(response, "candidates") and response.candidates:
+        for candidate in response.candidates:
+            if hasattr(candidate, "content") and candidate.content:
+                content: List[FormattedContentItem] = []
+                
+                if hasattr(candidate.content, "parts") and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            text_content: FormattedTextContent = {
+                                "type": "text",
+                                "text": part.text
+                            }
+                            content.append(text_content)
+                        elif hasattr(part, "function_call") and part.function_call:
+                            function_call = part.function_call
+                            func_content: FormattedFunctionCall = {
+                                "type": "function",
+                                "function": {
+                                    "name": function_call.name,
+                                    "arguments": function_call.args,
+                                }
+                            }
+                            content.append(func_content)
+                
+                if content:
+                    message: FormattedMessage = {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                    output.append(message)
+            
+            elif hasattr(candidate, "text") and candidate.text:
+                message: FormattedMessage = {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": candidate.text}],
+                }
+                output.append(message)
+    
+    elif hasattr(response, "text") and response.text:
+        message: FormattedMessage = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": response.text}],
+        }
+        output.append(message)
+    
+    return output
+
+
+def extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
+    """
+    Extract tool definitions from Gemini API kwargs.
+    
+    Args:
+        kwargs: Keyword arguments passed to Gemini API
+        
+    Returns:
+        Tool definitions if present, None otherwise
+    """
+    if "config" in kwargs and hasattr(kwargs["config"], "tools"):
+        return kwargs["config"].tools
+    
+    return None
 
 
 def format_gemini_input(contents: Any) -> List[FormattedMessage]:
