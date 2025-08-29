@@ -319,21 +319,9 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
             return messages
         return [{"role": "system", "content": kwargs.get("system")}] + messages
     elif provider == "gemini":
+        from posthog.ai.gemini.gemini_converter import format_gemini_input
         contents = kwargs.get("contents", [])
-        if isinstance(contents, str):
-            return [{"role": "user", "content": contents}]
-        elif isinstance(contents, list):
-            formatted = []
-            for item in contents:
-                if isinstance(item, str):
-                    formatted.append({"role": "user", "content": item})
-                elif hasattr(item, "text"):
-                    formatted.append({"role": "user", "content": item.text})
-                else:
-                    formatted.append({"role": "user", "content": str(item)})
-            return formatted
-        else:
-            return [{"role": "user", "content": str(contents)}]
+        return format_gemini_input(contents)
 
     # For OpenAI, handle both Chat Completions and Responses API
     if kwargs.get("messages") is not None:

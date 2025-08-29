@@ -16,6 +16,7 @@ from posthog.ai.utils import (
     get_model_params,
     with_privacy_mode,
 )
+from posthog.ai.gemini.gemini_converter import format_gemini_input
 from posthog.client import Client as PostHogClient
 
 
@@ -376,20 +377,7 @@ class Models:
 
     def _format_input(self, contents):
         """Format input contents for PostHog tracking"""
-        if isinstance(contents, str):
-            return [{"role": "user", "content": contents}]
-        elif isinstance(contents, list):
-            formatted = []
-            for item in contents:
-                if isinstance(item, str):
-                    formatted.append({"role": "user", "content": item})
-                elif hasattr(item, "text"):
-                    formatted.append({"role": "user", "content": item.text})
-                else:
-                    formatted.append({"role": "user", "content": str(item)})
-            return formatted
-        else:
-            return [{"role": "user", "content": str(contents)}]
+        return format_gemini_input(contents)
 
     def generate_content_stream(
         self,
