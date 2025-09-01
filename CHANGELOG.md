@@ -1,3 +1,7 @@
+# 6.7.1 - 2025-09-01
+
+- fix: Add base64 inline image sanitization
+
 # 6.7.0 - 2025-08-26
 
 - feat: Add support for feature flag dependencies
