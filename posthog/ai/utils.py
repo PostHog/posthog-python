@@ -43,7 +43,7 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
             "cache_read_input_tokens": response.usage.cache_read_input_tokens,
             "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
         }
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         cached_tokens = 0
         input_tokens = 0
         output_tokens = 0
@@ -114,7 +114,7 @@ def format_response(response, provider: str):
         return output
     if provider == "anthropic":
         return format_response_anthropic(response)
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         return format_response_openai(response)
     elif provider == "gemini":
         return format_response_gemini(response)
@@ -310,7 +310,7 @@ def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
             return kwargs["config"].tools
 
         return None
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         if "tools" in kwargs:
             return kwargs["tools"]
 
@@ -616,7 +616,7 @@ def sanitize_messages(data: Any, provider: str) -> Any:
     """Sanitize messages using provider-specific sanitization functions."""
     if provider == "anthropic":
         return sanitize_anthropic(data)
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         return sanitize_openai(data)
     elif provider == "gemini":
         return sanitize_gemini(data)
