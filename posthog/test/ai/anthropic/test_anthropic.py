@@ -24,8 +24,10 @@ pytestmark = pytest.mark.skipif(
 # Reusable Mock Helpers
 # =======================
 
+
 class MockContent:
     """Reusable mock content class for Anthropic responses."""
+
     def __init__(self, text="Bar", content_type="text"):
         self.type = content_type
         self.text = text
@@ -33,7 +35,14 @@ class MockContent:
 
 class MockUsage:
     """Reusable mock usage class for Anthropic responses."""
-    def __init__(self, input_tokens=18, output_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0):
+
+    def __init__(
+        self,
+        input_tokens=18,
+        output_tokens=1,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    ):
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.cache_read_input_tokens = cache_read_input_tokens
@@ -42,15 +51,23 @@ class MockUsage:
 
 class MockResponse:
     """Reusable mock response class for Anthropic messages."""
-    def __init__(self, content_text="Bar", model="claude-3-opus-20240229", 
-                 input_tokens=18, output_tokens=1, cache_read=0, cache_creation=0):
+
+    def __init__(
+        self,
+        content_text="Bar",
+        model="claude-3-opus-20240229",
+        input_tokens=18,
+        output_tokens=1,
+        cache_read=0,
+        cache_creation=0,
+    ):
         self.content = [MockContent(text=content_text)]
         self.model = model
         self.usage = MockUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_input_tokens=cache_read,
-            cache_creation_input_tokens=cache_creation
+            cache_creation_input_tokens=cache_creation,
         )
 
 
@@ -62,6 +79,7 @@ def create_mock_response(**kwargs):
 # Streaming mock helpers
 class MockStreamEvent:
     """Reusable mock event class for streaming responses."""
+
     def __init__(self, event_type=None, **kwargs):
         self.type = event_type
         for key, value in kwargs.items():
@@ -70,6 +88,7 @@ class MockStreamEvent:
 
 class MockContentBlock:
     """Reusable mock content block for streaming."""
+
     def __init__(self, block_type, **kwargs):
         self.type = block_type
         for key, value in kwargs.items():
@@ -78,6 +97,7 @@ class MockContentBlock:
 
 class MockDelta:
     """Reusable mock delta for streaming events."""
+
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
