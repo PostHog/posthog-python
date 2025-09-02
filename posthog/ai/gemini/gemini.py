@@ -309,11 +309,11 @@ class Models:
                     if chunk_usage:
                         usage_stats.update(chunk_usage)
 
-                    # Extract content from chunk
-                    content = extract_gemini_content_from_chunk(chunk)
+                    # Extract content from chunk (now returns content blocks)
+                    content_block = extract_gemini_content_from_chunk(chunk)
 
-                    if content is not None:
-                        accumulated_content.append(content)
+                    if content_block is not None:
+                        accumulated_content.append(content_block)
 
                     yield chunk
 
@@ -349,7 +349,7 @@ class Models:
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
-        output: str,
+        output: Any,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.gemini.gemini_converter import standardize_gemini_usage

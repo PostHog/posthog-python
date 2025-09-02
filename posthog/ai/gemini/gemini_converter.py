@@ -307,44 +307,110 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> StreamingUsageStats:
     return usage
 
 
-def extract_gemini_content_from_chunk(chunk: Any) -> Optional[str]:
+def extract_gemini_content_from_chunk(chunk: Any) -> Optional[Dict[str, Any]]:
     """
-    Extract text content from a Gemini streaming chunk.
+    Extract content (text or function call) from a Gemini streaming chunk.
 
     Args:
         chunk: Streaming chunk from Gemini API
 
     Returns:
-        Text content if present, None otherwise
+        Content block dictionary if present, None otherwise
     """
 
+    # Check for text content
     if hasattr(chunk, "text") and chunk.text:
-        return chunk.text
+        return {"type": "text", "text": chunk.text}
+
+    # Check for function calls in candidates
+    if hasattr(chunk, "candidates") and chunk.candidates:
+        for candidate in chunk.candidates:
+            if hasattr(candidate, "content") and candidate.content:
+                if hasattr(candidate.content, "parts") and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        # Check for function_call part
+                        if hasattr(part, "function_call") and part.function_call:
+                            function_call = part.function_call
+                            return {
+                                "type": "function",
+                                "function": {
+                                    "name": function_call.name,
+                                    "arguments": function_call.args,
+                                },
+                            }
+                        # Also check for text in parts
+                        elif hasattr(part, "text") and part.text:
+                            return {"type": "text", "text": part.text}
 
     return None
 
 
 def format_gemini_streaming_output(
-    accumulated_content: Union[str, List[str]],
+    accumulated_content: Union[str, List[Any]],
 ) -> List[FormattedMessage]:
     """
     Format the final output from Gemini streaming.
 
     Args:
-        accumulated_content: Accumulated content from streaming (string or list of strings)
+        accumulated_content: Accumulated content from streaming (string, list of strings, or list of content blocks)
 
     Returns:
         List of formatted messages
     """
 
-    # Handle list of strings
+    # Handle legacy string input (backward compatibility)
+    if isinstance(accumulated_content, str):
+        return [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": accumulated_content}],
+            }
+        ]
+
+    # Handle list input
     if isinstance(accumulated_content, list):
-        text = "".join(str(item) for item in accumulated_content)
+        content: List[FormattedContentItem] = []
+        text_parts = []
 
-    else:
-        text = str(accumulated_content)
+        for item in accumulated_content:
+            if isinstance(item, str):
+                # Legacy support: accumulate strings
+                text_parts.append(item)
+            elif isinstance(item, dict):
+                # New format: content blocks
+                if item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+                elif item.get("type") == "function":
+                    # If we have accumulated text, add it first
+                    if text_parts:
+                        text_content: FormattedTextContent = {
+                            "type": "text",
+                            "text": "".join(text_parts),
+                        }
+                        content.append(text_content)
+                        text_parts = []
 
-    return [{"role": "assistant", "content": [{"type": "text", "text": text}]}]
+                    # Add the function call
+                    func_content: FormattedFunctionCall = {
+                        "type": "function",
+                        "function": item.get("function", {}),
+                    }
+                    content.append(func_content)
+
+        # Add any remaining text
+        if text_parts:
+            text_content: FormattedTextContent = {
+                "type": "text",
+                "text": "".join(text_parts),
+            }
+            content.append(text_content)
+
+        # If we have content, return it
+        if content:
+            return [{"role": "assistant", "content": content}]
+
+    # Fallback for empty or unexpected input
+    return [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
 
 
 def standardize_gemini_usage(usage: Dict[str, Any]) -> TokenUsage:
