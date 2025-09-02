@@ -26,6 +26,7 @@ from posthog.ai.anthropic.anthropic_converter import (
     handle_anthropic_tool_delta,
     finalize_anthropic_tool_input,
 )
+from posthog.ai.sanitization import sanitize_anthropic
 from posthog.client import Client as PostHogClient
 
 
@@ -240,7 +241,7 @@ class AsyncWrappedMessages(AsyncMessages):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                merge_system_prompt(kwargs, "anthropic"),
+                sanitize_anthropic(merge_system_prompt(kwargs, "anthropic")),
             ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,

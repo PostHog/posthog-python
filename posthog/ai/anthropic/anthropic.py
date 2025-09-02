@@ -20,6 +20,7 @@ from posthog.ai.anthropic.anthropic_converter import (
     handle_anthropic_tool_delta,
     finalize_anthropic_tool_input,
 )
+from posthog.ai.sanitization import sanitize_anthropic
 from posthog.client import Client as PostHogClient
 from posthog import setup
 
@@ -219,12 +220,15 @@ class WrappedMessages(Messages):
         from posthog.ai.utils import capture_streaming_event
 
         # Prepare standardized event data
+        formatted_input = format_anthropic_streaming_input(kwargs)
+        sanitized_input = sanitize_anthropic(formatted_input)
+        
         event_data = StreamingEventData(
             provider="anthropic",
             model=kwargs.get("model"),
             base_url=str(self._client.base_url),
             kwargs=kwargs,
-            formatted_input=format_anthropic_streaming_input(kwargs),
+            formatted_input=sanitized_input,
             formatted_output=format_anthropic_streaming_output_complete(
                 content_blocks, accumulated_content
             ),

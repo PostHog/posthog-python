@@ -20,6 +20,7 @@ from posthog.ai.openai.openai_converter import (
     extract_openai_tool_calls_from_chunk,
     accumulate_openai_tool_calls,
 )
+from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
 from posthog import setup
 
@@ -183,12 +184,15 @@ class WrappedResponses:
         from posthog.ai.utils import capture_streaming_event
 
         # Prepare standardized event data
+        formatted_input = format_openai_streaming_input(kwargs, "responses")
+        sanitized_input = sanitize_openai_response(formatted_input)
+        
         event_data = StreamingEventData(
             provider="openai",
             model=kwargs.get("model"),
             base_url=str(self._client.base_url),
             kwargs=kwargs,
-            formatted_input=format_openai_streaming_input(kwargs, "responses"),
+            formatted_input=sanitized_input,
             formatted_output=format_openai_streaming_output(output, "responses"),
             usage_stats=standardize_openai_usage(usage_stats, "responses"),
             latency=latency,
@@ -397,12 +401,15 @@ class WrappedCompletions:
         from posthog.ai.utils import capture_streaming_event
 
         # Prepare standardized event data
+        formatted_input = format_openai_streaming_input(kwargs, "chat")
+        sanitized_input = sanitize_openai(formatted_input)
+        
         event_data = StreamingEventData(
             provider="openai",
             model=kwargs.get("model"),
             base_url=str(self._client.base_url),
             kwargs=kwargs,
-            formatted_input=format_openai_streaming_input(kwargs, "chat"),
+            formatted_input=sanitized_input,
             formatted_output=format_openai_streaming_output(output, "chat", tool_calls),
             usage_stats=standardize_openai_usage(usage_stats, "chat"),
             latency=latency,
@@ -474,7 +481,9 @@ class WrappedEmbeddings:
             "$ai_provider": "openai",
             "$ai_model": kwargs.get("model"),
             "$ai_input": with_privacy_mode(
-                self._client._ph_client, posthog_privacy_mode, kwargs.get("input")
+                self._client._ph_client,
+                posthog_privacy_mode,
+                sanitize_openai_response(kwargs.get("input")),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),

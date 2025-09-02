@@ -21,6 +21,7 @@ from posthog.ai.gemini.gemini_converter import (
     extract_gemini_content_from_chunk,
     format_gemini_streaming_output,
 )
+from posthog.ai.sanitization import sanitize_gemini
 from posthog.client import Client as PostHogClient
 
 
@@ -355,12 +356,15 @@ class Models:
         from posthog.ai.gemini.gemini_converter import standardize_gemini_usage
 
         # Prepare standardized event data
+        formatted_input = self._format_input(contents)
+        sanitized_input = sanitize_gemini(formatted_input)
+        
         event_data = StreamingEventData(
             provider="gemini",
             model=model,
             base_url=self._base_url,
             kwargs=kwargs,
-            formatted_input=self._format_input(contents),
+            formatted_input=sanitized_input,
             formatted_output=format_gemini_streaming_output(output),
             usage_stats=standardize_gemini_usage(usage_stats),
             latency=latency,

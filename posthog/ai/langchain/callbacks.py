@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from posthog import setup
 from posthog.ai.utils import get_model_params, with_privacy_mode
+from posthog.ai.sanitization import sanitize_langchain
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -480,7 +481,7 @@ class CallbackHandler(BaseCallbackHandler):
         event_properties = {
             "$ai_trace_id": trace_id,
             "$ai_input_state": with_privacy_mode(
-                self._ph_client, self._privacy_mode, run.input
+                self._ph_client, self._privacy_mode, sanitize_langchain(run.input)
             ),
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
@@ -550,7 +551,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_model": run.model,
             "$ai_model_parameters": run.model_params,
             "$ai_input": with_privacy_mode(
-                self._ph_client, self._privacy_mode, run.input
+                self._ph_client, self._privacy_mode, sanitize_langchain(run.input)
             ),
             "$ai_http_status": 200,
             "$ai_latency": run.latency,

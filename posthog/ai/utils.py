@@ -6,6 +6,12 @@ from httpx import URL
 
 from posthog.client import Client as PostHogClient
 from posthog.ai.types import StreamingEventData
+from posthog.ai.sanitization import (
+    sanitize_openai,
+    sanitize_anthropic,
+    sanitize_gemini,
+    sanitize_langchain,
+)
 
 
 def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -244,12 +250,15 @@ def call_llm_and_track_usage(
             usage = get_usage(response, provider)
 
         messages = merge_system_prompt(kwargs, provider)
+        sanitized_messages = sanitize_messages(messages, provider)
 
         event_properties = {
             "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, messages),
+            "$ai_input": with_privacy_mode(
+                ph_client, posthog_privacy_mode, sanitized_messages
+            ),
             "$ai_output_choices": with_privacy_mode(
                 ph_client, posthog_privacy_mode, format_response(response, provider)
             ),
@@ -358,12 +367,15 @@ async def call_llm_and_track_usage_async(
             usage = get_usage(response, provider)
 
         messages = merge_system_prompt(kwargs, provider)
+        sanitized_messages = sanitize_messages(messages, provider)
 
         event_properties = {
             "$ai_provider": provider,
             "$ai_model": kwargs.get("model"),
             "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(ph_client, posthog_privacy_mode, messages),
+            "$ai_input": with_privacy_mode(
+                ph_client, posthog_privacy_mode, sanitized_messages
+            ),
             "$ai_output_choices": with_privacy_mode(
                 ph_client, posthog_privacy_mode, format_response(response, provider)
             ),
@@ -420,6 +432,19 @@ async def call_llm_and_track_usage_async(
         raise error
 
     return response
+
+
+def sanitize_messages(data: Any, provider: str) -> Any:
+    """Sanitize messages using provider-specific sanitization functions."""
+    if provider == "anthropic":
+        return sanitize_anthropic(data)
+    elif provider == "openai":
+        return sanitize_openai(data)
+    elif provider == "gemini":
+        return sanitize_gemini(data)
+    elif provider == "langchain":
+        return sanitize_langchain(data)
+    return data
 
 
 def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
