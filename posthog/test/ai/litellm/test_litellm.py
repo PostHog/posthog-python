@@ -90,7 +90,9 @@ def mock_response_tool_calls_only():
     response.choices[0].message.tool_calls[0].type = "function"
     response.choices[0].message.tool_calls[0].function = MagicMock()
     response.choices[0].message.tool_calls[0].function.name = "get_weather"
-    response.choices[0].message.tool_calls[0].function.arguments = '{"location": "New York"}'
+    response.choices[0].message.tool_calls[
+        0
+    ].function.arguments = '{"location": "New York"}'
     return response
 
 
@@ -150,9 +152,7 @@ async def test_acompletion_basic(
     call_args = mock_client.capture.call_args
     assert call_args[1]["event"] == "$ai_generation"
     assert call_args[1]["properties"]["$ai_provider"] == "litellm"
-    assert (
-        call_args[1]["properties"]["$ai_model"] == "claude-3-sonnet-20240229"
-    )
+    assert call_args[1]["properties"]["$ai_model"] == "claude-3-sonnet-20240229"
 
 
 @patch("posthog.ai.litellm.litellm.litellm.acompletion")
@@ -164,7 +164,9 @@ async def test_acompletion_with_base64_image_sanitization(
     mock_setup.return_value = mock_client
     mock_litellm_acompletion.return_value = mock_response
 
-    base64_image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUl=="
+    base64_image_url = (
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUl=="
+    )
 
     messages = [
         {
@@ -173,12 +175,9 @@ async def test_acompletion_with_base64_image_sanitization(
                 {"type": "text", "text": "Analyze this image"},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": base64_image_url,
-                        "detail": "low"
-                    }
-                }
-            ]
+                    "image_url": {"url": base64_image_url, "detail": "low"},
+                },
+            ],
         }
     ]
 
@@ -194,7 +193,10 @@ async def test_acompletion_with_base64_image_sanitization(
     sanitized_input = call_args[1]["properties"]["$ai_input"]
 
     assert sanitized_input[0]["content"][0]["text"] == "Analyze this image"
-    assert sanitized_input[0]["content"][1]["image_url"]["url"] == "[base64 image redacted]"
+    assert (
+        sanitized_input[0]["content"][1]["image_url"]["url"]
+        == "[base64 image redacted]"
+    )
     assert sanitized_input[0]["content"][1]["image_url"]["detail"] == "low"
 
 
@@ -268,12 +270,9 @@ def test_completion_with_base64_image_sanitization(
                 {"type": "text", "text": "What is in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": base64_image_url,
-                        "detail": "high"
-                    }
-                }
-            ]
+                    "image_url": {"url": base64_image_url, "detail": "high"},
+                },
+            ],
         }
     ]
 
@@ -289,7 +288,10 @@ def test_completion_with_base64_image_sanitization(
     sanitized_input = call_args[1]["properties"]["$ai_input"]
 
     assert sanitized_input[0]["content"][0]["text"] == "What is in this image?"
-    assert sanitized_input[0]["content"][1]["image_url"]["url"] == "[base64 image redacted]"
+    assert (
+        sanitized_input[0]["content"][1]["image_url"]["url"]
+        == "[base64 image redacted]"
+    )
     assert sanitized_input[0]["content"][1]["image_url"]["detail"] == "high"
 
 
@@ -328,7 +330,9 @@ def test_completion_streaming(mock_setup, mock_litellm_completion, mock_client):
 
 @patch("posthog.ai.litellm.litellm.litellm.completion")
 @patch("posthog.ai.litellm.litellm.setup")
-def test_completion_streaming_with_base64_image_sanitization(mock_setup, mock_litellm_completion, mock_client):
+def test_completion_streaming_with_base64_image_sanitization(
+    mock_setup, mock_litellm_completion, mock_client
+):
     mock_setup.return_value = mock_client
 
     mock_chunk = MagicMock()
@@ -352,12 +356,9 @@ def test_completion_streaming_with_base64_image_sanitization(mock_setup, mock_li
                 {"type": "text", "text": "Describe this image"},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": base64_image_url,
-                        "detail": "auto"
-                    }
-                }
-            ]
+                    "image_url": {"url": base64_image_url, "detail": "auto"},
+                },
+            ],
         }
     ]
 
@@ -376,7 +377,10 @@ def test_completion_streaming_with_base64_image_sanitization(mock_setup, mock_li
 
     sanitized_input = call_args[1]["properties"]["$ai_input"]
     assert sanitized_input[0]["content"][0]["text"] == "Describe this image"
-    assert sanitized_input[0]["content"][1]["image_url"]["url"] == "[base64 image redacted]"
+    assert (
+        sanitized_input[0]["content"][1]["image_url"]["url"]
+        == "[base64 image redacted]"
+    )
     assert sanitized_input[0]["content"][1]["image_url"]["detail"] == "auto"
 
 
@@ -612,7 +616,9 @@ def test_completion_tool_calls_only_no_content(
 
 @patch("posthog.ai.litellm.litellm.litellm.completion")
 @patch("posthog.ai.litellm.litellm.setup")
-def test_completion_streaming_with_tool_calls(mock_setup, mock_litellm_completion, mock_client):
+def test_completion_streaming_with_tool_calls(
+    mock_setup, mock_litellm_completion, mock_client
+):
     mock_setup.return_value = mock_client
 
     tool_call_chunks = [
@@ -630,7 +636,9 @@ def test_completion_streaming_with_tool_calls(mock_setup, mock_litellm_completio
     tool_call_chunks[0].choices[0].delta.tool_calls[0].type = "function"
     tool_call_chunks[0].choices[0].delta.tool_calls[0].function = MagicMock()
     tool_call_chunks[0].choices[0].delta.tool_calls[0].function.name = "get_weather"
-    tool_call_chunks[0].choices[0].delta.tool_calls[0].function.arguments = '{"location": "'
+    tool_call_chunks[0].choices[0].delta.tool_calls[
+        0
+    ].function.arguments = '{"location": "'
     tool_call_chunks[0].choices[0].delta.content = None
     tool_call_chunks[0].choices[0].delta.finish_reason = None
 
@@ -639,7 +647,9 @@ def test_completion_streaming_with_tool_calls(mock_setup, mock_litellm_completio
     tool_call_chunks[1].choices[0].delta.tool_calls = [MagicMock()]
     tool_call_chunks[1].choices[0].delta.tool_calls[0].index = 0
     tool_call_chunks[1].choices[0].delta.tool_calls[0].function = MagicMock()
-    tool_call_chunks[1].choices[0].delta.tool_calls[0].function.arguments = 'San Francisco"'
+    tool_call_chunks[1].choices[0].delta.tool_calls[
+        0
+    ].function.arguments = 'San Francisco"'
     tool_call_chunks[1].choices[0].delta.content = None
     tool_call_chunks[1].choices[0].delta.finish_reason = None
 
@@ -648,13 +658,17 @@ def test_completion_streaming_with_tool_calls(mock_setup, mock_litellm_completio
     tool_call_chunks[2].choices[0].delta.tool_calls = [MagicMock()]
     tool_call_chunks[2].choices[0].delta.tool_calls[0].index = 0
     tool_call_chunks[2].choices[0].delta.tool_calls[0].function = MagicMock()
-    tool_call_chunks[2].choices[0].delta.tool_calls[0].function.arguments = ', "unit": "celsius"}'
+    tool_call_chunks[2].choices[0].delta.tool_calls[
+        0
+    ].function.arguments = ', "unit": "celsius"}'
     tool_call_chunks[2].choices[0].delta.content = None
     tool_call_chunks[2].choices[0].delta.finish_reason = None
 
     tool_call_chunks[3].choices = [MagicMock()]
     tool_call_chunks[3].choices[0].delta = MagicMock()
-    tool_call_chunks[3].choices[0].delta.content = "The weather in San Francisco is 15°C."
+    tool_call_chunks[3].choices[
+        0
+    ].delta.content = "The weather in San Francisco is 15°C."
     tool_call_chunks[3].choices[0].delta.tool_calls = None
     tool_call_chunks[3].usage = MagicMock()
     tool_call_chunks[3].usage.prompt_tokens = 20
@@ -680,9 +694,7 @@ def test_completion_streaming_with_tool_calls(mock_setup, mock_litellm_completio
 
     generator = completion(
         model="openai/gpt-4",
-        messages=[
-            {"role": "user", "content": "What's the weather in San Francisco?"}
-        ],
+        messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
         tools=tools,
         stream=True,
         posthog_distinct_id="test-id",
@@ -796,7 +808,9 @@ async def test_acompletion_streaming(mock_setup, mock_litellm_acompletion, mock_
     assert call_args[1]["properties"]["$ai_provider"] == "litellm"
     assert call_args[1]["properties"]["$ai_input_tokens"] == 10
     assert call_args[1]["properties"]["$ai_output_tokens"] == 5
-    assert call_args[1]["properties"]["$ai_output_choices"][0]["content"] == "Hello world!"
+    assert (
+        call_args[1]["properties"]["$ai_output_choices"][0]["content"] == "Hello world!"
+    )
 
 
 # Tests for provider stripping functionality

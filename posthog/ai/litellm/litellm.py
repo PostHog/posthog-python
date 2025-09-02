@@ -23,8 +23,7 @@ from posthog import setup
 
 
 def _setup_client_and_trace_id(
-    posthog_client: Optional[PostHogClient],
-    posthog_trace_id: Optional[str]
+    posthog_client: Optional[PostHogClient], posthog_trace_id: Optional[str]
 ) -> tuple[PostHogClient, str]:
     """Common setup logic for both sync and async completion functions."""
     ph_client = posthog_client or setup()
@@ -47,14 +46,12 @@ def _strip_provider_from_model(model: str) -> str:
     Strip provider prefix from LiteLLM model name for proper price matching.
     Examples:
     - "openai/gpt-4" -> "gpt-4"
-    - "anthropic/claude-3" -> "claude-3"  
+    - "anthropic/claude-3" -> "claude-3"
     - "gpt-4" -> "gpt-4" (no change if no provider prefix)
     """
     if "/" in model:
         return model.split("/", 1)[1]
     return model
-
-
 
 
 def completion(
@@ -66,7 +63,9 @@ def completion(
     posthog_groups: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    ph_client, posthog_trace_id = _setup_client_and_trace_id(posthog_client, posthog_trace_id)
+    ph_client, posthog_trace_id = _setup_client_and_trace_id(
+        posthog_client, posthog_trace_id
+    )
 
     if kwargs.get("stream", False):
         return _create_streaming(
@@ -107,7 +106,9 @@ async def acompletion(
     posthog_groups: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    ph_client, posthog_trace_id = _setup_client_and_trace_id(posthog_client, posthog_trace_id)
+    ph_client, posthog_trace_id = _setup_client_and_trace_id(
+        posthog_client, posthog_trace_id
+    )
 
     if kwargs.get("stream", False):
         return await _create_streaming_async(
@@ -164,7 +165,9 @@ def embedding(
     Returns:
         The response from litellm.embedding()
     """
-    ph_client, posthog_trace_id = _setup_client_and_trace_id(posthog_client, posthog_trace_id)
+    ph_client, posthog_trace_id = _setup_client_and_trace_id(
+        posthog_client, posthog_trace_id
+    )
 
     if posthog_trace_id is None:
         posthog_trace_id = str(uuid.uuid4())
@@ -186,7 +189,7 @@ def embedding(
     # Build the event properties for embeddings
     model = kwargs.get("model")
     stripped_model = _strip_provider_from_model(model) if model else model
-    
+
     event_properties = {
         "$ai_provider": "litellm",
         "$ai_model": stripped_model,
@@ -380,7 +383,7 @@ def _capture_streaming_event(
 
     model = kwargs.get("model")
     stripped_model = _strip_provider_from_model(model) if model else model
-    
+
     event_properties = {
         "$ai_provider": "litellm",
         "$ai_model": stripped_model,

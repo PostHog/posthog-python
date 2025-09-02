@@ -430,7 +430,7 @@ def call_llm_and_track_usage(
 
         messages = merge_system_prompt(kwargs, provider)
         sanitized_messages = sanitize_messages(messages, provider)
-        
+
         ai_model = tracking_model or kwargs.get("model")
         event_properties = {
             "$ai_provider": provider,
@@ -549,7 +549,7 @@ async def call_llm_and_track_usage_async(
 
         messages = merge_system_prompt(kwargs, provider)
         sanitized_messages = sanitize_messages(messages, provider)
-        
+
         ai_model = tracking_model or kwargs.get("model")
         event_properties = {
             "$ai_provider": provider,
