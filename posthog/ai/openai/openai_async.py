@@ -19,6 +19,8 @@ from posthog.ai.utils import (
 from posthog.ai.openai.openai_converter import (
     extract_openai_usage_from_chunk,
     extract_openai_content_from_chunk,
+    extract_openai_tool_calls_from_chunk,
+    accumulate_openai_tool_calls,
     format_openai_streaming_output,
 )
 from posthog.client import Client as PostHogClient
@@ -332,6 +334,7 @@ class WrappedCompletions:
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
+        accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
 
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
@@ -341,6 +344,7 @@ class WrappedCompletions:
         async def async_generator():
             nonlocal usage_stats
             nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_tool_calls
 
             try:
                 async for chunk in response:
@@ -354,11 +358,26 @@ class WrappedCompletions:
                     if content is not None:
                         accumulated_content.append(content)
 
+                    # Extract and accumulate tool calls from chunk
+                    chunk_tool_calls = extract_openai_tool_calls_from_chunk(chunk)
+                    if chunk_tool_calls:
+                        accumulate_openai_tool_calls(
+                            accumulated_tool_calls, chunk_tool_calls
+                        )
+
                     yield chunk
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
+
+                # Convert accumulated tool calls dict to list
+                tool_calls_list = (
+                    list(accumulated_tool_calls.values())
+                    if accumulated_tool_calls
+                    else None
+                )
+
                 await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -369,6 +388,7 @@ class WrappedCompletions:
                     usage_stats,
                     latency,
                     accumulated_content,
+                    tool_calls_list,
                     extract_available_tool_calls("openai", kwargs),
                 )
 
@@ -385,6 +405,7 @@ class WrappedCompletions:
         usage_stats: Dict[str, int],
         latency: float,
         output: Any,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
@@ -400,7 +421,7 @@ class WrappedCompletions:
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                format_openai_streaming_output(output, "chat"),
+                format_openai_streaming_output(output, "chat", tool_calls),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),

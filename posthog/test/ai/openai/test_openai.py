@@ -890,11 +890,29 @@ def test_streaming_with_tool_calls(mock_client):
         assert defined_tool["function"]["description"] == "Get weather"
         assert defined_tool["function"]["parameters"] == {}
 
-        # Check that the content was also accumulated
-        assert props["$ai_output_choices"][0]["content"][0]["type"] == "text"
+        # Check that both text content and tool calls were accumulated
+        output_content = props["$ai_output_choices"][0]["content"]
+
+        # Find text content and tool call in the output
+        text_content = None
+        tool_call_content = None
+        for item in output_content:
+            if item["type"] == "text":
+                text_content = item
+            elif item["type"] == "function":
+                tool_call_content = item
+
+        # Verify text content
+        assert text_content is not None
+        assert text_content["text"] == "The weather in San Francisco is 15°C."
+
+        # Verify tool call was captured
+        assert tool_call_content is not None
+        assert tool_call_content["id"] == "call_abc123"
+        assert tool_call_content["function"]["name"] == "get_weather"
         assert (
-            props["$ai_output_choices"][0]["content"][0]["text"]
-            == "The weather in San Francisco is 15°C."
+            tool_call_content["function"]["arguments"]
+            == '{"location": "San Francisco", "unit": "celsius"}'
         )
 
         # Check token usage

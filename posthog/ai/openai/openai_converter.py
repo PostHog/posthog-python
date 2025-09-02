@@ -358,8 +358,105 @@ def extract_openai_content_from_chunk(
     return None
 
 
+def extract_openai_tool_calls_from_chunk(chunk: Any) -> Optional[List[Dict[str, Any]]]:
+    """
+    Extract tool calls from an OpenAI streaming chunk.
+
+    Args:
+        chunk: Streaming chunk from OpenAI API
+
+    Returns:
+        List of tool call deltas if present, None otherwise
+    """
+    if (
+        hasattr(chunk, "choices")
+        and chunk.choices
+        and len(chunk.choices) > 0
+        and chunk.choices[0].delta
+        and hasattr(chunk.choices[0].delta, "tool_calls")
+        and chunk.choices[0].delta.tool_calls
+    ):
+        tool_calls = []
+        for tool_call in chunk.choices[0].delta.tool_calls:
+            tc_dict = {
+                "index": getattr(tool_call, "index", None),
+            }
+
+            if hasattr(tool_call, "id") and tool_call.id:
+                tc_dict["id"] = tool_call.id
+
+            if hasattr(tool_call, "type") and tool_call.type:
+                tc_dict["type"] = tool_call.type
+
+            if hasattr(tool_call, "function") and tool_call.function:
+                tc_dict["function"] = {}
+                if hasattr(tool_call.function, "name") and tool_call.function.name:
+                    tc_dict["function"]["name"] = tool_call.function.name
+                if (
+                    hasattr(tool_call.function, "arguments")
+                    and tool_call.function.arguments
+                ):
+                    tc_dict["function"]["arguments"] = tool_call.function.arguments
+
+            tool_calls.append(tc_dict)
+        return tool_calls
+
+    return None
+
+
+def accumulate_openai_tool_calls(
+    accumulated_tool_calls: Dict[int, Dict[str, Any]],
+    chunk_tool_calls: List[Dict[str, Any]],
+) -> None:
+    """
+    Accumulate tool calls from streaming chunks.
+
+    OpenAI sends tool calls incrementally:
+    - First chunk has id, type, function.name and partial function.arguments
+    - Subsequent chunks have more function.arguments
+
+    Args:
+        accumulated_tool_calls: Dictionary mapping index to accumulated tool call data
+        chunk_tool_calls: List of tool call deltas from current chunk
+    """
+    for tool_call_delta in chunk_tool_calls:
+        index = tool_call_delta.get("index")
+        if index is None:
+            continue
+
+        # Initialize tool call if first time seeing this index
+        if index not in accumulated_tool_calls:
+            accumulated_tool_calls[index] = {
+                "id": "",
+                "type": "function",
+                "function": {
+                    "name": "",
+                    "arguments": "",
+                },
+            }
+
+        # Update with new data from delta
+        tc = accumulated_tool_calls[index]
+
+        if "id" in tool_call_delta and tool_call_delta["id"]:
+            tc["id"] = tool_call_delta["id"]
+
+        if "type" in tool_call_delta and tool_call_delta["type"]:
+            tc["type"] = tool_call_delta["type"]
+
+        if "function" in tool_call_delta:
+            func_delta = tool_call_delta["function"]
+            if "name" in func_delta and func_delta["name"]:
+                tc["function"]["name"] = func_delta["name"]
+            if "arguments" in func_delta and func_delta["arguments"]:
+                # Arguments are sent incrementally, concatenate them
+                tc["function"]["arguments"] += func_delta["arguments"]
+
+
 def format_openai_streaming_output(
-    accumulated_content: Any, provider_type: str = "chat"
+    accumulated_content: Any,
+    provider_type: str = "chat",
+    tool_calls: Optional[List[Dict[str, Any]]] = None,
 ) -> List[FormattedMessage]:
     """
     Format the final output from OpenAI streaming.
@@ -367,24 +464,41 @@ def format_openai_streaming_output(
     Args:
         accumulated_content: Accumulated content from streaming (string for chat, list for responses)
         provider_type: Either "chat" or "responses" to handle different API formats
+        tool_calls: Optional list of accumulated tool calls
 
     Returns:
         List of formatted messages
     """
 
     if provider_type == "chat":
-        # Chat API: accumulated_content is a string
-        if isinstance(accumulated_content, str):
-            return [
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": accumulated_content}],
-                }
-            ]
-        # If it's a list of strings, join them
+        content_items: List[FormattedContentItem] = []
+
+        # Add text content if present
+        if isinstance(accumulated_content, str) and accumulated_content:
+            content_items.append({"type": "text", "text": accumulated_content})
         elif isinstance(accumulated_content, list):
-            text = "".join(str(item) for item in accumulated_content)
-            return [{"role": "assistant", "content": [{"type": "text", "text": text}]}]
+            # If it's a list of strings, join them
+            text = "".join(str(item) for item in accumulated_content if item)
+            if text:
+                content_items.append({"type": "text", "text": text})
+
+        # Add tool calls if present
+        if tool_calls:
+            for tool_call in tool_calls:
+                if "function" in tool_call:
+                    function_call: FormattedFunctionCall = {
+                        "type": "function",
+                        "id": tool_call.get("id", ""),
+                        "function": tool_call["function"],
+                    }
+                    content_items.append(function_call)
+
+        # Return formatted message with content
+        if content_items:
+            return [{"role": "assistant", "content": content_items}]
+        else:
+            # Empty response
+            return [{"role": "assistant", "content": []}]
 
     elif provider_type == "responses":
         # Responses API: accumulated_content is a list of output items
