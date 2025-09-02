@@ -1,17 +1,47 @@
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
-from httpx import URL
 
 from posthog.client import Client as PostHogClient
-from posthog.ai.types import StreamingEventData
+from posthog.ai.types import StreamingEventData, StreamingUsageStats
 from posthog.ai.sanitization import (
     sanitize_openai,
     sanitize_anthropic,
     sanitize_gemini,
     sanitize_langchain,
 )
+
+
+def merge_usage_stats(
+    target: Dict[str, int], 
+    source: StreamingUsageStats, 
+    mode: str = "incremental"
+) -> None:
+    """
+    Merge streaming usage statistics into target dict, handling None values.
+    
+    Supports two modes:
+    - "incremental": Add source values to target (for APIs that report new tokens)
+    - "cumulative": Replace target with source values (for APIs that report totals)
+    
+    Args:
+        target: Dictionary to update with usage stats
+        source: StreamingUsageStats that may contain None values
+        mode: Either "incremental" or "cumulative"
+    """
+    if mode == "incremental":
+        # Add new values to existing totals
+        for key, value in source.items():
+            if value is not None and isinstance(value, int):
+                target[key] = target.get(key, 0) + value
+    elif mode == "cumulative":
+        # Replace with latest values (already cumulative)
+        for key, value in source.items():
+            if value is not None and isinstance(value, int):
+                target[key] = value
+    else:
+        raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
 
 
 def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,7 +240,7 @@ def call_llm_and_track_usage(
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
     posthog_groups: Optional[Dict[str, Any]],
-    base_url: URL,
+    base_url: str,
     call_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
@@ -223,7 +253,7 @@ def call_llm_and_track_usage(
     error = None
     http_status = 200
     usage: Dict[str, Any] = {}
-    error_params: Dict[str, any] = {}
+    error_params: Dict[str, Any] = {}
 
     try:
         response = call_method(**kwargs)
@@ -331,7 +361,7 @@ async def call_llm_and_track_usage_async(
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
     posthog_groups: Optional[Dict[str, Any]],
-    base_url: URL,
+    base_url: str,
     call_async_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
@@ -340,7 +370,7 @@ async def call_llm_and_track_usage_async(
     error = None
     http_status = 200
     usage: Dict[str, Any] = {}
-    error_params: Dict[str, any] = {}
+    error_params: Dict[str, Any] = {}
 
     try:
         response = await call_async_method(**kwargs)
@@ -530,7 +560,7 @@ def capture_streaming_event(
 
         for field in optional_token_fields:
             value = event_data["usage_stats"].get(field)
-            if value is not None and value > 0:
+            if value is not None and isinstance(value, int) and value > 0:
                 event_properties[f"$ai_{field}"] = value
 
     # Handle provider-specific fields

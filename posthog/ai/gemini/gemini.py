@@ -14,6 +14,7 @@ from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage,
     capture_streaming_event,
+    merge_usage_stats,
 )
 from posthog.ai.gemini.gemini_converter import (
     format_gemini_input,
@@ -308,7 +309,8 @@ class Models:
                     chunk_usage = extract_gemini_usage_from_chunk(chunk)
 
                     if chunk_usage:
-                        usage_stats.update(chunk_usage)
+                        # Gemini reports cumulative totals, not incremental values
+                        merge_usage_stats(usage_stats, chunk_usage, mode="cumulative")
 
                     # Extract content from chunk (now returns content blocks)
                     content_block = extract_gemini_content_from_chunk(chunk)

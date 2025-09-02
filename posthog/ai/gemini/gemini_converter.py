@@ -9,9 +9,7 @@ from typing import Any, Dict, List, Optional, TypedDict, Union
 
 from posthog.ai.types import (
     FormattedContentItem,
-    FormattedFunctionCall,
     FormattedMessage,
-    FormattedTextContent,
     StreamingUsageStats,
     TokenUsage,
 )
@@ -164,7 +162,7 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
         List of formatted messages with role and content
     """
 
-    output = []
+    output: List[FormattedMessage] = []
 
     if response is None:
         return output
@@ -177,43 +175,38 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
-                            text_content: FormattedTextContent = {
+                            content.append({
                                 "type": "text",
                                 "text": part.text,
-                            }
-                            content.append(text_content)
+                            })
 
                         elif hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
-                            func_content: FormattedFunctionCall = {
+                            content.append({
                                 "type": "function",
                                 "function": {
                                     "name": function_call.name,
                                     "arguments": function_call.args,
                                 },
-                            }
-                            content.append(func_content)
+                            })
 
                 if content:
-                    message: FormattedMessage = {
+                    output.append({
                         "role": "assistant",
                         "content": content,
-                    }
-                    output.append(message)
+                    })
 
             elif hasattr(candidate, "text") and candidate.text:
-                message: FormattedMessage = {
+                output.append({
                     "role": "assistant",
                     "content": [{"type": "text", "text": candidate.text}],
-                }
-                output.append(message)
+                })
 
     elif hasattr(response, "text") and response.text:
-        message: FormattedMessage = {
+        output.append({
             "role": "assistant",
             "content": [{"type": "text", "text": response.text}],
-        }
-        output.append(message)
+        })
 
     return output
 
@@ -258,7 +251,7 @@ def format_gemini_input(contents: Any) -> List[FormattedMessage]:
 
     # Handle list input
     if isinstance(contents, list):
-        formatted = []
+        formatted: List[FormattedMessage] = []
 
         for item in contents:
             if isinstance(item, str):
@@ -383,27 +376,24 @@ def format_gemini_streaming_output(
                 elif item.get("type") == "function":
                     # If we have accumulated text, add it first
                     if text_parts:
-                        text_content: FormattedTextContent = {
+                        content.append({
                             "type": "text",
                             "text": "".join(text_parts),
-                        }
-                        content.append(text_content)
+                        })
                         text_parts = []
 
                     # Add the function call
-                    func_content: FormattedFunctionCall = {
+                    content.append({
                         "type": "function",
                         "function": item.get("function", {}),
-                    }
-                    content.append(func_content)
+                    })
 
         # Add any remaining text
         if text_parts:
-            text_content: FormattedTextContent = {
+            content.append({
                 "type": "text",
                 "text": "".join(text_parts),
-            }
-            content.append(text_content)
+            })
 
         # If we have content, return it
         if content:

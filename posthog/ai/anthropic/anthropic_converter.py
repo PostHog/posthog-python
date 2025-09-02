@@ -31,7 +31,7 @@ def format_anthropic_response(response: Any) -> List[FormattedMessage]:
         List of formatted messages with role and content
     """
 
-    output = []
+    output: List[FormattedMessage] = []
 
     if response is None:
         return output
@@ -127,7 +127,7 @@ def extract_anthropic_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
 
 
 def format_anthropic_streaming_content(
-    content_blocks: List[Dict[str, Any]],
+    content_blocks: List[StreamingContentBlock],
 ) -> List[FormattedContentItem]:
     """
     Format content blocks from Anthropic streaming response.
@@ -145,19 +145,17 @@ def format_anthropic_streaming_content(
 
     for block in content_blocks:
         if block.get("type") == "text":
-            text_content: FormattedTextContent = {
+            formatted.append({
                 "type": "text",
-                "text": block.get("text", ""),
-            }
-            formatted.append(text_content)
+                "text": block.get("text") or "",
+            })
 
         elif block.get("type") == "function":
-            function_call: FormattedFunctionCall = {
+            formatted.append({
                 "type": "function",
                 "id": block.get("id"),
-                "function": block.get("function", {}),
-            }
-            formatted.append(function_call)
+                "function": block.get("function") or {},
+            })
 
     return formatted
 
@@ -222,13 +220,13 @@ def handle_anthropic_content_block_start(
         return content_block, None
 
     elif block.type == "tool_use":
-        content_block: StreamingContentBlock = {
+        tool_block: StreamingContentBlock = {
             "type": "function",
             "id": getattr(block, "id", ""),
             "function": {"name": getattr(block, "name", ""), "arguments": {}},
         }
-        tool_in_progress: ToolInProgress = {"block": content_block, "input_string": ""}
-        return content_block, tool_in_progress
+        tool_in_progress: ToolInProgress = {"block": tool_block, "input_string": ""}
+        return tool_block, tool_in_progress
 
     return None, None
 
@@ -251,7 +249,11 @@ def handle_anthropic_text_delta(
         delta_text = event.delta.text or ""
 
         if current_block is not None and current_block.get("type") == "text":
-            current_block["text"] = current_block.get("text", "") + delta_text
+            text_val = current_block.get("text")
+            if text_val is not None:
+                current_block["text"] = text_val + delta_text
+            else:
+                current_block["text"] = delta_text
 
         return delta_text
 

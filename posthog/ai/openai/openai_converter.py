@@ -32,7 +32,7 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
         List of formatted messages with role and content
     """
 
-    output = []
+    output: List[FormattedMessage] = []
 
     if response is None:
         return output
@@ -48,30 +48,27 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                     role = choice.message.role
 
                 if choice.message.content:
-                    text_content: FormattedTextContent = {
+                    content.append({
                         "type": "text",
                         "text": choice.message.content,
-                    }
-                    content.append(text_content)
+                    })
 
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
-                        function_call: FormattedFunctionCall = {
+                        content.append({
                             "type": "function",
                             "id": tool_call.id,
                             "function": {
                                 "name": tool_call.function.name,
                                 "arguments": tool_call.function.arguments,
                             },
-                        }
-                        content.append(function_call)
+                        })
 
         if content:
-            message: FormattedMessage = {
+            output.append({
                 "role": role,
                 "content": content,
-            }
-            output.append(message)
+            })
 
     # Handle Responses API format
     if hasattr(response, "output"):
@@ -89,15 +86,13 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                             and content_item.type == "output_text"
                             and hasattr(content_item, "text")
                         ):
-                            text_content: FormattedTextContent = {
+                            content.append({
                                 "type": "text",
                                 "text": content_item.text,
-                            }
-                            content.append(text_content)
+                            })
 
                         elif hasattr(content_item, "text"):
-                            text_content = {"type": "text", "text": content_item.text}
-                            content.append(text_content)
+                            content.append({"type": "text", "text": content_item.text})
 
                         elif (
                             hasattr(content_item, "type")
@@ -115,22 +110,20 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                     content.append(text_content)
 
             elif hasattr(item, "type") and item.type == "function_call":
-                function_call: FormattedFunctionCall = {
+                content.append({
                     "type": "function",
                     "id": getattr(item, "call_id", getattr(item, "id", "")),
                     "function": {
                         "name": item.name,
                         "arguments": getattr(item, "arguments", {}),
                     },
-                }
-                content.append(function_call)
+                })
 
         if content:
-            message: FormattedMessage = {
+            output.append({
                 "role": role,
                 "content": content,
-            }
-            output.append(message)
+            })
 
     return output
 
@@ -156,11 +149,10 @@ def format_openai_input(
     # Handle Chat Completions API format
     if messages is not None:
         for msg in messages:
-            formatted_msg: FormattedMessage = {
+            formatted_messages.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", ""),
-            }
-            formatted_messages.append(formatted_msg)
+            })
 
     # Handle Responses API format
     if input_data is not None:
@@ -179,8 +171,7 @@ def format_openai_input(
                 else:
                     content = str(item)
 
-                formatted_msg: FormattedMessage = {"role": role, "content": content}
-                formatted_messages.append(formatted_msg)
+                formatted_messages.append({"role": role, "content": content})
 
         elif isinstance(input_data, str):
             formatted_messages.append({"role": "user", "content": input_data})
@@ -389,14 +380,15 @@ def extract_openai_tool_calls_from_chunk(chunk: Any) -> Optional[List[Dict[str, 
                 tc_dict["type"] = tool_call.type
 
             if hasattr(tool_call, "function") and tool_call.function:
-                tc_dict["function"] = {}
+                function_dict = {}
                 if hasattr(tool_call.function, "name") and tool_call.function.name:
-                    tc_dict["function"]["name"] = tool_call.function.name
+                    function_dict["name"] = tool_call.function.name
                 if (
                     hasattr(tool_call.function, "arguments")
                     and tool_call.function.arguments
                 ):
-                    tc_dict["function"]["arguments"] = tool_call.function.arguments
+                    function_dict["arguments"] = tool_call.function.arguments
+                tc_dict["function"] = function_dict
 
             tool_calls.append(tc_dict)
         return tool_calls

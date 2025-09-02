@@ -14,6 +14,7 @@ from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     extract_available_tool_calls,
     get_model_params,
+    merge_usage_stats,
     with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
@@ -137,7 +138,7 @@ class WrappedResponses:
                     chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
 
                     if chunk_usage:
-                        usage_stats.update(chunk_usage)
+                        merge_usage_stats(usage_stats, chunk_usage)
 
                     # Extract content from chunk
                     content = extract_openai_content_from_chunk(chunk, "responses")
@@ -354,7 +355,7 @@ class WrappedCompletions:
                     # Extract usage stats from chunk
                     chunk_usage = extract_openai_usage_from_chunk(chunk, "chat")
                     if chunk_usage:
-                        usage_stats.update(chunk_usage)
+                        merge_usage_stats(usage_stats, chunk_usage)
 
                     # Extract content from chunk
                     content = extract_openai_content_from_chunk(chunk, "chat")

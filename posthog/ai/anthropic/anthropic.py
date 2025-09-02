@@ -10,8 +10,10 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from posthog.ai.types import StreamingContentBlock, ToolInProgress
 from posthog.ai.utils import (
     call_llm_and_track_usage,
+    merge_usage_stats,
 )
 from posthog.ai.anthropic.anthropic_converter import (
     extract_anthropic_usage_from_event,
@@ -126,9 +128,9 @@ class WrappedMessages(Messages):
         start_time = time.time()
         usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         accumulated_content = ""
-        content_blocks: List[Dict[str, Any]] = []
-        tools_in_progress: Dict[str, Dict[str, Any]] = {}
-        current_text_block: Optional[Dict[str, Any]] = None
+        content_blocks: List[StreamingContentBlock] = []
+        tools_in_progress: Dict[str, ToolInProgress] = {}
+        current_text_block: Optional[StreamingContentBlock] = None
         response = super().create(**kwargs)
 
         def generator():
@@ -142,7 +144,7 @@ class WrappedMessages(Messages):
                 for event in response:
                     # Extract usage stats from event
                     event_usage = extract_anthropic_usage_from_event(event)
-                    usage_stats.update(event_usage)
+                    merge_usage_stats(usage_stats, event_usage)
 
                     # Handle content block start events
                     if hasattr(event, "type") and event.type == "content_block_start":
@@ -157,7 +159,9 @@ class WrappedMessages(Messages):
                                 current_text_block = None
 
                         if tool:
-                            tools_in_progress[tool["block"]["id"]] = tool
+                            tool_id = tool["block"].get("id")
+                            if tool_id:
+                                tools_in_progress[tool_id] = tool
 
                     # Handle text delta events
                     delta_text = handle_anthropic_text_delta(event, current_text_block)
@@ -208,7 +212,7 @@ class WrappedMessages(Messages):
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
-        content_blocks: List[Dict[str, Any]],
+        content_blocks: List[StreamingContentBlock],
         accumulated_content: str,
     ):
         from posthog.ai.types import StreamingEventData
@@ -225,7 +229,7 @@ class WrappedMessages(Messages):
 
         event_data = StreamingEventData(
             provider="anthropic",
-            model=kwargs.get("model"),
+            model=kwargs.get("model", "unknown"),
             base_url=str(self._client.base_url),
             kwargs=kwargs,
             formatted_input=sanitized_input,

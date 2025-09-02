@@ -480,13 +480,11 @@ async def test_async_streaming_system_prompt(mock_client):
         )
         yield final_msg
 
-    # Create a coroutine that returns the async generator
-    async def mock_create(**kwargs):
-        return mock_async_stream()
-
+    # Mock create to return the async generator directly (not wrapped in a coroutine)
+    # This matches the actual behavior when stream=True
     with patch(
         "anthropic.resources.messages.AsyncMessages.create",
-        side_effect=mock_create,
+        return_value=mock_async_stream(),
     ):
         client = AsyncAnthropic(posthog_client=mock_client)
         response = await client.messages.create(
