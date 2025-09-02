@@ -480,11 +480,14 @@ async def test_async_streaming_system_prompt(mock_client):
         )
         yield final_msg
 
-    # Mock create to return the async generator directly (not wrapped in a coroutine)
-    # This matches the actual behavior when stream=True
+    # Mock create to return a coroutine that yields the async generator
+    # This matches the actual behavior when stream=True with await
+    async def async_create_wrapper(**kwargs):
+        return mock_async_stream()
+    
     with patch(
         "anthropic.resources.messages.AsyncMessages.create",
-        return_value=mock_async_stream(),
+        side_effect=async_create_wrapper,
     ):
         client = AsyncAnthropic(posthog_client=mock_client)
         response = await client.messages.create(
@@ -926,14 +929,18 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
     """Test that tool calls are properly captured in async streaming mode."""
     import asyncio
 
-    async def mock_async_create(**kwargs):
+    async def mock_async_generator():
         # Convert regular generator to async generator
         for event in mock_anthropic_stream_with_tools:
             yield event
+    
+    async def mock_async_create(**kwargs):
+        # Return the async generator (to be awaited by the implementation)
+        return mock_async_generator()
 
     with patch(
         "anthropic.resources.AsyncMessages.create",
-        side_effect=lambda **kwargs: mock_async_create(),
+        side_effect=mock_async_create,
     ):
         async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
 

@@ -303,8 +303,8 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> StreamingUsageStats:
     usage["input_tokens"] = getattr(chunk.usage_metadata, "prompt_token_count", 0)
     usage["output_tokens"] = getattr(chunk.usage_metadata, "candidates_token_count", 0)
 
-    # Calculate total if both are present
-    if usage["input_tokens"] and usage["output_tokens"]:
+    # Calculate total if both values are defined (including 0)
+    if "input_tokens" in usage and "output_tokens" in usage:
         usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
 
     return usage

@@ -136,7 +136,7 @@ class AsyncWrappedMessages(AsyncMessages):
         content_blocks: List[StreamingContentBlock] = []
         tools_in_progress: Dict[str, ToolInProgress] = {}
         current_text_block: Optional[StreamingContentBlock] = None
-        response = super().create(**kwargs)
+        response = await super().create(**kwargs)
 
         async def generator():
             nonlocal usage_stats

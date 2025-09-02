@@ -503,8 +503,6 @@ def capture_streaming_event(
         ph_client: PostHog client instance
         event_data: Standardized streaming event data containing all necessary information
     """
-    import uuid
-
     trace_id = event_data.get("trace_id") or str(uuid.uuid4())
 
     # Build base event properties
