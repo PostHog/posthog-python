@@ -119,7 +119,7 @@ def test_completion_basic(
     call_args = mock_client.capture.call_args
     assert call_args[1]["event"] == "$ai_generation"
     assert call_args[1]["properties"]["$ai_provider"] == "litellm"
-    assert call_args[1]["properties"]["$ai_model"] == "openai/gpt-3.5-turbo"
+    assert call_args[1]["properties"]["$ai_model"] == "gpt-3.5-turbo"
     assert call_args[1]["properties"]["$ai_input_tokens"] == 10
     assert call_args[1]["properties"]["$ai_output_tokens"] == 20
 
@@ -151,7 +151,7 @@ async def test_acompletion_basic(
     assert call_args[1]["event"] == "$ai_generation"
     assert call_args[1]["properties"]["$ai_provider"] == "litellm"
     assert (
-        call_args[1]["properties"]["$ai_model"] == "anthropic/claude-3-sonnet-20240229"
+        call_args[1]["properties"]["$ai_model"] == "claude-3-sonnet-20240229"
     )
 
 
@@ -239,7 +239,7 @@ def test_completion_privacy_mode(
     mock_setup.return_value = mock_client
     mock_litellm_completion.return_value = mock_response
 
-    response = completion(
+    completion(
         model="openai/gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Sensitive information"}],
         posthog_distinct_id="test-user",
@@ -411,7 +411,7 @@ def test_completion_custom_properties(
 
     custom_props = {"custom_key": "custom_value", "environment": "test"}
 
-    response = completion(
+    completion(
         model="openai/gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hello"}],
         posthog_distinct_id="test-user",
@@ -472,7 +472,7 @@ def test_embedding_basic(
     call_args = mock_client.capture.call_args
     assert call_args[1]["event"] == "$ai_embedding"
     assert call_args[1]["properties"]["$ai_provider"] == "litellm"
-    assert call_args[1]["properties"]["$ai_model"] == "openai/text-embedding-3-small"
+    assert call_args[1]["properties"]["$ai_model"] == "text-embedding-3-small"
     assert call_args[1]["properties"]["$ai_input"] == "Hello world"
     assert call_args[1]["properties"]["$ai_input_tokens"] == 10
     assert call_args[1]["properties"]["$ai_http_status"] == 200
@@ -526,7 +526,7 @@ def test_completion_cached_tokens(
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "litellm"
-    assert props["$ai_model"] == "openai/gpt-4"
+    assert props["$ai_model"] == "gpt-4"
     assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
     assert props["$ai_output_choices"] == [
         {
@@ -578,7 +578,7 @@ def test_completion_tool_calls_only_no_content(
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "litellm"
-    assert props["$ai_model"] == "openai/gpt-4"
+    assert props["$ai_model"] == "gpt-4"
     assert props["$ai_output_choices"] == [
         {
             "role": "assistant",
@@ -701,7 +701,7 @@ def test_completion_streaming_with_tool_calls(mock_setup, mock_litellm_completio
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "litellm"
-    assert props["$ai_model"] == "openai/gpt-4"
+    assert props["$ai_model"] == "gpt-4"
 
     assert "$ai_tools" in props
     defined_tools = props["$ai_tools"]
@@ -797,3 +797,46 @@ async def test_acompletion_streaming(mock_setup, mock_litellm_acompletion, mock_
     assert call_args[1]["properties"]["$ai_input_tokens"] == 10
     assert call_args[1]["properties"]["$ai_output_tokens"] == 5
     assert call_args[1]["properties"]["$ai_output_choices"][0]["content"] == "Hello world!"
+
+
+# Tests for provider stripping functionality
+
+
+@patch("posthog.ai.litellm.litellm.litellm.completion")
+@patch("posthog.ai.litellm.litellm.setup")
+def test_completion_strips_provider_prefix(
+    mock_setup, mock_litellm_completion, mock_client, mock_response
+):
+    """Test that model with provider prefix gets stripped for tracking."""
+    mock_setup.return_value = mock_client
+    mock_litellm_completion.return_value = mock_response
+
+    completion(
+        model="openai/gpt-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        posthog_distinct_id="test-user",
+    )
+
+    # Verify tracking uses stripped model name
+    call_args = mock_client.capture.call_args
+    assert call_args[1]["properties"]["$ai_model"] == "gpt-4"
+
+
+@patch("posthog.ai.litellm.litellm.litellm.completion")
+@patch("posthog.ai.litellm.litellm.setup")
+def test_completion_model_without_provider_unchanged(
+    mock_setup, mock_litellm_completion, mock_client, mock_response
+):
+    """Test that model without provider prefix remains unchanged."""
+    mock_setup.return_value = mock_client
+    mock_litellm_completion.return_value = mock_response
+
+    completion(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        posthog_distinct_id="test-user",
+    )
+
+    # Verify tracking uses the same model name
+    call_args = mock_client.capture.call_args
+    assert call_args[1]["properties"]["$ai_model"] == "gpt-4"

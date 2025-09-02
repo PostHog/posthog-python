@@ -403,6 +403,7 @@ def call_llm_and_track_usage(
     usage: Dict[str, Any] = {}
     error_params: Dict[str, any] = {}
 
+    tracking_model = kwargs.pop("tracking_model", None)
     try:
         response = call_method(**kwargs)
     except Exception as exc:
@@ -429,10 +430,11 @@ def call_llm_and_track_usage(
 
         messages = merge_system_prompt(kwargs, provider)
         sanitized_messages = sanitize_messages(messages, provider)
-
+        
+        ai_model = tracking_model or kwargs.get("model")
         event_properties = {
             "$ai_provider": provider,
-            "$ai_model": kwargs.get("model"),
+            "$ai_model": ai_model,
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 ph_client, posthog_privacy_mode, sanitized_messages
@@ -520,6 +522,7 @@ async def call_llm_and_track_usage_async(
     usage: Dict[str, Any] = {}
     error_params: Dict[str, any] = {}
 
+    tracking_model = kwargs.pop("tracking_model", None)
     try:
         response = await call_async_method(**kwargs)
     except Exception as exc:
@@ -546,10 +549,11 @@ async def call_llm_and_track_usage_async(
 
         messages = merge_system_prompt(kwargs, provider)
         sanitized_messages = sanitize_messages(messages, provider)
-
+        
+        ai_model = tracking_model or kwargs.get("model")
         event_properties = {
             "$ai_provider": provider,
-            "$ai_model": kwargs.get("model"),
+            "$ai_model": ai_model,
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 ph_client, posthog_privacy_mode, sanitized_messages

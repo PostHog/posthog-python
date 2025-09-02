@@ -42,6 +42,21 @@ def _resolve_base_url(kwargs: Dict[str, Any]) -> str:
     )
 
 
+def _strip_provider_from_model(model: str) -> str:
+    """
+    Strip provider prefix from LiteLLM model name for proper price matching.
+    Examples:
+    - "openai/gpt-4" -> "gpt-4"
+    - "anthropic/claude-3" -> "claude-3"  
+    - "gpt-4" -> "gpt-4" (no change if no provider prefix)
+    """
+    if "/" in model:
+        return model.split("/", 1)[1]
+    return model
+
+
+
+
 def completion(
     posthog_client: Optional[PostHogClient] = None,
     posthog_distinct_id: Optional[str] = None,
@@ -64,6 +79,10 @@ def completion(
             **kwargs,
         )
 
+    tracking_model = None
+    if "model" in kwargs and kwargs["model"]:
+        tracking_model = _strip_provider_from_model(kwargs["model"])
+
     return call_llm_and_track_usage(
         posthog_distinct_id,
         ph_client,
@@ -74,6 +93,7 @@ def completion(
         posthog_groups,
         _resolve_base_url(kwargs),
         litellm.completion,
+        tracking_model=tracking_model,
         **kwargs,
     )
 
@@ -100,6 +120,11 @@ async def acompletion(
             **kwargs,
         )
 
+    # Strip provider prefix from model name for tracking
+    tracking_model = None
+    if "model" in kwargs and kwargs["model"]:
+        tracking_model = _strip_provider_from_model(kwargs["model"])
+
     return await call_llm_and_track_usage_async(
         posthog_distinct_id,
         ph_client,
@@ -110,6 +135,7 @@ async def acompletion(
         posthog_groups,
         _resolve_base_url(kwargs),
         litellm.acompletion,
+        tracking_model=tracking_model,
         **kwargs,
     )
 
@@ -158,9 +184,12 @@ def embedding(
     latency = end_time - start_time
 
     # Build the event properties for embeddings
+    model = kwargs.get("model")
+    stripped_model = _strip_provider_from_model(model) if model else model
+    
     event_properties = {
         "$ai_provider": "litellm",
-        "$ai_model": kwargs.get("model"),
+        "$ai_model": stripped_model,
         "$ai_input": with_privacy_mode(
             ph_client, posthog_privacy_mode, kwargs.get("input")
         ),
@@ -349,9 +378,12 @@ def _capture_streaming_event(
     if posthog_trace_id is None:
         posthog_trace_id = str(uuid.uuid4())
 
+    model = kwargs.get("model")
+    stripped_model = _strip_provider_from_model(model) if model else model
+    
     event_properties = {
         "$ai_provider": "litellm",
-        "$ai_model": kwargs.get("model"),
+        "$ai_model": stripped_model,
         "$ai_model_parameters": get_model_params(kwargs),
         "$ai_input": with_privacy_mode(
             ph_client, posthog_privacy_mode, sanitize_openai(kwargs.get("messages"))
