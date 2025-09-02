@@ -186,7 +186,7 @@ class WrappedResponses:
         # Prepare standardized event data
         formatted_input = format_openai_streaming_input(kwargs, "responses")
         sanitized_input = sanitize_openai_response(formatted_input)
-        
+
         event_data = StreamingEventData(
             provider="openai",
             model=kwargs.get("model"),
@@ -403,7 +403,7 @@ class WrappedCompletions:
         # Prepare standardized event data
         formatted_input = format_openai_streaming_input(kwargs, "chat")
         sanitized_input = sanitize_openai(formatted_input)
-        
+
         event_data = StreamingEventData(
             provider="openai",
             model=kwargs.get("model"),

@@ -358,7 +358,7 @@ class Models:
         # Prepare standardized event data
         formatted_input = self._format_input(contents)
         sanitized_input = sanitize_gemini(formatted_input)
-        
+
         event_data = StreamingEventData(
             provider="gemini",
             model=model,
