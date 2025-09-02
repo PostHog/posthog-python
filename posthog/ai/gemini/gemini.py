@@ -13,8 +13,7 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage,
-    get_model_params,
-    with_privacy_mode,
+    capture_streaming_event,
 )
 from posthog.ai.gemini.gemini_converter import (
     format_gemini_input,
@@ -352,42 +351,28 @@ class Models:
         latency: float,
         output: str,
     ):
-        if trace_id is None:
-            trace_id = str(uuid.uuid4())
+        from posthog.ai.types import StreamingEventData
+        from posthog.ai.gemini.gemini_converter import standardize_gemini_usage
 
-        event_properties = {
-            "$ai_provider": "gemini",
-            "$ai_model": model,
-            "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(
-                self._ph_client,
-                privacy_mode,
-                self._format_input(contents),
-            ),
-            "$ai_output_choices": with_privacy_mode(
-                self._ph_client,
-                privacy_mode,
-                format_gemini_streaming_output(output),
-            ),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
-            "$ai_output_tokens": usage_stats.get("output_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": trace_id,
-            "$ai_base_url": self._base_url,
-            **(properties or {}),
-        }
+        # Prepare standardized event data
+        event_data = StreamingEventData(
+            provider="gemini",
+            model=model,
+            base_url=self._base_url,
+            kwargs=kwargs,
+            formatted_input=self._format_input(contents),
+            formatted_output=format_gemini_streaming_output(output),
+            usage_stats=standardize_gemini_usage(usage_stats),
+            latency=latency,
+            distinct_id=distinct_id,
+            trace_id=trace_id,
+            properties=properties,
+            privacy_mode=privacy_mode,
+            groups=groups,
+        )
 
-        if distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        if hasattr(self._ph_client, "capture"):
-            self._ph_client.capture(
-                distinct_id=distinct_id,
-                event="$ai_generation",
-                properties=event_properties,
-                groups=groups,
-            )
+        # Use the common capture function
+        capture_streaming_event(self._ph_client, event_data)
 
     def _format_input(self, contents):
         """Format input contents for PostHog tracking"""

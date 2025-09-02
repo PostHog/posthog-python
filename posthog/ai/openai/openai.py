@@ -12,13 +12,10 @@ except ImportError:
 from posthog.ai.utils import (
     call_llm_and_track_usage,
     extract_available_tool_calls,
-    get_model_params,
-    with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
     extract_openai_usage_from_chunk,
     extract_openai_content_from_chunk,
-    format_openai_streaming_output,
 )
 from posthog.client import Client as PostHogClient
 from posthog import setup
@@ -156,7 +153,7 @@ class WrappedResponses:
                     usage_stats,
                     latency,
                     output,
-                    extract_available_tool_calls("openai", kwargs),
+                    None,  # Responses API doesn't have tools
                 )
 
         return generator()
@@ -174,47 +171,33 @@ class WrappedResponses:
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
-        if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+        from posthog.ai.types import StreamingEventData
+        from posthog.ai.openai.openai_converter import (
+            standardize_openai_usage,
+            format_openai_streaming_input,
+            format_openai_streaming_output,
+        )
+        from posthog.ai.utils import capture_streaming_event
 
-        event_properties = {
-            "$ai_provider": "openai",
-            "$ai_model": kwargs.get("model"),
-            "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(
-                self._client._ph_client, posthog_privacy_mode, kwargs.get("input")
-            ),
-            "$ai_output_choices": with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                format_openai_streaming_output(output, "responses"),
-            ),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
-            "$ai_output_tokens": usage_stats.get("output_tokens", 0),
-            "$ai_cache_read_input_tokens": usage_stats.get(
-                "cache_read_input_tokens", 0
-            ),
-            "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(self._client.base_url),
-            **(posthog_properties or {}),
-        }
+        # Prepare standardized event data
+        event_data = StreamingEventData(
+            provider="openai",
+            model=kwargs.get("model"),
+            base_url=str(self._client.base_url),
+            kwargs=kwargs,
+            formatted_input=format_openai_streaming_input(kwargs, "responses"),
+            formatted_output=format_openai_streaming_output(output, "responses"),
+            usage_stats=standardize_openai_usage(usage_stats, "responses"),
+            latency=latency,
+            distinct_id=posthog_distinct_id,
+            trace_id=posthog_trace_id,
+            properties=posthog_properties,
+            privacy_mode=posthog_privacy_mode,
+            groups=posthog_groups,
+        )
 
-        if available_tool_calls:
-            event_properties["$ai_tools"] = available_tool_calls
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
-                properties=event_properties,
-                groups=posthog_groups,
-            )
+        # Use the common capture function
+        capture_streaming_event(self._client._ph_client, event_data)
 
     def parse(
         self,
@@ -383,47 +366,33 @@ class WrappedCompletions:
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
-        if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+        from posthog.ai.types import StreamingEventData
+        from posthog.ai.openai.openai_converter import (
+            standardize_openai_usage,
+            format_openai_streaming_input,
+            format_openai_streaming_output,
+        )
+        from posthog.ai.utils import capture_streaming_event
 
-        event_properties = {
-            "$ai_provider": "openai",
-            "$ai_model": kwargs.get("model"),
-            "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(
-                self._client._ph_client, posthog_privacy_mode, kwargs.get("messages")
-            ),
-            "$ai_output_choices": with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                format_openai_streaming_output(output, "chat"),
-            ),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
-            "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
-            "$ai_cache_read_input_tokens": usage_stats.get(
-                "cache_read_input_tokens", 0
-            ),
-            "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(self._client.base_url),
-            **(posthog_properties or {}),
-        }
+        # Prepare standardized event data
+        event_data = StreamingEventData(
+            provider="openai",
+            model=kwargs.get("model"),
+            base_url=str(self._client.base_url),
+            kwargs=kwargs,
+            formatted_input=format_openai_streaming_input(kwargs, "chat"),
+            formatted_output=format_openai_streaming_output(output, "chat"),
+            usage_stats=standardize_openai_usage(usage_stats, "chat"),
+            latency=latency,
+            distinct_id=posthog_distinct_id,
+            trace_id=posthog_trace_id,
+            properties=posthog_properties,
+            privacy_mode=posthog_privacy_mode,
+            groups=posthog_groups,
+        )
 
-        if available_tool_calls:
-            event_properties["$ai_tools"] = available_tool_calls
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
-                properties=event_properties,
-                groups=posthog_groups,
-            )
+        # Use the common capture function
+        capture_streaming_event(self._client._ph_client, event_data)
 
 
 class WrappedEmbeddings:

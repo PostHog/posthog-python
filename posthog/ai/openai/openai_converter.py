@@ -15,6 +15,7 @@ from posthog.ai.types import (
     FormattedMessage,
     FormattedTextContent,
     StreamingUsageStats,
+    TokenUsage,
 )
 
 
@@ -405,3 +406,53 @@ def format_openai_streaming_output(
             "content": [{"type": "text", "text": str(accumulated_content)}],
         }
     ]
+
+
+def standardize_openai_usage(
+    usage: Dict[str, Any], api_type: str = "chat"
+) -> TokenUsage:
+    """
+    Standardize OpenAI usage statistics to common TokenUsage format.
+
+    Args:
+        usage: Raw usage statistics from OpenAI
+        api_type: Either "chat" or "responses" to handle different field names
+
+    Returns:
+        Standardized TokenUsage dict
+    """
+    if api_type == "chat":
+        # Chat API uses prompt_tokens/completion_tokens
+        return TokenUsage(
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            cache_read_input_tokens=usage.get("cache_read_input_tokens"),
+            reasoning_tokens=usage.get("reasoning_tokens"),
+        )
+    else:  # responses API
+        # Responses API uses input_tokens/output_tokens
+        return TokenUsage(
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cache_read_input_tokens=usage.get("cache_read_input_tokens"),
+            reasoning_tokens=usage.get("reasoning_tokens"),
+        )
+
+
+def format_openai_streaming_input(
+    kwargs: Dict[str, Any], api_type: str = "chat"
+) -> Any:
+    """
+    Format OpenAI streaming input based on API type.
+
+    Args:
+        kwargs: Keyword arguments passed to OpenAI API
+        api_type: Either "chat" or "responses"
+
+    Returns:
+        Formatted input ready for PostHog tracking
+    """
+    if api_type == "chat":
+        return kwargs.get("messages")
+    else:  # responses API
+        return kwargs.get("input")

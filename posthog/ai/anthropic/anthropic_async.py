@@ -133,7 +133,7 @@ class AsyncWrappedMessages(AsyncMessages):
         content_blocks: List[Dict[str, Any]] = []
         tools_in_progress: Dict[str, Dict[str, Any]] = {}
         current_text_block: Optional[Dict[str, Any]] = None
-        response = super().create(**kwargs)
+        response = await super().create(**kwargs)
 
         async def generator():
             nonlocal usage_stats

@@ -117,3 +117,26 @@ class ToolInProgress(TypedDict):
 
     block: StreamingContentBlock
     input_string: str
+
+
+class StreamingEventData(TypedDict):
+    """
+    Standardized data for streaming events across all providers.
+
+    This type ensures consistent data structure when capturing streaming events,
+    with all provider-specific formatting already completed.
+    """
+
+    provider: str  # "openai", "anthropic", "gemini"
+    model: str
+    base_url: str
+    kwargs: Dict[str, Any]  # Original kwargs for tool extraction and special handling
+    formatted_input: Any  # Provider-formatted input ready for tracking
+    formatted_output: Any  # Provider-formatted output ready for tracking
+    usage_stats: TokenUsage  # Standardized token counts
+    latency: float
+    distinct_id: Optional[str]
+    trace_id: Optional[str]
+    properties: Optional[Dict[str, Any]]
+    privacy_mode: bool
+    groups: Optional[Dict[str, Any]]

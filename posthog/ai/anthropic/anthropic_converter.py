@@ -15,6 +15,7 @@ from posthog.ai.types import (
     FormattedTextContent,
     StreamingContentBlock,
     StreamingUsageStats,
+    TokenUsage,
     ToolInProgress,
 )
 
@@ -320,3 +321,67 @@ def finalize_anthropic_tool_input(
                 pass
 
             del tools_in_progress[block["id"]]
+
+
+def standardize_anthropic_usage(usage: Dict[str, Any]) -> TokenUsage:
+    """
+    Standardize Anthropic usage statistics to common TokenUsage format.
+
+    Anthropic already uses standard field names, so this mainly structures the data.
+
+    Args:
+        usage: Raw usage statistics from Anthropic
+
+    Returns:
+        Standardized TokenUsage dict
+    """
+    return TokenUsage(
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        cache_read_input_tokens=usage.get("cache_read_input_tokens"),
+        cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
+    )
+
+
+def format_anthropic_streaming_input(kwargs: Dict[str, Any]) -> Any:
+    """
+    Format Anthropic streaming input using system prompt merging.
+
+    Args:
+        kwargs: Keyword arguments passed to Anthropic API
+
+    Returns:
+        Formatted input ready for PostHog tracking
+    """
+    from posthog.ai.utils import merge_system_prompt
+
+    return merge_system_prompt(kwargs, "anthropic")
+
+
+def format_anthropic_streaming_output_complete(
+    content_blocks: List[StreamingContentBlock], accumulated_content: str
+) -> List[FormattedMessage]:
+    """
+    Format complete Anthropic streaming output.
+
+    Combines existing logic for formatting content blocks with fallback to accumulated content.
+
+    Args:
+        content_blocks: List of content blocks accumulated during streaming
+        accumulated_content: Raw accumulated text content as fallback
+
+    Returns:
+        Formatted messages ready for PostHog tracking
+    """
+    formatted_content = format_anthropic_streaming_content(content_blocks)
+
+    if formatted_content:
+        return [{"role": "assistant", "content": formatted_content}]
+    else:
+        # Fallback to accumulated content if no blocks
+        return [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": accumulated_content}],
+            }
+        ]

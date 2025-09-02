@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 from httpx import URL
 
 from posthog.client import Client as PostHogClient
+from posthog.ai.types import StreamingEventData
 
 
 def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -425,3 +426,107 @@ def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
     if ph_client.privacy_mode or privacy_mode:
         return None
     return value
+
+
+def capture_streaming_event(
+    ph_client: PostHogClient,
+    event_data: StreamingEventData,
+):
+    """
+    Unified streaming event capture for all LLM providers.
+
+    This function handles the common logic for capturing streaming events across all providers.
+    All provider-specific formatting should be done BEFORE calling this function.
+
+    The function handles:
+    - Building PostHog event properties
+    - Extracting and adding tools based on provider
+    - Applying privacy mode
+    - Adding special token fields (cache, reasoning)
+    - Provider-specific fields (e.g., OpenAI instructions)
+    - Sending the event to PostHog
+
+    Args:
+        ph_client: PostHog client instance
+        event_data: Standardized streaming event data containing all necessary information
+    """
+    import uuid
+
+    trace_id = event_data.get("trace_id") or str(uuid.uuid4())
+
+    # Build base event properties
+    event_properties = {
+        "$ai_provider": event_data["provider"],
+        "$ai_model": event_data["model"],
+        "$ai_model_parameters": get_model_params(event_data["kwargs"]),
+        "$ai_input": with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["formatted_input"],
+        ),
+        "$ai_output_choices": with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["formatted_output"],
+        ),
+        "$ai_http_status": 200,
+        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
+        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
+        "$ai_latency": event_data["latency"],
+        "$ai_trace_id": trace_id,
+        "$ai_base_url": str(event_data["base_url"]),
+        **(event_data.get("properties") or {}),
+    }
+
+    # Extract and add tools based on provider
+    available_tools = extract_available_tool_calls(
+        event_data["provider"],
+        event_data["kwargs"],
+    )
+    if available_tools:
+        event_properties["$ai_tools"] = available_tools
+
+    # Add optional token fields
+    # For Anthropic, always include cache fields even if 0 (backward compatibility)
+    # For others, only include if present and non-zero
+    if event_data["provider"] == "anthropic":
+        # Anthropic always includes cache fields
+        cache_read = event_data["usage_stats"].get("cache_read_input_tokens", 0)
+        cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
+        event_properties["$ai_cache_read_input_tokens"] = cache_read
+        event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+    else:
+        # Other providers only include if non-zero
+        optional_token_fields = [
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "reasoning_tokens",
+        ]
+
+        for field in optional_token_fields:
+            value = event_data["usage_stats"].get(field)
+            if value is not None and value > 0:
+                event_properties[f"$ai_{field}"] = value
+
+    # Handle provider-specific fields
+    if (
+        event_data["provider"] == "openai"
+        and event_data["kwargs"].get("instructions") is not None
+    ):
+        event_properties["$ai_instructions"] = with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["kwargs"]["instructions"],
+        )
+
+    if event_data.get("distinct_id") is None:
+        event_properties["$process_person_profile"] = False
+
+    # Send event to PostHog
+    if hasattr(ph_client, "capture"):
+        ph_client.capture(
+            distinct_id=event_data.get("distinct_id") or trace_id,
+            event="$ai_generation",
+            properties=event_properties,
+            groups=event_data.get("groups"),
+        )

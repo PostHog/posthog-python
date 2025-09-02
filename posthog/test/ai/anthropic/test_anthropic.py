@@ -20,6 +20,69 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# =======================
+# Reusable Mock Helpers
+# =======================
+
+class MockContent:
+    """Reusable mock content class for Anthropic responses."""
+    def __init__(self, text="Bar", content_type="text"):
+        self.type = content_type
+        self.text = text
+
+
+class MockUsage:
+    """Reusable mock usage class for Anthropic responses."""
+    def __init__(self, input_tokens=18, output_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+
+
+class MockResponse:
+    """Reusable mock response class for Anthropic messages."""
+    def __init__(self, content_text="Bar", model="claude-3-opus-20240229", 
+                 input_tokens=18, output_tokens=1, cache_read=0, cache_creation=0):
+        self.content = [MockContent(text=content_text)]
+        self.model = model
+        self.usage = MockUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_creation
+        )
+
+
+def create_mock_response(**kwargs):
+    """Factory function to create mock responses with custom parameters."""
+    return MockResponse(**kwargs)
+
+
+# Streaming mock helpers
+class MockStreamEvent:
+    """Reusable mock event class for streaming responses."""
+    def __init__(self, event_type=None, **kwargs):
+        self.type = event_type
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+class MockContentBlock:
+    """Reusable mock content block for streaming."""
+    def __init__(self, block_type, **kwargs):
+        self.type = block_type
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+class MockDelta:
+    """Reusable mock delta for streaming events."""
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
 @pytest.fixture
 def mock_client():
     with patch("posthog.client.Client") as mock_client:
@@ -48,17 +111,6 @@ def mock_anthropic_response():
 def mock_anthropic_stream_with_tools():
     """Mock stream events for tool calls."""
 
-    class MockStreamEvent:
-        def __init__(self, event_type=None, **kwargs):
-            self.type = event_type
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-    class MockUsage:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
     class MockMessage:
         def __init__(self):
             self.usage = MockUsage(
@@ -66,17 +118,6 @@ def mock_anthropic_stream_with_tools():
                 cache_creation_input_tokens=0,
                 cache_read_input_tokens=5,
             )
-
-    class MockContentBlock:
-        def __init__(self, block_type, **kwargs):
-            self.type = block_type
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-    class MockDelta:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
 
     def stream_generator():
         # Message start with usage
@@ -314,16 +355,22 @@ def test_privacy_mode_global(mock_client, mock_anthropic_response):
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 def test_basic_integration(mock_client):
-    client = Anthropic(posthog_client=mock_client)
-    client.messages.create(
-        model="claude-3-opus-20240229",
-        messages=[{"role": "user", "content": "Foo"}],
-        max_tokens=1,
-        temperature=0,
-        posthog_distinct_id="test-id",
-        posthog_properties={"foo": "bar"},
-        system="You must always answer with 'Bar'.",
-    )
+    """Test basic non-streaming integration."""
+
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=create_mock_response(),
+    ):
+        client = Anthropic(posthog_client=mock_client)
+        client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Foo"}],
+            max_tokens=1,
+            temperature=0,
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+            system="You must always answer with 'Bar'.",
+        )
 
     assert mock_client.capture.call_count == 1
 
@@ -350,15 +397,27 @@ def test_basic_integration(mock_client):
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 async def test_basic_async_integration(mock_client):
-    client = AsyncAnthropic(posthog_client=mock_client)
-    await client.messages.create(
-        model="claude-3-opus-20240229",
-        messages=[{"role": "user", "content": "You must always answer with 'Bar'."}],
-        max_tokens=1,
-        temperature=0,
-        posthog_distinct_id="test-id",
-        posthog_properties={"foo": "bar"},
-    )
+    """Test async non-streaming integration."""
+
+    # Make the mock async
+    async def mock_async_create(**kwargs):
+        return create_mock_response(input_tokens=16)
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(posthog_client=mock_client)
+        await client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[
+                {"role": "user", "content": "You must always answer with 'Bar'."}
+            ],
+            max_tokens=1,
+            temperature=0,
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
 
     assert mock_client.capture.call_count == 1
 
@@ -382,20 +441,47 @@ async def test_basic_async_integration(mock_client):
 
 @pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 async def test_async_streaming_system_prompt(mock_client):
-    client = AsyncAnthropic(posthog_client=mock_client)
-    response = await client.messages.create(
-        model="claude-3-opus-20240229",
-        system="You must always answer with 'Bar'.",
-        messages=[{"role": "user", "content": "Foo"}],
-        stream=True,
-        max_tokens=1,
-    )
+    """Test async streaming with system prompt."""
 
-    # Consume the stream - async finally block completes before this returns
-    [c async for c in response]
+    # Create a simple mock async stream using reusable helpers
+    async def mock_async_stream():
+        # Yield some events
+        yield MockStreamEvent(type="message_start")
+        yield MockStreamEvent(type="content_block_start")
+        yield MockStreamEvent(type="content_block_delta", text="Bar")
 
-    # Capture happens in the async finally block before generator completes
-    assert mock_client.capture.call_count == 1
+        # Final message with usage
+        final_msg = MockStreamEvent(type="message_delta")
+        final_msg.usage = MockUsage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        yield final_msg
+
+    # Create a coroutine that returns the async generator
+    async def mock_create(**kwargs):
+        return mock_async_stream()
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_create,
+    ):
+        client = AsyncAnthropic(posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-3-opus-20240229",
+            system="You must always answer with 'Bar'.",
+            messages=[{"role": "user", "content": "Foo"}],
+            stream=True,
+            max_tokens=1,
+        )
+
+        # Consume the stream - async finally block completes before this returns
+        [c async for c in response]
+
+        # Capture happens in the async finally block before generator completes
+        assert mock_client.capture.call_count == 1
 
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
@@ -829,7 +915,7 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
 
     with patch(
         "anthropic.resources.AsyncMessages.create",
-        return_value=mock_async_create(),
+        side_effect=lambda **kwargs: mock_async_create(),
     ):
         async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
 

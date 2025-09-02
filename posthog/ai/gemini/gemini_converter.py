@@ -13,6 +13,7 @@ from posthog.ai.types import (
     FormattedMessage,
     FormattedTextContent,
     StreamingUsageStats,
+    TokenUsage,
 )
 
 
@@ -344,3 +345,22 @@ def format_gemini_streaming_output(
         text = str(accumulated_content)
 
     return [{"role": "assistant", "content": [{"type": "text", "text": text}]}]
+
+
+def standardize_gemini_usage(usage: Dict[str, Any]) -> TokenUsage:
+    """
+    Standardize Gemini usage statistics to common TokenUsage format.
+
+    Gemini already uses standard field names (input_tokens/output_tokens).
+
+    Args:
+        usage: Raw usage statistics from Gemini
+
+    Returns:
+        Standardized TokenUsage dict
+    """
+    return TokenUsage(
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        # Gemini doesn't currently support cache or reasoning tokens
+    )
