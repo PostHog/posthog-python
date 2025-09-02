@@ -48,27 +48,33 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                     role = choice.message.role
 
                 if choice.message.content:
-                    content.append({
-                        "type": "text",
-                        "text": choice.message.content,
-                    })
+                    content.append(
+                        {
+                            "type": "text",
+                            "text": choice.message.content,
+                        }
+                    )
 
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
-                        content.append({
-                            "type": "function",
-                            "id": tool_call.id,
-                            "function": {
-                                "name": tool_call.function.name,
-                                "arguments": tool_call.function.arguments,
-                            },
-                        })
+                        content.append(
+                            {
+                                "type": "function",
+                                "id": tool_call.id,
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments,
+                                },
+                            }
+                        )
 
         if content:
-            output.append({
-                "role": role,
-                "content": content,
-            })
+            output.append(
+                {
+                    "role": role,
+                    "content": content,
+                }
+            )
 
     # Handle Responses API format
     if hasattr(response, "output"):
@@ -86,10 +92,12 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                             and content_item.type == "output_text"
                             and hasattr(content_item, "text")
                         ):
-                            content.append({
-                                "type": "text",
-                                "text": content_item.text,
-                            })
+                            content.append(
+                                {
+                                    "type": "text",
+                                    "text": content_item.text,
+                                }
+                            )
 
                         elif hasattr(content_item, "text"):
                             content.append({"type": "text", "text": content_item.text})
@@ -110,20 +118,24 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                     content.append(text_content)
 
             elif hasattr(item, "type") and item.type == "function_call":
-                content.append({
-                    "type": "function",
-                    "id": getattr(item, "call_id", getattr(item, "id", "")),
-                    "function": {
-                        "name": item.name,
-                        "arguments": getattr(item, "arguments", {}),
-                    },
-                })
+                content.append(
+                    {
+                        "type": "function",
+                        "id": getattr(item, "call_id", getattr(item, "id", "")),
+                        "function": {
+                            "name": item.name,
+                            "arguments": getattr(item, "arguments", {}),
+                        },
+                    }
+                )
 
         if content:
-            output.append({
-                "role": role,
-                "content": content,
-            })
+            output.append(
+                {
+                    "role": role,
+                    "content": content,
+                }
+            )
 
     return output
 
@@ -149,10 +161,12 @@ def format_openai_input(
     # Handle Chat Completions API format
     if messages is not None:
         for msg in messages:
-            formatted_messages.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", ""),
-            })
+            formatted_messages.append(
+                {
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", ""),
+                }
+            )
 
     # Handle Responses API format
     if input_data is not None:

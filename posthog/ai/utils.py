@@ -14,17 +14,15 @@ from posthog.ai.sanitization import (
 
 
 def merge_usage_stats(
-    target: Dict[str, int], 
-    source: StreamingUsageStats, 
-    mode: str = "incremental"
+    target: Dict[str, int], source: StreamingUsageStats, mode: str = "incremental"
 ) -> None:
     """
     Merge streaming usage statistics into target dict, handling None values.
-    
+
     Supports two modes:
     - "incremental": Add source values to target (for APIs that report new tokens)
     - "cumulative": Replace target with source values (for APIs that report totals)
-    
+
     Args:
         target: Dictionary to update with usage stats
         source: StreamingUsageStats that may contain None values

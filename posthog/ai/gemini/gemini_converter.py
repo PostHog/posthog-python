@@ -175,38 +175,48 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
-                            content.append({
-                                "type": "text",
-                                "text": part.text,
-                            })
+                            content.append(
+                                {
+                                    "type": "text",
+                                    "text": part.text,
+                                }
+                            )
 
                         elif hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
-                            content.append({
-                                "type": "function",
-                                "function": {
-                                    "name": function_call.name,
-                                    "arguments": function_call.args,
-                                },
-                            })
+                            content.append(
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_call.name,
+                                        "arguments": function_call.args,
+                                    },
+                                }
+                            )
 
                 if content:
-                    output.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
+                    output.append(
+                        {
+                            "role": "assistant",
+                            "content": content,
+                        }
+                    )
 
             elif hasattr(candidate, "text") and candidate.text:
-                output.append({
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": candidate.text}],
-                })
+                output.append(
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": candidate.text}],
+                    }
+                )
 
     elif hasattr(response, "text") and response.text:
-        output.append({
-            "role": "assistant",
-            "content": [{"type": "text", "text": response.text}],
-        })
+        output.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": response.text}],
+            }
+        )
 
     return output
 
@@ -376,24 +386,30 @@ def format_gemini_streaming_output(
                 elif item.get("type") == "function":
                     # If we have accumulated text, add it first
                     if text_parts:
-                        content.append({
-                            "type": "text",
-                            "text": "".join(text_parts),
-                        })
+                        content.append(
+                            {
+                                "type": "text",
+                                "text": "".join(text_parts),
+                            }
+                        )
                         text_parts = []
 
                     # Add the function call
-                    content.append({
-                        "type": "function",
-                        "function": item.get("function", {}),
-                    })
+                    content.append(
+                        {
+                            "type": "function",
+                            "function": item.get("function", {}),
+                        }
+                    )
 
         # Add any remaining text
         if text_parts:
-            content.append({
-                "type": "text",
-                "text": "".join(text_parts),
-            })
+            content.append(
+                {
+                    "type": "text",
+                    "text": "".join(text_parts),
+                }
+            )
 
         # If we have content, return it
         if content:

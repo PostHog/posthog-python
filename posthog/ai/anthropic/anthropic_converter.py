@@ -145,17 +145,21 @@ def format_anthropic_streaming_content(
 
     for block in content_blocks:
         if block.get("type") == "text":
-            formatted.append({
-                "type": "text",
-                "text": block.get("text") or "",
-            })
+            formatted.append(
+                {
+                    "type": "text",
+                    "text": block.get("text") or "",
+                }
+            )
 
         elif block.get("type") == "function":
-            formatted.append({
-                "type": "function",
-                "id": block.get("id"),
-                "function": block.get("function") or {},
-            })
+            formatted.append(
+                {
+                    "type": "function",
+                    "id": block.get("id"),
+                    "function": block.get("function") or {},
+                }
+            )
 
     return formatted
 
