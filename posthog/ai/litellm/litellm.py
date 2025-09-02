@@ -114,7 +114,77 @@ async def acompletion(
     )
 
 
+def embedding(
+    posthog_client: Optional[PostHogClient] = None,
+    posthog_distinct_id: Optional[str] = None,
+    posthog_trace_id: Optional[str] = None,
+    posthog_properties: Optional[Dict[str, Any]] = None,
+    posthog_privacy_mode: bool = False,
+    posthog_groups: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+):
+    """
+    Create embeddings using LiteLLM, with automatic PostHog tracking.
 
+    Args:
+        posthog_client: Optional PostHog client instance
+        posthog_distinct_id: Optional distinct ID for the user
+        posthog_trace_id: Optional trace ID for linking events
+        posthog_properties: Optional additional properties to track
+        posthog_privacy_mode: Whether to sanitize input/output for privacy
+        posthog_groups: Optional groups to associate with the event
+        **kwargs: Additional arguments passed to litellm.embedding()
+
+    Returns:
+        The response from litellm.embedding()
+    """
+    ph_client, posthog_trace_id = _setup_client_and_trace_id(posthog_client, posthog_trace_id)
+
+    if posthog_trace_id is None:
+        posthog_trace_id = str(uuid.uuid4())
+
+    start_time = time.time()
+    response = litellm.embedding(**kwargs)
+    end_time = time.time()
+
+    # Extract usage statistics if available
+    usage_stats = {}
+    if hasattr(response, "usage") and response.usage:
+        usage_stats = {
+            "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+            "total_tokens": getattr(response.usage, "total_tokens", 0),
+        }
+
+    latency = end_time - start_time
+
+    # Build the event properties for embeddings
+    event_properties = {
+        "$ai_provider": "litellm",
+        "$ai_model": kwargs.get("model"),
+        "$ai_input": with_privacy_mode(
+            ph_client, posthog_privacy_mode, kwargs.get("input")
+        ),
+        "$ai_http_status": 200,
+        "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
+        "$ai_latency": latency,
+        "$ai_trace_id": posthog_trace_id,
+        "$ai_base_url": _resolve_base_url(kwargs),
+        **(posthog_properties or {}),
+    }
+
+    if posthog_distinct_id is None:
+        event_properties["$process_person_profile"] = False
+
+    # Send capture event for embeddings
+    if hasattr(ph_client, "capture"):
+        ph_client.capture(
+            distinct_id=posthog_distinct_id or posthog_trace_id,
+            event="$ai_embedding",
+            properties=event_properties,
+            groups=posthog_groups,
+        )
+
+    return response
 
 
 def _ensure_stream_usage(kwargs: Dict[str, Any]) -> None:

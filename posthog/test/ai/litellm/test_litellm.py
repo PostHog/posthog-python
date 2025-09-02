@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 try:
-    from posthog.ai.litellm import completion, acompletion
+    from posthog.ai.litellm import completion, acompletion, embedding
 
     LITELLM_AVAILABLE = True
 except ImportError:
@@ -424,7 +424,60 @@ def test_completion_custom_properties(
     assert properties["environment"] == "test"
 
 
+@pytest.fixture
+def mock_embedding_response():
+    response = MagicMock()
+    response.data = [
+        MagicMock(
+            embedding=[0.1, 0.2, 0.3],
+            index=0,
+            object="embedding",
+        )
+    ]
+    response.model = "text-embedding-3-small"
+    response.object = "list"
+    response.usage = MagicMock()
+    response.usage.prompt_tokens = 10
+    response.usage.total_tokens = 10
+    response.usage.prompt_tokens_details = MagicMock()
+    response.usage.prompt_tokens_details.cached_tokens = 0
+    response.usage.output_tokens_details = MagicMock()
+    response.usage.output_tokens_details.reasoning_tokens = 0
+    return response
 
+
+@patch("posthog.ai.litellm.litellm.litellm.embedding")
+@patch("posthog.ai.litellm.litellm.setup")
+def test_embedding_basic(
+    mock_setup, mock_litellm_embedding, mock_client, mock_embedding_response
+):
+    mock_setup.return_value = mock_client
+    mock_litellm_embedding.return_value = mock_embedding_response
+
+    response = embedding(
+        model="openai/text-embedding-3-small",
+        input="Hello world",
+        posthog_distinct_id="test-user",
+        posthog_properties={"foo": "bar"},
+    )
+
+    assert response == mock_embedding_response
+
+    mock_litellm_embedding.assert_called_once()
+    call_kwargs = mock_litellm_embedding.call_args[1]
+    assert call_kwargs["model"] == "openai/text-embedding-3-small"
+    assert call_kwargs["input"] == "Hello world"
+
+    mock_client.capture.assert_called_once()
+    call_args = mock_client.capture.call_args
+    assert call_args[1]["event"] == "$ai_embedding"
+    assert call_args[1]["properties"]["$ai_provider"] == "litellm"
+    assert call_args[1]["properties"]["$ai_model"] == "openai/text-embedding-3-small"
+    assert call_args[1]["properties"]["$ai_input"] == "Hello world"
+    assert call_args[1]["properties"]["$ai_input_tokens"] == 10
+    assert call_args[1]["properties"]["$ai_http_status"] == 200
+    assert call_args[1]["properties"]["foo"] == "bar"
+    assert isinstance(call_args[1]["properties"]["$ai_latency"], float)
 
 
 @patch("posthog.ai.litellm.litellm.litellm.completion")
