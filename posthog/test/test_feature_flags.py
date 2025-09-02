@@ -365,7 +365,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
-    def test_feature_flags_fallback_to_decide(self, patch_get, patch_flags):
+    def test_feature_flags_fallback_to_flags(self, patch_get, patch_flags):
         patch_flags.return_value = {
             "featureFlags": {"beta-feature": "alakazam", "beta-feature2": "alakazam2"}
         }
@@ -431,7 +431,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
-    def test_feature_flags_dont_fallback_to_decide_when_only_local_evaluation_is_true(
+    def test_feature_flags_dont_fallback_to_flags_when_only_local_evaluation_is_true(
         self, patch_get, patch_flags
     ):
         patch_flags.return_value = {
