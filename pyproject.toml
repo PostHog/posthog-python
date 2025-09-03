@@ -68,6 +68,7 @@ test = [
     "django",
     "openai",
     "anthropic",
+    "litellm",
     "langgraph>=0.4.8",
     "langchain-core>=0.3.65",
     "langchain-community>=0.3.25",
@@ -86,6 +87,7 @@ packages = [
     "posthog.ai.openai",
     "posthog.ai.anthropic",
     "posthog.ai.gemini",
+    "posthog.ai.litellm",
     "posthog.test",
     "posthog.integrations",
 ]

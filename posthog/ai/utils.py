@@ -43,7 +43,7 @@ def get_usage(response, provider: str) -> Dict[str, Any]:
             "cache_read_input_tokens": response.usage.cache_read_input_tokens,
             "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
         }
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         cached_tokens = 0
         input_tokens = 0
         output_tokens = 0
@@ -114,7 +114,7 @@ def format_response(response, provider: str):
         return output
     if provider == "anthropic":
         return format_response_anthropic(response)
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         return format_response_openai(response)
     elif provider == "gemini":
         return format_response_gemini(response)
@@ -310,7 +310,7 @@ def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
             return kwargs["config"].tools
 
         return None
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         if "tools" in kwargs:
             return kwargs["tools"]
 
@@ -403,6 +403,7 @@ def call_llm_and_track_usage(
     usage: Dict[str, Any] = {}
     error_params: Dict[str, any] = {}
 
+    tracking_model = kwargs.pop("tracking_model", None)
     try:
         response = call_method(**kwargs)
     except Exception as exc:
@@ -430,9 +431,10 @@ def call_llm_and_track_usage(
         messages = merge_system_prompt(kwargs, provider)
         sanitized_messages = sanitize_messages(messages, provider)
 
+        ai_model = tracking_model or kwargs.get("model")
         event_properties = {
             "$ai_provider": provider,
-            "$ai_model": kwargs.get("model"),
+            "$ai_model": ai_model,
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 ph_client, posthog_privacy_mode, sanitized_messages
@@ -520,6 +522,7 @@ async def call_llm_and_track_usage_async(
     usage: Dict[str, Any] = {}
     error_params: Dict[str, any] = {}
 
+    tracking_model = kwargs.pop("tracking_model", None)
     try:
         response = await call_async_method(**kwargs)
     except Exception as exc:
@@ -547,9 +550,10 @@ async def call_llm_and_track_usage_async(
         messages = merge_system_prompt(kwargs, provider)
         sanitized_messages = sanitize_messages(messages, provider)
 
+        ai_model = tracking_model or kwargs.get("model")
         event_properties = {
             "$ai_provider": provider,
-            "$ai_model": kwargs.get("model"),
+            "$ai_model": ai_model,
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 ph_client, posthog_privacy_mode, sanitized_messages
@@ -616,7 +620,7 @@ def sanitize_messages(data: Any, provider: str) -> Any:
     """Sanitize messages using provider-specific sanitization functions."""
     if provider == "anthropic":
         return sanitize_anthropic(data)
-    elif provider == "openai":
+    elif provider == "openai" or provider == "litellm":
         return sanitize_openai(data)
     elif provider == "gemini":
         return sanitize_gemini(data)
