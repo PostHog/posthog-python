@@ -1,3 +1,7 @@
+# 6.7.2 - 2025-09-03
+
+- fix: tool call results in streaming providers
+
 # 6.7.1 - 2025-09-01
 
 - fix: Add base64 inline image sanitization
