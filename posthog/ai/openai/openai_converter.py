@@ -273,7 +273,7 @@ def extract_openai_usage_from_chunk(
     """
 
     usage: StreamingUsageStats = {}
-    
+
     if provider_type == "chat":
         if not hasattr(chunk, "usage") or not chunk.usage:
             return usage
@@ -302,7 +302,11 @@ def extract_openai_usage_from_chunk(
     elif provider_type == "responses":
         # For Responses API, usage is only in chunk.response.usage for completed events
         if hasattr(chunk, "type") and chunk.type == "response.completed":
-            if hasattr(chunk, "response") and hasattr(chunk.response, "usage") and chunk.response.usage:
+            if (
+                hasattr(chunk, "response")
+                and hasattr(chunk.response, "usage")
+                and chunk.response.usage
+            ):
                 response_usage = chunk.response.usage
                 usage["input_tokens"] = getattr(response_usage, "input_tokens", 0)
                 usage["output_tokens"] = getattr(response_usage, "output_tokens", 0)
