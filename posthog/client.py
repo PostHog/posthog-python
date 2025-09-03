@@ -1814,7 +1814,7 @@ class Client(object):
             )
         )
 
-        response, fallback_to_decide = self._get_all_flags_and_payloads_locally(
+        response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
             person_properties=person_properties,
@@ -1822,7 +1822,7 @@ class Client(object):
             flag_keys_to_evaluate=flag_keys_to_evaluate,
         )
 
-        if fallback_to_decide and not only_evaluate_locally:
+        if fallback_to_flags and not only_evaluate_locally:
             try:
                 decide_response = self.get_flags_decision(
                     distinct_id,
@@ -1858,7 +1858,7 @@ class Client(object):
 
         flags: dict[str, FlagValue] = {}
         payloads: dict[str, str] = {}
-        fallback_to_decide = False
+        fallback_to_flags = False
         # If loading in previous line failed
         if self.feature_flags:
             # Filter flags based on flag_keys_to_evaluate if provided
@@ -1886,19 +1886,19 @@ class Client(object):
                         payloads[flag["key"]] = matched_payload
                 except InconclusiveMatchError:
                     # No need to log this, since it's just telling us to fall back to `/flags`
-                    fallback_to_decide = True
+                    fallback_to_flags = True
                 except Exception as e:
                     self.log.exception(
                         f"[FEATURE FLAGS] Error while computing variant and payload: {e}"
                     )
-                    fallback_to_decide = True
+                    fallback_to_flags = True
         else:
-            fallback_to_decide = True
+            fallback_to_flags = True
 
         return {
             "featureFlags": flags,
             "featureFlagPayloads": payloads,
-        }, fallback_to_decide
+        }, fallback_to_flags
 
     def _initialize_flag_cache(self, cache_url):
         """Initialize feature flag cache for graceful degradation during service outages.
