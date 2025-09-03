@@ -484,7 +484,7 @@ async def test_async_streaming_system_prompt(mock_client):
     # This matches the actual behavior when stream=True with await
     async def async_create_wrapper(**kwargs):
         return mock_async_stream()
-    
+
     with patch(
         "anthropic.resources.messages.AsyncMessages.create",
         side_effect=async_create_wrapper,
@@ -933,7 +933,7 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
         # Convert regular generator to async generator
         for event in mock_anthropic_stream_with_tools:
             yield event
-    
+
     async def mock_async_create(**kwargs):
         # Return the async generator (to be awaited by the implementation)
         return mock_async_generator()
