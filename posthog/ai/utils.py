@@ -1,16 +1,45 @@
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
-from httpx import URL
 
 from posthog.client import Client as PostHogClient
+from posthog.ai.types import StreamingEventData, StreamingUsageStats
 from posthog.ai.sanitization import (
     sanitize_openai,
     sanitize_anthropic,
     sanitize_gemini,
     sanitize_langchain,
 )
+
+
+def merge_usage_stats(
+    target: Dict[str, int], source: StreamingUsageStats, mode: str = "incremental"
+) -> None:
+    """
+    Merge streaming usage statistics into target dict, handling None values.
+
+    Supports two modes:
+    - "incremental": Add source values to target (for APIs that report new tokens)
+    - "cumulative": Replace target with source values (for APIs that report totals)
+
+    Args:
+        target: Dictionary to update with usage stats
+        source: StreamingUsageStats that may contain None values
+        mode: Either "incremental" or "cumulative"
+    """
+    if mode == "incremental":
+        # Add new values to existing totals
+        for key, value in source.items():
+            if value is not None and isinstance(value, int):
+                target[key] = target.get(key, 0) + value
+    elif mode == "cumulative":
+        # Replace with latest values (already cumulative)
+        for key, value in source.items():
+            if value is not None and isinstance(value, int):
+                target[key] = value
+    else:
+        raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
 
 
 def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,275 +138,96 @@ def format_response(response, provider: str):
     """
     Format a regular (non-streaming) response.
     """
-    output = []
-    if response is None:
-        return output
     if provider == "anthropic":
-        return format_response_anthropic(response)
+        from posthog.ai.anthropic.anthropic_converter import format_anthropic_response
+
+        return format_anthropic_response(response)
     elif provider == "openai":
-        return format_response_openai(response)
+        from posthog.ai.openai.openai_converter import format_openai_response
+
+        return format_openai_response(response)
     elif provider == "gemini":
-        return format_response_gemini(response)
-    return output
+        from posthog.ai.gemini.gemini_converter import format_gemini_response
 
-
-def format_response_anthropic(response):
-    output = []
-    content = []
-
-    for choice in response.content:
-        if (
-            hasattr(choice, "type")
-            and choice.type == "text"
-            and hasattr(choice, "text")
-            and choice.text
-        ):
-            content.append({"type": "text", "text": choice.text})
-        elif (
-            hasattr(choice, "type")
-            and choice.type == "tool_use"
-            and hasattr(choice, "name")
-            and hasattr(choice, "id")
-        ):
-            tool_call = {
-                "type": "function",
-                "id": choice.id,
-                "function": {
-                    "name": choice.name,
-                    "arguments": getattr(choice, "input", {}),
-                },
-            }
-            content.append(tool_call)
-
-    if content:
-        message = {
-            "role": "assistant",
-            "content": content,
-        }
-        output.append(message)
-
-    return output
-
-
-def format_response_openai(response):
-    output = []
-
-    if hasattr(response, "choices"):
-        content = []
-        role = "assistant"
-
-        for choice in response.choices:
-            # Handle Chat Completions response format
-            if hasattr(choice, "message") and choice.message:
-                if choice.message.role:
-                    role = choice.message.role
-
-                if choice.message.content:
-                    content.append({"type": "text", "text": choice.message.content})
-
-                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                    for tool_call in choice.message.tool_calls:
-                        content.append(
-                            {
-                                "type": "function",
-                                "id": tool_call.id,
-                                "function": {
-                                    "name": tool_call.function.name,
-                                    "arguments": tool_call.function.arguments,
-                                },
-                            }
-                        )
-
-        if content:
-            message = {
-                "role": role,
-                "content": content,
-            }
-            output.append(message)
-
-    # Handle Responses API format
-    if hasattr(response, "output"):
-        content = []
-        role = "assistant"
-
-        for item in response.output:
-            if item.type == "message":
-                role = item.role
-
-                if hasattr(item, "content") and isinstance(item.content, list):
-                    for content_item in item.content:
-                        if (
-                            hasattr(content_item, "type")
-                            and content_item.type == "output_text"
-                            and hasattr(content_item, "text")
-                        ):
-                            content.append({"type": "text", "text": content_item.text})
-                        elif hasattr(content_item, "text"):
-                            content.append({"type": "text", "text": content_item.text})
-                        elif (
-                            hasattr(content_item, "type")
-                            and content_item.type == "input_image"
-                            and hasattr(content_item, "image_url")
-                        ):
-                            content.append(
-                                {
-                                    "type": "image",
-                                    "image": content_item.image_url,
-                                }
-                            )
-                elif hasattr(item, "content"):
-                    content.append({"type": "text", "text": str(item.content)})
-
-            elif hasattr(item, "type") and item.type == "function_call":
-                content.append(
-                    {
-                        "type": "function",
-                        "id": getattr(item, "call_id", getattr(item, "id", "")),
-                        "function": {
-                            "name": item.name,
-                            "arguments": getattr(item, "arguments", {}),
-                        },
-                    }
-                )
-
-        if content:
-            message = {
-                "role": role,
-                "content": content,
-            }
-            output.append(message)
-
-    return output
-
-
-def format_response_gemini(response):
-    output = []
-
-    if hasattr(response, "candidates") and response.candidates:
-        for candidate in response.candidates:
-            if hasattr(candidate, "content") and candidate.content:
-                content = []
-
-                if hasattr(candidate.content, "parts") and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, "text") and part.text:
-                            content.append({"type": "text", "text": part.text})
-                        elif hasattr(part, "function_call") and part.function_call:
-                            function_call = part.function_call
-                            content.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_call.name,
-                                        "arguments": function_call.args,
-                                    },
-                                }
-                            )
-
-                if content:
-                    message = {
-                        "role": "assistant",
-                        "content": content,
-                    }
-                    output.append(message)
-
-            elif hasattr(candidate, "text") and candidate.text:
-                output.append(
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": candidate.text}],
-                    }
-                )
-    elif hasattr(response, "text") and response.text:
-        output.append(
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": response.text}],
-            }
-        )
-
-    return output
+        return format_gemini_response(response)
+    return []
 
 
 def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
+    """
+    Extract available tool calls for the given provider.
+    """
     if provider == "anthropic":
-        if "tools" in kwargs:
-            return kwargs["tools"]
+        from posthog.ai.anthropic.anthropic_converter import extract_anthropic_tools
 
-        return None
+        return extract_anthropic_tools(kwargs)
     elif provider == "gemini":
-        if "config" in kwargs and hasattr(kwargs["config"], "tools"):
-            return kwargs["config"].tools
+        from posthog.ai.gemini.gemini_converter import extract_gemini_tools
 
-        return None
+        return extract_gemini_tools(kwargs)
     elif provider == "openai":
-        if "tools" in kwargs:
-            return kwargs["tools"]
+        from posthog.ai.openai.openai_converter import extract_openai_tools
 
-        return None
+        return extract_openai_tools(kwargs)
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
-    messages: List[Dict[str, Any]] = []
+    """
+    Merge system prompts and format messages for the given provider.
+    """
     if provider == "anthropic":
+        from posthog.ai.anthropic.anthropic_converter import format_anthropic_input
+
         messages = kwargs.get("messages") or []
-        if kwargs.get("system") is None:
-            return messages
-        return [{"role": "system", "content": kwargs.get("system")}] + messages
+        system = kwargs.get("system")
+        return format_anthropic_input(messages, system)
     elif provider == "gemini":
+        from posthog.ai.gemini.gemini_converter import format_gemini_input
+
         contents = kwargs.get("contents", [])
-        if isinstance(contents, str):
-            return [{"role": "user", "content": contents}]
-        elif isinstance(contents, list):
-            formatted = []
-            for item in contents:
-                if isinstance(item, str):
-                    formatted.append({"role": "user", "content": item})
-                elif hasattr(item, "text"):
-                    formatted.append({"role": "user", "content": item.text})
-                else:
-                    formatted.append({"role": "user", "content": str(item)})
-            return formatted
-        else:
-            return [{"role": "user", "content": str(contents)}]
+        return format_gemini_input(contents)
+    elif provider == "openai":
+        # For OpenAI, handle both Chat Completions and Responses API
+        from posthog.ai.openai.openai_converter import format_openai_input
 
-    # For OpenAI, handle both Chat Completions and Responses API
-    if kwargs.get("messages") is not None:
-        messages = list(kwargs.get("messages", []))
+        messages_param = kwargs.get("messages")
+        input_param = kwargs.get("input")
 
-    if kwargs.get("input") is not None:
-        input_data = kwargs.get("input")
-        if isinstance(input_data, list):
-            messages.extend(input_data)
-        else:
-            messages.append({"role": "user", "content": input_data})
+        # Get base formatted messages
+        messages = format_openai_input(messages_param, input_param)
 
-    # Check if system prompt is provided as a separate parameter
-    if kwargs.get("system") is not None:
-        has_system = any(msg.get("role") == "system" for msg in messages)
-        if not has_system:
-            messages = [{"role": "system", "content": kwargs.get("system")}] + messages
+        # Check if system prompt is provided as a separate parameter
+        if kwargs.get("system") is not None:
+            has_system = any(msg.get("role") == "system" for msg in messages)
+            if not has_system:
+                messages = [
+                    {"role": "system", "content": kwargs.get("system")}
+                ] + messages
 
-    # For Responses API, add instructions to the system prompt if provided
-    if kwargs.get("instructions") is not None:
-        # Find the system message if it exists
-        system_idx = next(
-            (i for i, msg in enumerate(messages) if msg.get("role") == "system"), None
-        )
-
-        if system_idx is not None:
-            # Append instructions to existing system message
-            system_content = messages[system_idx].get("content", "")
-            messages[system_idx]["content"] = (
-                f"{system_content}\n\n{kwargs.get('instructions')}"
+        # For Responses API, add instructions to the system prompt if provided
+        if kwargs.get("instructions") is not None:
+            # Find the system message if it exists
+            system_idx = next(
+                (i for i, msg in enumerate(messages) if msg.get("role") == "system"),
+                None,
             )
-        else:
-            # Create a new system message with instructions
-            messages = [
-                {"role": "system", "content": kwargs.get("instructions")}
-            ] + messages
 
-    return messages
+            if system_idx is not None:
+                # Append instructions to existing system message
+                system_content = messages[system_idx].get("content", "")
+                messages[system_idx]["content"] = (
+                    f"{system_content}\n\n{kwargs.get('instructions')}"
+                )
+            else:
+                # Create a new system message with instructions
+                messages = [
+                    {"role": "system", "content": kwargs.get("instructions")}
+                ] + messages
+
+        return messages
+
+    # Default case - return empty list
+    return []
 
 
 def call_llm_and_track_usage(
@@ -388,7 +238,7 @@ def call_llm_and_track_usage(
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
     posthog_groups: Optional[Dict[str, Any]],
-    base_url: URL,
+    base_url: str,
     call_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
@@ -401,7 +251,7 @@ def call_llm_and_track_usage(
     error = None
     http_status = 200
     usage: Dict[str, Any] = {}
-    error_params: Dict[str, any] = {}
+    error_params: Dict[str, Any] = {}
 
     try:
         response = call_method(**kwargs)
@@ -509,7 +359,7 @@ async def call_llm_and_track_usage_async(
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
     posthog_groups: Optional[Dict[str, Any]],
-    base_url: URL,
+    base_url: str,
     call_async_method: Callable[..., Any],
     **kwargs: Any,
 ) -> Any:
@@ -518,7 +368,7 @@ async def call_llm_and_track_usage_async(
     error = None
     http_status = 200
     usage: Dict[str, Any] = {}
-    error_params: Dict[str, any] = {}
+    error_params: Dict[str, Any] = {}
 
     try:
         response = await call_async_method(**kwargs)
@@ -629,3 +479,105 @@ def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
     if ph_client.privacy_mode or privacy_mode:
         return None
     return value
+
+
+def capture_streaming_event(
+    ph_client: PostHogClient,
+    event_data: StreamingEventData,
+):
+    """
+    Unified streaming event capture for all LLM providers.
+
+    This function handles the common logic for capturing streaming events across all providers.
+    All provider-specific formatting should be done BEFORE calling this function.
+
+    The function handles:
+    - Building PostHog event properties
+    - Extracting and adding tools based on provider
+    - Applying privacy mode
+    - Adding special token fields (cache, reasoning)
+    - Provider-specific fields (e.g., OpenAI instructions)
+    - Sending the event to PostHog
+
+    Args:
+        ph_client: PostHog client instance
+        event_data: Standardized streaming event data containing all necessary information
+    """
+    trace_id = event_data.get("trace_id") or str(uuid.uuid4())
+
+    # Build base event properties
+    event_properties = {
+        "$ai_provider": event_data["provider"],
+        "$ai_model": event_data["model"],
+        "$ai_model_parameters": get_model_params(event_data["kwargs"]),
+        "$ai_input": with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["formatted_input"],
+        ),
+        "$ai_output_choices": with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["formatted_output"],
+        ),
+        "$ai_http_status": 200,
+        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
+        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
+        "$ai_latency": event_data["latency"],
+        "$ai_trace_id": trace_id,
+        "$ai_base_url": str(event_data["base_url"]),
+        **(event_data.get("properties") or {}),
+    }
+
+    # Extract and add tools based on provider
+    available_tools = extract_available_tool_calls(
+        event_data["provider"],
+        event_data["kwargs"],
+    )
+    if available_tools:
+        event_properties["$ai_tools"] = available_tools
+
+    # Add optional token fields
+    # For Anthropic, always include cache fields even if 0 (backward compatibility)
+    # For others, only include if present and non-zero
+    if event_data["provider"] == "anthropic":
+        # Anthropic always includes cache fields
+        cache_read = event_data["usage_stats"].get("cache_read_input_tokens", 0)
+        cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
+        event_properties["$ai_cache_read_input_tokens"] = cache_read
+        event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+    else:
+        # Other providers only include if non-zero
+        optional_token_fields = [
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "reasoning_tokens",
+        ]
+
+        for field in optional_token_fields:
+            value = event_data["usage_stats"].get(field)
+            if value is not None and isinstance(value, int) and value > 0:
+                event_properties[f"$ai_{field}"] = value
+
+    # Handle provider-specific fields
+    if (
+        event_data["provider"] == "openai"
+        and event_data["kwargs"].get("instructions") is not None
+    ):
+        event_properties["$ai_instructions"] = with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["kwargs"]["instructions"],
+        )
+
+    if event_data.get("distinct_id") is None:
+        event_properties["$process_person_profile"] = False
+
+    # Send event to PostHog
+    if hasattr(ph_client, "capture"):
+        ph_client.capture(
+            distinct_id=event_data.get("distinct_id") or trace_id,
+            event="$ai_generation",
+            properties=event_properties,
+            groups=event_data.get("groups"),
+        )

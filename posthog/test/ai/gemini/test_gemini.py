@@ -226,6 +226,87 @@ def test_new_client_streaming_with_generate_content_stream(
     assert isinstance(props["$ai_latency"], float)
 
 
+def test_new_client_streaming_with_tools(mock_client, mock_google_genai_client):
+    """Test that tools are captured in streaming mode"""
+
+    def mock_streaming_response():
+        mock_chunk1 = MagicMock()
+        mock_chunk1.text = "I'll check "
+        mock_usage1 = MagicMock()
+        mock_usage1.prompt_token_count = 15
+        mock_usage1.candidates_token_count = 5
+        mock_chunk1.usage_metadata = mock_usage1
+
+        mock_chunk2 = MagicMock()
+        mock_chunk2.text = "the weather"
+        mock_usage2 = MagicMock()
+        mock_usage2.prompt_token_count = 15
+        mock_usage2.candidates_token_count = 10
+        mock_chunk2.usage_metadata = mock_usage2
+
+        yield mock_chunk1
+        yield mock_chunk2
+
+    # Mock the generate_content_stream method
+    mock_google_genai_client.models.generate_content_stream.return_value = (
+        mock_streaming_response()
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    # Create mock tools configuration
+    mock_tool = MagicMock()
+    mock_tool.function_declarations = [
+        MagicMock(
+            name="get_current_weather",
+            description="Gets the current weather for a given location.",
+            parameters=MagicMock(
+                type="OBJECT",
+                properties={
+                    "location": MagicMock(
+                        type="STRING",
+                        description="The city and state, e.g. San Francisco, CA",
+                    )
+                },
+                required=["location"],
+            ),
+        )
+    ]
+
+    mock_config = MagicMock()
+    mock_config.tools = [mock_tool]
+
+    response = client.models.generate_content_stream(
+        model="gemini-2.0-flash",
+        contents=["What's the weather in SF?"],
+        config=mock_config,
+        posthog_distinct_id="test-id",
+        posthog_properties={"feature": "streaming_with_tools"},
+    )
+
+    chunks = list(response)
+    assert len(chunks) == 2
+    assert chunks[0].text == "I'll check "
+    assert chunks[1].text == "the weather"
+
+    # Check that the streaming event was captured with tools
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_model"] == "gemini-2.0-flash"
+    assert props["$ai_input_tokens"] == 15
+    assert props["$ai_output_tokens"] == 10
+    assert props["feature"] == "streaming_with_tools"
+    assert isinstance(props["$ai_latency"], float)
+
+    # Verify that tools are captured in the $ai_tools property in streaming mode
+    assert props["$ai_tools"] == [mock_tool]
+
+
 def test_new_client_groups(mock_client, mock_google_genai_client, mock_gemini_response):
     """Test groups functionality with new Client API"""
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
@@ -302,12 +383,32 @@ def test_new_client_different_input_formats(
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
 
-    # Test list input
-    mock_client.capture.reset_mock()
-    mock_part = MagicMock()
-    mock_part.text = "List item"
+    # Test Gemini-specific format with parts array (like in the screenshot)
+    mock_client.reset_mock()
     client.models.generate_content(
-        model="gemini-2.0-flash", contents=[mock_part], posthog_distinct_id="test-id"
+        model="gemini-2.0-flash",
+        contents=[{"role": "user", "parts": [{"text": "hey"}]}],
+        posthog_distinct_id="test-id",
+    )
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+
+    # Test multiple parts in the parts array
+    mock_client.reset_mock()
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[{"role": "user", "parts": [{"text": "Hello "}, {"text": "world"}]}],
+        posthog_distinct_id="test-id",
+    )
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert props["$ai_input"] == [{"role": "user", "content": "Hello world"}]
+
+    # Test list input with string
+    mock_client.capture.reset_mock()
+    client.models.generate_content(
+        model="gemini-2.0-flash", contents=["List item"], posthog_distinct_id="test-id"
     )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]

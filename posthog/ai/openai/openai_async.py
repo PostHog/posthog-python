@@ -14,7 +14,15 @@ from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     extract_available_tool_calls,
     get_model_params,
+    merge_usage_stats,
     with_privacy_mode,
+)
+from posthog.ai.openai.openai_converter import (
+    extract_openai_usage_from_chunk,
+    extract_openai_content_from_chunk,
+    extract_openai_tool_calls_from_chunk,
+    accumulate_openai_tool_calls,
+    format_openai_streaming_output,
 )
 from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
@@ -35,6 +43,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
                             of the global posthog.
             **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
         """
+
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
 
@@ -67,6 +76,7 @@ class WrappedResponses:
 
     def __getattr__(self, name):
         """Fallback to original responses object for any methods we don't explicitly handle."""
+
         return getattr(self._original, name)
 
     async def create(
@@ -116,7 +126,7 @@ class WrappedResponses:
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         final_content = []
-        response = await self._original.create(**kwargs)
+        response = self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
@@ -124,35 +134,17 @@ class WrappedResponses:
 
             try:
                 async for chunk in response:
-                    if hasattr(chunk, "type") and chunk.type == "response.completed":
-                        res = chunk.response
-                        if res.output and len(res.output) > 0:
-                            final_content.append(res.output[0])
+                    # Extract usage stats from chunk
+                    chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
 
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        usage_stats = {
-                            k: getattr(chunk.usage, k, 0)
-                            for k in [
-                                "input_tokens",
-                                "output_tokens",
-                                "total_tokens",
-                            ]
-                        }
+                    if chunk_usage:
+                        merge_usage_stats(usage_stats, chunk_usage)
 
-                        # Add support for cached tokens
-                        if hasattr(chunk.usage, "output_tokens_details") and hasattr(
-                            chunk.usage.output_tokens_details, "reasoning_tokens"
-                        ):
-                            usage_stats["reasoning_tokens"] = (
-                                chunk.usage.output_tokens_details.reasoning_tokens
-                            )
+                    # Extract content from chunk
+                    content = extract_openai_content_from_chunk(chunk, "responses")
 
-                        if hasattr(chunk.usage, "input_tokens_details") and hasattr(
-                            chunk.usage.input_tokens_details, "cached_tokens"
-                        ):
-                            usage_stats["cache_read_input_tokens"] = (
-                                chunk.usage.input_tokens_details.cached_tokens
-                            )
+                    if content is not None:
+                        final_content.append(content)
 
                     yield chunk
 
@@ -160,6 +152,7 @@ class WrappedResponses:
                 end_time = time.time()
                 latency = end_time - start_time
                 output = final_content
+
                 await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -203,7 +196,7 @@ class WrappedResponses:
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                output,
+                format_openai_streaming_output(output, "responses"),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -345,59 +338,50 @@ class WrappedCompletions:
         start_time = time.time()
         usage_stats: Dict[str, int] = {}
         accumulated_content = []
+        accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
 
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
-        response = await self._original.create(**kwargs)
+        response = self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
             nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_tool_calls
 
             try:
                 async for chunk in response:
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        usage_stats = {
-                            k: getattr(chunk.usage, k, 0)
-                            for k in [
-                                "prompt_tokens",
-                                "completion_tokens",
-                                "total_tokens",
-                            ]
-                        }
+                    # Extract usage stats from chunk
+                    chunk_usage = extract_openai_usage_from_chunk(chunk, "chat")
+                    if chunk_usage:
+                        merge_usage_stats(usage_stats, chunk_usage)
 
-                        # Add support for cached tokens
-                        if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
-                            chunk.usage.prompt_tokens_details, "cached_tokens"
-                        ):
-                            usage_stats["cache_read_input_tokens"] = (
-                                chunk.usage.prompt_tokens_details.cached_tokens
-                            )
+                    # Extract content from chunk
+                    content = extract_openai_content_from_chunk(chunk, "chat")
+                    if content is not None:
+                        accumulated_content.append(content)
 
-                        if hasattr(chunk.usage, "output_tokens_details") and hasattr(
-                            chunk.usage.output_tokens_details, "reasoning_tokens"
-                        ):
-                            usage_stats["reasoning_tokens"] = (
-                                chunk.usage.output_tokens_details.reasoning_tokens
-                            )
-
-                    if (
-                        hasattr(chunk, "choices")
-                        and chunk.choices
-                        and len(chunk.choices) > 0
-                    ):
-                        if chunk.choices[0].delta and chunk.choices[0].delta.content:
-                            content = chunk.choices[0].delta.content
-                            if content:
-                                accumulated_content.append(content)
+                    # Extract and accumulate tool calls from chunk
+                    chunk_tool_calls = extract_openai_tool_calls_from_chunk(chunk)
+                    if chunk_tool_calls:
+                        accumulate_openai_tool_calls(
+                            accumulated_tool_calls, chunk_tool_calls
+                        )
 
                     yield chunk
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
-                output = "".join(accumulated_content)
+
+                # Convert accumulated tool calls dict to list
+                tool_calls_list = (
+                    list(accumulated_tool_calls.values())
+                    if accumulated_tool_calls
+                    else None
+                )
+
                 await self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -407,7 +391,8 @@ class WrappedCompletions:
                     kwargs,
                     usage_stats,
                     latency,
-                    output,
+                    accumulated_content,
+                    tool_calls_list,
                     extract_available_tool_calls("openai", kwargs),
                 )
 
@@ -424,6 +409,7 @@ class WrappedCompletions:
         usage_stats: Dict[str, int],
         latency: float,
         output: Any,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         if posthog_trace_id is None:
@@ -441,7 +427,7 @@ class WrappedCompletions:
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                [{"content": output, "role": "assistant"}],
+                format_openai_streaming_output(output, "chat", tool_calls),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
@@ -480,6 +466,7 @@ class WrappedEmbeddings:
 
     def __getattr__(self, name):
         """Fallback to original embeddings object for any methods we don't explicitly handle."""
+
         return getattr(self._original, name)
 
     async def create(
@@ -505,15 +492,17 @@ class WrappedEmbeddings:
         Returns:
             The response from OpenAI's embeddings.create call.
         """
+
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
         start_time = time.time()
-        response = await self._original.create(**kwargs)
+        response = self._original.create(**kwargs)
         end_time = time.time()
 
         # Extract usage statistics if available
         usage_stats = {}
+
         if hasattr(response, "usage") and response.usage:
             usage_stats = {
                 "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
@@ -563,6 +552,7 @@ class WrappedBeta:
 
     def __getattr__(self, name):
         """Fallback to original beta object for any methods we don't explicitly handle."""
+
         return getattr(self._original, name)
 
     @property
@@ -579,6 +569,7 @@ class WrappedBetaChat:
 
     def __getattr__(self, name):
         """Fallback to original beta chat object for any methods we don't explicitly handle."""
+
         return getattr(self._original, name)
 
     @property
@@ -595,6 +586,7 @@ class WrappedBetaCompletions:
 
     def __getattr__(self, name):
         """Fallback to original beta completions object for any methods we don't explicitly handle."""
+
         return getattr(self._original, name)
 
     async def parse(

@@ -8,14 +8,25 @@ except ImportError:
 
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from posthog import setup
+from posthog.ai.types import StreamingContentBlock, ToolInProgress
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
+    extract_available_tool_calls,
     get_model_params,
     merge_system_prompt,
+    merge_usage_stats,
     with_privacy_mode,
+)
+from posthog.ai.anthropic.anthropic_converter import (
+    format_anthropic_streaming_content,
+    extract_anthropic_usage_from_event,
+    handle_anthropic_content_block_start,
+    handle_anthropic_text_delta,
+    handle_anthropic_tool_delta,
+    finalize_anthropic_tool_input,
 )
 from posthog.ai.sanitization import sanitize_anthropic
 from posthog.client import Client as PostHogClient
@@ -62,6 +73,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups: Optional group analytics properties
             **kwargs: Arguments passed to Anthropic's messages.create
         """
+
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
@@ -120,34 +132,65 @@ class AsyncWrappedMessages(AsyncMessages):
     ):
         start_time = time.time()
         usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
-        accumulated_content = []
+        accumulated_content = ""
+        content_blocks: List[StreamingContentBlock] = []
+        tools_in_progress: Dict[str, ToolInProgress] = {}
+        current_text_block: Optional[StreamingContentBlock] = None
         response = await super().create(**kwargs)
 
         async def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_content
+            nonlocal content_blocks
+            nonlocal tools_in_progress
+            nonlocal current_text_block
+
             try:
                 async for event in response:
-                    if hasattr(event, "usage") and event.usage:
-                        usage_stats = {
-                            k: getattr(event.usage, k, 0)
-                            for k in [
-                                "input_tokens",
-                                "output_tokens",
-                                "cache_read_input_tokens",
-                                "cache_creation_input_tokens",
-                            ]
-                        }
+                    # Extract usage stats from event
+                    event_usage = extract_anthropic_usage_from_event(event)
+                    merge_usage_stats(usage_stats, event_usage)
 
-                    if hasattr(event, "content") and event.content:
-                        accumulated_content.append(event.content)
+                    # Handle content block start events
+                    if hasattr(event, "type") and event.type == "content_block_start":
+                        block, tool = handle_anthropic_content_block_start(event)
+
+                        if block:
+                            content_blocks.append(block)
+
+                            if block.get("type") == "text":
+                                current_text_block = block
+                            else:
+                                current_text_block = None
+
+                        if tool:
+                            tool_id = tool["block"].get("id")
+                            if tool_id:
+                                tools_in_progress[tool_id] = tool
+
+                    # Handle text delta events
+                    delta_text = handle_anthropic_text_delta(event, current_text_block)
+
+                    if delta_text:
+                        accumulated_content += delta_text
+
+                    # Handle tool input delta events
+                    handle_anthropic_tool_delta(
+                        event, content_blocks, tools_in_progress
+                    )
+
+                    # Handle content block stop events
+                    if hasattr(event, "type") and event.type == "content_block_stop":
+                        current_text_block = None
+                        finalize_anthropic_tool_input(
+                            event, content_blocks, tools_in_progress
+                        )
 
                     yield event
 
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
-                output = "".join(accumulated_content)
 
                 await self._capture_streaming_event(
                     posthog_distinct_id,
@@ -158,7 +201,8 @@ class AsyncWrappedMessages(AsyncMessages):
                     kwargs,
                     usage_stats,
                     latency,
-                    output,
+                    content_blocks,
+                    accumulated_content,
                 )
 
         return generator()
@@ -173,10 +217,26 @@ class AsyncWrappedMessages(AsyncMessages):
         kwargs: Dict[str, Any],
         usage_stats: Dict[str, int],
         latency: float,
-        output: str,
+        content_blocks: List[StreamingContentBlock],
+        accumulated_content: str,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
+
+        # Format output using converter
+        formatted_content = format_anthropic_streaming_content(content_blocks)
+        formatted_output = []
+
+        if formatted_content:
+            formatted_output = [{"role": "assistant", "content": formatted_content}]
+        else:
+            # Fallback to accumulated content if no blocks
+            formatted_output = [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": accumulated_content}],
+                }
+            ]
 
         event_properties = {
             "$ai_provider": "anthropic",
@@ -190,7 +250,7 @@ class AsyncWrappedMessages(AsyncMessages):
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                [{"content": output, "role": "assistant"}],
+                formatted_output,
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -206,6 +266,12 @@ class AsyncWrappedMessages(AsyncMessages):
             "$ai_base_url": str(self._client.base_url),
             **(posthog_properties or {}),
         }
+
+        # Add tools if available
+        available_tools = extract_available_tool_calls("anthropic", kwargs)
+
+        if available_tools:
+            event_properties["$ai_tools"] = available_tools
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
