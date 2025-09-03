@@ -1033,6 +1033,87 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert isinstance(props["$ai_latency"], float)
 
 
+def test_responses_api_streaming_with_tokens(mock_client):
+    """Test that Responses API streaming properly captures token usage from response.usage."""
+    from openai.types.responses import ResponseUsage
+    from unittest.mock import MagicMock
+    
+    # Create mock response chunks with usage data in the correct location
+    chunks = []
+    
+    # First chunk - just content, no usage
+    chunk1 = MagicMock()
+    chunk1.type = "response.text.delta"
+    chunk1.text = "Test "
+    chunks.append(chunk1)
+    
+    # Second chunk - more content
+    chunk2 = MagicMock()
+    chunk2.type = "response.text.delta"
+    chunk2.text = "response"
+    chunks.append(chunk2)
+    
+    # Final chunk - completed event with usage in response.usage
+    chunk3 = MagicMock()
+    chunk3.type = "response.completed"
+    chunk3.response = MagicMock()
+    chunk3.response.usage = ResponseUsage(
+        input_tokens=25,
+        output_tokens=30,
+        total_tokens=55,
+        input_tokens_details={"prompt_tokens": 25, "cached_tokens": 0},
+        output_tokens_details={"reasoning_tokens": 0},
+    )
+    chunk3.response.output = ["Test response"]
+    chunks.append(chunk3)
+    
+    captured_kwargs = {}
+    
+    def mock_streaming_response(**kwargs):
+        # Capture the kwargs to verify stream_options was NOT added
+        captured_kwargs.update(kwargs)
+        return iter(chunks)
+    
+    with patch(
+        "openai.resources.responses.Responses.create",
+        side_effect=mock_streaming_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        
+        # Consume the streaming response
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[
+                {"role": "user", "content": "Test message"}
+            ],
+            stream=True,
+            posthog_distinct_id="test-id",
+            posthog_properties={"test": "streaming"},
+        )
+        
+        # Consume all chunks
+        list(response)
+        
+        # Verify stream_options was NOT added (Responses API doesn't support it)
+        assert "stream_options" not in captured_kwargs
+        
+        # Verify capture was called
+        assert mock_client.capture.call_count == 1
+        
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        
+        # Verify tokens are captured correctly from response.usage (not 0)
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4o-mini"
+        assert props["$ai_input_tokens"] == 25  # Should not be 0
+        assert props["$ai_output_tokens"] == 30  # Should not be 0
+        assert props["test"] == "streaming"
+        assert isinstance(props["$ai_latency"], float)
+
+
 def test_tool_definition(mock_client, mock_openai_response):
     """Test that tools defined in the create function are captured in $ai_tools property"""
     with patch(

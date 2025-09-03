@@ -273,11 +273,11 @@ def extract_openai_usage_from_chunk(
     """
 
     usage: StreamingUsageStats = {}
-
-    if not hasattr(chunk, "usage") or not chunk.usage:
-        return usage
-
+    
     if provider_type == "chat":
+        if not hasattr(chunk, "usage") or not chunk.usage:
+            return usage
+
         # Chat Completions API uses prompt_tokens and completion_tokens
         usage["prompt_tokens"] = getattr(chunk.usage, "prompt_tokens", 0)
         usage["completion_tokens"] = getattr(chunk.usage, "completion_tokens", 0)
@@ -300,26 +300,29 @@ def extract_openai_usage_from_chunk(
             )
 
     elif provider_type == "responses":
-        # Responses API uses input_tokens and output_tokens
-        usage["input_tokens"] = getattr(chunk.usage, "input_tokens", 0)
-        usage["output_tokens"] = getattr(chunk.usage, "output_tokens", 0)
-        usage["total_tokens"] = getattr(chunk.usage, "total_tokens", 0)
+        # For Responses API, usage is only in chunk.response.usage for completed events
+        if hasattr(chunk, "type") and chunk.type == "response.completed":
+            if hasattr(chunk, "response") and hasattr(chunk.response, "usage") and chunk.response.usage:
+                response_usage = chunk.response.usage
+                usage["input_tokens"] = getattr(response_usage, "input_tokens", 0)
+                usage["output_tokens"] = getattr(response_usage, "output_tokens", 0)
+                usage["total_tokens"] = getattr(response_usage, "total_tokens", 0)
 
-        # Handle cached tokens
-        if hasattr(chunk.usage, "input_tokens_details") and hasattr(
-            chunk.usage.input_tokens_details, "cached_tokens"
-        ):
-            usage["cache_read_input_tokens"] = (
-                chunk.usage.input_tokens_details.cached_tokens
-            )
+                # Handle cached tokens
+                if hasattr(response_usage, "input_tokens_details") and hasattr(
+                    response_usage.input_tokens_details, "cached_tokens"
+                ):
+                    usage["cache_read_input_tokens"] = (
+                        response_usage.input_tokens_details.cached_tokens
+                    )
 
-        # Handle reasoning tokens
-        if hasattr(chunk.usage, "output_tokens_details") and hasattr(
-            chunk.usage.output_tokens_details, "reasoning_tokens"
-        ):
-            usage["reasoning_tokens"] = (
-                chunk.usage.output_tokens_details.reasoning_tokens
-            )
+                # Handle reasoning tokens
+                if hasattr(response_usage, "output_tokens_details") and hasattr(
+                    response_usage.output_tokens_details, "reasoning_tokens"
+                ):
+                    usage["reasoning_tokens"] = (
+                        response_usage.output_tokens_details.reasoning_tokens
+                    )
 
     return usage
 
