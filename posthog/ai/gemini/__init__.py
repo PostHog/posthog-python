@@ -1,4 +1,5 @@
 from .gemini import Client
+from .gemini_async import AsyncClient
 from .gemini_converter import (
     format_gemini_input,
     format_gemini_response,
@@ -15,6 +16,7 @@ genai = _GenAI()
 
 __all__ = [
     "Client",
+    "AsyncClient",
     "genai",
     "format_gemini_input",
     "format_gemini_response",
