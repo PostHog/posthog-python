@@ -40,6 +40,31 @@ def async_client(mock_posthog_client, mock_genai_client):
     )
 
 
+@pytest.fixture
+def mock_gemini_functions():
+    """Mock all Gemini-related functions for streaming tests."""
+    with (
+        patch("posthog.ai.gemini.gemini_async.capture_streaming_event") as mock_capture,
+        patch("posthog.ai.gemini.gemini_async.sanitize_gemini") as mock_sanitize,
+        patch(
+            "posthog.ai.gemini.gemini_async.format_gemini_input"
+        ) as mock_format_input,
+        patch(
+            "posthog.ai.gemini.gemini_async.format_gemini_streaming_output"
+        ) as mock_format_output,
+    ):
+        mock_format_input.return_value = "formatted input"
+        mock_sanitize.return_value = "sanitized input"
+        mock_format_output.return_value = "formatted output"
+
+        yield {
+            "capture": mock_capture,
+            "sanitize": mock_sanitize,
+            "format_input": mock_format_input,
+            "format_output": mock_format_output,
+        }
+
+
 class TestAsyncClient:
     """Test the AsyncClient class."""
 
@@ -252,53 +277,37 @@ class TestAsyncModels:
             mock_format.assert_called_once_with(["test content"])
 
     @pytest.mark.asyncio
-    async def test_capture_streaming_event(self, async_client, mock_posthog_client):
+    async def test_capture_streaming_event(
+        self, async_client, mock_posthog_client, mock_gemini_functions
+    ):
         """Test streaming event capture."""
         models = async_client.aio.models
 
-        with patch(
-            "posthog.ai.gemini.gemini_async.capture_streaming_event"
-        ) as mock_capture:
-            with patch(
-                "posthog.ai.gemini.gemini_async.sanitize_gemini"
-            ) as mock_sanitize:
-                with patch(
-                    "posthog.ai.gemini.gemini_async.format_gemini_input"
-                ) as mock_format_input:
-                    with patch(
-                        "posthog.ai.gemini.gemini_async.format_gemini_streaming_output"
-                    ) as mock_format_output:
-                        mock_format_input.return_value = "formatted input"
-                        mock_sanitize.return_value = "sanitized input"
-                        mock_format_output.return_value = "formatted output"
+        from posthog.ai.types import TokenUsage
 
-                        from posthog.ai.types import TokenUsage
+        usage_stats = TokenUsage(input_tokens=10, output_tokens=20)
 
-                        usage_stats = TokenUsage(input_tokens=10, output_tokens=20)
+        await models._capture_streaming_event(
+            model="gemini-2.0-flash",
+            contents=["test"],
+            distinct_id="test-user",
+            trace_id="test-trace",
+            properties={"test": "prop"},
+            privacy_mode=False,
+            groups={"team": "ai"},
+            kwargs={"temperature": 0.7},
+            usage_stats=usage_stats,
+            latency=1.5,
+            output=["output"],
+        )
 
-                        await models._capture_streaming_event(
-                            model="gemini-2.0-flash",
-                            contents=["test"],
-                            distinct_id="test-user",
-                            trace_id="test-trace",
-                            properties={"test": "prop"},
-                            privacy_mode=False,
-                            groups={"team": "ai"},
-                            kwargs={"temperature": 0.7},
-                            usage_stats=usage_stats,
-                            latency=1.5,
-                            output=["output"],
-                        )
-
-                        # Verify the capture function was called
-                        mock_capture.assert_called_once()
-                        # Verify the call was made with the PostHog client and event data
-                        call_args = mock_capture.call_args
-                        assert (
-                            call_args[0][0] == mock_posthog_client
-                        )  # First arg is the client
-                        # The second arg is the event data object - just verify it exists
-                        assert call_args[0][1] is not None
+        # Verify the capture function was called
+        mock_gemini_functions["capture"].assert_called_once()
+        # Verify the call was made with the PostHog client and event data
+        call_args = mock_gemini_functions["capture"].call_args
+        assert call_args[0][0] == mock_posthog_client  # First arg is the client
+        # The second arg is the event data object - just verify it exists
+        assert call_args[0][1] is not None
 
 
 class TestAsyncIntegration:
@@ -372,8 +381,3 @@ class TestAsyncIntegration:
                     await client.aio.models.generate_content(
                         model="gemini-2.0-flash", contents=["Hello world"]
                     )
-
-
-if __name__ == "__main__":
-    # Run the tests
-    pytest.main([__file__, "-v"])

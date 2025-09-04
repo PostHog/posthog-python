@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -244,8 +245,6 @@ class AsyncModels:
                 client_args["api_key"] = api_key
         else:
             # For non-Vertex AI mode, api_key is required (backwards compatibility)
-            import os
-
             if api_key is None:
                 api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
 
