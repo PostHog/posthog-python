@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from posthog.ai.types import TokenUsage
+
 try:
     import openai
 except ImportError:
@@ -124,7 +126,7 @@ class WrappedResponses:
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {}
+        usage_stats: TokenUsage = TokenUsage()
         final_content = []
         response = self._original.create(**kwargs)
 
@@ -176,7 +178,7 @@ class WrappedResponses:
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
@@ -336,7 +338,7 @@ class WrappedCompletions:
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {}
+        usage_stats: TokenUsage = TokenUsage()
         accumulated_content = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
 
@@ -406,7 +408,7 @@ class WrappedCompletions:
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
@@ -430,8 +432,8 @@ class WrappedCompletions:
                 format_openai_streaming_output(output, "chat", tool_calls),
             ),
             "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
-            "$ai_output_tokens": usage_stats.get("completion_tokens", 0),
+            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
+            "$ai_output_tokens": usage_stats.get("output_tokens", 0),
             "$ai_cache_read_input_tokens": usage_stats.get(
                 "cache_read_input_tokens", 0
             ),
@@ -501,13 +503,13 @@ class WrappedEmbeddings:
         end_time = time.time()
 
         # Extract usage statistics if available
-        usage_stats = {}
+        usage_stats: TokenUsage = TokenUsage()
 
         if hasattr(response, "usage") and response.usage:
-            usage_stats = {
-                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                "total_tokens": getattr(response.usage, "total_tokens", 0),
-            }
+            usage_stats = TokenUsage(
+                input_tokens=getattr(response.usage, "prompt_tokens", 0),
+                output_tokens=getattr(response.usage, "completion_tokens", 0),
+            )
 
         latency = end_time - start_time
 
@@ -521,7 +523,7 @@ class WrappedEmbeddings:
                 sanitize_openai_response(kwargs.get("input")),
             ),
             "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
+            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),

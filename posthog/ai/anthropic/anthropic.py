@@ -10,7 +10,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from posthog.ai.types import StreamingContentBlock, ToolInProgress
+from posthog.ai.types import StreamingContentBlock, TokenUsage, ToolInProgress
 from posthog.ai.utils import (
     call_llm_and_track_usage,
     merge_usage_stats,
@@ -126,7 +126,7 @@ class WrappedMessages(Messages):
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
         accumulated_content = ""
         content_blocks: List[StreamingContentBlock] = []
         tools_in_progress: Dict[str, ToolInProgress] = {}
@@ -210,14 +210,13 @@ class WrappedMessages(Messages):
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         content_blocks: List[StreamingContentBlock],
         accumulated_content: str,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.anthropic.anthropic_converter import (
-            standardize_anthropic_usage,
             format_anthropic_streaming_input,
             format_anthropic_streaming_output_complete,
         )
@@ -236,7 +235,7 @@ class WrappedMessages(Messages):
             formatted_output=format_anthropic_streaming_output_complete(
                 content_blocks, accumulated_content
             ),
-            usage_stats=standardize_anthropic_usage(usage_stats),
+            usage_stats=usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,

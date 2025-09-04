@@ -2,9 +2,8 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Optional
 
-
 from posthog.client import Client as PostHogClient
-from posthog.ai.types import StreamingEventData, StreamingUsageStats
+from posthog.ai.types import StreamingEventData, TokenUsage
 from posthog.ai.sanitization import (
     sanitize_openai,
     sanitize_anthropic,
@@ -14,7 +13,7 @@ from posthog.ai.sanitization import (
 
 
 def merge_usage_stats(
-    target: Dict[str, int], source: StreamingUsageStats, mode: str = "incremental"
+    target: TokenUsage, source: TokenUsage, mode: str = "incremental"
 ) -> None:
     """
     Merge streaming usage statistics into target dict, handling None values.
@@ -25,19 +24,49 @@ def merge_usage_stats(
 
     Args:
         target: Dictionary to update with usage stats
-        source: StreamingUsageStats that may contain None values
+        source: TokenUsage that may contain None values
         mode: Either "incremental" or "cumulative"
     """
     if mode == "incremental":
         # Add new values to existing totals
-        for key, value in source.items():
-            if value is not None and isinstance(value, int):
-                target[key] = target.get(key, 0) + value
+        source_input = source.get("input_tokens")
+        if source_input is not None:
+            current = target.get("input_tokens") or 0
+            target["input_tokens"] = current + source_input
+
+        source_output = source.get("output_tokens")
+        if source_output is not None:
+            current = target.get("output_tokens") or 0
+            target["output_tokens"] = current + source_output
+
+        source_cache_read = source.get("cache_read_input_tokens")
+        if source_cache_read is not None:
+            current = target.get("cache_read_input_tokens") or 0
+            target["cache_read_input_tokens"] = current + source_cache_read
+
+        source_cache_creation = source.get("cache_creation_input_tokens")
+        if source_cache_creation is not None:
+            current = target.get("cache_creation_input_tokens") or 0
+            target["cache_creation_input_tokens"] = current + source_cache_creation
+
+        source_reasoning = source.get("reasoning_tokens")
+        if source_reasoning is not None:
+            current = target.get("reasoning_tokens") or 0
+            target["reasoning_tokens"] = current + source_reasoning
     elif mode == "cumulative":
         # Replace with latest values (already cumulative)
-        for key, value in source.items():
-            if value is not None and isinstance(value, int):
-                target[key] = value
+        if source.get("input_tokens") is not None:
+            target["input_tokens"] = source["input_tokens"]
+        if source.get("output_tokens") is not None:
+            target["output_tokens"] = source["output_tokens"]
+        if source.get("cache_read_input_tokens") is not None:
+            target["cache_read_input_tokens"] = source["cache_read_input_tokens"]
+        if source.get("cache_creation_input_tokens") is not None:
+            target["cache_creation_input_tokens"] = source[
+                "cache_creation_input_tokens"
+            ]
+        if source.get("reasoning_tokens") is not None:
+            target["reasoning_tokens"] = source["reasoning_tokens"]
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
 
@@ -64,74 +93,31 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return model_params
 
 
-def get_usage(response, provider: str) -> Dict[str, Any]:
+def get_usage(response, provider: str) -> TokenUsage:
+    """
+    Extract usage statistics from response based on provider.
+    Delegates to provider-specific converter functions.
+    """
     if provider == "anthropic":
-        return {
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-            "cache_read_input_tokens": response.usage.cache_read_input_tokens,
-            "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
-        }
+        from posthog.ai.anthropic.anthropic_converter import (
+            extract_anthropic_usage_from_response,
+        )
+
+        return extract_anthropic_usage_from_response(response)
     elif provider == "openai":
-        cached_tokens = 0
-        input_tokens = 0
-        output_tokens = 0
-        reasoning_tokens = 0
+        from posthog.ai.openai.openai_converter import (
+            extract_openai_usage_from_response,
+        )
 
-        # responses api
-        if hasattr(response.usage, "input_tokens"):
-            input_tokens = response.usage.input_tokens
-        if hasattr(response.usage, "output_tokens"):
-            output_tokens = response.usage.output_tokens
-        if hasattr(response.usage, "input_tokens_details") and hasattr(
-            response.usage.input_tokens_details, "cached_tokens"
-        ):
-            cached_tokens = response.usage.input_tokens_details.cached_tokens
-        if hasattr(response.usage, "output_tokens_details") and hasattr(
-            response.usage.output_tokens_details, "reasoning_tokens"
-        ):
-            reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
-
-        # chat completions
-        if hasattr(response.usage, "prompt_tokens"):
-            input_tokens = response.usage.prompt_tokens
-        if hasattr(response.usage, "completion_tokens"):
-            output_tokens = response.usage.completion_tokens
-        if hasattr(response.usage, "prompt_tokens_details") and hasattr(
-            response.usage.prompt_tokens_details, "cached_tokens"
-        ):
-            cached_tokens = response.usage.prompt_tokens_details.cached_tokens
-
-        return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_read_input_tokens": cached_tokens,
-            "reasoning_tokens": reasoning_tokens,
-        }
+        return extract_openai_usage_from_response(response)
     elif provider == "gemini":
-        input_tokens = 0
-        output_tokens = 0
+        from posthog.ai.gemini.gemini_converter import (
+            extract_gemini_usage_from_response,
+        )
 
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
-            output_tokens = getattr(
-                response.usage_metadata, "candidates_token_count", 0
-            )
+        return extract_gemini_usage_from_response(response)
 
-        return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "reasoning_tokens": 0,
-        }
-    return {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_tokens": 0,
-    }
+    return TokenUsage(input_tokens=0, output_tokens=0)
 
 
 def format_response(response, provider: str):
@@ -169,6 +155,7 @@ def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
         from posthog.ai.openai.openai_converter import extract_openai_tools
 
         return extract_openai_tools(kwargs)
+    return None
 
 
 def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
@@ -187,9 +174,9 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         contents = kwargs.get("contents", [])
         return format_gemini_input(contents)
     elif provider == "openai":
-        # For OpenAI, handle both Chat Completions and Responses API
         from posthog.ai.openai.openai_converter import format_openai_input
 
+        # For OpenAI, handle both Chat Completions and Responses API
         messages_param = kwargs.get("messages")
         input_param = kwargs.get("input")
 
@@ -250,7 +237,7 @@ def call_llm_and_track_usage(
     response = None
     error = None
     http_status = 200
-    usage: Dict[str, Any] = {}
+    usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
     try:
@@ -305,27 +292,17 @@ def call_llm_and_track_usage(
         if available_tool_calls:
             event_properties["$ai_tools"] = available_tool_calls
 
-        if (
-            usage.get("cache_read_input_tokens") is not None
-            and usage.get("cache_read_input_tokens", 0) > 0
-        ):
-            event_properties["$ai_cache_read_input_tokens"] = usage.get(
-                "cache_read_input_tokens", 0
-            )
+        cache_read = usage.get("cache_read_input_tokens")
+        if cache_read is not None and cache_read > 0:
+            event_properties["$ai_cache_read_input_tokens"] = cache_read
 
-        if (
-            usage.get("cache_creation_input_tokens") is not None
-            and usage.get("cache_creation_input_tokens", 0) > 0
-        ):
-            event_properties["$ai_cache_creation_input_tokens"] = usage.get(
-                "cache_creation_input_tokens", 0
-            )
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if cache_creation is not None and cache_creation > 0:
+            event_properties["$ai_cache_creation_input_tokens"] = cache_creation
 
-        if (
-            usage.get("reasoning_tokens") is not None
-            and usage.get("reasoning_tokens", 0) > 0
-        ):
-            event_properties["$ai_reasoning_tokens"] = usage.get("reasoning_tokens", 0)
+        reasoning = usage.get("reasoning_tokens")
+        if reasoning is not None and reasoning > 0:
+            event_properties["$ai_reasoning_tokens"] = reasoning
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -367,7 +344,7 @@ async def call_llm_and_track_usage_async(
     response = None
     error = None
     http_status = 200
-    usage: Dict[str, Any] = {}
+    usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
     try:
@@ -422,21 +399,13 @@ async def call_llm_and_track_usage_async(
         if available_tool_calls:
             event_properties["$ai_tools"] = available_tool_calls
 
-        if (
-            usage.get("cache_read_input_tokens") is not None
-            and usage.get("cache_read_input_tokens", 0) > 0
-        ):
-            event_properties["$ai_cache_read_input_tokens"] = usage.get(
-                "cache_read_input_tokens", 0
-            )
+        cache_read = usage.get("cache_read_input_tokens")
+        if cache_read is not None and cache_read > 0:
+            event_properties["$ai_cache_read_input_tokens"] = cache_read
 
-        if (
-            usage.get("cache_creation_input_tokens") is not None
-            and usage.get("cache_creation_input_tokens", 0) > 0
-        ):
-            event_properties["$ai_cache_creation_input_tokens"] = usage.get(
-                "cache_creation_input_tokens", 0
-            )
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if cache_creation is not None and cache_creation > 0:
+            event_properties["$ai_cache_creation_input_tokens"] = cache_creation
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False

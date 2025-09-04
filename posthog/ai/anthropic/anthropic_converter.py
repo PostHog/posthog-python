@@ -14,7 +14,6 @@ from posthog.ai.types import (
     FormattedMessage,
     FormattedTextContent,
     StreamingContentBlock,
-    StreamingUsageStats,
     TokenUsage,
     ToolInProgress,
 )
@@ -164,7 +163,38 @@ def format_anthropic_streaming_content(
     return formatted
 
 
-def extract_anthropic_usage_from_event(event: Any) -> StreamingUsageStats:
+def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
+    """
+    Extract usage from a full Anthropic response (non-streaming).
+
+    Args:
+        response: The complete response from Anthropic API
+
+    Returns:
+        TokenUsage with standardized usage
+    """
+    if not hasattr(response, "usage"):
+        return TokenUsage(input_tokens=0, output_tokens=0)
+
+    result = TokenUsage(
+        input_tokens=getattr(response.usage, "input_tokens", 0),
+        output_tokens=getattr(response.usage, "output_tokens", 0),
+    )
+
+    if hasattr(response.usage, "cache_read_input_tokens"):
+        cache_read = response.usage.cache_read_input_tokens
+        if cache_read and cache_read > 0:
+            result["cache_read_input_tokens"] = cache_read
+
+    if hasattr(response.usage, "cache_creation_input_tokens"):
+        cache_creation = response.usage.cache_creation_input_tokens
+        if cache_creation and cache_creation > 0:
+            result["cache_creation_input_tokens"] = cache_creation
+
+    return result
+
+
+def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
     """
     Extract usage statistics from an Anthropic streaming event.
 
@@ -175,7 +205,7 @@ def extract_anthropic_usage_from_event(event: Any) -> StreamingUsageStats:
         Dictionary of usage statistics
     """
 
-    usage: StreamingUsageStats = {}
+    usage: TokenUsage = TokenUsage()
 
     # Handle usage stats from message_start event
     if hasattr(event, "type") and event.type == "message_start":
@@ -327,26 +357,6 @@ def finalize_anthropic_tool_input(
                 pass
 
             del tools_in_progress[block["id"]]
-
-
-def standardize_anthropic_usage(usage: Dict[str, Any]) -> TokenUsage:
-    """
-    Standardize Anthropic usage statistics to common TokenUsage format.
-
-    Anthropic already uses standard field names, so this mainly structures the data.
-
-    Args:
-        usage: Raw usage statistics from Anthropic
-
-    Returns:
-        Standardized TokenUsage dict
-    """
-    return TokenUsage(
-        input_tokens=usage.get("input_tokens", 0),
-        output_tokens=usage.get("output_tokens", 0),
-        cache_read_input_tokens=usage.get("cache_read_input_tokens"),
-        cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
-    )
 
 
 def format_anthropic_streaming_input(kwargs: Dict[str, Any]) -> Any:

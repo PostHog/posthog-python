@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from posthog.ai.types import TokenUsage
+
 try:
     import openai
 except ImportError:
@@ -120,7 +122,7 @@ class WrappedResponses:
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {}
+        usage_stats: TokenUsage = TokenUsage()
         final_content = []
         response = self._original.create(**kwargs)
 
@@ -171,14 +173,13 @@ class WrappedResponses:
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.openai.openai_converter import (
-            standardize_openai_usage,
             format_openai_streaming_input,
             format_openai_streaming_output,
         )
@@ -195,7 +196,7 @@ class WrappedResponses:
             kwargs=kwargs,
             formatted_input=sanitized_input,
             formatted_output=format_openai_streaming_output(output, "responses"),
-            usage_stats=standardize_openai_usage(usage_stats, "responses"),
+            usage_stats=usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
@@ -316,7 +317,7 @@ class WrappedCompletions:
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {}
+        usage_stats: TokenUsage = TokenUsage()
         accumulated_content = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
         if "stream_options" not in kwargs:
@@ -387,7 +388,7 @@ class WrappedCompletions:
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
@@ -395,7 +396,6 @@ class WrappedCompletions:
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.openai.openai_converter import (
-            standardize_openai_usage,
             format_openai_streaming_input,
             format_openai_streaming_output,
         )
@@ -412,7 +412,7 @@ class WrappedCompletions:
             kwargs=kwargs,
             formatted_input=sanitized_input,
             formatted_output=format_openai_streaming_output(output, "chat", tool_calls),
-            usage_stats=standardize_openai_usage(usage_stats, "chat"),
+            usage_stats=usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,

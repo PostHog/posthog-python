@@ -14,7 +14,6 @@ from posthog.ai.types import (
     FormattedImageContent,
     FormattedMessage,
     FormattedTextContent,
-    StreamingUsageStats,
     TokenUsage,
 )
 
@@ -256,9 +255,69 @@ def format_openai_streaming_content(
     return formatted
 
 
+def extract_openai_usage_from_response(response: Any) -> TokenUsage:
+    """
+    Extract usage statistics from a full OpenAI response (non-streaming).
+    Handles both Chat Completions and Responses API.
+
+    Args:
+        response: The complete response from OpenAI API
+
+    Returns:
+        TokenUsage with standardized usage statistics
+    """
+    if not hasattr(response, "usage"):
+        return TokenUsage(input_tokens=0, output_tokens=0)
+
+    cached_tokens = 0
+    input_tokens = 0
+    output_tokens = 0
+    reasoning_tokens = 0
+
+    # Responses API format
+    if hasattr(response.usage, "input_tokens"):
+        input_tokens = response.usage.input_tokens
+    if hasattr(response.usage, "output_tokens"):
+        output_tokens = response.usage.output_tokens
+    if hasattr(response.usage, "input_tokens_details") and hasattr(
+        response.usage.input_tokens_details, "cached_tokens"
+    ):
+        cached_tokens = response.usage.input_tokens_details.cached_tokens
+    if hasattr(response.usage, "output_tokens_details") and hasattr(
+        response.usage.output_tokens_details, "reasoning_tokens"
+    ):
+        reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
+
+    # Chat Completions format
+    if hasattr(response.usage, "prompt_tokens"):
+        input_tokens = response.usage.prompt_tokens
+    if hasattr(response.usage, "completion_tokens"):
+        output_tokens = response.usage.completion_tokens
+    if hasattr(response.usage, "prompt_tokens_details") and hasattr(
+        response.usage.prompt_tokens_details, "cached_tokens"
+    ):
+        cached_tokens = response.usage.prompt_tokens_details.cached_tokens
+    if hasattr(response.usage, "completion_tokens_details") and hasattr(
+        response.usage.completion_tokens_details, "reasoning_tokens"
+    ):
+        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+
+    result = TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+    if cached_tokens > 0:
+        result["cache_read_input_tokens"] = cached_tokens
+    if reasoning_tokens > 0:
+        result["reasoning_tokens"] = reasoning_tokens
+
+    return result
+
+
 def extract_openai_usage_from_chunk(
     chunk: Any, provider_type: str = "chat"
-) -> StreamingUsageStats:
+) -> TokenUsage:
     """
     Extract usage statistics from an OpenAI streaming chunk.
 
@@ -272,16 +331,16 @@ def extract_openai_usage_from_chunk(
         Dictionary of usage statistics
     """
 
-    usage: StreamingUsageStats = {}
+    usage: TokenUsage = TokenUsage()
 
     if provider_type == "chat":
         if not hasattr(chunk, "usage") or not chunk.usage:
             return usage
 
         # Chat Completions API uses prompt_tokens and completion_tokens
-        usage["prompt_tokens"] = getattr(chunk.usage, "prompt_tokens", 0)
-        usage["completion_tokens"] = getattr(chunk.usage, "completion_tokens", 0)
-        usage["total_tokens"] = getattr(chunk.usage, "total_tokens", 0)
+        # Standardize to input_tokens and output_tokens
+        usage["input_tokens"] = getattr(chunk.usage, "prompt_tokens", 0)
+        usage["output_tokens"] = getattr(chunk.usage, "completion_tokens", 0)
 
         # Handle cached tokens
         if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
@@ -310,7 +369,6 @@ def extract_openai_usage_from_chunk(
                 response_usage = chunk.response.usage
                 usage["input_tokens"] = getattr(response_usage, "input_tokens", 0)
                 usage["output_tokens"] = getattr(response_usage, "output_tokens", 0)
-                usage["total_tokens"] = getattr(response_usage, "total_tokens", 0)
 
                 # Handle cached tokens
                 if hasattr(response_usage, "input_tokens_details") and hasattr(
@@ -533,37 +591,6 @@ def format_openai_streaming_output(
             "content": [{"type": "text", "text": str(accumulated_content)}],
         }
     ]
-
-
-def standardize_openai_usage(
-    usage: Dict[str, Any], api_type: str = "chat"
-) -> TokenUsage:
-    """
-    Standardize OpenAI usage statistics to common TokenUsage format.
-
-    Args:
-        usage: Raw usage statistics from OpenAI
-        api_type: Either "chat" or "responses" to handle different field names
-
-    Returns:
-        Standardized TokenUsage dict
-    """
-    if api_type == "chat":
-        # Chat API uses prompt_tokens/completion_tokens
-        return TokenUsage(
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            cache_read_input_tokens=usage.get("cache_read_input_tokens"),
-            reasoning_tokens=usage.get("reasoning_tokens"),
-        )
-    else:  # responses API
-        # Responses API uses input_tokens/output_tokens
-        return TokenUsage(
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            cache_read_input_tokens=usage.get("cache_read_input_tokens"),
-            reasoning_tokens=usage.get("reasoning_tokens"),
-        )
 
 
 def format_openai_streaming_input(

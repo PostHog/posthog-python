@@ -1,3 +1,7 @@
+# 6.7.3 - 2025-09-04
+
+- fix: missing usage tokens in Gemini
+
 # 6.7.2 - 2025-09-03
 
 - fix: tool call results in streaming providers

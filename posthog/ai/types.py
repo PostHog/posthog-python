@@ -77,24 +77,6 @@ class ProviderResponse(TypedDict, total=False):
     error: Optional[str]
 
 
-class StreamingUsageStats(TypedDict, total=False):
-    """
-    Usage statistics collected during streaming.
-
-    Different providers populate different fields during streaming.
-    """
-
-    input_tokens: int
-    output_tokens: int
-    cache_read_input_tokens: Optional[int]
-    cache_creation_input_tokens: Optional[int]
-    reasoning_tokens: Optional[int]
-    # OpenAI-specific names
-    prompt_tokens: Optional[int]
-    completion_tokens: Optional[int]
-    total_tokens: Optional[int]
-
-
 class StreamingContentBlock(TypedDict, total=False):
     """
     Content block used during streaming to accumulate content.
@@ -133,7 +115,7 @@ class StreamingEventData(TypedDict):
     kwargs: Dict[str, Any]  # Original kwargs for tool extraction and special handling
     formatted_input: Any  # Provider-formatted input ready for tracking
     formatted_output: Any  # Provider-formatted output ready for tracking
-    usage_stats: TokenUsage  # Standardized token counts
+    usage_stats: TokenUsage
     latency: float
     distinct_id: Optional[str]
     trace_id: Optional[str]

@@ -11,7 +11,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from posthog import setup
-from posthog.ai.types import StreamingContentBlock, ToolInProgress
+from posthog.ai.types import StreamingContentBlock, TokenUsage, ToolInProgress
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     extract_available_tool_calls,
@@ -131,7 +131,7 @@ class AsyncWrappedMessages(AsyncMessages):
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
         accumulated_content = ""
         content_blocks: List[StreamingContentBlock] = []
         tools_in_progress: Dict[str, ToolInProgress] = {}
@@ -215,7 +215,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         content_blocks: List[StreamingContentBlock],
         accumulated_content: str,
