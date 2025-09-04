@@ -12,8 +12,6 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-
 # Skip all tests if Anthropic is not available
 pytestmark = pytest.mark.skipif(
     not ANTHROPIC_AVAILABLE, reason="Anthropic package is not available"
@@ -373,7 +371,6 @@ def test_privacy_mode_global(mock_client, mock_anthropic_response):
         assert props["$ai_output_choices"] is None
 
 
-@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 def test_basic_integration(mock_client):
     """Test basic non-streaming integration."""
 
@@ -415,7 +412,6 @@ def test_basic_integration(mock_client):
     assert isinstance(props["$ai_latency"], float)
 
 
-@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 async def test_basic_async_integration(mock_client):
     """Test async non-streaming integration."""
 
@@ -459,7 +455,6 @@ async def test_basic_async_integration(mock_client):
     assert isinstance(props["$ai_latency"], float)
 
 
-@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
 async def test_async_streaming_system_prompt(mock_client):
     """Test async streaming with system prompt."""
 

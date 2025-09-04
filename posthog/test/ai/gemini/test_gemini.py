@@ -31,6 +31,9 @@ def mock_gemini_response():
     mock_usage = MagicMock()
     mock_usage.prompt_token_count = 20
     mock_usage.candidates_token_count = 10
+    # Ensure cache and reasoning tokens are not present (not MagicMock)
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
     mock_response.usage_metadata = mock_usage
 
     mock_candidate = MagicMock()
@@ -64,6 +67,8 @@ def mock_gemini_response_with_function_calls():
     mock_usage = MagicMock()
     mock_usage.prompt_token_count = 25
     mock_usage.candidates_token_count = 15
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
     mock_response.usage_metadata = mock_usage
 
     # Mock function call
@@ -110,6 +115,8 @@ def mock_gemini_response_function_calls_only():
     mock_usage = MagicMock()
     mock_usage.prompt_token_count = 30
     mock_usage.candidates_token_count = 12
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
     mock_response.usage_metadata = mock_usage
 
     # Mock function call
@@ -180,6 +187,8 @@ def test_new_client_streaming_with_generate_content_stream(
         mock_usage1 = MagicMock()
         mock_usage1.prompt_token_count = 10
         mock_usage1.candidates_token_count = 5
+        mock_usage1.cached_content_token_count = 0
+        mock_usage1.thoughts_token_count = 0
         mock_chunk1.usage_metadata = mock_usage1
 
         mock_chunk2 = MagicMock()
@@ -187,6 +196,8 @@ def test_new_client_streaming_with_generate_content_stream(
         mock_usage2 = MagicMock()
         mock_usage2.prompt_token_count = 10
         mock_usage2.candidates_token_count = 10
+        mock_usage2.cached_content_token_count = 0
+        mock_usage2.thoughts_token_count = 0
         mock_chunk2.usage_metadata = mock_usage2
 
         yield mock_chunk1
@@ -235,6 +246,8 @@ def test_new_client_streaming_with_tools(mock_client, mock_google_genai_client):
         mock_usage1 = MagicMock()
         mock_usage1.prompt_token_count = 15
         mock_usage1.candidates_token_count = 5
+        mock_usage1.cached_content_token_count = 0
+        mock_usage1.thoughts_token_count = 0
         mock_chunk1.usage_metadata = mock_usage1
 
         mock_chunk2 = MagicMock()
@@ -242,6 +255,8 @@ def test_new_client_streaming_with_tools(mock_client, mock_google_genai_client):
         mock_usage2 = MagicMock()
         mock_usage2.prompt_token_count = 15
         mock_usage2.candidates_token_count = 10
+        mock_usage2.cached_content_token_count = 0
+        mock_usage2.thoughts_token_count = 0
         mock_chunk2.usage_metadata = mock_usage2
 
         yield mock_chunk1
@@ -730,3 +745,93 @@ def test_function_calls_only_no_content(
     assert props["$ai_input_tokens"] == 30
     assert props["$ai_output_tokens"] == 12
     assert props["$ai_http_status"] == 200
+
+
+def test_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
+    """Test that cache and reasoning tokens are properly extracted"""
+    # Create a mock response with cache and reasoning tokens
+    mock_response = MagicMock()
+    mock_response.text = "Test response with cache"
+    
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 100
+    mock_usage.candidates_token_count = 50
+    mock_usage.cached_content_token_count = 30  # Cache tokens
+    mock_usage.thoughts_token_count = 10  # Reasoning tokens
+    mock_response.usage_metadata = mock_usage
+    
+    # Mock candidates
+    mock_candidate = MagicMock()
+    mock_candidate.text = "Test response with cache"
+    mock_response.candidates = [mock_candidate]
+    
+    mock_google_genai_client.models.generate_content.return_value = mock_response
+    
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    
+    response = client.models.generate_content(
+        model="gemini-2.5-pro", 
+        contents="Test with cache",
+        posthog_distinct_id="test-id"
+    )
+    
+    assert response == mock_response
+    assert mock_client.capture.call_count == 1
+    
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    
+    # Check that all token types are present
+    assert props["$ai_input_tokens"] == 100
+    assert props["$ai_output_tokens"] == 50
+    assert props["$ai_cache_read_input_tokens"] == 30
+    assert props["$ai_reasoning_tokens"] == 10
+
+
+def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
+    """Test that cache and reasoning tokens are properly extracted in streaming"""
+    # Create mock chunks with cache and reasoning tokens
+    chunk1 = MagicMock()
+    chunk1.text = "Hello "
+    chunk1_usage = MagicMock()
+    chunk1_usage.prompt_token_count = 100
+    chunk1_usage.candidates_token_count = 5
+    chunk1_usage.cached_content_token_count = 30  # Cache tokens
+    chunk1_usage.thoughts_token_count = 0
+    chunk1.usage_metadata = chunk1_usage
+    
+    chunk2 = MagicMock()
+    chunk2.text = "world!"
+    chunk2_usage = MagicMock()
+    chunk2_usage.prompt_token_count = 100
+    chunk2_usage.candidates_token_count = 10
+    chunk2_usage.cached_content_token_count = 30  # Same cache tokens
+    chunk2_usage.thoughts_token_count = 5  # Reasoning tokens
+    chunk2.usage_metadata = chunk2_usage
+    
+    mock_stream = iter([chunk1, chunk2])
+    mock_google_genai_client.models.generate_content_stream.return_value = mock_stream
+    
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    
+    response = client.models.generate_content_stream(
+        model="gemini-2.5-pro",
+        contents="Test streaming with cache",
+        posthog_distinct_id="test-id"
+    )
+    
+    # Consume the stream
+    result = list(response)
+    assert len(result) == 2
+    
+    # Check PostHog capture was called
+    assert mock_client.capture.call_count == 1
+    
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    
+    # Check that all token types are present (should use final chunk's usage)
+    assert props["$ai_input_tokens"] == 100
+    assert props["$ai_output_tokens"] == 10
+    assert props["$ai_cache_read_input_tokens"] == 30
+    assert props["$ai_reasoning_tokens"] == 5

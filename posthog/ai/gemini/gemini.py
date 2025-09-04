@@ -3,6 +3,8 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
+from posthog.ai.types import TokenUsage
+
 try:
     from google import genai
 except ImportError:
@@ -294,7 +296,7 @@ class Models:
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
         accumulated_content = []
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
@@ -350,12 +352,11 @@ class Models:
         privacy_mode: bool,
         groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: Dict[str, int],
+        usage_stats: TokenUsage,
         latency: float,
         output: Any,
     ):
         from posthog.ai.types import StreamingEventData
-        from posthog.ai.gemini.gemini_converter import standardize_gemini_usage
 
         # Prepare standardized event data
         formatted_input = self._format_input(contents)
@@ -368,7 +369,7 @@ class Models:
             kwargs=kwargs,
             formatted_input=sanitized_input,
             formatted_output=format_gemini_streaming_output(output),
-            usage_stats=standardize_gemini_usage(usage_stats),
+            usage_stats=usage_stats,
             latency=latency,
             distinct_id=distinct_id,
             trace_id=trace_id,
