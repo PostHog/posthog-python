@@ -77,8 +77,6 @@ class ProviderResponse(TypedDict, total=False):
     error: Optional[str]
 
 
-
-
 class StreamingContentBlock(TypedDict, total=False):
     """
     Content block used during streaming to accumulate content.

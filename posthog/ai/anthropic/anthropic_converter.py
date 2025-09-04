@@ -166,31 +166,31 @@ def format_anthropic_streaming_content(
 def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage from a full Anthropic response (non-streaming).
-    
+
     Args:
         response: The complete response from Anthropic API
-    
+
     Returns:
         TokenUsage with standardized usage
     """
     if not hasattr(response, "usage"):
         return TokenUsage(input_tokens=0, output_tokens=0)
-    
+
     result = TokenUsage(
         input_tokens=getattr(response.usage, "input_tokens", 0),
         output_tokens=getattr(response.usage, "output_tokens", 0),
     )
-    
+
     if hasattr(response.usage, "cache_read_input_tokens"):
         cache_read = response.usage.cache_read_input_tokens
         if cache_read and cache_read > 0:
             result["cache_read_input_tokens"] = cache_read
-    
+
     if hasattr(response.usage, "cache_creation_input_tokens"):
         cache_creation = response.usage.cache_creation_input_tokens
         if cache_creation and cache_creation > 0:
             result["cache_creation_input_tokens"] = cache_creation
-    
+
     return result
 
 
@@ -359,8 +359,6 @@ def finalize_anthropic_tool_input(
             del tools_in_progress[block["id"]]
 
 
-
-
 def format_anthropic_streaming_input(kwargs: Dict[str, Any]) -> Any:
     """
     Format Anthropic streaming input using system prompt merging.
@@ -372,6 +370,7 @@ def format_anthropic_streaming_input(kwargs: Dict[str, Any]) -> Any:
         Formatted input ready for PostHog tracking
     """
     from posthog.ai.utils import merge_system_prompt
+
     return merge_system_prompt(kwargs, "anthropic")
 
 

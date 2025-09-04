@@ -286,10 +286,10 @@ def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
     """
     Common logic to extract usage from Gemini metadata.
     Used by both streaming and non-streaming paths.
-    
+
     Args:
         metadata: usage_metadata from Gemini response or chunk
-    
+
     Returns:
         TokenUsage with standardized usage
     """
@@ -297,35 +297,35 @@ def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
         input_tokens=getattr(metadata, "prompt_token_count", 0),
         output_tokens=getattr(metadata, "candidates_token_count", 0),
     )
-    
+
     # Add cache tokens if present (don't add if 0)
     if hasattr(metadata, "cached_content_token_count"):
         cache_tokens = metadata.cached_content_token_count
         if cache_tokens and cache_tokens > 0:
             usage["cache_read_input_tokens"] = cache_tokens
-    
+
     # Add reasoning tokens if present (don't add if 0)
     if hasattr(metadata, "thoughts_token_count"):
         reasoning_tokens = metadata.thoughts_token_count
         if reasoning_tokens and reasoning_tokens > 0:
             usage["reasoning_tokens"] = reasoning_tokens
-    
+
     return usage
 
 
 def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage statistics from a full Gemini response (non-streaming).
-    
+
     Args:
         response: The complete response from Gemini API
-    
+
     Returns:
         TokenUsage with standardized usage statistics
     """
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
         return TokenUsage(input_tokens=0, output_tokens=0)
-    
+
     return _extract_usage_from_metadata(response.usage_metadata)
 
 
@@ -347,7 +347,6 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
 
     # Use the shared helper to extract usage
     usage = _extract_usage_from_metadata(chunk.usage_metadata)
-    
 
     return usage
 
@@ -459,5 +458,3 @@ def format_gemini_streaming_output(
 
     # Fallback for empty or unexpected input
     return [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
-
-

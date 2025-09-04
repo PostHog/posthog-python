@@ -33,22 +33,22 @@ def merge_usage_stats(
         if source_input is not None:
             current = target.get("input_tokens") or 0
             target["input_tokens"] = current + source_input
-        
+
         source_output = source.get("output_tokens")
         if source_output is not None:
             current = target.get("output_tokens") or 0
             target["output_tokens"] = current + source_output
-        
+
         source_cache_read = source.get("cache_read_input_tokens")
         if source_cache_read is not None:
             current = target.get("cache_read_input_tokens") or 0
             target["cache_read_input_tokens"] = current + source_cache_read
-        
+
         source_cache_creation = source.get("cache_creation_input_tokens")
         if source_cache_creation is not None:
             current = target.get("cache_creation_input_tokens") or 0
             target["cache_creation_input_tokens"] = current + source_cache_creation
-        
+
         source_reasoning = source.get("reasoning_tokens")
         if source_reasoning is not None:
             current = target.get("reasoning_tokens") or 0
@@ -62,7 +62,9 @@ def merge_usage_stats(
         if source.get("cache_read_input_tokens") is not None:
             target["cache_read_input_tokens"] = source["cache_read_input_tokens"]
         if source.get("cache_creation_input_tokens") is not None:
-            target["cache_creation_input_tokens"] = source["cache_creation_input_tokens"]
+            target["cache_creation_input_tokens"] = source[
+                "cache_creation_input_tokens"
+            ]
         if source.get("reasoning_tokens") is not None:
             target["reasoning_tokens"] = source["reasoning_tokens"]
     else:
@@ -97,15 +99,24 @@ def get_usage(response, provider: str) -> TokenUsage:
     Delegates to provider-specific converter functions.
     """
     if provider == "anthropic":
-        from posthog.ai.anthropic.anthropic_converter import extract_anthropic_usage_from_response
+        from posthog.ai.anthropic.anthropic_converter import (
+            extract_anthropic_usage_from_response,
+        )
+
         return extract_anthropic_usage_from_response(response)
     elif provider == "openai":
-        from posthog.ai.openai.openai_converter import extract_openai_usage_from_response
+        from posthog.ai.openai.openai_converter import (
+            extract_openai_usage_from_response,
+        )
+
         return extract_openai_usage_from_response(response)
     elif provider == "gemini":
-        from posthog.ai.gemini.gemini_converter import extract_gemini_usage_from_response
+        from posthog.ai.gemini.gemini_converter import (
+            extract_gemini_usage_from_response,
+        )
+
         return extract_gemini_usage_from_response(response)
-    
+
     return TokenUsage(input_tokens=0, output_tokens=0)
 
 
@@ -115,12 +126,15 @@ def format_response(response, provider: str):
     """
     if provider == "anthropic":
         from posthog.ai.anthropic.anthropic_converter import format_anthropic_response
+
         return format_anthropic_response(response)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import format_openai_response
+
         return format_openai_response(response)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import format_gemini_response
+
         return format_gemini_response(response)
     return []
 
@@ -131,12 +145,15 @@ def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     """
     if provider == "anthropic":
         from posthog.ai.anthropic.anthropic_converter import extract_anthropic_tools
+
         return extract_anthropic_tools(kwargs)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import extract_gemini_tools
+
         return extract_gemini_tools(kwargs)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import extract_openai_tools
+
         return extract_openai_tools(kwargs)
     return None
 
@@ -147,15 +164,18 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
     """
     if provider == "anthropic":
         from posthog.ai.anthropic.anthropic_converter import format_anthropic_input
+
         messages = kwargs.get("messages") or []
         system = kwargs.get("system")
         return format_anthropic_input(messages, system)
     elif provider == "gemini":
         from posthog.ai.gemini.gemini_converter import format_gemini_input
+
         contents = kwargs.get("contents", [])
         return format_gemini_input(contents)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import format_openai_input
+
         # For OpenAI, handle both Chat Completions and Responses API
         messages_param = kwargs.get("messages")
         input_param = kwargs.get("input")

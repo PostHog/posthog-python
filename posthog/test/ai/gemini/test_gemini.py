@@ -752,35 +752,35 @@ def test_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
     # Create a mock response with cache and reasoning tokens
     mock_response = MagicMock()
     mock_response.text = "Test response with cache"
-    
+
     mock_usage = MagicMock()
     mock_usage.prompt_token_count = 100
     mock_usage.candidates_token_count = 50
     mock_usage.cached_content_token_count = 30  # Cache tokens
     mock_usage.thoughts_token_count = 10  # Reasoning tokens
     mock_response.usage_metadata = mock_usage
-    
+
     # Mock candidates
     mock_candidate = MagicMock()
     mock_candidate.text = "Test response with cache"
     mock_response.candidates = [mock_candidate]
-    
+
     mock_google_genai_client.models.generate_content.return_value = mock_response
-    
+
     client = Client(api_key="test-key", posthog_client=mock_client)
-    
+
     response = client.models.generate_content(
-        model="gemini-2.5-pro", 
+        model="gemini-2.5-pro",
         contents="Test with cache",
-        posthog_distinct_id="test-id"
+        posthog_distinct_id="test-id",
     )
-    
+
     assert response == mock_response
     assert mock_client.capture.call_count == 1
-    
+
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
-    
+
     # Check that all token types are present
     assert props["$ai_input_tokens"] == 100
     assert props["$ai_output_tokens"] == 50
@@ -799,7 +799,7 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     chunk1_usage.cached_content_token_count = 30  # Cache tokens
     chunk1_usage.thoughts_token_count = 0
     chunk1.usage_metadata = chunk1_usage
-    
+
     chunk2 = MagicMock()
     chunk2.text = "world!"
     chunk2_usage = MagicMock()
@@ -808,28 +808,28 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     chunk2_usage.cached_content_token_count = 30  # Same cache tokens
     chunk2_usage.thoughts_token_count = 5  # Reasoning tokens
     chunk2.usage_metadata = chunk2_usage
-    
+
     mock_stream = iter([chunk1, chunk2])
     mock_google_genai_client.models.generate_content_stream.return_value = mock_stream
-    
+
     client = Client(api_key="test-key", posthog_client=mock_client)
-    
+
     response = client.models.generate_content_stream(
         model="gemini-2.5-pro",
         contents="Test streaming with cache",
-        posthog_distinct_id="test-id"
+        posthog_distinct_id="test-id",
     )
-    
+
     # Consume the stream
     result = list(response)
     assert len(result) == 2
-    
+
     # Check PostHog capture was called
     assert mock_client.capture.call_count == 1
-    
+
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
-    
+
     # Check that all token types are present (should use final chunk's usage)
     assert props["$ai_input_tokens"] == 100
     assert props["$ai_output_tokens"] == 10

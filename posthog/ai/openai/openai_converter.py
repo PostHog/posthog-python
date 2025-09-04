@@ -259,21 +259,21 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage statistics from a full OpenAI response (non-streaming).
     Handles both Chat Completions and Responses API.
-    
+
     Args:
         response: The complete response from OpenAI API
-    
+
     Returns:
         TokenUsage with standardized usage statistics
     """
     if not hasattr(response, "usage"):
         return TokenUsage(input_tokens=0, output_tokens=0)
-    
+
     cached_tokens = 0
     input_tokens = 0
     output_tokens = 0
     reasoning_tokens = 0
-    
+
     # Responses API format
     if hasattr(response.usage, "input_tokens"):
         input_tokens = response.usage.input_tokens
@@ -287,7 +287,7 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
         response.usage.output_tokens_details, "reasoning_tokens"
     ):
         reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
-    
+
     # Chat Completions format
     if hasattr(response.usage, "prompt_tokens"):
         input_tokens = response.usage.prompt_tokens
@@ -301,17 +301,17 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
         response.usage.completion_tokens_details, "reasoning_tokens"
     ):
         reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
-    
+
     result = TokenUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
     )
-    
+
     if cached_tokens > 0:
         result["cache_read_input_tokens"] = cached_tokens
     if reasoning_tokens > 0:
         result["reasoning_tokens"] = reasoning_tokens
-    
+
     return result
 
 
@@ -341,7 +341,6 @@ def extract_openai_usage_from_chunk(
         # Standardize to input_tokens and output_tokens
         usage["input_tokens"] = getattr(chunk.usage, "prompt_tokens", 0)
         usage["output_tokens"] = getattr(chunk.usage, "completion_tokens", 0)
-        
 
         # Handle cached tokens
         if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
@@ -592,8 +591,6 @@ def format_openai_streaming_output(
             "content": [{"type": "text", "text": str(accumulated_content)}],
         }
     ]
-
-
 
 
 def format_openai_streaming_input(
