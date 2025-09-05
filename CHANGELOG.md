@@ -1,3 +1,7 @@
+# 6.7.4 - 2025-09-05
+
+- fix: Missing system prompts for some providers
+
 # 6.7.3 - 2025-09-04
 
 - fix: missing usage tokens in Gemini
