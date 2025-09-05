@@ -616,6 +616,8 @@ def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_re
 
     mock_config = MagicMock()
     mock_config.tools = [mock_tool]
+    # Explicitly specify this config doesn't have system_instruction
+    del mock_config.system_instruction
 
     response = client.models.generate_content(
         model="gemini-2.5-flash",
