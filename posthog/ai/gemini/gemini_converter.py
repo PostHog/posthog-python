@@ -261,7 +261,9 @@ def extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
     return None
 
 
-def format_gemini_input_with_system(contents: Any, config: Any = None) -> List[FormattedMessage]:
+def format_gemini_input_with_system(
+    contents: Any, config: Any = None
+) -> List[FormattedMessage]:
     """
     Format Gemini input contents into standardized message format, including system instruction handling.
 
@@ -273,17 +275,21 @@ def format_gemini_input_with_system(contents: Any, config: Any = None) -> List[F
         List of formatted messages with role and content fields, with system message prepended if needed
     """
     formatted_messages = format_gemini_input(contents)
-    
+
     # Check if system instruction is provided in config parameter
     system_instruction = extract_gemini_system_instruction(config)
-    
+
     if system_instruction is not None:
         has_system = any(msg.get("role") == "system" for msg in formatted_messages)
         if not has_system:
             from posthog.ai.types import FormattedMessage
-            system_message: FormattedMessage = {"role": "system", "content": system_instruction}
+
+            system_message: FormattedMessage = {
+                "role": "system",
+                "content": system_instruction,
+            }
             formatted_messages = [system_message] + list(formatted_messages)
-    
+
     return formatted_messages
 
 
