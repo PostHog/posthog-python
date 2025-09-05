@@ -231,7 +231,7 @@ class TestSystemPromptCapture(unittest.TestCase):
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     def test_gemini_system_instruction_parameter(self):
-        """Test Gemini with system_instruction parameter."""
+        """Test Gemini with system_instruction in config parameter."""
         try:
             from posthog.ai.gemini import Client
         except ImportError:
@@ -256,10 +256,10 @@ class TestSystemPromptCapture(unittest.TestCase):
             client = Client(posthog_client=self.client, api_key="test")
             
             contents = [{"role": "user", "content": self.test_user_message}]
+            config = {"system_instruction": self.test_system_prompt}
             
             client.models.generate_content(
-                model="gemini-2.0-flash", contents=contents,
-                system_instruction=self.test_system_prompt, posthog_distinct_id="test-user"
+                model="gemini-2.0-flash", contents=contents, config=config, posthog_distinct_id="test-user"
             )
 
             self.assertEqual(len(self.client.capture.call_args_list), 1)
