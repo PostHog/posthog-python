@@ -607,5 +607,5 @@ def format_openai_streaming_input(
         Formatted input ready for PostHog tracking
     """
     from posthog.ai.utils import merge_system_prompt
-    
+
     return merge_system_prompt(kwargs, "openai")
