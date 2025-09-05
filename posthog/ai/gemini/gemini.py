@@ -3,7 +3,8 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from posthog.ai.types import TokenUsage
+from posthog.ai.types import TokenUsage, StreamingEventData
+from posthog.ai.utils import merge_system_prompt
 
 try:
     from google import genai
@@ -355,8 +356,6 @@ class Models:
         latency: float,
         output: Any,
     ):
-        from posthog.ai.types import StreamingEventData
-
         # Prepare standardized event data
         formatted_input = self._format_input(contents, **kwargs)
         sanitized_input = sanitize_gemini(formatted_input)
@@ -382,7 +381,6 @@ class Models:
 
     def _format_input(self, contents, **kwargs):
         """Format input contents for PostHog tracking"""
-        from posthog.ai.utils import merge_system_prompt
 
         # Create kwargs dict with contents for merge_system_prompt
         input_kwargs = {"contents": contents, **kwargs}
