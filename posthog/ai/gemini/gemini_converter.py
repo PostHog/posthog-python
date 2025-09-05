@@ -220,6 +220,30 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
     return output
 
 
+def extract_gemini_system_instruction(config: Any) -> Optional[str]:
+    """
+    Extract system instruction from Gemini config parameter.
+
+    Args:
+        config: Config object or dict that may contain system instruction
+
+    Returns:
+        System instruction string if present, None otherwise
+    """
+    if config is None:
+        return None
+
+    # Handle different config formats
+    if hasattr(config, "system_instruction"):
+        return config.system_instruction
+    elif isinstance(config, dict) and "system_instruction" in config:
+        return config["system_instruction"]
+    elif isinstance(config, dict) and "systemInstruction" in config:
+        return config["systemInstruction"]
+
+    return None
+
+
 def extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
     """
     Extract tool definitions from Gemini API kwargs.
@@ -235,6 +259,32 @@ def extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
         return kwargs["config"].tools
 
     return None
+
+
+def format_gemini_input_with_system(contents: Any, config: Any = None) -> List[FormattedMessage]:
+    """
+    Format Gemini input contents into standardized message format, including system instruction handling.
+
+    Args:
+        contents: Input contents in various possible formats
+        config: Config object or dict that may contain system instruction
+
+    Returns:
+        List of formatted messages with role and content fields, with system message prepended if needed
+    """
+    formatted_messages = format_gemini_input(contents)
+    
+    # Check if system instruction is provided in config parameter
+    system_instruction = extract_gemini_system_instruction(config)
+    
+    if system_instruction is not None:
+        has_system = any(msg.get("role") == "system" for msg in formatted_messages)
+        if not has_system:
+            from posthog.ai.types import FormattedMessage
+            system_message: FormattedMessage = {"role": "system", "content": system_instruction}
+            formatted_messages = [system_message] + list(formatted_messages)
+    
+    return formatted_messages
 
 
 def format_gemini_input(contents: Any) -> List[FormattedMessage]:

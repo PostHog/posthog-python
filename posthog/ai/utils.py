@@ -171,33 +171,11 @@ def merge_system_prompt(
         system = kwargs.get("system")
         return format_anthropic_input(messages, system)
     elif provider == "gemini":
-        from posthog.ai.gemini.gemini_converter import format_gemini_input
+        from posthog.ai.gemini.gemini_converter import format_gemini_input_with_system
 
         contents = kwargs.get("contents", [])
-        formatted_messages = format_gemini_input(contents)
-
-        # Check if system instruction is provided in config parameter
         config = kwargs.get("config")
-        system_instruction = None
-
-        if config is not None:
-            # Handle different config formats
-            if hasattr(config, "system_instruction"):
-                system_instruction = config.system_instruction
-            elif isinstance(config, dict) and "system_instruction" in config:
-                system_instruction = config["system_instruction"]
-            elif isinstance(config, dict) and "systemInstruction" in config:
-                system_instruction = config["systemInstruction"]
-
-        if system_instruction is not None:
-            has_system = any(msg.get("role") == "system" for msg in formatted_messages)
-            if not has_system:
-                system_message = cast(
-                    FormattedMessage, {"role": "system", "content": system_instruction}
-                )
-                formatted_messages = [system_message] + list(formatted_messages)
-
-        return formatted_messages
+        return format_gemini_input_with_system(contents, config)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import format_openai_input
 
