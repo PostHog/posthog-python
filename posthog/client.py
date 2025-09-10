@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 from typing_extensions import Unpack
 from uuid import uuid4
 
@@ -97,6 +97,34 @@ def add_context_tags(properties):
         properties["$session_id"] = get_context_session_id()
 
     return properties
+
+
+def no_throw(default_return=None):
+    """
+    Decorator to prevent raising exceptions from public API methods.
+    Note that this doesn't prevent errors from propagating via `on_error`.
+    Exceptions will still be raised if the debug flag is enabled.
+
+    Args:
+        default_return: Value to return on exception (default: None)
+    """
+
+    def decorator(func):
+        from functools import wraps
+
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as e:
+                if self.debug:
+                    raise e
+                self.log.exception(f"Error in {func.__name__}: {e}")
+                return default_return
+
+        return wrapper
+
+    return decorator
 
 
 class Client(object):
@@ -481,6 +509,7 @@ class Client(object):
 
         return normalize_flags_response(resp_data)
 
+    @no_throw()
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
@@ -657,6 +686,7 @@ class Client(object):
                 f"Expected bool or dict."
             )
 
+    @no_throw()
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         """
         Set properties on a person profile.
@@ -690,6 +720,8 @@ class Client(object):
 
         Category:
             Identification
+
+        Note: This method will not raise exceptions. Errors are logged.
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
@@ -716,6 +748,7 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
+    @no_throw()
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         """
         Set properties on a person profile only if they haven't been set before.
@@ -734,6 +767,8 @@ class Client(object):
 
         Category:
             Identification
+
+        Note: This method will not raise exceptions. Errors are logged.
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
@@ -759,6 +794,7 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
+    @no_throw()
     def group_identify(
         self,
         group_type: str,
@@ -791,6 +827,8 @@ class Client(object):
 
         Category:
             Identification
+
+        Note: This method will not raise exceptions. Errors are logged.
         """
         properties = properties or {}
 
@@ -815,6 +853,7 @@ class Client(object):
 
         return self._enqueue(msg, disable_geoip)
 
+    @no_throw()
     def alias(
         self,
         previous_id: str,
@@ -840,6 +879,8 @@ class Client(object):
 
         Category:
             Identification
+
+        Note: This method will not raise exceptions. Errors are logged.
         """
         (distinct_id, personless) = get_identity_state(distinct_id)
 
