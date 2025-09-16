@@ -1,3 +1,7 @@
+# 6.7.5 - 2025-09-16
+
+- feat: Django middleware now supports async request handling.
+
 # 6.7.4 - 2025-09-05
 
 - fix: Missing system prompts for some providers
