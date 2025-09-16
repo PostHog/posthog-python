@@ -12,7 +12,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
-    from typing import Callable, Dict, Any, Optional  # noqa: F401
+    from typing import Callable, Dict, Any, Optional, Union, Awaitable  # noqa: F401
 
 
 class PosthogContextMiddleware:
@@ -46,9 +46,19 @@ class PosthogContextMiddleware:
     async_capable = True
 
     def __init__(self, get_response):
-        # type: (Callable[[HttpRequest], HttpResponse]) -> None
-        self.get_response = get_response
+        # type: (Union[Callable[[HttpRequest], HttpResponse], Callable[[HttpRequest], Awaitable[HttpResponse]]]) -> None
         self._is_coroutine = iscoroutinefunction(get_response)
+        self._async_get_response = None  # type: Optional[Callable[[HttpRequest], Awaitable[HttpResponse]]]
+        self._sync_get_response = None  # type: Optional[Callable[[HttpRequest], HttpResponse]]
+
+        if self._is_coroutine:
+            self._async_get_response = cast(
+                "Callable[[HttpRequest], Awaitable[HttpResponse]]", get_response
+            )
+        else:
+            self._sync_get_response = cast(
+                "Callable[[HttpRequest], HttpResponse]", get_response
+            )
 
         from django.conf import settings
 
@@ -180,27 +190,31 @@ class PosthogContextMiddleware:
             )
 
         if self.request_filter and not self.request_filter(request):
-            return self.get_response(request)
+            assert self._sync_get_response is not None
+            return self._sync_get_response(request)
 
         with contexts.new_context(self.capture_exceptions, client=self.client):
             for k, v in self.extract_tags(request).items():
                 contexts.tag(k, v)
 
-            return self.get_response(request)
+            assert self._sync_get_response is not None
+            return self._sync_get_response(request)
 
     async def __acall__(self, request):
         # type: (HttpRequest) -> HttpResponse
         if self.request_filter and not self.request_filter(request):
-            if self._is_coroutine:
-                return await self.get_response(request)  # type: ignore
+            if self._async_get_response is not None:
+                return await self._async_get_response(request)
             else:
-                return self.get_response(request)  # type: ignore
+                assert self._sync_get_response is not None
+                return self._sync_get_response(request)
 
         with contexts.new_context(self.capture_exceptions, client=self.client):
             for k, v in self.extract_tags(request).items():
                 contexts.tag(k, v)
 
-            if self._is_coroutine:
-                return await self.get_response(request)  # type: ignore
+            if self._async_get_response is not None:
+                return await self._async_get_response(request)
             else:
-                return self.get_response(request)  # type: ignore
+                assert self._sync_get_response is not None
+                return self._sync_get_response(request)
