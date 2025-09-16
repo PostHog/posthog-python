@@ -1,6 +1,14 @@
 from typing import TYPE_CHECKING, cast
-from posthog import contexts, capture_exception
+from posthog import contexts
 from posthog.client import Client
+
+try:
+    from asgiref.sync import iscoroutinefunction
+except ImportError:
+    # Fallback for older Django versions
+    import asyncio
+
+    iscoroutinefunction = asyncio.iscoroutinefunction
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
@@ -33,9 +41,14 @@ class PosthogContextMiddleware:
     frontend. See the documentation for `set_context_session` and `identify_context` for more details.
     """
 
+    # Django middleware capability flags
+    sync_capable = True
+    async_capable = True
+
     def __init__(self, get_response):
         # type: (Callable[[HttpRequest], HttpResponse]) -> None
         self.get_response = get_response
+        self._is_coroutine = iscoroutinefunction(get_response)
 
         from django.conf import settings
 
@@ -159,6 +172,13 @@ class PosthogContextMiddleware:
 
     def __call__(self, request):
         # type: (HttpRequest) -> HttpResponse
+        # Purely defensive around django's internal sync/async handling - this should be unreachable, but if it's reached, we may
+        # as well return something semi-meaningful
+        if self._is_coroutine:
+            raise RuntimeError(
+                "PosthogContextMiddleware received sync call but get_response is async"
+            )
+
         if self.request_filter and not self.request_filter(request):
             return self.get_response(request)
 
@@ -168,14 +188,19 @@ class PosthogContextMiddleware:
 
             return self.get_response(request)
 
-    def process_exception(self, request, exception):
+    async def __acall__(self, request):
+        # type: (HttpRequest) -> HttpResponse
         if self.request_filter and not self.request_filter(request):
-            return
+            if self._is_coroutine:
+                return await self.get_response(request)  # type: ignore
+            else:
+                return self.get_response(request)  # type: ignore
 
-        if not self.capture_exceptions:
-            return
+        with contexts.new_context(self.capture_exceptions, client=self.client):
+            for k, v in self.extract_tags(request).items():
+                contexts.tag(k, v)
 
-        if self.client:
-            self.client.capture_exception(exception)
-        else:
-            capture_exception(exception)
+            if self._is_coroutine:
+                return await self.get_response(request)  # type: ignore
+            else:
+                return self.get_response(request)  # type: ignore
