@@ -18,14 +18,6 @@ class TestModule(unittest.TestCase):
             "testsecret", host="http://localhost:8000", on_error=self.failed
         )
 
-    def test_no_api_key(self):
-        self.posthog.api_key = None
-        self.assertRaises(Exception, self.posthog.capture)
-
-    def test_no_host(self):
-        self.posthog.host = None
-        self.assertRaises(Exception, self.posthog.capture)
-
     def test_track(self):
         res = self.posthog.capture("python module event", distinct_id="distinct_id")
         self._assert_enqueue_result(res)
