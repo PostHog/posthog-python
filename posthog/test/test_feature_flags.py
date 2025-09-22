@@ -2856,7 +2856,7 @@ class TestLocalEvaluation(unittest.TestCase):
             "user123",
             person_properties={"email": "user@vip.com"},
         )
-        self.assertIn(result, "control")
+        self.assertEqual(result, "control")
 
         # server not called because this can be evaluated locally
         self.assertEqual(patch_flags.call_count, 0)
