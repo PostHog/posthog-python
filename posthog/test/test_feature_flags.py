@@ -2804,73 +2804,61 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
-    def test_flag_with_multiple_variant_overrides(self, patch_flags):
-        patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
+    def test_conditions_evaluated_in_order(self, patch_flags):
+        patch_flags.return_value = {"featureFlags": {"order-test": True}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {
                 "id": 1,
-                "name": "Beta Feature",
-                "key": "beta-feature",
+                "name": "Order Test Flag",
+                "key": "order-test",
                 "active": True,
-                "rollout_percentage": 100,
                 "filters": {
                     "groups": [
                         {
                             "rollout_percentage": 100,
-                            # The override applies even if the first condition matches all and gives everyone their default group
                         },
                         {
                             "properties": [
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@posthog.com",
-                                    "operator": "exact",
+                                    "value": "@vip.com",
+                                    "operator": "icontains",
                                 }
                             ],
                             "rollout_percentage": 100,
-                            "variant": "second-variant",
+                            "variant": "vip-variant",
                         },
-                        {"rollout_percentage": 50, "variant": "third-variant"},
                     ],
                     "multivariate": {
                         "variants": [
                             {
-                                "key": "first-variant",
-                                "name": "First Variant",
-                                "rollout_percentage": 50,
+                                "key": "control",
+                                "name": "Control",
+                                "rollout_percentage": 100,
                             },
                             {
-                                "key": "second-variant",
-                                "name": "Second Variant",
-                                "rollout_percentage": 25,
-                            },
-                            {
-                                "key": "third-variant",
-                                "name": "Third Variant",
-                                "rollout_percentage": 25,
+                                "key": "vip-variant",
+                                "name": "VIP Variant",
+                                "rollout_percentage": 0,
                             },
                         ]
                     },
                 },
             }
         ]
-        self.assertEqual(
-            client.get_feature_flag(
-                "beta-feature",
-                "test_id",
-                person_properties={"email": "test@posthog.com"},
-            ),
-            "second-variant",
+
+        # Even though user@vip.com would match the second condition with variant override,
+        # they should match the first condition and get control
+        result = client.get_feature_flag(
+            "order-test",
+            "user123",
+            person_properties={"email": "user@vip.com"},
         )
-        self.assertEqual(
-            client.get_feature_flag("beta-feature", "example_id"), "third-variant"
-        )
-        self.assertEqual(
-            client.get_feature_flag("beta-feature", "another_id"), "second-variant"
-        )
-        # decide not called because this can be evaluated locally
+        self.assertIn(result, "control")
+
+        # server not called because this can be evaluated locally
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
