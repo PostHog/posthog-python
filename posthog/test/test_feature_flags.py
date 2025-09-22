@@ -2805,7 +2805,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     def test_conditions_evaluated_in_order(self, patch_flags):
-        patch_flags.return_value = {"featureFlags": {"order-test": True}}
+        patch_flags.return_value = {"featureFlags": {"order-test": "server-variant"}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {
