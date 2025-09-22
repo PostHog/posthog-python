@@ -1,3 +1,8 @@
+# 6.7.6 - 2025-09-16
+
+- fix: don't sort condition sets with variant overrides to the top
+- fix: Prevent core Client methods from raising exceptions
+
 # 6.7.5 - 2025-09-16
 
 - feat: Django middleware now supports async request handling.
