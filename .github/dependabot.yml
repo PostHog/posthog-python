@@ -1,0 +1,36 @@
+version: 2
+updates:
+    - package-ecosystem: 'pip'
+      directory: '/'
+      schedule:
+          interval: 'daily'
+          time: '10:00'
+          timezone: 'UTC'
+      groups:
+          ai-providers:
+              patterns:
+                  - 'openai'
+                  - 'anthropic'
+                  - 'google-genai'
+                  - 'langchain-core'
+                  - 'langchain-community'
+                  - 'langchain-openai'
+                  - 'langchain-anthropic'
+                  - 'langgraph'
+      allow:
+          - dependency-name: 'openai'
+          - dependency-name: 'anthropic'
+          - dependency-name: 'google-genai'
+          - dependency-name: 'langchain-core'
+          - dependency-name: 'langchain-community'
+          - dependency-name: 'langchain-openai'
+          - dependency-name: 'langchain-anthropic'
+          - dependency-name: 'langgraph'
+      # Uncomment below to enable auto-merge for minor updates when CI passes
+      # open-pull-requests-limit: 1
+      # pull-request-branch-name:
+      #   separator: "/"
+      # reviewers:
+      #   - "PostHog/ai-team"
+      # assignees:
+      #   - "PostHog/ai-team"
