@@ -3,6 +3,7 @@ Constants for PostHog Python SDK documentation generation.
 """
 
 from typing import Dict, Union
+from posthog.version import VERSION
 
 # Documentation generation metadata
 DOCUMENTATION_METADATA = {
@@ -27,8 +28,9 @@ DOCSTRING_PATTERNS = {
 
 # Output file configuration
 OUTPUT_CONFIG: Dict[str, Union[str, int]] = {
-    "output_dir": ".",
-    "filename": "posthog-python-references.json",
+    "output_dir": "./references",
+    "filename": f"posthog-python-references-{VERSION}.json",
+    "filename_latest": "posthog-python-references-latest.json",
     "indent": 2,
 }
 
