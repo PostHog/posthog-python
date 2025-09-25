@@ -1,9 +1,8 @@
 name: "Generate References"
 
 on:
-  push:
-    branches:
-      - master
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -14,13 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
         with:
           fetch-depth: 0
           token: ${{ secrets.POSTHOG_BOT_GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
         with:
           python-version: 3.11.11
 
@@ -46,7 +45,7 @@ jobs:
             echo "No new references generated in references directory"
           fi
 
-      - uses: stefanzweifel/git-auto-commit-action@v6
+      - uses: stefanzweifel/git-auto-commit-action@b3e3f72439fc3af08948f989a19a825463598a
         if: steps.changes.outputs.changed == 'true'
         with:
           commit_message: "Update generated references"
