@@ -1173,3 +1173,131 @@ def test_tool_definition(mock_client, mock_openai_response):
         assert isinstance(props["$ai_latency"], float)
         # Verify that tools are captured in the $ai_tools property
         assert props["$ai_tools"] == tools
+
+
+def test_input_with_tool_calls(mock_client, mock_openai_response):
+    """Test that tool_calls in input messages are preserved in $ai_input"""
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Create a conversation history with tool calls
+        # This simulates a multi-turn conversation where the assistant made a tool call
+        messages = [
+            {"role": "user", "content": "What's the weather in San Francisco?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "San Francisco"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": '{"temperature": "15°C", "condition": "sunny"}',
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify that the tool_calls are preserved in $ai_input
+        ai_input = props["$ai_input"]
+        assert len(ai_input) == 3
+
+        # Check user message
+        assert ai_input[0]["role"] == "user"
+        assert ai_input[0]["content"] == "What's the weather in San Francisco?"
+
+        # Check assistant message with tool calls
+        assert ai_input[1]["role"] == "assistant"
+        assert isinstance(ai_input[1]["content"], list)
+        assert len(ai_input[1]["content"]) == 1
+
+        # Verify tool call is formatted correctly
+        tool_call_content = ai_input[1]["content"][0]
+        assert tool_call_content["type"] == "function"
+        assert tool_call_content["id"] == "call_abc123"
+        assert tool_call_content["function"]["name"] == "get_weather"
+        assert tool_call_content["function"]["arguments"] == '{"location": "San Francisco"}'
+
+        # Check tool message
+        assert ai_input[2]["role"] == "tool"
+        assert ai_input[2]["content"] == '{"temperature": "15°C", "condition": "sunny"}'
+
+
+def test_input_with_tool_calls_and_content(mock_client, mock_openai_response):
+    """Test that tool_calls with text content are both preserved in $ai_input"""
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Some models include both content and tool_calls
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "Let me check that for you.",
+                "tool_calls": [
+                    {
+                        "id": "call_xyz789",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "New York"}',
+                        },
+                    }
+                ],
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify both text content and tool_calls are preserved
+        ai_input = props["$ai_input"]
+        assert len(ai_input) == 2
+
+        assistant_msg = ai_input[1]
+        assert assistant_msg["role"] == "assistant"
+        assert isinstance(assistant_msg["content"], list)
+        assert len(assistant_msg["content"]) == 2
+
+        # First item should be text
+        assert assistant_msg["content"][0]["type"] == "text"
+        assert assistant_msg["content"][0]["text"] == "Let me check that for you."
+
+        # Second item should be the tool call
+        assert assistant_msg["content"][1]["type"] == "function"
+        assert assistant_msg["content"][1]["id"] == "call_xyz789"
+        assert assistant_msg["content"][1]["function"]["name"] == "get_weather"

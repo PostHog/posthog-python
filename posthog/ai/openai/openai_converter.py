@@ -160,12 +160,36 @@ def format_openai_input(
     # Handle Chat Completions API format
     if messages is not None:
         for msg in messages:
-            formatted_messages.append(
-                {
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", ""),
-                }
-            )
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            tool_calls = msg.get("tool_calls")
+
+            # If message has tool_calls, format them into content array
+            if tool_calls:
+                content_items: List[FormattedContentItem] = []
+
+                # Add text content if present
+                if content:
+                    content_items.append({"type": "text", "text": content})
+
+                # Add tool calls
+                for tool_call in tool_calls:
+                    function_data = tool_call.get("function", {})
+                    content_items.append(
+                        {
+                            "type": "function",
+                            "id": tool_call.get("id"),
+                            "function": {
+                                "name": function_data.get("name", ""),
+                                "arguments": function_data.get("arguments", ""),
+                            },
+                        }
+                    )
+
+                formatted_messages.append({"role": role, "content": content_items})
+            else:
+                # No tool calls, use content as-is
+                formatted_messages.append({"role": role, "content": content})
 
     # Handle Responses API format
     if input_data is not None:
