@@ -18,6 +18,60 @@ from posthog.ai.types import (
 )
 
 
+def _format_tool_calls_to_content(tool_calls: List[Any]) -> List[FormattedFunctionCall]:
+    """
+    Helper function to format tool calls into standardized content items.
+
+    Handles both object-based tool calls (from API responses) and dict-based
+    tool calls (from input messages).
+
+    Args:
+        tool_calls: List of tool call objects or dicts from OpenAI API
+
+    Returns:
+        List of formatted function call content items
+    """
+    formatted: List[FormattedFunctionCall] = []
+    for tool_call in tool_calls:
+        # Safely extract id - handle both object and dict formats
+        if hasattr(tool_call, "id"):
+            tool_id = tool_call.id
+        elif isinstance(tool_call, dict):
+            tool_id = tool_call.get("id", "")
+        else:
+            tool_id = ""
+
+        # Safely extract function name and arguments - handle both formats
+        if hasattr(tool_call, "function"):
+            func_name = getattr(tool_call.function, "name", "")
+            func_args = getattr(tool_call.function, "arguments", "")
+        elif isinstance(tool_call, dict):
+            function_data = tool_call.get("function", {})
+            func_name = (
+                function_data.get("name", "") if isinstance(function_data, dict) else ""
+            )
+            func_args = (
+                function_data.get("arguments", "")
+                if isinstance(function_data, dict)
+                else ""
+            )
+        else:
+            func_name = ""
+            func_args = ""
+
+        formatted.append(
+            {
+                "type": "function",
+                "id": tool_id,
+                "function": {
+                    "name": func_name,
+                    "arguments": func_args,
+                },
+            }
+        )
+    return formatted
+
+
 def format_openai_response(response: Any) -> List[FormattedMessage]:
     """
     Format an OpenAI response into standardized message format.
@@ -55,17 +109,9 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                     )
 
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                    for tool_call in choice.message.tool_calls:
-                        content.append(
-                            {
-                                "type": "function",
-                                "id": tool_call.id,
-                                "function": {
-                                    "name": tool_call.function.name,
-                                    "arguments": tool_call.function.arguments,
-                                },
-                            }
-                        )
+                    content.extend(
+                        _format_tool_calls_to_content(choice.message.tool_calls)
+                    )
 
         if content:
             output.append(
@@ -160,10 +206,40 @@ def format_openai_input(
     # Handle Chat Completions API format
     if messages is not None:
         for msg in messages:
+            role = msg.get("role", "user")
+            content_value = msg.get("content", "")
+            tool_calls = msg.get("tool_calls")
+
+            # Validate tool_calls is a non-empty list
+            has_tool_calls = (
+                tool_calls is not None
+                and isinstance(tool_calls, list)
+                and len(tool_calls) > 0
+            )
+
+            if isinstance(content_value, str) and not has_tool_calls:
+                formatted_messages.append(
+                    {
+                        "role": role,
+                        "content": content_value,
+                    }
+                )
+                continue
+
+            content_items: List[FormattedContentItem] = []
+
+            if isinstance(content_value, str) and content_value:
+                content_items.append({"type": "text", "text": content_value})
+            elif isinstance(content_value, list):
+                content_items.extend(content_value)
+
+            if has_tool_calls:
+                content_items.extend(_format_tool_calls_to_content(tool_calls))
+
             formatted_messages.append(
                 {
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", ""),
+                    "role": role,
+                    "content": content_items,
                 }
             )
 

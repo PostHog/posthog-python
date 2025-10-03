@@ -1173,3 +1173,77 @@ def test_tool_definition(mock_client, mock_openai_response):
         assert isinstance(props["$ai_latency"], float)
         # Verify that tools are captured in the $ai_tools property
         assert props["$ai_tools"] == tools
+
+
+def test_input_messages_with_tool_calls(mock_client, mock_openai_response):
+    """Test that tool calls in input messages are preserved and not dropped"""
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Simulate a conversation with tool calls from a previous assistant message
+        messages = [
+            {"role": "user", "content": "What's the weather in San Francisco?"},
+            {
+                "role": "assistant",
+                "content": "Let me check that for you.",
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "San Francisco"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": "72 degrees and sunny",
+            },
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_openai_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify the input contains the tool calls
+        assert len(props["$ai_input"]) == 3
+
+        # First message should be simple string
+        assert props["$ai_input"][0] == {
+            "role": "user",
+            "content": "What's the weather in San Francisco?",
+        }
+
+        # Second message should have both content and tool calls
+        assert props["$ai_input"][1]["role"] == "assistant"
+        assert props["$ai_input"][1]["content"] == [
+            {"type": "text", "text": "Let me check that for you."},
+            {
+                "type": "function",
+                "id": "call_abc123",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "San Francisco"}',
+                },
+            },
+        ]
+
+        # Third message should be the tool response
+        assert props["$ai_input"][2] == {
+            "role": "tool",
+            "content": "72 degrees and sunny",
+        }
