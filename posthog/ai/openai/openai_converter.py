@@ -209,6 +209,7 @@ def format_openai_input(
             role = msg.get("role", "user")
             content_value = msg.get("content", "")
             tool_calls = msg.get("tool_calls")
+            tool_call_id = msg.get("tool_call_id")
 
             # Validate tool_calls is a non-empty list
             has_tool_calls = (
@@ -217,15 +218,19 @@ def format_openai_input(
                 and len(tool_calls) > 0
             )
 
+            # Simple string content (with optional tool_call_id for tool messages)
             if isinstance(content_value, str) and not has_tool_calls:
-                formatted_messages.append(
-                    {
-                        "role": role,
-                        "content": content_value,
-                    }
-                )
+                formatted_msg: FormattedMessage = {
+                    "role": role,
+                    "content": content_value,
+                }
+                # Preserve tool_call_id for tool role messages
+                if tool_call_id:
+                    formatted_msg["tool_call_id"] = tool_call_id
+                formatted_messages.append(formatted_msg)
                 continue
 
+            # Complex content (multimodal or tool calls)
             content_items: List[FormattedContentItem] = []
 
             if isinstance(content_value, str) and content_value:

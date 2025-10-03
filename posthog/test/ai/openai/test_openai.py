@@ -1245,5 +1245,6 @@ def test_input_messages_with_tool_calls(mock_client, mock_openai_response):
         # Third message should be the tool response
         assert props["$ai_input"][2] == {
             "role": "tool",
+            "tool_call_id": "call_abc123",
             "content": "72 degrees and sunny",
         }
