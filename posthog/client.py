@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
 from uuid import uuid4
 
@@ -271,8 +271,8 @@ class Client(object):
             # to call flush().
             if send:
                 atexit.register(self.join)
+            self.consumers = []
             for n in range(thread):
-                self.consumers = []
                 consumer = Consumer(
                     self.queue,
                     self.api_key,
