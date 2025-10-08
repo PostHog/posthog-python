@@ -2472,6 +2472,6 @@ class TestClient(unittest.TestCase):
 
         client = Client(FAKE_TEST_API_KEY, send=False, thread=expected_threads)
         try:
-            assert len(client.consumers) == expected_threads
+            self.assertEqual(len(client.consumers), expected_threads)
         finally:
             client.shutdown()
