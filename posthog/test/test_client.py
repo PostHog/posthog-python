@@ -2466,3 +2466,12 @@ class TestClient(unittest.TestCase):
                 with self.assertRaises(Exception) as cm:
                     method(*args, **kwargs)
                 self.assertEqual(str(cm.exception), "Expected error")
+
+    def test_number_of_consumers(self):
+        expected_threads = 10
+
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=expected_threads)
+        try:
+            assert len(client.consumers) == expected_threads
+        finally:
+            client.shutdown()
