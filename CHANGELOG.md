@@ -1,3 +1,7 @@
+# 6.7.7 - 2025-10-14
+
+- fix: remove deprecated attribute $exception_personURL from exception events
+
 # 6.7.6 - 2025-09-16
 
 - fix: don't sort condition sets with variant overrides to the top

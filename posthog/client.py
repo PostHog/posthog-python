@@ -973,7 +973,6 @@ class Client(object):
                     "value"
                 ),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_personURL": f"{remove_trailing_slash(self.raw_host)}/project/{self.api_key}/person/{distinct_id}",
                 **properties,
             }
 
