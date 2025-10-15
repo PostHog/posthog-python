@@ -50,4 +50,3 @@ jobs:
         with:
           commit_message: "Update generated references"
           file_pattern: references/
-          token: ${{ secrets.POSTHOG_BOT_PAT }}
