@@ -49,3 +49,9 @@ jobs:
         with:
           tag_name: v${{ env.REPO_VERSION }}
           release_name: ${{ env.REPO_VERSION }}
+      
+      - name: Dispatch generate-references for posthog-python
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run generate-references.yml --ref master
