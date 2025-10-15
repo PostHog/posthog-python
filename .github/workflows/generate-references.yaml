@@ -10,8 +10,6 @@ on:
 jobs:
   docs-generation:
     name: Generate references
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the repository
@@ -52,3 +50,4 @@ jobs:
         with:
           commit_message: "Update generated references"
           file_pattern: references/
+          token: ${{ secrets.POSTHOG_BOT_PAT }}
