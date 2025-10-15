@@ -345,7 +345,7 @@ class WrappedCompletions:
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
