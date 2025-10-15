@@ -1,10 +1,6 @@
 name: "Generate References"
 
 on:
-  workflow_run:
-    workflows: ["Release"]
-    types:
-      - completed
   workflow_dispatch:
 
 jobs:
@@ -45,7 +41,7 @@ jobs:
             echo "No new references generated in references directory"
           fi
 
-      - uses: stefanzweifel/git-auto-commit-action@b3e3f72439fc3af08948f989a19a825463598a
+      - uses: stefanzweifel/git-auto-commit-action@778341af668090896ca464160c2def5d1d1a3eb0
         if: steps.changes.outputs.changed == 'true'
         with:
           commit_message: "Update generated references"
