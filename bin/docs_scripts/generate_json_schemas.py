@@ -460,6 +460,10 @@ if __name__ == "__main__":
     try:
         documentation = generate_sdk_documentation()
 
+        # Ensure output directory exists
+        output_dir = str(OUTPUT_CONFIG["output_dir"])
+        os.makedirs(output_dir, exist_ok=True)
+
         output_file = os.path.join(
             str(OUTPUT_CONFIG["output_dir"]), str(OUTPUT_CONFIG["filename"])
         )
