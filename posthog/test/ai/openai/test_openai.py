@@ -1,5 +1,5 @@
 import time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -34,6 +34,7 @@ try:
     )
 
     from posthog.ai.openai import OpenAI
+    from posthog.ai.openai.openai_async import AsyncOpenAI
 
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -216,6 +217,106 @@ def mock_openai_response_with_cached_tokens():
             prompt_tokens_details={"cached_tokens": 15},
         ),
     )
+
+
+@pytest.fixture
+def streaming_tool_call_chunks():
+    return [
+        ChatCompletionChunk(
+            id="chunk1",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(
+                        role="assistant",
+                        tool_calls=[
+                            ChoiceDeltaToolCall(
+                                index=0,
+                                id="call_abc123",
+                                type="function",
+                                function=ChoiceDeltaToolCallFunction(
+                                    name="get_weather",
+                                    arguments='{"location": "',
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ChatCompletionChunk(
+            id="chunk2",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567891,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(
+                        tool_calls=[
+                            ChoiceDeltaToolCall(
+                                index=0,
+                                id="call_abc123",
+                                type="function",
+                                function=ChoiceDeltaToolCallFunction(
+                                    arguments='San Francisco"',
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ChatCompletionChunk(
+            id="chunk3",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567892,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(
+                        tool_calls=[
+                            ChoiceDeltaToolCall(
+                                index=0,
+                                id="call_abc123",
+                                type="function",
+                                function=ChoiceDeltaToolCallFunction(
+                                    arguments=', "unit": "celsius"}',
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ChatCompletionChunk(
+            id="chunk4",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567893,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(
+                        content="The weather in San Francisco is 15°C.",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=CompletionUsage(
+                prompt_tokens=20,
+                completion_tokens=15,
+                total_tokens=35,
+            ),
+        ),
+    ]
 
 
 @pytest.fixture
@@ -734,109 +835,11 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         assert props["$ai_http_status"] == 200
 
 
-def test_streaming_with_tool_calls(mock_client):
-    # Create mock tool call chunks that will be returned in sequence
-    tool_call_chunks = [
-        ChatCompletionChunk(
-            id="chunk1",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567890,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        role="assistant",
-                        tool_calls=[
-                            ChoiceDeltaToolCall(
-                                index=0,
-                                id="call_abc123",
-                                type="function",
-                                function=ChoiceDeltaToolCallFunction(
-                                    name="get_weather",
-                                    arguments='{"location": "',
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason=None,
-                )
-            ],
-        ),
-        ChatCompletionChunk(
-            id="chunk2",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567891,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        tool_calls=[
-                            ChoiceDeltaToolCall(
-                                index=0,
-                                id="call_abc123",
-                                type="function",
-                                function=ChoiceDeltaToolCallFunction(
-                                    arguments='San Francisco"',
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason=None,
-                )
-            ],
-        ),
-        ChatCompletionChunk(
-            id="chunk3",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567892,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        tool_calls=[
-                            ChoiceDeltaToolCall(
-                                index=0,
-                                id="call_abc123",
-                                type="function",
-                                function=ChoiceDeltaToolCallFunction(
-                                    arguments=', "unit": "celsius"}',
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason=None,
-                )
-            ],
-        ),
-        ChatCompletionChunk(
-            id="chunk4",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567893,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        content="The weather in San Francisco is 15°C.",
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=CompletionUsage(
-                prompt_tokens=20,
-                completion_tokens=15,
-                total_tokens=35,
-            ),
-        ),
-    ]
-
+def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
     # Mock the create method to return our chunks
     with patch("openai.resources.chat.completions.Completions.create") as mock_create:
         # Set up the mock to return our chunks when iterated
-        mock_create.return_value = tool_call_chunks
+        mock_create.return_value = streaming_tool_call_chunks
 
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
 
@@ -865,7 +868,7 @@ def test_streaming_with_tool_calls(mock_client):
 
         # Verify the chunks were returned correctly
         assert len(chunks) == 4
-        assert chunks == tool_call_chunks
+        assert chunks == streaming_tool_call_chunks
 
         # Verify the capture was called with the right arguments
         assert mock_client.capture.call_count == 1
@@ -1110,6 +1113,169 @@ def test_responses_api_streaming_with_tokens(mock_client):
         assert props["$ai_output_tokens"] == 30  # Should not be 0
         assert props["test"] == "streaming"
         assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.asyncio
+async def test_async_chat_streaming_with_tool_calls(
+    mock_client, streaming_tool_call_chunks
+):
+    captured_kwargs = {}
+
+    async def mock_create(self, **kwargs):
+        captured_kwargs["kwargs"] = kwargs
+
+        async def chunk_iterable():
+            for chunk in streaming_tool_call_chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_stream = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "user", "content": "What's the weather in San Francisco?"}
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "parameters": {},
+                    },
+                }
+            ],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        chunks = []
+        async for chunk in response_stream:
+            chunks.append(chunk)
+
+    kwargs = captured_kwargs["kwargs"]
+    assert kwargs["stream_options"]["include_usage"] is True
+
+    assert len(chunks) == len(streaming_tool_call_chunks)
+    assert chunks == streaming_tool_call_chunks
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "gpt-4"
+    assert props["$ai_output_tokens"] == 15
+    assert props["$ai_input_tokens"] == 20
+    assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.asyncio
+async def test_async_responses_streaming_with_tokens(mock_client):
+    from openai.types.responses import ResponseUsage
+    from unittest.mock import MagicMock
+
+    chunks = []
+
+    chunk1 = MagicMock()
+    chunk1.type = "response.text.delta"
+    chunk1.text = "Test "
+    chunks.append(chunk1)
+
+    chunk2 = MagicMock()
+    chunk2.type = "response.text.delta"
+    chunk2.text = "response"
+    chunks.append(chunk2)
+
+    chunk3 = MagicMock()
+    chunk3.type = "response.completed"
+    chunk3.response = MagicMock()
+    chunk3.response.usage = ResponseUsage(
+        input_tokens=25,
+        output_tokens=30,
+        total_tokens=55,
+        input_tokens_details={"prompt_tokens": 25, "cached_tokens": 0},
+        output_tokens_details={"reasoning_tokens": 0},
+    )
+    chunk3.response.output = ["Test response"]
+    chunks.append(chunk3)
+
+    captured_kwargs = {}
+
+    async def mock_create(self, **kwargs):
+        captured_kwargs["kwargs"] = kwargs
+
+        async def chunk_iterable():
+            for chunk in chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch("openai.resources.responses.AsyncResponses.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_stream = await client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": "Test message"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+            posthog_properties={"test": "streaming"},
+        )
+
+        async for _ in response_stream:
+            pass
+
+    kwargs = captured_kwargs["kwargs"]
+    assert "stream_options" not in kwargs
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "gpt-4o-mini"
+    assert props["$ai_input_tokens"] == 25
+    assert props["$ai_output_tokens"] == 30
+    assert props["test"] == "streaming"
+    assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.asyncio
+async def test_async_embeddings_create(mock_client, mock_embedding_response):
+    mock_create = AsyncMock(return_value=mock_embedding_response)
+
+    with patch("openai.resources.embeddings.AsyncEmbeddings.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.embeddings.create(
+            model="text-embedding-3-small",
+            input="Hello world",
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+    assert response == mock_embedding_response
+    assert mock_create.await_count == 1
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "text-embedding-3-small"
+    assert props["foo"] == "bar"
+    assert isinstance(props["$ai_latency"], float)
 
 
 def test_tool_definition(mock_client, mock_openai_response):
