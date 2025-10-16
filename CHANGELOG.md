@@ -1,3 +1,7 @@
+# 6.7.7 - 2025-09-16
+
+- fix(llma): missing async for OpenAI's streaming implementation
+
 # 6.7.6 - 2025-09-16
 
 - fix: don't sort condition sets with variant overrides to the top
