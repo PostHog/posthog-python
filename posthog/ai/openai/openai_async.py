@@ -128,7 +128,7 @@ class WrappedResponses:
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
         final_content = []
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
@@ -345,7 +345,7 @@ class WrappedCompletions:
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
@@ -499,7 +499,7 @@ class WrappedEmbeddings:
             posthog_trace_id = str(uuid.uuid4())
 
         start_time = time.time()
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
         end_time = time.time()
 
         # Extract usage statistics if available
