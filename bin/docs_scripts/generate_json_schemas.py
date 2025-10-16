@@ -460,11 +460,22 @@ if __name__ == "__main__":
     try:
         documentation = generate_sdk_documentation()
 
-        # Write to file
+        # Ensure output directory exists
+        output_dir = str(OUTPUT_CONFIG["output_dir"])
+        os.makedirs(output_dir, exist_ok=True)
+
         output_file = os.path.join(
             str(OUTPUT_CONFIG["output_dir"]), str(OUTPUT_CONFIG["filename"])
         )
+        output_file_latest = os.path.join(
+            str(OUTPUT_CONFIG["output_dir"]), str(OUTPUT_CONFIG["filename_latest"])
+        )
+
+        # Write to current version
         with open(output_file, "w") as f:
+            json.dump(documentation, f, indent=int(OUTPUT_CONFIG["indent"]))
+        # Write to latest
+        with open(output_file_latest, "w") as f:
             json.dump(documentation, f, indent=int(OUTPUT_CONFIG["indent"]))
 
         print(f"✓ Generated {output_file}")

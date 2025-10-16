@@ -1,6 +1,10 @@
-# 6.7.7 - 2025-09-16
+# 6.7.8 - 2025-10-16
 
 - fix(llma): missing async for OpenAI's streaming implementation
+
+# 6.7.7 - 2025-10-14
+
+- fix: remove deprecated attribute $exception_personURL from exception events
 
 # 6.7.6 - 2025-09-16
 
