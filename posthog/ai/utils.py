@@ -1,9 +1,9 @@
 import time
 import uuid
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from posthog.client import Client as PostHogClient
-from posthog.ai.types import StreamingEventData, TokenUsage
+from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.ai.sanitization import (
     sanitize_openai,
     sanitize_anthropic,
@@ -158,7 +158,9 @@ def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     return None
 
 
-def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
+def merge_system_prompt(
+    kwargs: Dict[str, Any], provider: str
+) -> List[FormattedMessage]:
     """
     Merge system prompts and format messages for the given provider.
     """
@@ -169,10 +171,11 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         system = kwargs.get("system")
         return format_anthropic_input(messages, system)
     elif provider == "gemini":
-        from posthog.ai.gemini.gemini_converter import format_gemini_input
+        from posthog.ai.gemini.gemini_converter import format_gemini_input_with_system
 
         contents = kwargs.get("contents", [])
-        return format_gemini_input(contents)
+        config = kwargs.get("config")
+        return format_gemini_input_with_system(contents, config)
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import format_openai_input
 
@@ -187,9 +190,11 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
         if kwargs.get("system") is not None:
             has_system = any(msg.get("role") == "system" for msg in messages)
             if not has_system:
-                messages = [
-                    {"role": "system", "content": kwargs.get("system")}
-                ] + messages
+                system_msg = cast(
+                    FormattedMessage,
+                    {"role": "system", "content": kwargs.get("system")},
+                )
+                messages = [system_msg] + messages
 
         # For Responses API, add instructions to the system prompt if provided
         if kwargs.get("instructions") is not None:
@@ -207,9 +212,11 @@ def merge_system_prompt(kwargs: Dict[str, Any], provider: str):
                 )
             else:
                 # Create a new system message with instructions
-                messages = [
-                    {"role": "system", "content": kwargs.get("instructions")}
-                ] + messages
+                instruction_msg = cast(
+                    FormattedMessage,
+                    {"role": "system", "content": kwargs.get("instructions")},
+                )
+                messages = [instruction_msg] + messages
 
         return messages
 

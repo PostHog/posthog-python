@@ -3,7 +3,8 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from posthog.ai.types import TokenUsage
+from posthog.ai.types import TokenUsage, StreamingEventData
+from posthog.ai.utils import merge_system_prompt
 
 try:
     from google import genai
@@ -19,7 +20,6 @@ from posthog.ai.utils import (
     merge_usage_stats,
 )
 from posthog.ai.gemini.gemini_converter import (
-    format_gemini_input,
     extract_gemini_usage_from_chunk,
     extract_gemini_content_from_chunk,
     format_gemini_streaming_output,
@@ -356,10 +356,8 @@ class Models:
         latency: float,
         output: Any,
     ):
-        from posthog.ai.types import StreamingEventData
-
         # Prepare standardized event data
-        formatted_input = self._format_input(contents)
+        formatted_input = self._format_input(contents, **kwargs)
         sanitized_input = sanitize_gemini(formatted_input)
 
         event_data = StreamingEventData(
@@ -381,10 +379,12 @@ class Models:
         # Use the common capture function
         capture_streaming_event(self._ph_client, event_data)
 
-    def _format_input(self, contents):
+    def _format_input(self, contents, **kwargs):
         """Format input contents for PostHog tracking"""
 
-        return format_gemini_input(contents)
+        # Create kwargs dict with contents for merge_system_prompt
+        input_kwargs = {"contents": contents, **kwargs}
+        return merge_system_prompt(input_kwargs, "gemini")
 
     def generate_content_stream(
         self,

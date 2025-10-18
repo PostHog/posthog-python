@@ -1,10 +1,18 @@
 from typing import TYPE_CHECKING, cast
-from posthog import contexts, capture_exception
+from posthog import contexts
 from posthog.client import Client
+
+try:
+    from asgiref.sync import iscoroutinefunction
+except ImportError:
+    # Fallback for older Django versions
+    import asyncio
+
+    iscoroutinefunction = asyncio.iscoroutinefunction
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
-    from typing import Callable, Dict, Any, Optional  # noqa: F401
+    from typing import Callable, Dict, Any, Optional, Union, Awaitable  # noqa: F401
 
 
 class PosthogContextMiddleware:
@@ -33,9 +41,24 @@ class PosthogContextMiddleware:
     frontend. See the documentation for `set_context_session` and `identify_context` for more details.
     """
 
+    # Django middleware capability flags
+    sync_capable = True
+    async_capable = True
+
     def __init__(self, get_response):
-        # type: (Callable[[HttpRequest], HttpResponse]) -> None
-        self.get_response = get_response
+        # type: (Union[Callable[[HttpRequest], HttpResponse], Callable[[HttpRequest], Awaitable[HttpResponse]]]) -> None
+        self._is_coroutine = iscoroutinefunction(get_response)
+        self._async_get_response = None  # type: Optional[Callable[[HttpRequest], Awaitable[HttpResponse]]]
+        self._sync_get_response = None  # type: Optional[Callable[[HttpRequest], HttpResponse]]
+
+        if self._is_coroutine:
+            self._async_get_response = cast(
+                "Callable[[HttpRequest], Awaitable[HttpResponse]]", get_response
+            )
+        else:
+            self._sync_get_response = cast(
+                "Callable[[HttpRequest], HttpResponse]", get_response
+            )
 
         from django.conf import settings
 
@@ -159,23 +182,39 @@ class PosthogContextMiddleware:
 
     def __call__(self, request):
         # type: (HttpRequest) -> HttpResponse
+        # Purely defensive around django's internal sync/async handling - this should be unreachable, but if it's reached, we may
+        # as well return something semi-meaningful
+        if self._is_coroutine:
+            raise RuntimeError(
+                "PosthogContextMiddleware received sync call but get_response is async"
+            )
+
         if self.request_filter and not self.request_filter(request):
-            return self.get_response(request)
+            assert self._sync_get_response is not None
+            return self._sync_get_response(request)
 
         with contexts.new_context(self.capture_exceptions, client=self.client):
             for k, v in self.extract_tags(request).items():
                 contexts.tag(k, v)
 
-            return self.get_response(request)
+            assert self._sync_get_response is not None
+            return self._sync_get_response(request)
 
-    def process_exception(self, request, exception):
+    async def __acall__(self, request):
+        # type: (HttpRequest) -> HttpResponse
         if self.request_filter and not self.request_filter(request):
-            return
+            if self._async_get_response is not None:
+                return await self._async_get_response(request)
+            else:
+                assert self._sync_get_response is not None
+                return self._sync_get_response(request)
 
-        if not self.capture_exceptions:
-            return
+        with contexts.new_context(self.capture_exceptions, client=self.client):
+            for k, v in self.extract_tags(request).items():
+                contexts.tag(k, v)
 
-        if self.client:
-            self.client.capture_exception(exception)
-        else:
-            capture_exception(exception)
+            if self._async_get_response is not None:
+                return await self._async_get_response(request)
+            else:
+                assert self._sync_get_response is not None
+                return self._sync_get_response(request)

@@ -2423,3 +2423,46 @@ class TestClient(unittest.TestCase):
             batch_data = mock_post.call_args[1]["batch"]
             msg = batch_data[0]
             self.assertEqual(msg["properties"]["$context_tags"], ["random_tag"])
+
+    @mock.patch(
+        "posthog.client.Client._enqueue", side_effect=Exception("Unexpected error")
+    )
+    def test_methods_handle_exceptions(self, mock_enqueue):
+        """Test that all decorated methods handle exceptions gracefully."""
+        client = Client("test-key")
+
+        test_cases = [
+            ("capture", ["test_event"], {}),
+            ("set", [], {"distinct_id": "some-id", "properties": {"a": "b"}}),
+            ("set_once", [], {"distinct_id": "some-id", "properties": {"a": "b"}}),
+            ("group_identify", ["group-type", "group-key"], {}),
+            ("alias", ["some-id", "new-id"], {}),
+        ]
+
+        for method_name, args, kwargs in test_cases:
+            with self.subTest(method=method_name):
+                method = getattr(client, method_name)
+                result = method(*args, **kwargs)
+                self.assertEqual(result, None)
+
+    @mock.patch(
+        "posthog.client.Client._enqueue", side_effect=Exception("Expected error")
+    )
+    def test_debug_flag_re_raises_exceptions(self, mock_enqueue):
+        """Test that methods re-raise exceptions when debug=True."""
+        client = Client("test-key", debug=True)
+
+        test_cases = [
+            ("capture", ["test_event"], {}),
+            ("set", [], {"distinct_id": "some-id", "properties": {"a": "b"}}),
+            ("set_once", [], {"distinct_id": "some-id", "properties": {"a": "b"}}),
+            ("group_identify", ["group-type", "group-key"], {}),
+            ("alias", ["some-id", "new-id"], {}),
+        ]
+
+        for method_name, args, kwargs in test_cases:
+            with self.subTest(method=method_name):
+                method = getattr(client, method_name)
+                with self.assertRaises(Exception) as cm:
+                    method(*args, **kwargs)
+                self.assertEqual(str(cm.exception), "Expected error")

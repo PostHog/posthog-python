@@ -1,3 +1,24 @@
+# 6.7.8 - 2025-10-16
+
+- fix(llma): missing async for OpenAI's streaming implementation
+
+# 6.7.7 - 2025-10-14
+
+- fix: remove deprecated attribute $exception_personURL from exception events
+
+# 6.7.6 - 2025-09-16
+
+- fix: don't sort condition sets with variant overrides to the top
+- fix: Prevent core Client methods from raising exceptions
+
+# 6.7.5 - 2025-09-16
+
+- feat: Django middleware now supports async request handling.
+
+# 6.7.4 - 2025-09-05
+
+- fix: Missing system prompts for some providers
+
 # 6.7.3 - 2025-09-04
 
 - fix: missing usage tokens in Gemini

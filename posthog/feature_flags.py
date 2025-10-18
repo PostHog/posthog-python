@@ -220,14 +220,7 @@ def match_feature_flag_properties(
     ) or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
 
-    # Stable sort conditions with variant overrides to the top. This ensures that if overrides are present, they are
-    # evaluated first, and the variant override is applied to the first matching condition.
-    sorted_flag_conditions = sorted(
-        flag_conditions,
-        key=lambda condition: 0 if condition.get("variant") else 1,
-    )
-
-    for condition in sorted_flag_conditions:
+    for condition in flag_conditions:
         try:
             # if any one condition resolves to True, we can shortcircuit and return
             # the matching variant

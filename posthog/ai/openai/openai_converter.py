@@ -606,7 +606,6 @@ def format_openai_streaming_input(
     Returns:
         Formatted input ready for PostHog tracking
     """
-    if api_type == "chat":
-        return kwargs.get("messages")
-    else:  # responses API
-        return kwargs.get("input")
+    from posthog.ai.utils import merge_system_prompt
+
+    return merge_system_prompt(kwargs, "openai")
