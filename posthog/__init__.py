@@ -11,6 +11,7 @@ from posthog.contexts import (
     set_context_session as inner_set_context_session,
     identify_context as inner_identify_context,
 )
+from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
 from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
 from posthog.version import VERSION
 

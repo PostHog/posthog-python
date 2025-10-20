@@ -3013,6 +3013,75 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 0)
 
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_fallback_to_api_when_flag_has_static_cohort_in_multi_condition(
+        self, patch_get, patch_flags
+    ):
+        """
+        When a flag has multiple conditions and one contains a static cohort,
+        the SDK should fallback to API for the entire flag, not just skip that
+        condition and evaluate the next one locally.
+
+        This prevents returning wrong variants when later conditions could match
+        locally but the user is actually in the static cohort.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        # Mock the local flags response - cohort 999 is NOT in cohorts map (static cohort)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "multi-condition-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "id", "value": 999, "type": "cohort"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "set-1",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "$geoip_country_code",
+                                    "operator": "exact",
+                                    "value": ["DE"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "set-8",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "set-1", "rollout_percentage": 50},
+                            {"key": "set-8", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            }
+        ]
+        client.cohorts = {}  # Note: cohort 999 is NOT here - it's a static cohort
+
+        # Mock the API response - user is in the static cohort
+        patch_flags.return_value = {"featureFlags": {"multi-condition-flag": "set-1"}}
+
+        result = client.get_feature_flag(
+            "multi-condition-flag",
+            "test-distinct-id",
+            person_properties={"$geoip_country_code": "DE"},
+        )
+
+        # Should return the API result (set-1), not local evaluation (set-8)
+        self.assertEqual(result, "set-1")
+
+        # Verify API was called (fallback occurred)
+        self.assertEqual(patch_flags.call_count, 1)
+
 
 class TestMatchProperties(unittest.TestCase):
     def property(self, key, value, operator=None):

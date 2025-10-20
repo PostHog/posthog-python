@@ -20,7 +20,11 @@ from posthog.exception_utils import (
     exception_is_already_captured,
     mark_exception_as_captured,
 )
-from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
+from posthog.feature_flags import (
+    InconclusiveMatchError,
+    RequiresServerEvaluation,
+    match_feature_flag_properties,
+)
 from posthog.poller import Poller
 from posthog.request import (
     DEFAULT_HOST,
@@ -1583,7 +1587,7 @@ class Client(object):
                     self.log.debug(
                         f"Successfully computed flag locally: {key} -> {response}"
                     )
-                except InconclusiveMatchError as e:
+                except (RequiresServerEvaluation, InconclusiveMatchError) as e:
                     self.log.debug(f"Failed to compute flag {key} locally: {e}")
                 except Exception as e:
                     self.log.exception(

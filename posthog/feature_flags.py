@@ -22,6 +22,18 @@ class InconclusiveMatchError(Exception):
     pass
 
 
+class RequiresServerEvaluation(Exception):
+    """
+    Raised when feature flag evaluation requires server-side data that is not
+    available locally (e.g., static cohorts, experience continuity).
+
+    This error should propagate immediately to trigger API fallback, unlike
+    InconclusiveMatchError which allows trying other conditions.
+    """
+
+    pass
+
+
 # This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
 # Given the same distinct_id and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
@@ -239,7 +251,12 @@ def match_feature_flag_properties(
                 else:
                     variant = get_matching_variant(flag, distinct_id)
                 return variant or True
+        except RequiresServerEvaluation:
+            # Static cohort or other missing server-side data - must fallback to API
+            raise
         except InconclusiveMatchError:
+            # Evaluation error (bad regex, invalid date, missing property, etc.)
+            # Track that we had an inconclusive match, but try other conditions
             is_inconclusive = True
 
     if is_inconclusive:
@@ -449,8 +466,8 @@ def match_cohort(
     # }
     cohort_id = str(property.get("value"))
     if cohort_id not in cohort_properties:
-        raise InconclusiveMatchError(
-            "can't match cohort without a given cohort property value"
+        raise RequiresServerEvaluation(
+            f"cohort {cohort_id} not found in local cohorts - likely a static cohort that requires server evaluation"
         )
 
     property_group = cohort_properties[cohort_id]
@@ -503,6 +520,9 @@ def match_property_group(
                     # OR group
                     if matches:
                         return True
+            except RequiresServerEvaluation:
+                # Immediately propagate - this condition requires server-side data
+                raise
             except InconclusiveMatchError as e:
                 log.debug(f"Failed to compute property {prop} locally: {e}")
                 error_matching_locally = True
@@ -552,6 +572,9 @@ def match_property_group(
                         return True
                     if not matches and negation:
                         return True
+            except RequiresServerEvaluation:
+                # Immediately propagate - this condition requires server-side data
+                raise
             except InconclusiveMatchError as e:
                 log.debug(f"Failed to compute property {prop} locally: {e}")
                 error_matching_locally = True
