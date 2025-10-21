@@ -4103,9 +4103,7 @@ class TestCaptureCalls(unittest.TestCase):
                         }
                     ],
                     "multivariate": {
-                        "variants": [
-                            {"key": "variant-1", "rollout_percentage": 100}
-                        ]
+                        "variants": [{"key": "variant-1", "rollout_percentage": 100}]
                     },
                     "payloads": {"variant-1": '{"message": "local-payload"}'},
                 },
