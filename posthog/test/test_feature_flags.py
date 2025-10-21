@@ -4075,6 +4075,62 @@ class TestCaptureCalls(unittest.TestCase):
 
         patch_capture.reset_mock()
 
+    @mock.patch("posthog.client.flags")
+    def test_fallback_to_api_in_get_feature_flag_payload_when_flag_has_static_cohort(
+        self, patch_flags
+    ):
+        """
+        Test that get_feature_flag_payload falls back to API when evaluating
+        a flag with static cohorts, similar to get_feature_flag behavior.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        # Mock the local flags response - cohort 999 is NOT in cohorts map (static cohort)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Multi-condition Flag",
+                "key": "multi-condition-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "id", "value": 999, "type": "cohort"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "variant-1",
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "variant-1", "rollout_percentage": 100}
+                        ]
+                    },
+                    "payloads": {"variant-1": '{"message": "local-payload"}'},
+                },
+            }
+        ]
+        client.cohorts = {}  # Note: cohort 999 is NOT here - it's a static cohort
+
+        # Mock the API response - user is in the static cohort
+        patch_flags.return_value = {
+            "featureFlags": {"multi-condition-flag": "variant-1"},
+            "featureFlagPayloads": {"multi-condition-flag": '{"message": "from-api"}'},
+        }
+
+        # Call get_feature_flag_payload without match_value to trigger evaluation
+        result = client.get_feature_flag_payload(
+            "multi-condition-flag",
+            "test-distinct-id",
+        )
+
+        # Should return the API payload, not local payload
+        self.assertEqual(result, {"message": "from-api"})
+
+        # Verify API was called (fallback occurred)
+        self.assertEqual(patch_flags.call_count, 1)
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_disable_geoip_get_flag_capture_call(self, patch_flags, patch_capture):
