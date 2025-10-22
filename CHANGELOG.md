@@ -1,3 +1,7 @@
+# 6.7.9 - 2025-10-22
+
+- fix(flags): multi-condition flags with static cohorts returning wrong variants
+
 # 6.7.8 - 2025-10-16
 
 - fix(llma): missing async for OpenAI's streaming implementation
