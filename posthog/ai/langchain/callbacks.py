@@ -9,19 +9,29 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Union,
-    cast,
-)
+from typing import Any, Dict, List, Optional, Sequence, Union, cast
 from uuid import UUID
 
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema.agent import AgentAction, AgentFinish
+from packaging import version
+
+# check if langchain version is pre 1.0.0 or post 1.0.0
+# because the callbacks are different in the two versions
+# can be removed once we drop support for LangChain < 1.0.0
+if version.parse(langchain.__version__) < version.parse("1.0.0"):
+    from langchain.callbacks.base import BaseCallbackHandler
+    from langchain.schema.agent import AgentAction, AgentFinish
+else:
+    import langchain_core
+
+    if version.parse(langchain_core.__version__) < version.parse("1.0.0"):
+        from langchain_core.agents import AgentAction, AgentFinish
+        from langchain_core.callbacks.base import BaseCallbackHandler
+    else:
+        raise ValueError(
+            f"Unsupported LangChain Core package version: {langchain_core.__version__}."
+            "Please upgrade to LangChain Core 1.0.0 or later."
+        )
+
 from langchain_core.documents import Document
 from langchain_core.messages import (
     AIMessage,
@@ -29,15 +39,15 @@ from langchain_core.messages import (
     FunctionMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
     ToolCall,
+    ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
 from posthog import setup
-from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.ai.sanitization import sanitize_langchain
+from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -864,4 +874,5 @@ def _stringify_exception(exception: BaseException) -> str:
     description = str(exception)
     if description:
         return f"{exception.__class__.__name__}: {description}"
+    return exception.__class__.__name__
     return exception.__class__.__name__
