@@ -36,7 +36,7 @@ from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
 from posthog import setup
-from posthog.ai.utils import get_model_params, with_privacy_mode
+from posthog.ai.utils import get_model_params, with_privacy_mode, get_ai_lib_metadata
 from posthog.ai.sanitization import sanitize_langchain
 from posthog.client import Client
 
@@ -486,7 +486,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
             "$ai_span_id": run_id,
-            "$ai_lib_metadata": _get_ai_lib_metadata(),
+            "$ai_lib_metadata": get_ai_lib_metadata("langchain"),
         }
         if parent_run_id is not None:
             event_properties["$ai_parent_id"] = parent_run_id
@@ -557,7 +557,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_http_status": 200,
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
-            "$ai_lib_metadata": _get_ai_lib_metadata(),
+            "$ai_lib_metadata": get_ai_lib_metadata("langchain"),
         }
 
         if run.tools:
@@ -867,12 +867,3 @@ def _stringify_exception(exception: BaseException) -> str:
     if description:
         return f"{exception.__class__.__name__}: {description}"
     return exception.__class__.__name__
-
-
-def _get_ai_lib_metadata() -> Dict[str, Any]:
-    """
-    Generate the $ai_lib_metadata dict with framework information.
-    Since this file is langchain/callbacks.py, we know the framework is LangChain.
-    Returns a dict with schema version and framework name.
-    """
-    return {"schema": "v1", "frameworks": [{"name": "langchain"}]}
