@@ -167,6 +167,10 @@ def test_new_client_basic_generation(
 
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
+    assert props["$ai_lib_metadata"] == {
+        "schema": "v1",
+        "frameworks": [{"name": "gemini"}],
+    }
     assert props["$ai_provider"] == "gemini"
     assert props["$ai_model"] == "gemini-2.0-flash"
     assert props["$ai_input_tokens"] == 20
