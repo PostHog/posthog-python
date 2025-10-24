@@ -12,6 +12,14 @@ from posthog.ai.sanitization import (
 )
 
 
+def get_ai_lib_metadata(framework: str) -> Dict[str, Any]:
+    """
+    Generate AI library metadata object with framework name.
+    Used to identify which framework/SDK generated the AI event.
+    """
+    return {"schema": "v1", "frameworks": [{"name": framework}]}
+
+
 def merge_usage_stats(
     target: TokenUsage, source: TokenUsage, mode: str = "incremental"
 ) -> None:
@@ -320,6 +328,8 @@ def call_llm_and_track_usage(
                 ph_client, posthog_privacy_mode, kwargs.get("instructions")
             )
 
+        event_properties["$ai_lib_metadata"] = get_ai_lib_metadata(provider)
+
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
@@ -423,6 +433,8 @@ async def call_llm_and_track_usage_async(
                 ph_client, posthog_privacy_mode, kwargs.get("instructions")
             )
 
+        event_properties["$ai_lib_metadata"] = get_ai_lib_metadata(provider)
+
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
@@ -483,6 +495,7 @@ def capture_streaming_event(
 
     # Build base event properties
     event_properties = {
+        "$ai_lib_metadata": get_ai_lib_metadata(event_data["provider"]),
         "$ai_provider": event_data["provider"],
         "$ai_model": event_data["model"],
         "$ai_model_parameters": get_model_params(event_data["kwargs"]),

@@ -482,6 +482,10 @@ def test_basic_completion(mock_client, mock_openai_response):
 
         assert call_args["distinct_id"] == "test-id"
         assert call_args["event"] == "$ai_generation"
+        assert props["$ai_lib_metadata"] == {
+            "schema": "v1",
+            "frameworks": [{"name": "openai"}],
+        }
         assert props["$ai_provider"] == "openai"
         assert props["$ai_model"] == "gpt-4"
         assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
