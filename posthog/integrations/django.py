@@ -220,3 +220,32 @@ class PosthogContextMiddleware:
                 contexts.tag(k, v)
 
             return await self.get_response(request)
+
+    def process_exception(self, request, exception):
+        # type: (HttpRequest, Exception) -> None
+        """
+        Process exceptions from views and downstream middleware.
+
+        Django calls this WHILE still inside the context created by __call__,
+        so request tags have already been extracted and set. This method just
+        needs to capture the exception directly.
+
+        Django converts view exceptions into responses before they propagate through
+        the middleware stack, so the context manager in __call__/__acall__ never sees them.
+
+        Note: Django's process_exception is always synchronous, even for async views.
+        """
+        if self.request_filter and not self.request_filter(request):
+            return
+
+        if not self.capture_exceptions:
+            return
+
+        # Context and tags already set by __call__ or __acall__
+        # Just capture the exception
+        if self.client:
+            self.client.capture_exception(exception)
+        else:
+            from posthog import capture_exception
+
+            capture_exception(exception)

@@ -1,7 +1,11 @@
+# 6.7.11 - 2025-10-24
+
+- fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
+
 # 6.7.10 - 2025-10-24
 
 - fix(django): Make middleware truly hybrid - compatible with both sync (WSGI) and async (ASGI) Django stacks without breaking sync-only deployments
-- fix(django): Exception capture works correctly via context manager (addresses #329)
+- Note: v6.7.10 did not fully fix exception capture - see v6.7.11
 
 # 6.7.9 - 2025-10-22
 

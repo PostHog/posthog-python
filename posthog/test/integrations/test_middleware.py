@@ -276,6 +276,46 @@ class TestPosthogContextMiddlewareSync(unittest.TestCase):
         self.assertIsInstance(captured_exception, ValueError)
         self.assertEqual(str(captured_exception), "Test exception")
 
+    def test_process_exception_integration(self):
+        """
+        Integration test simulating Django's actual exception handling flow.
+
+        When a view raises an exception:
+        1. Middleware.__call__ creates context with request tags
+        2. __call__ calls self.get_response(request)
+        3. Inside Django's handler: catches exception, checks if middleware.process_exception
+           exists (hasattr), calls it if present, returns error response
+        4. Context manager exits
+
+        This verifies exception capture works in the real Django flow.
+        """
+        mock_client = Mock()
+
+        get_response = Mock(return_value=Mock())
+        middleware = PosthogContextMiddleware(get_response)
+        middleware.client = mock_client
+
+        view_exception = ValueError("View error")
+        error_response = Mock(status_code=500)
+
+        def mock_get_response(request):
+            # Simulate Django: check if process_exception exists, call it
+            if hasattr(middleware, "process_exception"):
+                middleware.process_exception(request, view_exception)
+            return error_response
+
+        middleware.get_response = mock_get_response
+
+        request = MockRequest(
+            headers={"X-POSTHOG-DISTINCT-ID": "user123"},
+            method="POST",
+            path="/api/test",
+        )
+        response = middleware(request)
+
+        self.assertEqual(response, error_response)
+        mock_client.capture_exception.assert_called_once_with(view_exception)
+
 
 class TestPosthogContextMiddlewareAsync(unittest.TestCase):
     """Test asynchronous middleware behavior"""
