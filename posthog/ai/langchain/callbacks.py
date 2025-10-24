@@ -750,12 +750,13 @@ def _parse_usage_model(
         "cache_read": "cache_read_tokens",
         "reasoning": "reasoning_tokens",
     }
-    return ModelUsage(
-        **{
-            dataclass_key: parsed_usage.get(mapped_key) or 0
-            for mapped_key, dataclass_key in field_mapping.items()
-        },
+    normalized_usage = ModelUsage(
+        **{dataclass_key: parsed_usage.get(mapped_key) or 0 for mapped_key, dataclass_key in field_mapping.items()},
     )
+    # input_tokens is the sum of input and cache read tokens.
+    if normalized_usage.input_tokens and normalized_usage.cache_read_tokens:
+        normalized_usage.input_tokens = max(normalized_usage.input_tokens - normalized_usage.cache_read_tokens, 0)
+    return normalized_usage
 
 
 def _parse_usage(response: LLMResult) -> ModelUsage:
