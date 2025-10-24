@@ -320,6 +320,8 @@ def call_llm_and_track_usage(
                 ph_client, posthog_privacy_mode, kwargs.get("instructions")
             )
 
+        event_properties["$ai_lib_metadata"] = {"schema": "v1", "frameworks": [{"name": provider}]}
+
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
             ph_client.capture(
@@ -422,6 +424,8 @@ async def call_llm_and_track_usage_async(
             event_properties["$ai_instructions"] = with_privacy_mode(
                 ph_client, posthog_privacy_mode, kwargs.get("instructions")
             )
+
+        event_properties["$ai_lib_metadata"] = {"schema": "v1", "frameworks": [{"name": provider}]}
 
         # send the event to posthog
         if hasattr(ph_client, "capture") and callable(ph_client.capture):
