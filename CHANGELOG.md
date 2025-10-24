@@ -1,4 +1,4 @@
-# Unreleased
+# 6.7.10 - 2025-10-24
 
 - fix(django): Make middleware truly hybrid - compatible with both sync (WSGI) and async (ASGI) Django stacks without breaking sync-only deployments
 - fix(django): Exception capture works correctly via context manager (addresses #329)
