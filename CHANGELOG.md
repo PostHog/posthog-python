@@ -1,3 +1,7 @@
+# 6.7.10 - 2025-10-24
+
+- fix(llma): cache cost calculation in the LangChain callback
+
 # 6.7.9 - 2025-10-22
 
 - fix(flags): multi-condition flags with static cohorts returning wrong variants
