@@ -483,6 +483,7 @@ def capture_streaming_event(
 
     # Build base event properties
     event_properties = {
+        "$ai_lib_metadata": {"schema": "v1", "frameworks": [{"name": event_data["provider"]}]},
         "$ai_provider": event_data["provider"],
         "$ai_model": event_data["model"],
         "$ai_model_parameters": get_model_params(event_data["kwargs"]),
