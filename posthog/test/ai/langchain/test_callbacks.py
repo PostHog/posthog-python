@@ -1969,7 +1969,9 @@ def test_no_cache_read_tokens_no_subtraction(mock_client):
 
     This tests the conditional check before the subtraction in callbacks.py line 757.
     """
-    prompt = ChatPromptTemplate.from_messages([("user", "Normal request without cache")])
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Normal request without cache")]
+    )
 
     # No cache usage - input_tokens should remain as-is
     model = FakeMessagesListChatModel(
