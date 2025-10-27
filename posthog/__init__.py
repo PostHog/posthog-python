@@ -581,7 +581,7 @@ def get_feature_flag_payload(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
-) -> Optional[str]:
+) -> Optional[FeatureFlagResult]:
     return _proxy(
         "get_feature_flag_payload",
         key=key,
