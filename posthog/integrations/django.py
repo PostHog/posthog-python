@@ -184,6 +184,101 @@ class PosthogContextMiddleware:
 
         return user_id, email
 
+    async def aextract_tags(self, request):
+        # type: (HttpRequest) -> Dict[str, Any]
+        """
+        Async version of extract_tags for use in async request handling.
+
+        Uses await request.auser() instead of request.user to avoid
+        SynchronousOnlyOperation in async context.
+
+        Follows Django's naming convention for async methods (auser, asave, etc.).
+        """
+        tags = {}
+
+        (user_id, user_email) = await self.aextract_request_user(request)
+
+        # Extract session ID from X-POSTHOG-SESSION-ID header
+        session_id = request.headers.get("X-POSTHOG-SESSION-ID")
+        if session_id:
+            contexts.set_context_session(session_id)
+
+        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
+        distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID") or user_id
+        if distinct_id:
+            contexts.identify_context(distinct_id)
+
+        # Extract user email
+        if user_email:
+            tags["email"] = user_email
+
+        # Extract current URL
+        absolute_url = request.build_absolute_uri()
+        if absolute_url:
+            tags["$current_url"] = absolute_url
+
+        # Extract request method
+        if request.method:
+            tags["$request_method"] = request.method
+
+        # Extract request path
+        if request.path:
+            tags["$request_path"] = request.path
+
+        # Extract IP address
+        ip_address = request.headers.get("X-Forwarded-For")
+        if ip_address:
+            tags["$ip_address"] = ip_address
+
+        # Extract user agent
+        user_agent = request.headers.get("User-Agent")
+        if user_agent:
+            tags["$user_agent"] = user_agent
+
+        # Apply extra tags if configured
+        if self.extra_tags:
+            extra = self.extra_tags(request)
+            if extra:
+                tags.update(extra)
+
+        # Apply tag mapping if configured
+        if self.tag_map:
+            tags = self.tag_map(tags)
+
+        return tags
+
+    async def aextract_request_user(self, request):
+        """
+        Async version of extract_request_user for use in async request handling.
+
+        Uses await request.auser() instead of request.user to avoid
+        SynchronousOnlyOperation in async context.
+
+        Follows Django's naming convention for async methods (auser, asave, etc.).
+        """
+        user_id = None
+        email = None
+
+        # In async context, use auser() instead of user attribute
+        if hasattr(request, "auser"):
+            user = await request.auser()
+        else:
+            # Fallback for non-Django or test requests
+            user = getattr(request, "user", None)
+
+        if user and getattr(user, "is_authenticated", False):
+            try:
+                user_id = str(user.pk)
+            except Exception:
+                pass
+
+            try:
+                email = str(user.email)
+            except Exception:
+                pass
+
+        return user_id, email
+
     def __call__(self, request):
         # type: (HttpRequest) -> Union[HttpResponse, Awaitable[HttpResponse]]
         """
@@ -211,12 +306,14 @@ class PosthogContextMiddleware:
         Asynchronous entry point for async request handling.
 
         This method is called when the middleware chain is async.
+        Uses aextract_tags() which calls request.auser() to avoid
+        SynchronousOnlyOperation when accessing user in async context.
         """
         if self.request_filter and not self.request_filter(request):
             return await self.get_response(request)
 
         with contexts.new_context(self.capture_exceptions, client=self.client):
-            for k, v in self.extract_tags(request).items():
+            for k, v in (await self.aextract_tags(request)).items():
                 contexts.tag(k, v)
 
             return await self.get_response(request)
