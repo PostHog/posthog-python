@@ -486,6 +486,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
             "$ai_span_id": run_id,
+            "$ai_framework": "langchain",
         }
         if parent_run_id is not None:
             event_properties["$ai_parent_id"] = parent_run_id
@@ -556,6 +557,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_http_status": 200,
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
+            "$ai_framework": "langchain",
         }
 
         if run.tools:

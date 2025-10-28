@@ -204,6 +204,7 @@ def test_basic_chat_chain(mock_client, stream):
     # Generation is second
     assert generation_args["event"] == "$ai_generation"
     assert "distinct_id" in generation_args
+    assert generation_props["$ai_framework"] == "langchain"
     assert "$ai_model" in generation_props
     assert "$ai_provider" in generation_props
     assert generation_props["$ai_input"] == [
