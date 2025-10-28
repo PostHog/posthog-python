@@ -837,3 +837,64 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_cache_read_input_tokens"] == 30
     assert props["$ai_reasoning_tokens"] == 5
+
+
+def test_web_search_grounding(mock_client, mock_google_genai_client):
+    """Test web search detection via grounding_metadata."""
+
+    # Create mock response with grounding metadata
+    mock_response = MagicMock()
+
+    # Mock usage metadata
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 60
+    mock_usage.candidates_token_count = 40
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_response.usage_metadata = mock_usage
+
+    # Mock grounding metadata
+    mock_grounding_chunk = MagicMock()
+    mock_grounding_chunk.uri = "https://example.com"
+
+    mock_grounding_metadata = MagicMock()
+    mock_grounding_metadata.grounding_chunks = [mock_grounding_chunk]
+
+    # Mock text part
+    mock_text_part = MagicMock()
+    mock_text_part.text = "According to search results..."
+    type(mock_text_part).text = mock_text_part.text
+
+    # Mock content with parts
+    mock_content = MagicMock()
+    mock_content.parts = [mock_text_part]
+
+    # Mock candidate with grounding metadata
+    mock_candidate = MagicMock()
+    mock_candidate.content = mock_content
+    mock_candidate.grounding_metadata = mock_grounding_metadata
+    type(mock_candidate).grounding_metadata = mock_candidate.grounding_metadata
+
+    mock_response.candidates = [mock_candidate]
+    mock_response.text = "According to search results..."
+
+    # Mock the generate_content method
+    mock_google_genai_client.models.generate_content.return_value = mock_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents="What's the latest news?",
+        posthog_distinct_id="test-id",
+    )
+
+    assert response == mock_response
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Verify web search count is detected (binary for grounding)
+    assert props["$ai_web_search_count"] == 1
+    assert props["$ai_input_tokens"] == 60
+    assert props["$ai_output_tokens"] == 40

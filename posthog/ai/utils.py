@@ -53,6 +53,12 @@ def merge_usage_stats(
         if source_reasoning is not None:
             current = target.get("reasoning_tokens") or 0
             target["reasoning_tokens"] = current + source_reasoning
+
+        source_web_search = source.get("web_search_count")
+        if source_web_search is not None:
+            current = target.get("web_search_count") or 0
+            target["web_search_count"] = current + source_web_search
+
     elif mode == "cumulative":
         # Replace with latest values (already cumulative)
         if source.get("input_tokens") is not None:
@@ -67,6 +73,9 @@ def merge_usage_stats(
             ]
         if source.get("reasoning_tokens") is not None:
             target["reasoning_tokens"] = source["reasoning_tokens"]
+        if source.get("web_search_count") is not None:
+            target["web_search_count"] = source["web_search_count"]
+
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
 
@@ -311,6 +320,10 @@ def call_llm_and_track_usage(
         if reasoning is not None and reasoning > 0:
             event_properties["$ai_reasoning_tokens"] = reasoning
 
+        web_search_count = usage.get("web_search_count")
+        if web_search_count is not None and web_search_count > 0:
+            event_properties["$ai_web_search_count"] = web_search_count
+
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
 
@@ -413,6 +426,14 @@ async def call_llm_and_track_usage_async(
         cache_creation = usage.get("cache_creation_input_tokens")
         if cache_creation is not None and cache_creation > 0:
             event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+
+        reasoning = usage.get("reasoning_tokens")
+        if reasoning is not None and reasoning > 0:
+            event_properties["$ai_reasoning_tokens"] = reasoning
+
+        web_search_count = usage.get("web_search_count")
+        if web_search_count is not None and web_search_count > 0:
+            event_properties["$ai_web_search_count"] = web_search_count
 
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
@@ -534,6 +555,15 @@ def capture_streaming_event(
             value = event_data["usage_stats"].get(field)
             if value is not None and isinstance(value, int) and value > 0:
                 event_properties[f"$ai_{field}"] = value
+
+    # Add web search count if present (all providers)
+    web_search_count = event_data["usage_stats"].get("web_search_count")
+    if (
+        web_search_count is not None
+        and isinstance(web_search_count, int)
+        and web_search_count > 0
+    ):
+        event_properties["$ai_web_search_count"] = web_search_count
 
     # Handle provider-specific fields
     if (

@@ -255,6 +255,81 @@ def format_openai_streaming_content(
     return formatted
 
 
+def extract_openai_web_search_count(response: Any) -> int:
+    """
+    Extract web search count from OpenAI response.
+
+    Uses a two-tier detection strategy:
+    1. Priority 1 (exact count): Check for output[].type == "web_search_call" (Responses API)
+    2. Priority 2 (binary detection): Check for various web search indicators:
+       - Root-level citations, search_results, or usage.search_context_size (Perplexity)
+       - Annotations with type "url_citation" in choices/output
+
+    Args:
+        response: The response from OpenAI API
+
+    Returns:
+        Number of web search requests (exact count or binary 1/0)
+    """
+
+    # Priority 1: Check for exact count in Responses API output
+    if hasattr(response, "output"):
+        web_search_count = 0
+        for item in response.output:
+            if hasattr(item, "type") and item.type == "web_search_call":
+                web_search_count += 1
+
+        if web_search_count > 0:
+            return web_search_count
+
+    # Priority 2: Binary detection (returns 1 or 0)
+
+    # Check root-level indicators (Perplexity)
+    if hasattr(response, "citations"):
+        citations = getattr(response, "citations")
+        if citations and len(citations) > 0:
+            return 1
+
+    if hasattr(response, "search_results"):
+        search_results = getattr(response, "search_results")
+        if search_results and len(search_results) > 0:
+            return 1
+
+    if hasattr(response, "usage") and hasattr(response.usage, "search_context_size"):
+        if response.usage.search_context_size:
+            return 1
+
+    # Check for url_citation annotations in choices (Chat Completions)
+    if hasattr(response, "choices"):
+        for choice in response.choices:
+            if hasattr(choice, "message") and hasattr(choice.message, "annotations"):
+                annotations = choice.message.annotations
+                if annotations:
+                    for annotation in annotations:
+                        if (
+                            hasattr(annotation, "type")
+                            and annotation.type == "url_citation"
+                        ):
+                            return 1
+
+    # Check for url_citation annotations in output (Responses API)
+    if hasattr(response, "output"):
+        for item in response.output:
+            if hasattr(item, "content") and isinstance(item.content, list):
+                for content_item in item.content:
+                    if hasattr(content_item, "annotations"):
+                        annotations = content_item.annotations
+                        if annotations:
+                            for annotation in annotations:
+                                if (
+                                    hasattr(annotation, "type")
+                                    and annotation.type == "url_citation"
+                                ):
+                                    return 1
+
+    return 0
+
+
 def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage statistics from a full OpenAI response (non-streaming).
@@ -312,6 +387,10 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     if reasoning_tokens > 0:
         result["reasoning_tokens"] = reasoning_tokens
 
+    web_search_count = extract_openai_web_search_count(response)
+    if web_search_count > 0:
+        result["web_search_count"] = web_search_count
+
     return result
 
 
@@ -358,6 +437,11 @@ def extract_openai_usage_from_chunk(
                 chunk.usage.completion_tokens_details.reasoning_tokens
             )
 
+        # Extract web search count from the chunk (available in final streaming chunks)
+        web_search_count = extract_openai_web_search_count(chunk)
+        if web_search_count > 0:
+            usage["web_search_count"] = web_search_count
+
     elif provider_type == "responses":
         # For Responses API, usage is only in chunk.response.usage for completed events
         if hasattr(chunk, "type") and chunk.type == "response.completed":
@@ -385,6 +469,12 @@ def extract_openai_usage_from_chunk(
                     usage["reasoning_tokens"] = (
                         response_usage.output_tokens_details.reasoning_tokens
                     )
+
+                # Extract web search count from the complete response
+                if hasattr(chunk, "response"):
+                    web_search_count = extract_openai_web_search_count(chunk.response)
+                    if web_search_count > 0:
+                        usage["web_search_count"] = web_search_count
 
     return usage
 

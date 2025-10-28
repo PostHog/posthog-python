@@ -163,6 +163,32 @@ def format_anthropic_streaming_content(
     return formatted
 
 
+def extract_anthropic_web_search_count(response: Any) -> int:
+    """
+    Extract web search count from Anthropic response.
+
+    Anthropic provides exact web search counts via usage.server_tool_use.web_search_requests.
+
+    Args:
+        response: The response from Anthropic API
+
+    Returns:
+        Number of web search requests (0 if none)
+    """
+    if not hasattr(response, "usage"):
+        return 0
+
+    if not hasattr(response.usage, "server_tool_use"):
+        return 0
+
+    server_tool_use = response.usage.server_tool_use
+
+    if hasattr(server_tool_use, "web_search_requests"):
+        return int(getattr(server_tool_use, "web_search_requests", 0))
+
+    return 0
+
+
 def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage from a full Anthropic response (non-streaming).
@@ -190,6 +216,10 @@ def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
         cache_creation = response.usage.cache_creation_input_tokens
         if cache_creation and cache_creation > 0:
             result["cache_creation_input_tokens"] = cache_creation
+
+    web_search_count = extract_anthropic_web_search_count(response)
+    if web_search_count > 0:
+        result["web_search_count"] = web_search_count
 
     return result
 
@@ -221,6 +251,16 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
     # Handle usage stats from message_delta event
     if hasattr(event, "usage") and event.usage:
         usage["output_tokens"] = getattr(event.usage, "output_tokens", 0)
+
+        # Extract web search count from usage
+        if hasattr(event.usage, "server_tool_use"):
+            server_tool_use = event.usage.server_tool_use
+            if hasattr(server_tool_use, "web_search_requests"):
+                web_search_count = int(
+                    getattr(server_tool_use, "web_search_requests", 0)
+                )
+                if web_search_count > 0:
+                    usage["web_search_count"] = web_search_count
 
     return usage
 

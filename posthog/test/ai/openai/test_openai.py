@@ -1339,3 +1339,110 @@ def test_tool_definition(mock_client, mock_openai_response):
         assert isinstance(props["$ai_latency"], float)
         # Verify that tools are captured in the $ai_tools property
         assert props["$ai_tools"] == tools
+
+
+def test_web_search_perplexity_style(mock_client):
+    """Test web search detection via annotations (Perplexity-style)."""
+
+    class MockAnnotation:
+        def __init__(self):
+            self.type = "url_citation"
+
+    class MockMessage:
+        def __init__(self):
+            self.role = "assistant"
+            self.content = "Based on recent search results..."
+            self.annotations = [MockAnnotation(), MockAnnotation()]
+
+    class MockChoice:
+        def __init__(self):
+            self.message = MockMessage()
+
+    class MockUsage:
+        def __init__(self):
+            self.prompt_tokens = 50
+            self.completion_tokens = 30
+
+    class MockResponseWithAnnotations:
+        def __init__(self):
+            self.choices = [MockChoice()]
+            self.usage = MockUsage()
+            self.model = "gpt-4-turbo"
+
+    mock_response = MockResponseWithAnnotations()
+
+    with patch("openai.resources.chat.Completions.create", return_value=mock_response):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=[{"role": "user", "content": "What's happening in tech?"}],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is detected (binary detection)
+        assert props["$ai_web_search_count"] == 1
+
+
+def test_web_search_responses_api(mock_client):
+    """Test exact web search count from Responses API."""
+
+    class MockWebSearchItem:
+        def __init__(self):
+            self.type = "web_search_call"
+
+    class MockMessageItem:
+        def __init__(self):
+            self.type = "message"
+            self.role = "assistant"
+            self.content = "Here are the results..."
+
+    class MockUsage:
+        def __init__(self):
+            self.input_tokens = 100
+            self.output_tokens = 75
+
+    class MockResponsesAPIResponse:
+        def __init__(self):
+            self.output = [MockWebSearchItem(), MockWebSearchItem(), MockMessageItem()]
+            self.usage = MockUsage()
+            self.model = "gpt-4o"
+
+    mock_response = MockResponsesAPIResponse()
+
+    with patch(
+        "openai.resources.responses.Responses.create", return_value=mock_response
+    ):
+        # Manually call the tracking since we're testing the converter logic
+        from posthog.ai.utils import call_llm_and_track_usage
+
+        def mock_create_call(**kwargs):
+            return mock_response
+
+        result = call_llm_and_track_usage(
+            posthog_distinct_id="test-id",
+            ph_client=mock_client,
+            provider="openai",
+            posthog_trace_id=None,
+            posthog_properties=None,
+            posthog_privacy_mode=False,
+            posthog_groups=None,
+            base_url="https://api.openai.com/v1",
+            call_method=mock_create_call,
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Search query"}],
+        )
+
+        assert result == mock_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify exact web search count
+        assert props["$ai_web_search_count"] == 2
