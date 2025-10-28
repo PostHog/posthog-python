@@ -499,6 +499,50 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_async_middleware_with_authenticated_user(self):
+        """
+        Test that async middleware correctly extracts user info in async context.
+
+        Django's request.user is a SimpleLazyObject that defers DB access.
+        In async context, accessing it directly raises SynchronousOnlyOperation.
+        The middleware should use request.auser() instead.
+
+        This tests the fix for issue #355.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = True
+            mock_user.pk = 123
+            mock_user.email = "test@example.com"
+
+            async def async_get_response(request):
+                # Verify user info was extracted and set as distinct_id
+                distinct_id = get_context_distinct_id()
+                self.assertEqual(distinct_id, "123")
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser() to return authenticated user
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
 
 class TestPosthogContextMiddlewareHybrid(unittest.TestCase):
     """Test hybrid middleware behavior with mixed sync/async chains"""
