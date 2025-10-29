@@ -68,3 +68,34 @@ jobs:
             - name: Run posthog tests
               run: |
                   pytest --verbose --timeout=30
+
+    django5-integration:
+        name: Django 5 integration tests
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.12
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: 3.12
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+              with:
+                  enable-cache: true
+                  pyproject-file: 'test_project_django5/pyproject.toml'
+
+            - name: Install Django 5 test project dependencies
+              shell: bash
+              working-directory: test_project_django5
+              run: |
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync
+
+            - name: Run Django 5 middleware integration tests
+              working-directory: test_project_django5
+              run: |
+                  uv run pytest test_middleware.py test_exception_capture.py --verbose
