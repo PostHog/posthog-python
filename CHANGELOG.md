@@ -1,3 +1,8 @@
+# 6.7.14 - 2025-11-03
+
+- fix(django): Handle request.user access in async middleware context to prevent SynchronousOnlyOperation errors in Django 5+ (fixes #355)
+- test(django): Add Django 5 integration test suite with real ASGI application testing async middleware behavior
+
 # 6.7.13 - 2025-11-02
 
 - fix(llma): cache cost calculation in the LangChain callback
