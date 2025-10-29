@@ -14,14 +14,15 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+
 from django.contrib import admin
 from django.urls import path
 from testdjango import views
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('test/async-user', views.test_async_user),
-    path('test/sync-user', views.test_sync_user),
-    path('test/async-exception', views.test_async_exception),
-    path('test/sync-exception', views.test_sync_exception),
+    path("admin/", admin.site.urls),
+    path("test/async-user", views.test_async_user),
+    path("test/sync-user", views.test_sync_user),
+    path("test/async-exception", views.test_async_exception),
+    path("test/sync-exception", views.test_sync_exception),
 ]
