@@ -12,5 +12,8 @@ dependencies = [
     "httpx~=0.28.1",
 ]
 
+[tool.uv]
+required-version = ">=0.5"
+
 [tool.uv.sources]
 posthog = { path = "..", editable = true }

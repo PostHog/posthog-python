@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
 from uuid import uuid4
 
@@ -60,7 +60,6 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     guess_timezone,
-    remove_trailing_slash,
     system_context,
 )
 from posthog.version import VERSION

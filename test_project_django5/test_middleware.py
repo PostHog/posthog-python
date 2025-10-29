@@ -8,6 +8,7 @@ These tests verify that the middleware correctly handles:
 
 Tests run directly against the ASGI application without needing a server.
 """
+
 import os
 import django
 
@@ -15,9 +16,9 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "testdjango.settings")
 django.setup()
 
-import pytest
-from httpx import AsyncClient, ASGITransport
-from django.core.asgi import get_asgi_application
+import pytest  # noqa: E402
+from httpx import AsyncClient, ASGITransport  # noqa: E402
+from django.core.asgi import get_asgi_application  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -38,7 +39,9 @@ async def test_async_user_access(asgi_app):
     trigger the lazy loading bug. This test verifies the middleware works
     in the common case.
     """
-    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=asgi_app), base_url="http://testserver"
+    ) as ac:
         response = await ac.get("/test/async-user")
 
     assert response.status_code == 200
@@ -74,13 +77,13 @@ async def test_async_authenticated_user_access(asgi_app):
     @sync_to_async
     def create_or_get_user():
         user, created = User.objects.get_or_create(
-            username='testuser',
+            username="testuser",
             defaults={
-                'email': 'test@example.com',
-            }
+                "email": "test@example.com",
+            },
         )
         if created:
-            user.set_password('testpass123')
+            user.set_password("testpass123")
             user.save()
         return user
 
@@ -91,7 +94,7 @@ async def test_async_authenticated_user_access(asgi_app):
     def create_session():
         client = Client()
         client.force_login(user)
-        return client.cookies.get('sessionid')
+        return client.cookies.get("sessionid")
 
     session_cookie = await create_session()
 
@@ -104,14 +107,14 @@ async def test_async_authenticated_user_access(asgi_app):
         async with AsyncClient(
             transport=ASGITransport(app=asgi_app),
             base_url="http://testserver",
-            cookies={"sessionid": session_cookie.value}
+            cookies={"sessionid": session_cookie.value},
         ) as ac:
             response = await ac.get("/test/async-user")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
-        assert data["user_authenticated"] == True
+        assert data["user_authenticated"]
 
 
 @pytest.mark.asyncio
@@ -121,7 +124,9 @@ async def test_sync_user_access(asgi_app):
 
     This should always work regardless of middleware version.
     """
-    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=asgi_app), base_url="http://testserver"
+    ) as ac:
         response = await ac.get("/test/sync-user")
 
     assert response.status_code == 200
@@ -139,7 +144,9 @@ async def test_async_exception_capture(asgi_app):
     causes a 500 response. See test_exception_capture.py for tests that verify
     actual exception capture to PostHog.
     """
-    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=asgi_app), base_url="http://testserver"
+    ) as ac:
         response = await ac.get("/test/async-exception")
 
     # Django returns 500 for unhandled exceptions
@@ -154,7 +161,9 @@ async def test_sync_exception_capture(asgi_app):
     The middleware's process_exception() method captures view exceptions to PostHog.
     This test verifies the exception causes a 500 response.
     """
-    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=asgi_app), base_url="http://testserver"
+    ) as ac:
         response = await ac.get("/test/sync-exception")
 
     # Django returns 500 for unhandled exceptions
