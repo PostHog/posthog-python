@@ -101,11 +101,12 @@ async def test_async_authenticated_user_access(asgi_app):
     # Make request with session cookie - this should trigger the bug in v6.7.11
     # Disable exception capture to see the SynchronousOnlyOperation clearly
     with override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=False):
-        async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
-            response = await ac.get(
-                "/test/async-user",
-                cookies={"sessionid": session_cookie.value}
-            )
+        async with AsyncClient(
+            transport=ASGITransport(app=asgi_app),
+            base_url="http://testserver",
+            cookies={"sessionid": session_cookie.value}
+        ) as ac:
+            response = await ac.get("/test/async-user")
 
         assert response.status_code == 200
         data = response.json()
