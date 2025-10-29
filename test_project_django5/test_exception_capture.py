@@ -18,11 +18,16 @@ django.setup()
 import pytest
 from httpx import AsyncClient, ASGITransport
 from django.core.asgi import get_asgi_application
-from posthog import Client
+
+
+@pytest.fixture(scope="session")
+def asgi_app():
+    """Shared ASGI application for all tests."""
+    return get_asgi_application()
 
 
 @pytest.mark.asyncio
-async def test_async_exception_is_captured():
+async def test_async_exception_is_captured(asgi_app):
     """
     Test that async view exceptions are captured to PostHog.
 
@@ -42,9 +47,9 @@ async def test_async_exception_is_captured():
             'message': str(exception)
         })
 
+    # Patch at the posthog module level where middleware imports from
     with patch('posthog.capture_exception', side_effect=mock_capture):
-        app = get_asgi_application()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+        async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
             response = await ac.get("/test/async-exception")
 
         # Django returns 500
@@ -58,13 +63,9 @@ async def test_async_exception_is_captured():
         assert exception_data['type'] == 'ValueError'
         assert 'Test exception from Django 5 async view' in exception_data['message']
 
-        print(f"✓ Async exception captured: {len(captured)} exception event(s)")
-        print(f"  Exception type: {exception_data['type']}")
-        print(f"  Exception message: {exception_data['message']}")
-
 
 @pytest.mark.asyncio
-async def test_sync_exception_is_captured():
+async def test_sync_exception_is_captured(asgi_app):
     """
     Test that sync view exceptions are captured to PostHog.
 
@@ -84,9 +85,9 @@ async def test_sync_exception_is_captured():
             'message': str(exception)
         })
 
+    # Patch at the posthog module level where middleware imports from
     with patch('posthog.capture_exception', side_effect=mock_capture):
-        app = get_asgi_application()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+        async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
             response = await ac.get("/test/sync-exception")
 
         # Django returns 500
@@ -99,33 +100,3 @@ async def test_sync_exception_is_captured():
         exception_data = captured[0]
         assert exception_data['type'] == 'ValueError'
         assert 'Test exception from Django 5 sync view' in exception_data['message']
-
-        print(f"✓ Sync exception captured: {len(captured)} exception event(s)")
-        print(f"  Exception type: {exception_data['type']}")
-        print(f"  Exception message: {exception_data['message']}")
-
-
-if __name__ == "__main__":
-    """Run tests directly."""
-    import asyncio
-
-    async def run_tests():
-        print("\nTesting exception capture with process_exception() fix...\n")
-
-        try:
-            await test_async_exception_is_captured()
-        except AssertionError as e:
-            print(f"✗ Async exception capture failed: {e}")
-        except Exception as e:
-            print(f"✗ Async test error: {e}")
-
-        try:
-            await test_sync_exception_is_captured()
-        except AssertionError as e:
-            print(f"✗ Sync exception capture failed: {e}")
-        except Exception as e:
-            print(f"✗ Sync test error: {e}")
-
-        print("\nDone!\n")
-
-    asyncio.run(run_tests())
