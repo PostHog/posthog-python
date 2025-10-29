@@ -1,6 +1,10 @@
-# 6.7.11 - 2025-10-24
+# Unreleased
 
 - fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
+
+# 6.7.11 - 2025-10-28
+
+- feat(ai): Add `$ai_framework` property for framework integrations (e.g. LangChain)
 
 # 6.7.10 - 2025-10-24
 
