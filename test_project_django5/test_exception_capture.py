@@ -1,11 +1,12 @@
 """
-Test that demonstrates the exception capture bug and fix.
+Test that verifies exception capture functionality.
 
-This test uses a real PostHog client with a test consumer to verify that
-exceptions are actually captured to PostHog, not just that 500 responses are returned.
+These tests verify that exceptions are actually captured to PostHog, not just that
+500 responses are returned.
 
-Bug: Without process_exception(), view exceptions are NOT captured to PostHog.
-Fix: PR #350 adds process_exception() which Django calls to capture exceptions.
+Without process_exception(), view exceptions are NOT captured to PostHog (v6.7.11 and earlier).
+With process_exception(), Django calls this method to capture exceptions before
+converting them to 500 responses.
 """
 import os
 import django
@@ -25,8 +26,8 @@ async def test_async_exception_is_captured():
     """
     Test that async view exceptions are captured to PostHog.
 
-    With process_exception() (PR #350), exceptions are captured.
-    Without it, exceptions are NOT captured even though 500 is returned.
+    The middleware's process_exception() method ensures exceptions are captured.
+    Without it (v6.7.11 and earlier), exceptions are NOT captured even though 500 is returned.
     """
     from unittest.mock import patch
 
@@ -67,8 +68,8 @@ async def test_sync_exception_is_captured():
     """
     Test that sync view exceptions are captured to PostHog.
 
-    With process_exception() (PR #350), exceptions are captured.
-    Without it, exceptions are NOT captured even though 500 is returned.
+    The middleware's process_exception() method ensures exceptions are captured.
+    Without it (v6.7.11 and earlier), exceptions are NOT captured even though 500 is returned.
     """
     from unittest.mock import patch
 

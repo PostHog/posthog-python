@@ -133,12 +133,10 @@ async def test_async_exception_capture():
     """
     Test that middleware handles exceptions from async views.
 
-    This branch is stacked on PR #350 which adds process_exception() to capture
-    view exceptions. Django calls process_exception() for view exceptions, allowing
-    the middleware to capture them to PostHog before Django converts them to 500 responses.
-
-    This test verifies the exception causes a 500 response. To verify actual PostHog
-    capture, you'd need to mock posthog.capture_exception (tested in PR #350).
+    The middleware's process_exception() method captures view exceptions to PostHog
+    before Django converts them to 500 responses. This test verifies the exception
+    causes a 500 response. See test_exception_capture.py for tests that verify
+    actual exception capture to PostHog.
     """
     app = get_asgi_application()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
@@ -146,7 +144,7 @@ async def test_async_exception_capture():
 
     # Django returns 500 for unhandled exceptions
     assert response.status_code == 500
-    print("✓ Async exception raises 500 (captured via process_exception from PR #350)")
+    print("✓ Async exception raises 500 (captured via process_exception)")
 
 
 @pytest.mark.asyncio
@@ -154,8 +152,8 @@ async def test_sync_exception_capture():
     """
     Test that middleware handles exceptions from sync views.
 
-    This branch is stacked on PR #350 which adds process_exception() to capture
-    view exceptions. This test verifies the exception causes a 500 response.
+    The middleware's process_exception() method captures view exceptions to PostHog.
+    This test verifies the exception causes a 500 response.
     """
     app = get_asgi_application()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
@@ -163,7 +161,7 @@ async def test_sync_exception_capture():
 
     # Django returns 500 for unhandled exceptions
     assert response.status_code == 500
-    print("✓ Sync exception raises 500 (captured via process_exception from PR #350)")
+    print("✓ Sync exception raises 500 (captured via process_exception)")
 
 
 if __name__ == "__main__":
