@@ -1,0 +1,12 @@
+[project]
+name = "test-django5"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=5.0",
+    "uvicorn[standard]",
+    "posthog",
+]
+
+[tool.uv.sources]
+posthog = { path = "..", editable = true }
