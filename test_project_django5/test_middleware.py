@@ -20,8 +20,14 @@ from httpx import AsyncClient, ASGITransport
 from django.core.asgi import get_asgi_application
 
 
+@pytest.fixture(scope="session")
+def asgi_app():
+    """Shared ASGI application for all tests."""
+    return get_asgi_application()
+
+
 @pytest.mark.asyncio
-async def test_async_user_access():
+async def test_async_user_access(asgi_app):
     """
     Test that middleware can access request.user in async context.
 
@@ -32,19 +38,18 @@ async def test_async_user_access():
     trigger the lazy loading bug. This test verifies the middleware works
     in the common case.
     """
-    app = get_asgi_application()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
         response = await ac.get("/test/async-user")
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
     assert "django_version" in data
-    print(f"✓ Async user access test passed: {data['message']}")
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_async_authenticated_user_access():
+async def test_async_authenticated_user_access(asgi_app):
     """
     Test that middleware can access an authenticated user in async context.
 
@@ -91,14 +96,12 @@ async def test_async_authenticated_user_access():
     session_cookie = await create_session()
 
     if not session_cookie:
-        print("⚠ Warning: Could not create authenticated session, skipping auth test")
-        return
+        pytest.skip("Could not create authenticated session")
 
     # Make request with session cookie - this should trigger the bug in v6.7.11
     # Disable exception capture to see the SynchronousOnlyOperation clearly
     with override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=False):
-        app = get_asgi_application()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+        async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
             response = await ac.get(
                 "/test/async-user",
                 cookies={"sessionid": session_cookie.value}
@@ -108,28 +111,25 @@ async def test_async_authenticated_user_access():
         data = response.json()
         assert data["status"] == "success"
         assert data["user_authenticated"] == True
-        print(f"✓ Async authenticated user access test passed: {data['message']}")
 
 
 @pytest.mark.asyncio
-async def test_sync_user_access():
+async def test_sync_user_access(asgi_app):
     """
     Test that middleware works with sync views.
 
     This should always work regardless of middleware version.
     """
-    app = get_asgi_application()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
         response = await ac.get("/test/sync-user")
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    print(f"✓ Sync user access test passed: {data['message']}")
 
 
 @pytest.mark.asyncio
-async def test_async_exception_capture():
+async def test_async_exception_capture(asgi_app):
     """
     Test that middleware handles exceptions from async views.
 
@@ -138,59 +138,23 @@ async def test_async_exception_capture():
     causes a 500 response. See test_exception_capture.py for tests that verify
     actual exception capture to PostHog.
     """
-    app = get_asgi_application()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
         response = await ac.get("/test/async-exception")
 
     # Django returns 500 for unhandled exceptions
     assert response.status_code == 500
-    print("✓ Async exception raises 500 (captured via process_exception)")
 
 
 @pytest.mark.asyncio
-async def test_sync_exception_capture():
+async def test_sync_exception_capture(asgi_app):
     """
     Test that middleware handles exceptions from sync views.
 
     The middleware's process_exception() method captures view exceptions to PostHog.
     This test verifies the exception causes a 500 response.
     """
-    app = get_asgi_application()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
+    async with AsyncClient(transport=ASGITransport(app=asgi_app), base_url="http://testserver") as ac:
         response = await ac.get("/test/sync-exception")
 
     # Django returns 500 for unhandled exceptions
     assert response.status_code == 500
-    print("✓ Sync exception raises 500 (captured via process_exception)")
-
-
-if __name__ == "__main__":
-    """Run tests directly with asyncio for quick testing."""
-    import asyncio
-
-    async def run_all_tests():
-        print("\nRunning PostHog Django middleware tests...\n")
-
-        try:
-            await test_async_user_access()
-        except Exception as e:
-            print(f"✗ Async user access test failed: {e}")
-
-        try:
-            await test_sync_user_access()
-        except Exception as e:
-            print(f"✗ Sync user access test failed: {e}")
-
-        try:
-            await test_async_exception_capture()
-        except Exception as e:
-            print(f"✗ Async exception capture test failed: {e}")
-
-        try:
-            await test_sync_exception_capture()
-        except Exception as e:
-            print(f"✗ Sync exception capture test failed: {e}")
-
-        print("\nAll tests completed!\n")
-
-    asyncio.run(run_all_tests())
