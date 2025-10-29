@@ -1716,7 +1716,7 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
-def test_openai_reasoning_tokens(mock_client):
+def test_openai_reasoning_tokens_o4_mini(mock_client):
     model = ChatOpenAI(
         api_key=OPENAI_API_KEY, model="o4-mini", max_completion_tokens=10
     )

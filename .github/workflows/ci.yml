@@ -33,6 +33,10 @@ jobs:
               run: |
                   ruff format --check .
 
+            - name: Lint with ruff
+              run: |
+                  ruff check .
+
             - name: Check types with mypy
               run: |
                   mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
