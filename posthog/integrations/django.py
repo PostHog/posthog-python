@@ -112,9 +112,18 @@ class PosthogContextMiddleware:
 
     def extract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
-        tags = {}
+        """Extract tags from request in sync context."""
+        user_id, user_email = self.extract_request_user(request)
+        return self._build_tags(request, user_id, user_email)
 
-        (user_id, user_email) = self.extract_request_user(request)
+    def _build_tags(self, request, user_id, user_email):
+        # type: (HttpRequest, Optional[str], Optional[str]) -> Dict[str, Any]
+        """
+        Build tags dict from request and user info.
+
+        Centralized tag extraction logic used by both sync and async paths.
+        """
+        tags = {}
 
         # Extract session ID from X-POSTHOG-SESSION-ID header
         session_id = request.headers.get("X-POSTHOG-SESSION-ID")
@@ -166,23 +175,10 @@ class PosthogContextMiddleware:
         return tags
 
     def extract_request_user(self, request):
-        user_id = None
-        email = None
-
+        # type: (HttpRequest) -> tuple[Optional[str], Optional[str]]
+        """Extract user ID and email from request in sync context."""
         user = getattr(request, "user", None)
-
-        if user and getattr(user, "is_authenticated", False):
-            try:
-                user_id = str(user.pk)
-            except Exception:
-                pass
-
-            try:
-                email = str(user.email)
-            except Exception:
-                pass
-
-        return user_id, email
+        return self._resolve_user_details(user)
 
     async def aextract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
@@ -194,60 +190,11 @@ class PosthogContextMiddleware:
 
         Follows Django's naming convention for async methods (auser, asave, etc.).
         """
-        tags = {}
-
-        (user_id, user_email) = await self.aextract_request_user(request)
-
-        # Extract session ID from X-POSTHOG-SESSION-ID header
-        session_id = request.headers.get("X-POSTHOG-SESSION-ID")
-        if session_id:
-            contexts.set_context_session(session_id)
-
-        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
-        distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID") or user_id
-        if distinct_id:
-            contexts.identify_context(distinct_id)
-
-        # Extract user email
-        if user_email:
-            tags["email"] = user_email
-
-        # Extract current URL
-        absolute_url = request.build_absolute_uri()
-        if absolute_url:
-            tags["$current_url"] = absolute_url
-
-        # Extract request method
-        if request.method:
-            tags["$request_method"] = request.method
-
-        # Extract request path
-        if request.path:
-            tags["$request_path"] = request.path
-
-        # Extract IP address
-        ip_address = request.headers.get("X-Forwarded-For")
-        if ip_address:
-            tags["$ip_address"] = ip_address
-
-        # Extract user agent
-        user_agent = request.headers.get("User-Agent")
-        if user_agent:
-            tags["$user_agent"] = user_agent
-
-        # Apply extra tags if configured
-        if self.extra_tags:
-            extra = self.extra_tags(request)
-            if extra:
-                tags.update(extra)
-
-        # Apply tag mapping if configured
-        if self.tag_map:
-            tags = self.tag_map(tags)
-
-        return tags
+        user_id, user_email = await self.aextract_request_user(request)
+        return self._build_tags(request, user_id, user_email)
 
     async def aextract_request_user(self, request):
+        # type: (HttpRequest) -> tuple[Optional[str], Optional[str]]
         """
         Async version of extract_request_user for use in async request handling.
 
@@ -256,26 +203,50 @@ class PosthogContextMiddleware:
 
         Follows Django's naming convention for async methods (auser, asave, etc.).
         """
+        auser = getattr(request, "auser", None)
+        if callable(auser):
+            try:
+                user = await auser()
+                return self._resolve_user_details(user)
+            except Exception:
+                # If auser() fails, return empty - don't break the request
+                # Real errors (permissions, broken auth) will be logged by Django
+                return None, None
+
+        # Fallback for test requests without auser
+        return None, None
+
+    def _resolve_user_details(self, user):
+        # type: (Any) -> tuple[Optional[str], Optional[str]]
+        """
+        Extract user ID and email from a user object.
+
+        Handles both authenticated and unauthenticated users, as well as
+        legacy Django where is_authenticated was a method.
+        """
         user_id = None
         email = None
 
-        # In async context, use auser() instead of user attribute
-        if hasattr(request, "auser"):
-            user = await request.auser()
-        else:
-            # Fallback for non-Django or test requests
-            user = getattr(request, "user", None)
+        if user is None:
+            return user_id, email
 
-        if user and getattr(user, "is_authenticated", False):
-            try:
-                user_id = str(user.pk)
-            except Exception:
-                pass
+        # Handle is_authenticated (property in modern Django, method in legacy)
+        is_authenticated = getattr(user, "is_authenticated", False)
+        if callable(is_authenticated):
+            is_authenticated = is_authenticated()
 
-            try:
-                email = str(user.email)
-            except Exception:
-                pass
+        if not is_authenticated:
+            return user_id, email
+
+        # Extract user primary key
+        user_pk = getattr(user, "pk", None)
+        if user_pk is not None:
+            user_id = str(user_pk)
+
+        # Extract user email
+        user_email = getattr(user, "email", None)
+        if user_email:
+            email = str(user_email)
 
         return user_id, email
 
