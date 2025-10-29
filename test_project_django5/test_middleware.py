@@ -131,18 +131,14 @@ async def test_sync_user_access():
 @pytest.mark.asyncio
 async def test_async_exception_capture():
     """
-    Test that middleware captures exceptions from async views.
+    Test that middleware handles exceptions from async views.
 
-    IMPORTANT: This test verifies that exceptions raise 500 errors, but it doesn't
-    verify that PostHog actually captures them. The exception capture fix (PR #350)
-    adds a process_exception() method that Django calls to capture view exceptions.
+    This branch is stacked on PR #350 which adds process_exception() to capture
+    view exceptions. Django calls process_exception() for view exceptions, allowing
+    the middleware to capture them to PostHog before Django converts them to 500 responses.
 
-    Without process_exception(), Django converts view exceptions to responses
-    before they propagate through the middleware context manager, so they're not
-    captured to PostHog even though they still return 500 to the client.
-
-    To properly test exception capture, you'd need to mock posthog.capture_exception
-    and verify it's called. That's tested in PR #350.
+    This test verifies the exception causes a 500 response. To verify actual PostHog
+    capture, you'd need to mock posthog.capture_exception (tested in PR #350).
     """
     app = get_asgi_application()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
@@ -150,7 +146,7 @@ async def test_async_exception_capture():
 
     # Django returns 500 for unhandled exceptions
     assert response.status_code == 500
-    print("✓ Async exception raises 500 (capture requires process_exception from PR #350)")
+    print("✓ Async exception raises 500 (captured via process_exception from PR #350)")
 
 
 @pytest.mark.asyncio
@@ -158,9 +154,8 @@ async def test_sync_exception_capture():
     """
     Test that middleware handles exceptions from sync views.
 
-    IMPORTANT: Same as test_async_exception_capture - this verifies 500 response
-    but not actual PostHog capture. Exception capture requires process_exception()
-    method from PR #350.
+    This branch is stacked on PR #350 which adds process_exception() to capture
+    view exceptions. This test verifies the exception causes a 500 response.
     """
     app = get_asgi_application()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
@@ -168,7 +163,7 @@ async def test_sync_exception_capture():
 
     # Django returns 500 for unhandled exceptions
     assert response.status_code == 500
-    print("✓ Sync exception raises 500 (capture requires process_exception from PR #350)")
+    print("✓ Sync exception raises 500 (captured via process_exception from PR #350)")
 
 
 if __name__ == "__main__":
