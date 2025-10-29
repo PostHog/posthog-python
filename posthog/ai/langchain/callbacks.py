@@ -787,10 +787,20 @@ def _parse_usage(response: LLMResult) -> ModelUsage:
                 if generation_chunk.generation_info and (
                     "usage_metadata" in generation_chunk.generation_info
                 ):
-                    llm_usage = _parse_usage_model(
-                        generation_chunk.generation_info["usage_metadata"]
-                    )
-                    break
+                    if generation_chunk.generation_info["usage_metadata"]:
+                        llm_usage = _parse_usage_model(
+                            generation_chunk.generation_info["usage_metadata"]
+                        )
+                        break
+                    
+                    elif generation_chunk.message and (
+                        "usage_metadata" in generation_chunk.message
+                    ):
+                        if generation_chunk.message["usage_metadata"]:
+                            llm_usage = _parse_usage_model(
+                                generation_chunk.message["usage_metadata"]
+                            )
+                            break
 
                 message_chunk = getattr(generation_chunk, "message", {})
                 response_metadata = getattr(message_chunk, "response_metadata", {})
