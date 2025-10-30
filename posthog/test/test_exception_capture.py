@@ -40,10 +40,11 @@ def test_local_vars_with_include_decorator(tmpdir):
     app.write(
         dedent(
             """
-    from posthog import Posthog, include
+    from posthog import Posthog, local_vars_include
+    from posthog.local_vars import get_code_variables_include
     posthog = Posthog('phc_x', host='https://eu.i.posthog.com', 
                       enable_exception_autocapture=True, 
-                      enable_code_variables_capture=True,
+                      enable_code_variables_capture=False,
                       debug=True, 
                       on_error=lambda e, batch: print('error handling batch: ', e, batch))
 
@@ -53,8 +54,9 @@ def test_local_vars_with_include_decorator(tmpdir):
         error_count = 42
         raise ValueError("Something went wrong in throws_error")
 
-    @include
+    @local_vars_include
     def decorated_function():
+        print(f"Context variable state: {get_code_variables_include()}")
         return throws_error()
 
     decorated_function()
@@ -68,6 +70,13 @@ def test_local_vars_with_include_decorator(tmpdir):
         subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
 
     output = excinfo.value.output
+    
+    # Print the full output to see what was captured
+    print("\n" + "="*50)
+    print("CAPTURED OUTPUT:")
+    print("="*50)
+    print(output.decode('utf-8'))
+    print("="*50 + "\n")
     
     # Check that exception was captured
     assert b"ValueError" in output
@@ -85,7 +94,7 @@ def test_local_vars_with_ignore_decorator(tmpdir):
     app.write(
         dedent(
             """
-    from posthog import Posthog, ignore
+    from posthog import Posthog, local_vars_ignore
     posthog = Posthog('phc_x', host='https://eu.i.posthog.com', 
                       enable_exception_autocapture=True, 
                       enable_code_variables_capture=True,
@@ -98,7 +107,7 @@ def test_local_vars_with_ignore_decorator(tmpdir):
         sensitive_data = {"ssn": "123-45-6789", "credit_card": "4111-1111-1111-1111"}
         raise ValueError("Something went wrong in throws_error")
 
-    @ignore
+    @local_vars_ignore
     def decorated_function():
         return throws_error()
 

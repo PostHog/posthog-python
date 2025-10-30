@@ -14,7 +14,7 @@ from posthog.contexts import (
 from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
 from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
 from posthog.version import VERSION
-from posthog.local_vars import include, ignore
+from posthog.local_vars import local_vars_include, local_vars_ignore
 
 __version__ = VERSION
 

@@ -8,11 +8,11 @@ posthog.api_key = "phc_J1o2BXYxzXBHJeG2mS5hk62ijkTWk38Z385lO0MhU5w"
 posthog.host = "http://localhost:8010" 
 posthog.debug = True
 posthog.enable_exception_autocapture = True
-posthog.enable_code_variables_capture = True
+posthog.enable_code_variables_capture = False
 
 var = ContextVar[str]("var", default="unknown")
 
-@posthog.include
+@posthog.local_vars_include
 def with_include(IN_PARAMS=5):
     simple_number = 5
     simple_string = "hello"
@@ -30,7 +30,7 @@ def with_include(IN_PARAMS=5):
     except Exception as e:
         posthog.capture_exception(e)
 
-@posthog.ignore
+@posthog.local_vars_ignore
 def with_ignore():
     simple_number = 5
     simple_string = "hello"
@@ -42,6 +42,9 @@ def with_ignore():
     simple_none = None
     simple_float = 1.0
 
-    raise Exception("test exception")
+    try:
+        raise Exception("test exception")
+    except Exception as e:
+        posthog.capture_exception(e)
 
-with_include(10)
+with_include()

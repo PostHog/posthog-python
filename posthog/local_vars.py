@@ -46,19 +46,19 @@ def _get_ignore_active() -> bool:
     return getattr(_ignore_thread_local, 'ignore_active', False)
 
 
-def include(func: F) -> F:
+def local_vars_include(func: F) -> F:
     """
     Decorator to enable local variables capture for exceptions in this function.
     
-    When an exception occurs within a function decorated with @include,
+    When an exception occurs within a function decorated with @local_vars_include,
     local variables from the frame where the exception originated will be captured
     and attached to the exception data.
     
     Examples:
         ```python
-        from posthog import include
+        from posthog import local_vars_include
         
-        @include
+        @local_vars_include
         def risky_function():
             user_id = "12345"
             data = {"key": "value"}
@@ -79,18 +79,18 @@ def include(func: F) -> F:
     return wrapper  # type: ignore
 
 
-def ignore(func: F) -> F:
+def local_vars_ignore(func: F) -> F:
     """
     Decorator to disable local variables capture for exceptions in this function.
     
-    When an exception occurs within a function decorated with @ignore,
-    local variables will not be captured even if a parent function has @include.
+    When an exception occurs within a function decorated with @local_vars_ignore,
+    local variables will not be captured even if a parent function has @local_vars_include.
     
     Examples:
         ```python
-        from posthog import ignore
+        from posthog import local_vars_ignore
         
-        @ignore  
+        @local_vars_ignore  
         def sensitive_function():
             password = "secret123"
             # If an exception occurs here, password will NOT be captured
