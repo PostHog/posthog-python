@@ -884,3 +884,107 @@ def strip_string(value, max_length=None):
             "rem": [["!limit", "x", max_length - 3, max_length]],
         },
     )
+
+
+def safe_serialize_local_var(key, value, max_length=DEFAULT_MAX_VALUE_LENGTH):
+    """
+    Safely serialize a local variable for exception capture.
+    
+    Args:
+        key: The variable name
+        value: The variable value
+        max_length: Maximum length for serialized values
+        
+    Returns:
+        A safely serialized representation of the variable
+    """
+    try:
+        # Skip private/internal variables and common framework internals
+        if key.startswith('_') or key in ('self', 'cls', 'args', 'kwargs'):
+            return None
+            
+        # Handle common types
+        if value is None:
+            return None
+        elif isinstance(value, (str, int, float, bool)):
+            # For strings, apply length limits
+            if isinstance(value, str) and len(value) > max_length:
+                return value[:max_length] + "..."
+            return value
+        elif isinstance(value, (list, tuple)):
+            # Serialize first few elements of sequences
+            if len(value) > 10:
+                return f"<{type(value).__name__}[{len(value)}]>"
+            try:
+                return [safe_serialize_local_var(f"[{i}]", item, max_length // 2) for i, item in enumerate(value[:5])]
+            except Exception:
+                return f"<{type(value).__name__}[{len(value)}]>"
+        elif isinstance(value, dict):
+            # Serialize first few items of dictionaries
+            if len(value) > 10:
+                return f"<dict[{len(value)}]>"
+            try:
+                result = {}
+                for i, (k, v) in enumerate(value.items()):
+                    if i >= 5:  # Limit to first 5 items
+                        break
+                    if isinstance(k, str) and len(k) < 50:  # Reasonable key length
+                        result[k] = safe_serialize_local_var(k, v, max_length // 2)
+                return result
+            except Exception:
+                return f"<dict[{len(value)}]>"
+        else:
+            # For other objects, try to get a safe representation
+            try:
+                # Try to get a string representation, but limit length
+                str_repr = str(value)
+                if len(str_repr) > max_length:
+                    str_repr = str_repr[:max_length] + "..."
+                return f"<{type(value).__name__}: {str_repr}>"
+            except Exception:
+                return f"<{type(value).__name__}>"
+                
+    except Exception:
+        # If anything goes wrong, return a safe placeholder
+        return f"<Error serializing {key}>"
+
+
+def extract_frame_locals(frame, max_vars=20, max_var_length=DEFAULT_MAX_VALUE_LENGTH):
+    """
+    Extract local variables from a frame for exception capture.
+    
+    Args:
+        frame: The frame object to extract variables from
+        max_vars: Maximum number of variables to capture
+        max_var_length: Maximum length for individual variable values
+        
+    Returns:
+        Dictionary of safely serialized local variables
+    """
+    if not frame:
+        return {}
+        
+    try:
+        frame_locals = getattr(frame, 'f_locals', {})
+        if not frame_locals:
+            return {}
+            
+        # Extract and serialize variables
+        result = {}
+        var_count = 0
+        
+        for key, value in frame_locals.items():
+            if var_count >= max_vars:
+                result['...'] = f"<{len(frame_locals) - max_vars} more variables>"
+                break
+                
+            serialized = safe_serialize_local_var(key, value, max_var_length)
+            if serialized is not None:
+                result[key] = serialized
+                var_count += 1
+                
+        return result
+        
+    except Exception:
+        # If extraction fails, return empty dict to not break exception handling
+        return {}

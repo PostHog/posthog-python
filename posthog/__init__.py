@@ -14,6 +14,7 @@ from posthog.contexts import (
 from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
 from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
 from posthog.version import VERSION
+from posthog.local_vars import include, ignore
 
 __version__ = VERSION
 
@@ -147,6 +148,8 @@ privacy_mode = False  # type: bool
 # Whether to enable feature flag polling for local evaluation by default. Defaults to True.
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
+# Whether to enable local variables capture in exception tracking by default. Defaults to False.
+enable_code_variables_capture = False  # type: bool
 
 default_client = None  # type: Optional[Client]
 
@@ -744,6 +747,7 @@ def setup() -> Client:
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
             enable_local_evaluation=enable_local_evaluation,
+            enable_code_variables_capture=enable_code_variables_capture,
         )
 
     # always set incase user changes it

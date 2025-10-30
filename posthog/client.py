@@ -16,6 +16,7 @@ from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
     exc_info_from_error,
     exceptions_from_error_tuple,
+    extract_frame_locals,
     handle_in_app,
     exception_is_already_captured,
     mark_exception_as_captured,
@@ -41,6 +42,7 @@ from posthog.contexts import (
     get_context_session_id,
     new_context,
 )
+from posthog.local_vars import get_code_variables_include
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
@@ -179,6 +181,7 @@ class Client(object):
         before_send=None,
         flag_fallback_cache_url=None,
         enable_local_evaluation=True,
+        enable_code_variables_capture=False,
     ):
         """
         Initialize a new PostHog client instance.
@@ -233,6 +236,7 @@ class Client(object):
         self.exception_capture = None
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
+        self.enable_code_variables_capture = enable_code_variables_capture
 
         if project_root is None:
             try:
@@ -979,6 +983,31 @@ class Client(object):
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 **properties,
             }
+
+            # Capture local variables if enabled
+            if self.enable_code_variables_capture and get_code_variables_include():
+                try:
+                    # Extract locals from the bottom-most frame (where exception originated)
+                    if (exc_info and exc_info[2] and 
+                        all_exceptions_with_trace_and_in_app and 
+                        all_exceptions_with_trace_and_in_app[0].get("stacktrace", {}).get("frames")):
+                        
+                        # Get the last frame (bottom of stack, where exception occurred)
+                        frames = all_exceptions_with_trace_and_in_app[0]["stacktrace"]["frames"]
+                        if frames:
+                            # Find the traceback object for the last frame
+                            tb = exc_info[2]
+                            while tb.tb_next is not None:
+                                tb = tb.tb_next
+                            
+                            # Extract local variables from the frame
+                            local_vars = extract_frame_locals(tb.tb_frame)
+                            if local_vars:
+                                properties["$exception_local_vars"] = local_vars
+                                
+                except Exception as e:
+                    # If local variable extraction fails, log but don't break exception capture
+                    self.log.debug(f"Failed to capture local variables: {e}")
 
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
