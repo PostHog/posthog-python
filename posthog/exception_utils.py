@@ -890,9 +890,6 @@ def strip_string(value, max_length=None):
 
 def safe_serialize_local_var(key, value, max_length=DEFAULT_MAX_VALUE_LENGTH):
     try:
-        if key.startswith('_') or key in ('self', 'cls', 'args', 'kwargs'):
-            return None
-            
         if value is None:
             return None
             
@@ -914,13 +911,12 @@ def safe_serialize_local_var(key, value, max_length=DEFAULT_MAX_VALUE_LENGTH):
         return f"<Error serializing {key}>"
 
 
-def extract_frame_locals(frame, max_vars=20, max_total_chars=1024):
+def extract_frame_locals(frame, max_total_chars=DEFAULT_MAX_VALUE_LENGTH):
     """
     Extract local variables from a frame for exception capture.
     
     Args:
         frame: The frame object to extract variables from
-        max_vars: Maximum number of variables to capture
         max_total_chars: Maximum total characters across all variables (default: 1024)
         
     Returns:
@@ -937,9 +933,7 @@ def extract_frame_locals(frame, max_vars=20, max_total_chars=1024):
             
         result = {}
         total_chars = 0
-        var_count = 0
         
-        # Helper function to calculate serialized size
         def get_serialized_size(key, value):
             serialized = safe_serialize_local_var(key, value)
             if serialized is None:
@@ -950,45 +944,30 @@ def extract_frame_locals(frame, max_vars=20, max_total_chars=1024):
             except (TypeError, ValueError, OverflowError):
                 return 0, None
         
-        # Separate variables by type priority (simple types first)
-        simple_vars = []
-        complex_vars = []
+        all_vars = []
         
         for key, value in frame_locals.items():
             if isinstance(value, (str, int, float, bool)) or value is None:
-                simple_vars.append((key, value))
-            else:
-                complex_vars.append((key, value))
+                all_vars.append((key, value))
         
-        # First pass: Add simple types
-        for key, value in simple_vars:
-            if var_count >= max_vars:
+        for key, value in frame_locals.items():
+            if not (isinstance(value, (str, int, float, bool)) or value is None):
+                all_vars.append((key, value))
+        
+        for key, value in all_vars:
+            if total_chars >= max_total_chars:
                 break
                 
             size, serialized = get_serialized_size(key, value)
             if serialized is not None and total_chars + size <= max_total_chars:
                 result[key] = serialized
                 total_chars += size
-                var_count += 1
-        
-        # Second pass: Add complex types if space remains
-        for key, value in complex_vars:
-            if var_count >= max_vars or total_chars >= max_total_chars:
-                break
-                
-            size, serialized = get_serialized_size(key, value)
-            if serialized is not None and total_chars + size <= max_total_chars:
-                result[key] = serialized
-                total_chars += size
-                var_count += 1
         
         # Add summary if we hit limits
-        total_skipped = len(frame_locals) - var_count
+        total_skipped = len(frame_locals) - len(result)
         if total_skipped > 0:
             summary = f"<{total_skipped} more variables>"
-            summary_size = len(json.dumps({"...": summary}))
-            if total_chars + summary_size <= max_total_chars:
-                result['...'] = summary
+            result['...'] = summary
                 
         return result
         

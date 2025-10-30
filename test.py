@@ -13,7 +13,7 @@ posthog.enable_code_variables_capture = True
 var = ContextVar[str]("var", default="unknown")
 
 @posthog.include
-def with_include():
+def with_include(IN_PARAMS=5):
     simple_number = 5
     simple_string = "hello"
     simple_list = [1, 2, 3]
@@ -44,4 +44,4 @@ def with_ignore():
 
     raise Exception("test exception")
 
-with_include()
+with_include(10)
