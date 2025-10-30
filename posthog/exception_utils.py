@@ -912,16 +912,6 @@ def safe_serialize_local_var(key, value, max_length=DEFAULT_MAX_VALUE_LENGTH):
 
 
 def extract_frame_locals(frame, max_total_chars=DEFAULT_MAX_VALUE_LENGTH):
-    """
-    Extract local variables from a frame for exception capture.
-    
-    Args:
-        frame: The frame object to extract variables from
-        max_total_chars: Maximum total characters across all variables (default: 1024)
-        
-    Returns:
-        Dictionary of safely serialized local variables
-    """
     if not frame:
         return {}
         
@@ -980,12 +970,6 @@ def capture_local_variables_for_exception(
     all_exceptions_with_trace_and_in_app,
     logger=None
 ):
-    """
-    Extract local variables from an exception if context capture is enabled.
-    Returns a dictionary of local variables if captured, None otherwise
-    """
-
-    
     if not get_code_variables_include():
         return None
         
