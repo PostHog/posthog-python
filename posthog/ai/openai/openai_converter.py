@@ -279,6 +279,8 @@ def extract_openai_web_search_count(response: Any) -> int:
             if hasattr(item, "type") and item.type == "web_search_call":
                 web_search_count += 1
 
+        web_search_count = max(0, web_search_count)
+
         if web_search_count > 0:
             return web_search_count
 

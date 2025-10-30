@@ -898,3 +898,219 @@ def test_web_search_grounding(mock_client, mock_google_genai_client):
     assert props["$ai_web_search_count"] == 1
     assert props["$ai_input_tokens"] == 60
     assert props["$ai_output_tokens"] == 40
+
+
+def test_streaming_with_web_search(mock_client, mock_google_genai_client):
+    """Test that web search count is properly captured in streaming mode."""
+
+    def mock_streaming_response():
+        # Create chunk 1 with grounding metadata
+        mock_chunk1 = MagicMock()
+        mock_chunk1.text = "According to "
+
+        mock_usage1 = MagicMock()
+        mock_usage1.prompt_token_count = 30
+        mock_usage1.candidates_token_count = 5
+        mock_usage1.cached_content_token_count = 0
+        mock_usage1.thoughts_token_count = 0
+        mock_chunk1.usage_metadata = mock_usage1
+
+        # Add grounding metadata to first chunk
+        mock_grounding_chunk = MagicMock()
+        mock_grounding_chunk.uri = "https://example.com"
+
+        mock_grounding_metadata = MagicMock()
+        mock_grounding_metadata.grounding_chunks = [mock_grounding_chunk]
+
+        mock_candidate1 = MagicMock()
+        mock_candidate1.grounding_metadata = mock_grounding_metadata
+        type(mock_candidate1).grounding_metadata = mock_candidate1.grounding_metadata
+
+        mock_chunk1.candidates = [mock_candidate1]
+
+        # Create chunk 2
+        mock_chunk2 = MagicMock()
+        mock_chunk2.text = "search results..."
+
+        mock_usage2 = MagicMock()
+        mock_usage2.prompt_token_count = 30
+        mock_usage2.candidates_token_count = 15
+        mock_usage2.cached_content_token_count = 0
+        mock_usage2.thoughts_token_count = 0
+        mock_chunk2.usage_metadata = mock_usage2
+
+        mock_candidate2 = MagicMock()
+        mock_chunk2.candidates = [mock_candidate2]
+
+        yield mock_chunk1
+        yield mock_chunk2
+
+    # Mock the generate_content_stream method
+    mock_google_genai_client.models.generate_content_stream.return_value = (
+        mock_streaming_response()
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    response = client.models.generate_content_stream(
+        model="gemini-2.5-flash",
+        contents="What's the latest news?",
+        posthog_distinct_id="test-id",
+    )
+
+    chunks = list(response)
+    assert len(chunks) == 2
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Verify web search count is detected (binary for grounding)
+    assert props["$ai_web_search_count"] == 1
+    assert props["$ai_input_tokens"] == 30
+    assert props["$ai_output_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_async_with_web_search(mock_client, mock_google_genai_client):
+    """Test that web search count is properly tracked in async non-streaming mode."""
+
+    # Create mock response with grounding metadata
+    mock_response = MagicMock()
+
+    # Mock usage metadata
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 60
+    mock_usage.candidates_token_count = 40
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_response.usage_metadata = mock_usage
+
+    # Mock grounding metadata
+    mock_grounding_chunk = MagicMock()
+    mock_grounding_chunk.uri = "https://example.com"
+
+    mock_grounding_metadata = MagicMock()
+    mock_grounding_metadata.grounding_chunks = [mock_grounding_chunk]
+
+    # Mock text part
+    mock_text_part = MagicMock()
+    mock_text_part.text = "According to search results..."
+    type(mock_text_part).text = mock_text_part.text
+
+    # Mock content with parts
+    mock_content = MagicMock()
+    mock_content.parts = [mock_text_part]
+
+    # Mock candidate with grounding metadata
+    mock_candidate = MagicMock()
+    mock_candidate.content = mock_content
+    mock_candidate.grounding_metadata = mock_grounding_metadata
+    type(mock_candidate).grounding_metadata = mock_candidate.grounding_metadata
+
+    mock_response.candidates = [mock_candidate]
+    mock_response.text = "According to search results..."
+
+    # Mock the async generate_content method
+    async def mock_async_generate_content(*args, **kwargs):
+        return mock_response
+
+    mock_google_genai_client.models.generate_content_async = mock_async_generate_content
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    async def run_test():
+        response = await client.models.generate_content_async(
+            model="gemini-2.5-flash",
+            contents="What's the latest news?",
+            posthog_distinct_id="test-id",
+        )
+        return response
+
+    response = await run_test()
+
+    assert response == mock_response
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Verify web search count is detected (binary for grounding)
+    assert props["$ai_web_search_count"] == 1
+    assert props["$ai_input_tokens"] == 60
+    assert props["$ai_output_tokens"] == 40
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_with_web_search(mock_client, mock_google_genai_client):
+    """Test that web search count is properly captured in async streaming mode."""
+
+    async def mock_async_streaming_response():
+        # Create chunk 1 with grounding metadata
+        mock_chunk1 = MagicMock()
+        mock_chunk1.text = "According to "
+
+        mock_usage1 = MagicMock()
+        mock_usage1.prompt_token_count = 30
+        mock_usage1.candidates_token_count = 5
+        mock_usage1.cached_content_token_count = 0
+        mock_usage1.thoughts_token_count = 0
+        mock_chunk1.usage_metadata = mock_usage1
+
+        # Add grounding metadata to first chunk
+        mock_grounding_chunk = MagicMock()
+        mock_grounding_chunk.uri = "https://example.com"
+
+        mock_grounding_metadata = MagicMock()
+        mock_grounding_metadata.grounding_chunks = [mock_grounding_chunk]
+
+        mock_candidate1 = MagicMock()
+        mock_candidate1.grounding_metadata = mock_grounding_metadata
+        type(mock_candidate1).grounding_metadata = mock_candidate1.grounding_metadata
+
+        mock_chunk1.candidates = [mock_candidate1]
+
+        # Create chunk 2
+        mock_chunk2 = MagicMock()
+        mock_chunk2.text = "search results..."
+
+        mock_usage2 = MagicMock()
+        mock_usage2.prompt_token_count = 30
+        mock_usage2.candidates_token_count = 15
+        mock_usage2.cached_content_token_count = 0
+        mock_usage2.thoughts_token_count = 0
+        mock_chunk2.usage_metadata = mock_usage2
+
+        mock_candidate2 = MagicMock()
+        mock_chunk2.candidates = [mock_candidate2]
+
+        yield mock_chunk1
+        yield mock_chunk2
+
+    # Mock the async generate_content_stream method
+    mock_google_genai_client.models.generate_content_stream_async = (
+        mock_async_streaming_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    response = await client.models.generate_content_stream_async(
+        model="gemini-2.5-flash",
+        contents="What's the latest news?",
+        posthog_distinct_id="test-id",
+    )
+
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+
+    assert len(chunks) == 2
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Verify web search count is detected (binary for grounding)
+    assert props["$ai_web_search_count"] == 1
+    assert props["$ai_input_tokens"] == 30
+    assert props["$ai_output_tokens"] == 15

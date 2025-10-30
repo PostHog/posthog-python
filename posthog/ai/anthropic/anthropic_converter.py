@@ -184,7 +184,7 @@ def extract_anthropic_web_search_count(response: Any) -> int:
     server_tool_use = response.usage.server_tool_use
 
     if hasattr(server_tool_use, "web_search_requests"):
-        return int(getattr(server_tool_use, "web_search_requests", 0))
+        return max(0, int(getattr(server_tool_use, "web_search_requests", 0)))
 
     return 0
 

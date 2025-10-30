@@ -1446,3 +1446,197 @@ def test_web_search_responses_api(mock_client):
 
         # Verify exact web search count
         assert props["$ai_web_search_count"] == 2
+
+
+@pytest.fixture
+def streaming_web_search_chunks():
+    """Streaming chunks with web search indicators (Perplexity-style)."""
+    return [
+        ChatCompletionChunk(
+            id="chunk1",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(
+                        role="assistant",
+                        content="Based on my search, ",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ChatCompletionChunk(
+            id="chunk2",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567891,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(
+                        content="here are the latest news...",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ChatCompletionChunk(
+            id="chunk3",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567892,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(),
+                    finish_reason="stop",
+                )
+            ],
+            usage=CompletionUsage(
+                prompt_tokens=20,
+                completion_tokens=15,
+                total_tokens=35,
+            ),
+        ),
+    ]
+
+
+def test_streaming_with_web_search(mock_client, streaming_web_search_chunks):
+    """Test that web search count is properly captured in streaming mode."""
+
+    # Add citations attribute to the last chunk to indicate web search was used
+    streaming_web_search_chunks[-1].citations = ["https://example.com/news"]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = streaming_web_search_chunks
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response_generator = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Search for recent news"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        # Consume the generator to trigger the event capture
+        chunks = list(response_generator)
+
+        # Verify the chunks were returned correctly
+        assert len(chunks) == 3
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is captured (binary detection = 1)
+        assert props["$ai_web_search_count"] == 1
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_async_chat_with_web_search(mock_client):
+    """Test that web search count is properly tracked in async non-streaming mode."""
+
+    # Create mock response with citations (Perplexity-style)
+    mock_response = ChatCompletion(
+        id="chatcmpl-test",
+        model="gpt-4",
+        object="chat.completion",
+        created=1234567890,
+        choices=[
+            Choice(
+                index=0,
+                message=ChatCompletionMessage(
+                    role="assistant",
+                    content="Here are the search results...",
+                ),
+                finish_reason="stop",
+            )
+        ],
+        usage=CompletionUsage(
+            prompt_tokens=20,
+            completion_tokens=15,
+            total_tokens=35,
+        ),
+    )
+
+    # Add citations attribute to indicate web search
+    mock_response.citations = ["https://example.com/result1"]
+
+    async def mock_create(self, **kwargs):
+        return mock_response
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Search for recent news"}],
+            posthog_distinct_id="test-id",
+        )
+
+    assert response == mock_response
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Verify web search count is captured (binary detection = 1)
+    assert props["$ai_web_search_count"] == 1
+    assert props["$ai_input_tokens"] == 20
+    assert props["$ai_output_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_async_chat_streaming_with_web_search(
+    mock_client, streaming_web_search_chunks
+):
+    """Test that web search count is properly captured in async streaming mode."""
+
+    # Add citations attribute to the last chunk to indicate web search was used
+    streaming_web_search_chunks[-1].citations = ["https://example.com/news"]
+
+    captured_kwargs = {}
+
+    async def mock_create(self, **kwargs):
+        captured_kwargs["kwargs"] = kwargs
+
+        async def chunk_iterable():
+            for chunk in streaming_web_search_chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_stream = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Search for recent news"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        chunks = []
+        async for chunk in response_stream:
+            chunks.append(chunk)
+
+    # Verify the chunks were returned correctly
+    assert len(chunks) == 3
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Verify web search count is captured (binary detection = 1)
+    assert props["$ai_web_search_count"] == 1
+    assert props["$ai_input_tokens"] == 20
+    assert props["$ai_output_tokens"] == 15
