@@ -28,7 +28,8 @@ from typing import (  # noqa: F401
     TYPE_CHECKING,
 )
 
-from posthog.args import ExcInfo, ExceptionArg  # noqa: F401
+from posthog.args import ExcInfo, ExceptionArg
+from posthog.local_vars import get_code_variables_include  # noqa: F401
 
 try:
     # Python 3.11
@@ -887,17 +888,6 @@ def strip_string(value, max_length=None):
 
 
 def safe_serialize_local_var(key, value, max_length=DEFAULT_MAX_VALUE_LENGTH):
-    """
-    Safely serialize a local variable for exception capture.
-    
-    Args:
-        key: The variable name
-        value: The variable value
-        max_length: Maximum length for serialized values
-        
-    Returns:
-        A safely serialized representation of the variable
-    """
     try:
         # Skip private/internal variables and common framework internals
         if key.startswith('_') or key in ('self', 'cls', 'args', 'kwargs'):
@@ -969,7 +959,6 @@ def extract_frame_locals(frame, max_vars=20, max_var_length=DEFAULT_MAX_VALUE_LE
         if not frame_locals:
             return {}
             
-        # Extract and serialize variables
         result = {}
         var_count = 0
         
@@ -986,5 +975,40 @@ def extract_frame_locals(frame, max_vars=20, max_var_length=DEFAULT_MAX_VALUE_LE
         return result
         
     except Exception:
-        # If extraction fails, return empty dict to not break exception handling
         return {}
+
+
+def capture_local_variables_for_exception(
+    exc_info,
+    all_exceptions_with_trace_and_in_app,
+    logger=None
+):
+    """
+    Extract local variables from an exception if context capture is enabled.
+    Returns a dictionary of local variables if captured, None otherwise
+    """
+
+    
+    if not get_code_variables_include():
+        return None
+        
+    try:
+        if (exc_info and exc_info[2] and 
+            all_exceptions_with_trace_and_in_app and 
+            all_exceptions_with_trace_and_in_app[0].get("stacktrace", {}).get("frames")):
+            
+            frames = all_exceptions_with_trace_and_in_app[0]["stacktrace"]["frames"]
+            if frames:
+                tb = exc_info[2]
+                while tb.tb_next is not None:
+                    tb = tb.tb_next
+                
+                local_vars = extract_frame_locals(tb.tb_frame)
+                if local_vars:
+                    return local_vars
+                    
+    except Exception as e:
+        if logger:
+            logger.debug(f"Failed to capture local variables: {e}")
+            
+    return None
