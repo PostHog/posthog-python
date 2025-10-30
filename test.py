@@ -8,7 +8,7 @@ posthog.api_key = "phc_J1o2BXYxzXBHJeG2mS5hk62ijkTWk38Z385lO0MhU5w"
 posthog.host = "http://localhost:8010" 
 posthog.debug = True
 posthog.enable_exception_autocapture = True
-posthog.enable_code_variables_autocapture = True
+posthog.enable_code_variables_capture = True
 
 var = ContextVar[str]("var", default="unknown")
 
