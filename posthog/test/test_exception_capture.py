@@ -59,6 +59,7 @@ def test_local_vars_with_include_decorator(tmpdir):
         print(f"Context variable state: {get_code_variables_include()}")
         return throws_error()
 
+    print(f"Context variable state: {get_code_variables_include()}")
     decorated_function()
     """
         )

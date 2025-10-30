@@ -42,7 +42,7 @@ from posthog.contexts import (
     get_context_session_id,
     new_context,
 )
-from posthog.local_vars import set_code_variables_include
+from posthog.local_vars import get_code_variables_include, set_code_variables_include
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
@@ -942,6 +942,9 @@ class Client(object):
         Category:
             Error Tracking
         """
+
+        print("\n\n\n CAPTURING EXCEPTION  \n\n\n")
+
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
@@ -989,6 +992,7 @@ class Client(object):
             }
 
             # Capture local variables if enabled
+            print(f"Capturing local variables: {get_code_variables_include()}")
             local_vars = capture_local_variables_for_exception(
                 exc_info,
                 all_exceptions_with_trace_and_in_app,
