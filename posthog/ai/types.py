@@ -63,6 +63,7 @@ class TokenUsage(TypedDict, total=False):
     cache_read_input_tokens: Optional[int]
     cache_creation_input_tokens: Optional[int]
     reasoning_tokens: Optional[int]
+    web_search_count: Optional[int]
 
 
 class ProviderResponse(TypedDict, total=False):

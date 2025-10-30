@@ -338,6 +338,46 @@ def format_gemini_input(contents: Any) -> List[FormattedMessage]:
     return [_format_object_message(contents)]
 
 
+def extract_gemini_web_search_count(response: Any) -> int:
+    """
+    Extract web search count from Gemini response.
+
+    Gemini bills per request that uses grounding, not per query.
+    Returns 1 if grounding_metadata is present, 0 otherwise.
+
+    Args:
+        response: The response from Gemini API
+
+    Returns:
+        1 if web search/grounding was used, 0 otherwise
+    """
+
+    # Check for grounding_metadata in candidates
+    if hasattr(response, "candidates"):
+        for candidate in response.candidates:
+            if (
+                hasattr(candidate, "grounding_metadata")
+                and candidate.grounding_metadata
+            ):
+                return 1
+
+            # Also check for google_search or grounding in function call names
+            if hasattr(candidate, "content") and candidate.content:
+                if hasattr(candidate.content, "parts") and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "function_call") and part.function_call:
+                            function_name = getattr(
+                                part.function_call, "name", ""
+                            ).lower()
+                            if (
+                                "google_search" in function_name
+                                or "grounding" in function_name
+                            ):
+                                return 1
+
+    return 0
+
+
 def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
     """
     Common logic to extract usage from Gemini metadata.
@@ -382,7 +422,14 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
         return TokenUsage(input_tokens=0, output_tokens=0)
 
-    return _extract_usage_from_metadata(response.usage_metadata)
+    usage = _extract_usage_from_metadata(response.usage_metadata)
+
+    # Add web search count if present
+    web_search_count = extract_gemini_web_search_count(response)
+    if web_search_count > 0:
+        usage["web_search_count"] = web_search_count
+
+    return usage
 
 
 def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
@@ -403,6 +450,11 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
 
     # Use the shared helper to extract usage
     usage = _extract_usage_from_metadata(chunk.usage_metadata)
+
+    # Add web search count if present
+    web_search_count = extract_gemini_web_search_count(chunk)
+    if web_search_count > 0:
+        usage["web_search_count"] = web_search_count
 
     return usage
 

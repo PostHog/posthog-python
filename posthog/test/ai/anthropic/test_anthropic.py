@@ -1,4 +1,3 @@
-import os
 from unittest.mock import patch
 
 import pytest
@@ -1034,3 +1033,233 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
         assert props["$ai_output_tokens"] == 25
         assert props["$ai_cache_read_input_tokens"] == 5
         assert props["$ai_cache_creation_input_tokens"] == 0
+
+
+def test_web_search_count(mock_client):
+    """Test that web search count is properly tracked from Anthropic responses."""
+
+    # Create a mock usage with web search
+    class MockServerToolUse:
+        def __init__(self):
+            self.web_search_requests = 3
+
+    class MockUsageWithWebSearch:
+        def __init__(self):
+            self.input_tokens = 100
+            self.output_tokens = 50
+            self.cache_read_input_tokens = 0
+            self.cache_creation_input_tokens = 0
+            self.server_tool_use = MockServerToolUse()
+
+    class MockResponseWithWebSearch:
+        def __init__(self):
+            self.content = [MockContent(text="Search results show...")]
+            self.model = "claude-3-opus-20240229"
+            self.usage = MockUsageWithWebSearch()
+
+    mock_response = MockResponseWithWebSearch()
+
+    with patch("anthropic.resources.Messages.create", return_value=mock_response):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Search for recent news"}],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is captured
+        assert props["$ai_web_search_count"] == 3
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_output_tokens"] == 50
+
+
+@pytest.fixture
+def mock_anthropic_stream_with_web_search():
+    """Mock stream events for web search."""
+
+    class MockServerToolUse:
+        def __init__(self):
+            self.web_search_requests = 2
+
+    class MockMessage:
+        def __init__(self):
+            self.usage = MockUsage(
+                input_tokens=50,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=5,
+            )
+
+    def stream_generator():
+        # Message start with usage
+        event = MockStreamEvent("message_start")
+        event.message = MockMessage()
+        yield event
+
+        # Text block start
+        event = MockStreamEvent("content_block_start")
+        event.content_block = MockContentBlock("text")
+        event.index = 0
+        yield event
+
+        # Text delta
+        event = MockStreamEvent("content_block_delta")
+        event.delta = MockDelta(text="Here are the search results...")
+        event.index = 0
+        yield event
+
+        # Text block stop
+        event = MockStreamEvent("content_block_stop")
+        event.index = 0
+        yield event
+
+        # Message delta with final usage including web search
+        event = MockStreamEvent("message_delta")
+        usage = MockUsage(output_tokens=25)
+        usage.server_tool_use = MockServerToolUse()
+        event.usage = usage
+        yield event
+
+        # Message stop
+        event = MockStreamEvent("message_stop")
+        yield event
+
+    return stream_generator()
+
+
+def test_streaming_with_web_search(mock_client, mock_anthropic_stream_with_web_search):
+    """Test that web search count is properly captured in streaming mode."""
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_stream_with_web_search,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Search for recent news"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        # Consume the stream - this triggers the finally block synchronously
+        list(response)
+
+        # Capture happens synchronously when generator is exhausted
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is captured
+        assert props["$ai_web_search_count"] == 2
+        assert props["$ai_input_tokens"] == 50
+        assert props["$ai_output_tokens"] == 25
+
+
+def test_async_with_web_search(mock_client):
+    """Test that web search count is properly tracked in async non-streaming mode."""
+    import asyncio
+
+    # Create a mock usage with web search
+    class MockServerToolUse:
+        def __init__(self):
+            self.web_search_requests = 3
+
+    class MockUsageWithWebSearch:
+        def __init__(self):
+            self.input_tokens = 100
+            self.output_tokens = 50
+            self.cache_read_input_tokens = 0
+            self.cache_creation_input_tokens = 0
+            self.server_tool_use = MockServerToolUse()
+
+    class MockResponseWithWebSearch:
+        def __init__(self):
+            self.content = [MockContent(text="Search results show...")]
+            self.model = "claude-3-opus-20240229"
+            self.usage = MockUsageWithWebSearch()
+
+    mock_response = MockResponseWithWebSearch()
+
+    async def mock_async_create(**kwargs):
+        return mock_response
+
+    with patch(
+        "anthropic.resources.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+
+        async def run_test():
+            response = await async_client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "Search for recent news"}],
+                posthog_distinct_id="test-id",
+            )
+            return response
+
+        # asyncio.run() waits for all async operations to complete
+        response = asyncio.run(run_test())
+
+        assert response == mock_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is captured
+        assert props["$ai_web_search_count"] == 3
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_output_tokens"] == 50
+
+
+def test_async_streaming_with_web_search(
+    mock_client, mock_anthropic_stream_with_web_search
+):
+    """Test that web search count is properly captured in async streaming mode."""
+    import asyncio
+
+    async def mock_async_generator():
+        # Convert regular generator to async generator
+        for event in mock_anthropic_stream_with_web_search:
+            yield event
+
+    async def mock_async_create(**kwargs):
+        # Return the async generator (to be awaited by the implementation)
+        return mock_async_generator()
+
+    with patch(
+        "anthropic.resources.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+
+        async def run_test():
+            response = await async_client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "Search for recent news"}],
+                stream=True,
+                posthog_distinct_id="test-id",
+            )
+
+            # Consume the async stream
+            [event async for event in response]
+
+        # asyncio.run() waits for all async operations to complete
+        asyncio.run(run_test())
+
+        # Capture completes before asyncio.run() returns
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is captured
+        assert props["$ai_web_search_count"] == 2
+        assert props["$ai_input_tokens"] == 50
+        assert props["$ai_output_tokens"] == 25
