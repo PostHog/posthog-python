@@ -26,8 +26,8 @@ try:
     from langchain_core.agents import AgentAction, AgentFinish
 except (ImportError, ModuleNotFoundError):
     # Fallback for older LangChain versions
-    from langchain.callbacks.base import BaseCallbackHandler  # type: ignore
-    from langchain.schema.agent import AgentAction, AgentFinish  # type: ignore
+    from langchain.callbacks.base import BaseCallbackHandler
+    from langchain.schema.agent import AgentAction, AgentFinish
 from langchain_core.documents import Document
 from langchain_core.messages import (
     AIMessage,
