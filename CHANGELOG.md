@@ -1,3 +1,7 @@
+# 6.8.0 - 2025-10-28
+
+- feat(llma): send web search calls to be used for LLM cost calculations
+
 # 6.7.11 - 2025-10-28
 
 - feat(ai): Add `$ai_framework` property for framework integrations (e.g. LangChain)
