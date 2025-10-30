@@ -23,6 +23,7 @@ def with_include():
     simple_bool = True
     simple_none = None
     simple_float = 1.0
+    complex_object_instance = object()
 
     try:
         raise Exception("test exception")
