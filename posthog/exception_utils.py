@@ -889,53 +889,27 @@ def strip_string(value, max_length=None):
 
 def safe_serialize_local_var(key, value, max_length=DEFAULT_MAX_VALUE_LENGTH):
     try:
-        # Skip private/internal variables and common framework internals
         if key.startswith('_') or key in ('self', 'cls', 'args', 'kwargs'):
             return None
             
-        # Handle common types
         if value is None:
             return None
-        elif isinstance(value, (str, int, float, bool)):
-            # For strings, apply length limits
+            
+        if isinstance(value, (str, int, float, bool)):
             if isinstance(value, str) and len(value) > max_length:
                 return value[:max_length] + "..."
             return value
-        elif isinstance(value, (list, tuple)):
-            # Serialize first few elements of sequences
-            if len(value) > 10:
-                return f"<{type(value).__name__}[{len(value)}]>"
-            try:
-                return [safe_serialize_local_var(f"[{i}]", item, max_length // 2) for i, item in enumerate(value[:5])]
-            except Exception:
-                return f"<{type(value).__name__}[{len(value)}]>"
-        elif isinstance(value, dict):
-            # Serialize first few items of dictionaries
-            if len(value) > 10:
-                return f"<dict[{len(value)}]>"
-            try:
-                result = {}
-                for i, (k, v) in enumerate(value.items()):
-                    if i >= 5:  # Limit to first 5 items
-                        break
-                    if isinstance(k, str) and len(k) < 50:  # Reasonable key length
-                        result[k] = safe_serialize_local_var(k, v, max_length // 2)
-                return result
-            except Exception:
-                return f"<dict[{len(value)}]>"
-        else:
-            # For other objects, try to get a safe representation
-            try:
-                # Try to get a string representation, but limit length
-                str_repr = str(value)
-                if len(str_repr) > max_length:
-                    str_repr = str_repr[:max_length] + "..."
-                return f"<{type(value).__name__}: {str_repr}>"
-            except Exception:
-                return f"<{type(value).__name__}>"
-                
+            
+        try:
+            import json
+            json_str = json.dumps(value, default=str, ensure_ascii=False)
+            if len(json_str) > max_length:
+                return json_str[:max_length] + "..."
+            return json.loads(json_str)
+        except (TypeError, ValueError, OverflowError):
+            return f"<{type(value).__name__}>"
+            
     except Exception:
-        # If anything goes wrong, return a safe placeholder
         return f"<Error serializing {key}>"
 
 
