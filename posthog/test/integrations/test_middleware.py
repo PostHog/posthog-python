@@ -499,6 +499,229 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_async_middleware_with_authenticated_user(self):
+        """
+        Test that async middleware correctly extracts user info in async context.
+
+        Django's request.user is a SimpleLazyObject that defers DB access.
+        In async context, accessing it directly raises SynchronousOnlyOperation.
+        The middleware should use request.auser() instead.
+
+        This tests the fix for issue #355.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = True
+            mock_user.pk = 123
+            mock_user.email = "test@example.com"
+
+            async def async_get_response(request):
+                # Verify user info was extracted and set as distinct_id
+                distinct_id = get_context_distinct_id()
+                self.assertEqual(distinct_id, "123")
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser() to return authenticated user
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_unauthenticated_user(self):
+        """
+        Test that async middleware handles unauthenticated users correctly.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = False  # Not authenticated
+
+            async def async_get_response(request):
+                # Verify no distinct_id was set (no user)
+                distinct_id = get_context_distinct_id()
+                self.assertIsNone(distinct_id)
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_without_user_attribute(self):
+        """
+        Test that async middleware handles requests without user attribute (no auth middleware).
+        """
+
+        async def run_test():
+            mock_response = Mock()
+
+            async def async_get_response(request):
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            # Request without auser method (no auth middleware)
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_extra_tags(self):
+        """
+        Test that async middleware works with extra_tags callback.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+
+            def extra_tags_callback(request):
+                # Simple sync callback - should work
+                return {"custom_tag": "custom_value"}
+
+            async def async_get_response(request):
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.extra_tags = extra_tags_callback
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser for no user
+            async def mock_auser():
+                return None
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_tag_map(self):
+        """
+        Test that async middleware works with tag_map callback.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+
+            def tag_map_callback(tags):
+                # Simple sync callback - should work
+                tags["mapped"] = "yes"
+                return tags
+
+            async def async_get_response(request):
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.tag_map = tag_map_callback
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser for no user
+            async def mock_auser():
+                return None
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_user_extraction_with_all_headers(self):
+        """
+        Test async middleware extracts all request info correctly.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = True
+            mock_user.pk = 456
+            mock_user.email = "async@test.com"
+
+            async def async_get_response(request):
+                # Verify all context was set correctly
+                distinct_id = get_context_distinct_id()
+                session_id = get_context_session_id()
+                self.assertEqual(distinct_id, "456")
+                self.assertEqual(session_id, "async-sess-123")
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={
+                    "X-POSTHOG-SESSION-ID": "async-sess-123",
+                    "X-Forwarded-For": "192.168.1.1",
+                    "User-Agent": "TestAgent/1.0",
+                },
+                method="POST",
+                path="/api/test",
+            )
+
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
 
 class TestPosthogContextMiddlewareHybrid(unittest.TestCase):
     """Test hybrid middleware behavior with mixed sync/async chains"""
