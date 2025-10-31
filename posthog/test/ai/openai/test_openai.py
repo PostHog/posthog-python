@@ -1537,6 +1537,42 @@ def test_streaming_with_web_search(mock_client, streaming_web_search_chunks):
         assert props["$ai_output_tokens"] == 15
 
 
+def test_streaming_with_web_search_on_non_usage_chunk(
+    mock_client, streaming_web_search_chunks
+):
+    """Test that web search count is captured even when citations appear on chunks without usage data."""
+
+    # Add citations attribute to the FIRST chunk (which has no usage data)
+    # This tests the fix for the bug where web search indicators on non-usage chunks were ignored
+    streaming_web_search_chunks[0].citations = ["https://example.com/news"]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = streaming_web_search_chunks
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response_generator = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Search for recent news"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        # Consume the generator to trigger the event capture
+        chunks = list(response_generator)
+
+        # Verify the chunks were returned correctly
+        assert len(chunks) == 3
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Verify web search count is captured even though citations were on first chunk
+        assert props["$ai_web_search_count"] == 1
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 15
+
+
 @pytest.mark.asyncio
 async def test_async_chat_with_web_search(mock_client):
     """Test that web search count is properly tracked in async non-streaming mode."""

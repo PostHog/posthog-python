@@ -415,6 +415,13 @@ def extract_openai_usage_from_chunk(
     usage: TokenUsage = TokenUsage()
 
     if provider_type == "chat":
+        # Extract web search count from the chunk before checking for usage
+        # Web search indicators (citations, annotations) can appear on any chunk,
+        # not just those with usage data
+        web_search_count = extract_openai_web_search_count(chunk)
+        if web_search_count > 0:
+            usage["web_search_count"] = web_search_count
+
         if not hasattr(chunk, "usage") or not chunk.usage:
             return usage
 
@@ -438,11 +445,6 @@ def extract_openai_usage_from_chunk(
             usage["reasoning_tokens"] = (
                 chunk.usage.completion_tokens_details.reasoning_tokens
             )
-
-        # Extract web search count from the chunk (available in final streaming chunks)
-        web_search_count = extract_openai_web_search_count(chunk)
-        if web_search_count > 0:
-            usage["web_search_count"] = web_search_count
 
     elif provider_type == "responses":
         # For Responses API, usage is only in chunk.response.usage for completed events

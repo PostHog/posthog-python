@@ -445,16 +445,20 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
 
     usage: TokenUsage = TokenUsage()
 
-    if not hasattr(chunk, "usage_metadata") or not chunk.usage_metadata:
-        return usage
-
-    # Use the shared helper to extract usage
-    usage = _extract_usage_from_metadata(chunk.usage_metadata)
-
-    # Add web search count if present
+    # Extract web search count from the chunk before checking for usage_metadata
+    # Web search indicators can appear on any chunk, not just those with usage data
     web_search_count = extract_gemini_web_search_count(chunk)
     if web_search_count > 0:
         usage["web_search_count"] = web_search_count
+
+    if not hasattr(chunk, "usage_metadata") or not chunk.usage_metadata:
+        return usage
+
+    usage_from_metadata = _extract_usage_from_metadata(chunk.usage_metadata)
+
+    # Merge the usage from metadata with any web search count we found
+    for key, value in usage_from_metadata.items():
+        usage[key] = value
 
     return usage
 
