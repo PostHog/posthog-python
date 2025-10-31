@@ -2,7 +2,13 @@ import datetime  # noqa: F401
 from typing import Callable, Dict, Optional, Any  # noqa: F401
 from typing_extensions import Unpack
 
-from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ExceptionArg
+from posthog.args import (
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+    OptionalCaptureAIArgs,
+    AI_EVENT_TYPE,
+    ExceptionArg,
+)
 from posthog.client import Client
 from posthog.contexts import (
     new_context as inner_new_context,
@@ -11,8 +17,15 @@ from posthog.contexts import (
     set_context_session as inner_set_context_session,
     identify_context as inner_identify_context,
 )
-from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
-from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
+from posthog.feature_flags import (
+    InconclusiveMatchError as InconclusiveMatchError,
+    RequiresServerEvaluation as RequiresServerEvaluation,
+)
+from posthog.types import (
+    FeatureFlag,
+    FlagsAndPayloads,
+    FeatureFlagResult as FeatureFlagResult,
+)
 from posthog.version import VERSION
 
 __version__ = VERSION
@@ -384,6 +397,81 @@ def capture_exception(
     """
 
     return _proxy("capture_exception", exception=exception, **kwargs)
+
+
+def capture_ai(
+    event: AI_EVENT_TYPE, **kwargs: Unpack[OptionalCaptureAIArgs]
+) -> Optional[str]:
+    """
+    Capture an AI event to the dedicated AI endpoint with support for large payloads.
+
+    This method sends AI events (like $ai_generation, $ai_trace, etc.) to PostHog's
+    specialized AI endpoint (/i/v0/ai) which supports large payloads through multipart/form-data
+    and blob storage in S3.
+
+    Args:
+        event: The AI event type. Must be one of: "$ai_generation", "$ai_trace", "$ai_span",
+               "$ai_embedding", "$ai_metric", "$ai_feedback"
+        distinct_id: The distinct ID of the user.
+        properties: A dictionary of AI event properties. Must include required properties based on event type:
+            - All events: "$ai_model" (required)
+            - $ai_generation: "$ai_provider", "$ai_trace_id" (required)
+            - $ai_trace: "$ai_trace_id" (required)
+            - $ai_span: "$ai_trace_id", "$ai_span_id" (required)
+            - $ai_embedding: "$ai_provider", "$ai_trace_id" (required)
+        blob_properties: List of property names to send as blobs (large data stored in S3).
+            Common blob properties: "$ai_input", "$ai_output_choices", "$ai_input_state", "$ai_output_state"
+            If not provided, defaults to common blob properties based on event type.
+        timestamp: The timestamp of the event.
+        uuid: A unique identifier for the event.
+        groups: A dictionary of group information.
+        disable_geoip: Whether to disable GeoIP for this event.
+
+    Examples:
+        ```python
+        # $ai_generation event with blobs
+        from posthog import capture_ai
+        capture_ai(
+            "$ai_generation",
+            distinct_id="user_123",
+            properties={
+                "$ai_model": "gpt-4",
+                "$ai_provider": "openai",
+                "$ai_trace_id": "trace_abc123",
+                "$ai_input": {
+                    "messages": [
+                        {"role": "user", "content": "Hello!"}
+                    ]
+                },
+                "$ai_output_choices": {
+                    "choices": [{"message": {"role": "assistant", "content": "Hi there!"}}]
+                },
+                "$ai_completion_tokens": 150,
+                "$ai_prompt_tokens": 50
+            },
+            blob_properties=["$ai_input", "$ai_output_choices"]
+        )
+        ```
+
+        ```python
+        # $ai_trace event
+        from posthog import capture_ai
+        capture_ai(
+            "$ai_trace",
+            distinct_id="user_123",
+            properties={
+                "$ai_model": "gpt-4",
+                "$ai_trace_id": "trace_abc123"
+            }
+        )
+        ```
+
+    Category:
+        AI Events
+
+    Note: This method sends events synchronously to the AI endpoint, bypassing the queue system.
+    """
+    return _proxy("capture_ai", event, **kwargs)
 
 
 def feature_enabled(

@@ -1,16 +1,25 @@
 import atexit
+import json
 import logging
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Optional, Union
+from io import BytesIO
+from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Unpack
 from uuid import uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
 
-from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ID_TYPES, ExceptionArg
+from posthog.args import (
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+    OptionalCaptureAIArgs,
+    AI_EVENT_TYPE,
+    ID_TYPES,
+    ExceptionArg,
+)
 from posthog.consumer import Consumer
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
@@ -101,6 +110,106 @@ def add_context_tags(properties):
         properties["$session_id"] = get_context_session_id()
 
     return properties
+
+
+def _generate_multipart_boundary() -> str:
+    """Generate a random boundary string for multipart requests."""
+    return f"----WebKitFormBoundary{uuid4().hex[:16]}"
+
+
+def _encode_multipart_part(
+    boundary: str,
+    name: str,
+    content: bytes,
+    content_type: str,
+    filename: Optional[str] = None,
+) -> bytes:
+    """Encode a single part of a multipart/form-data request."""
+    part = f"--{boundary}\r\n".encode("utf-8")
+
+    if filename:
+        part += f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode(
+            "utf-8"
+        )
+    else:
+        part += f'Content-Disposition: form-data; name="{name}"\r\n'.encode("utf-8")
+
+    part += f"Content-Type: {content_type}\r\n\r\n".encode("utf-8")
+    part += content
+    part += b"\r\n"
+
+    return part
+
+
+def _build_multipart_body(
+    event_data: Dict[str, Any],
+    properties: Optional[Dict[str, Any]],
+    blob_properties: Optional[List[str]],
+) -> Tuple[bytes, str]:
+    """
+    Build a multipart/form-data body for AI capture endpoint.
+
+    Args:
+        event_data: The event data (uuid, event, distinct_id, timestamp)
+        properties: Event properties (small properties)
+        blob_properties: List of property names to send as blobs
+
+    Returns:
+        Tuple of (body_bytes, content_type_header)
+    """
+    boundary = _generate_multipart_boundary()
+    body = BytesIO()
+
+    # Part 1: Event (required, must be first)
+    event_json = json.dumps(event_data).encode("utf-8")
+    body.write(
+        _encode_multipart_part(boundary, "event", event_json, "application/json")
+    )
+
+    # Separate properties into small properties and blob properties
+    small_properties = {}
+    blob_data = {}
+
+    if properties:
+        blob_property_names = set(blob_properties or [])
+        for key, value in properties.items():
+            if key in blob_property_names:
+                blob_data[key] = value
+            else:
+                small_properties[key] = value
+
+    # Part 2: Event properties (if there are any small properties)
+    if small_properties:
+        properties_json = json.dumps(small_properties).encode("utf-8")
+        body.write(
+            _encode_multipart_part(
+                boundary, "event.properties", properties_json, "application/json"
+            )
+        )
+
+    # Part 3+: Blob parts
+    for property_name, property_value in blob_data.items():
+        # Serialize the blob data as JSON
+        blob_json = json.dumps(property_value).encode("utf-8")
+        blob_filename = f"blob_{uuid4().hex[:8]}"
+
+        body.write(
+            _encode_multipart_part(
+                boundary,
+                f"event.properties.{property_name}",
+                blob_json,
+                "application/json",
+                filename=blob_filename,
+            )
+        )
+
+    # Final boundary
+    body.write(f"--{boundary}--\r\n".encode("utf-8"))
+
+    body_bytes = body.getvalue()
+    content_type = f"multipart/form-data; boundary={boundary}"
+
+    return body_bytes, content_type
 
 
 def no_throw(default_return=None):
@@ -1004,6 +1113,196 @@ class Client(object):
             return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
+
+    @no_throw()
+    def capture_ai(
+        self, event: AI_EVENT_TYPE, **kwargs: Unpack[OptionalCaptureAIArgs]
+    ) -> Optional[str]:
+        """
+        Capture an AI event to the dedicated AI endpoint with support for large payloads.
+
+        This method sends AI events (like $ai_generation, $ai_trace, etc.) to PostHog's
+        specialized AI endpoint (/i/v0/ai) which supports large payloads through multipart/form-data
+        and blob storage in S3.
+
+        Args:
+            event: The AI event type. Must be one of: "$ai_generation", "$ai_trace", "$ai_span",
+                   "$ai_embedding", "$ai_metric", "$ai_feedback"
+            distinct_id: The distinct ID of the user.
+            properties: A dictionary of AI event properties. Must include required properties based on event type:
+                - All events: "$ai_model" (required)
+                - $ai_generation: "$ai_provider", "$ai_trace_id" (required)
+                - $ai_trace: "$ai_trace_id" (required)
+                - $ai_span: "$ai_trace_id", "$ai_span_id" (required)
+                - $ai_embedding: "$ai_provider", "$ai_trace_id" (required)
+            blob_properties: List of property names to send as blobs (large data stored in S3).
+                Common blob properties: "$ai_input", "$ai_output_choices", "$ai_input_state", "$ai_output_state"
+                If not provided, defaults to common blob properties based on event type.
+            timestamp: The timestamp of the event.
+            uuid: A unique identifier for the event.
+            groups: A dictionary of group information.
+            disable_geoip: Whether to disable GeoIP for this event.
+
+        Examples:
+            ```python
+            # $ai_generation event with blobs
+            posthog.capture_ai(
+                "$ai_generation",
+                distinct_id="user_123",
+                properties={
+                    "$ai_model": "gpt-4",
+                    "$ai_provider": "openai",
+                    "$ai_trace_id": "trace_abc123",
+                    "$ai_input": {
+                        "messages": [
+                            {"role": "user", "content": "Hello!"}
+                        ]
+                    },
+                    "$ai_output_choices": {
+                        "choices": [{"message": {"role": "assistant", "content": "Hi there!"}}]
+                    },
+                    "$ai_completion_tokens": 150,
+                    "$ai_prompt_tokens": 50
+                },
+                blob_properties=["$ai_input", "$ai_output_choices"]
+            )
+            ```
+
+            ```python
+            # $ai_trace event
+            posthog.capture_ai(
+                "$ai_trace",
+                distinct_id="user_123",
+                properties={
+                    "$ai_model": "gpt-4",
+                    "$ai_trace_id": "trace_abc123"
+                }
+            )
+            ```
+
+            ```python
+            # $ai_metric event
+            posthog.capture_ai(
+                "$ai_metric",
+                distinct_id="user_123",
+                properties={
+                    "$ai_model": "gpt-4",
+                    "$ai_trace_id": "trace_abc123",
+                    "$ai_metric_name": "accuracy",
+                    "$ai_metric_value": "0.95"
+                }
+            )
+            ```
+
+        Category:
+            AI Events
+
+        Note: This method sends events synchronously to the AI endpoint, bypassing the queue system.
+        """
+        import requests
+
+        if self.disabled:
+            return None
+
+        distinct_id = kwargs.get("distinct_id", None)
+        properties = kwargs.get("properties", None)
+        timestamp = kwargs.get("timestamp", None)
+        uuid = kwargs.get("uuid", None)
+        groups = kwargs.get("groups", None)
+        blob_properties = kwargs.get("blob_properties", None)
+
+        # Default blob properties based on event type if not provided
+        if blob_properties is None:
+            default_blob_properties = {
+                "$ai_generation": ["$ai_input", "$ai_output_choices"],
+                "$ai_trace": ["$ai_input_state", "$ai_output_state"],
+                "$ai_span": ["$ai_input_state", "$ai_output_state"],
+                "$ai_embedding": ["$ai_input"],
+            }
+            blob_properties = default_blob_properties.get(event, [])
+
+        properties = properties or {}
+
+        # Get distinct_id
+        (distinct_id, personless) = get_identity_state(distinct_id)
+
+        if personless and "$process_person_profile" not in properties:
+            properties["$process_person_profile"] = False
+
+        # Prepare timestamp
+        if timestamp is None:
+            timestamp = datetime.now(tz=tzutc())
+
+        timestamp = guess_timezone(timestamp)
+        timestamp_str = timestamp.isoformat()
+
+        # Generate UUID if not provided
+        if uuid:
+            uuid_str = stringify_id(uuid)
+        else:
+            uuid_str = stringify_id(uuid4())
+
+        # Add groups to properties
+        if groups:
+            properties["$groups"] = groups
+
+        # Prepare event data (the main event part)
+        event_data = {
+            "uuid": uuid_str,
+            "event": event,
+            "distinct_id": stringify_id(distinct_id),
+            "timestamp": timestamp_str,
+        }
+
+        # Build multipart body
+        body_bytes, content_type = _build_multipart_body(
+            event_data, properties, blob_properties
+        )
+
+        # Send request to AI endpoint
+        url = remove_trailing_slash(self.host) + "/i/v0/ai"
+
+        headers = {
+            "Content-Type": content_type,
+            "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": f"posthog-python/{VERSION}",
+        }
+
+        self.log.debug(f"Sending AI event to {url}: {event} (uuid: {uuid_str})")
+
+        try:
+            response = requests.post(
+                url,
+                data=body_bytes,
+                headers=headers,
+                timeout=self.timeout,
+            )
+
+            if response.status_code == 200:
+                self.log.debug(f"AI event captured successfully: {event}")
+                return uuid_str
+            else:
+                error_message = f"AI capture failed with status {response.status_code}"
+                try:
+                    error_detail = response.json()
+                    error_message = f"{error_message}: {error_detail}"
+                except Exception:
+                    error_message = f"{error_message}: {response.text}"
+
+                self.log.error(error_message)
+
+                if self.debug:
+                    raise Exception(error_message)
+
+                return None
+
+        except Exception as e:
+            self.log.exception(f"Error sending AI event: {e}")
+
+            if self.debug:
+                raise e
+
+            return None
 
     def _enqueue(self, msg, disable_geoip):
         # type: (...) -> Optional[str]

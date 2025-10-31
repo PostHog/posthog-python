@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, Any, Dict, Union, Tuple, Type
+from typing import TypedDict, Optional, Any, Dict, List, Union, Tuple, Type
 from types import TracebackType
 from typing_extensions import NotRequired  # For Python < 3.11 compatibility
 from datetime import datetime
@@ -69,3 +69,33 @@ ExcInfo = Union[
 ]
 
 ExceptionArg = Union[BaseException, ExcInfo]
+
+
+# AI Event Types (literal strings to enforce valid event types)
+AI_EVENT_TYPE = Union[
+    str,  # Allow str for flexibility but document the expected values
+]  # "$ai_generation", "$ai_trace", "$ai_span", "$ai_embedding", "$ai_metric", "$ai_feedback"
+
+
+class OptionalCaptureAIArgs(TypedDict):
+    """Optional arguments for the capture_ai method.
+
+    Args:
+        distinct_id: Unique identifier for the person associated with this AI event. If not set, the context
+            distinct_id is used, if available, otherwise a UUID is generated.
+        properties: Dictionary of AI event properties to track. Must include required properties for the event type.
+        blob_properties: List of property names that should be sent as blobs (e.g., '$ai_input', '$ai_output_choices').
+            These properties will be extracted from `properties` and sent as multipart blobs.
+        timestamp: When the event occurred (defaults to current time)
+        uuid: Unique identifier for this specific event. If not provided, one is generated.
+        groups: Group identifiers to associate with this event (format: {group_type: group_key})
+        disable_geoip: Whether to disable GeoIP lookup for this event.
+    """
+
+    distinct_id: NotRequired[Optional[ID_TYPES]]
+    properties: NotRequired[Optional[Dict[str, Any]]]
+    blob_properties: NotRequired[Optional[List[str]]]
+    timestamp: NotRequired[Optional[Union[datetime, str]]]
+    uuid: NotRequired[Optional[str]]
+    groups: NotRequired[Optional[Dict[str, str]]]
+    disable_geoip: NotRequired[Optional[bool]]
