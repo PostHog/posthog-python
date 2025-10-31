@@ -1,4 +1,4 @@
-# 6.7.12 - 2025-10-29
+# 6.7.12 - 2025-10-31
 
 - fix(django): Handle request.user access in async middleware context to prevent SynchronousOnlyOperation errors in Django 5+ (fixes #355)
 - fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
