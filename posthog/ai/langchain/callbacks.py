@@ -756,7 +756,8 @@ def _parse_usage_model(
             for mapped_key, dataclass_key in field_mapping.items()
         },
     )
-    # input_tokens is the sum of input and cache read tokens.
+    # In LangChain, input_tokens is the sum of input and cache read tokens.
+    # Our cost calculation expects them to be separate, for Anthropic.
     if normalized_usage.input_tokens and normalized_usage.cache_read_tokens:
         normalized_usage.input_tokens = max(
             normalized_usage.input_tokens - normalized_usage.cache_read_tokens, 0
