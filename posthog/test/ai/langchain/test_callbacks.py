@@ -1565,9 +1565,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
             AIMessage(
                 content="Using cached analysis to provide quick response.",
                 usage_metadata={
-                    "input_tokens": 200,
+                    "input_tokens": 1200,
                     "output_tokens": 30,
-                    "total_tokens": 1030,
+                    "total_tokens": 1230,
                     "cache_read_input_tokens": 800,  # Anthropic cache read
                 },
             )
@@ -1584,7 +1584,7 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 200
+    assert generation_props["$ai_input_tokens"] == 400
     assert generation_props["$ai_output_tokens"] == 30
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
     assert generation_props["$ai_cache_read_input_tokens"] == 800
@@ -1626,7 +1626,7 @@ def test_openai_cache_read_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 150
+    assert generation_props["$ai_input_tokens"] == 50
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
@@ -1708,7 +1708,7 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 500
+    assert generation_props["$ai_input_tokens"] == 200
     assert generation_props["$ai_output_tokens"] == 100
     assert generation_props["$ai_cache_read_input_tokens"] == 300
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
@@ -1877,6 +1877,212 @@ def test_tool_definition(mock_client):
     assert props["$ai_latency"] == 1.0
     # Verify that tools are captured in the $ai_tools property
     assert props["$ai_tools"] == tools
+
+
+def test_cache_read_tokens_subtraction_from_input_tokens(mock_client):
+    """Test that cache_read_tokens are properly subtracted from input_tokens.
+
+    This tests the logic in callbacks.py lines 757-758:
+        if normalized_usage.input_tokens and normalized_usage.cache_read_tokens:
+            normalized_usage.input_tokens = max(normalized_usage.input_tokens - normalized_usage.cache_read_tokens, 0)
+    """
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Use the cached prompt for this request")]
+    )
+
+    # Scenario 1: input_tokens includes cache_read_tokens (typical case)
+    # input_tokens=150 includes 100 cache_read tokens, so actual input is 50
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response using cached prompt context.",
+                usage_metadata={
+                    "input_tokens": 150,  # Total includes cache reads
+                    "output_tokens": 40,
+                    "total_tokens": 190,
+                    "cache_read_input_tokens": 100,  # 100 tokens read from cache
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response using cached prompt context."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should be reduced: 150 - 100 = 50
+    assert generation_props["$ai_input_tokens"] == 50
+    assert generation_props["$ai_output_tokens"] == 40
+    assert generation_props["$ai_cache_read_input_tokens"] == 100
+
+
+def test_cache_read_tokens_subtraction_prevents_negative(mock_client):
+    """Test that cache_read_tokens subtraction doesn't result in negative input_tokens.
+
+    This tests the max(..., 0) part of the logic in callbacks.py lines 757-758.
+    """
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Edge case with large cache read")]
+    )
+
+    # Edge case: cache_read_tokens >= input_tokens
+    # This could happen in some API responses where accounting differs
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response with edge case token counts.",
+                usage_metadata={
+                    "input_tokens": 80,
+                    "output_tokens": 20,
+                    "total_tokens": 100,
+                    "cache_read_input_tokens": 100,  # More than input_tokens
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response with edge case token counts."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should be 0, not negative: max(80 - 100, 0) = 0
+    assert generation_props["$ai_input_tokens"] == 0
+    assert generation_props["$ai_output_tokens"] == 20
+    assert generation_props["$ai_cache_read_input_tokens"] == 100
+
+
+def test_no_cache_read_tokens_no_subtraction(mock_client):
+    """Test that when there are no cache_read_tokens, input_tokens remain unchanged.
+
+    This tests the conditional check before the subtraction in callbacks.py line 757.
+    """
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Normal request without cache")]
+    )
+
+    # No cache usage - input_tokens should remain as-is
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response without cache.",
+                usage_metadata={
+                    "input_tokens": 100,
+                    "output_tokens": 30,
+                    "total_tokens": 130,
+                    # No cache_read_input_tokens
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response without cache."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should remain unchanged at 100
+    assert generation_props["$ai_input_tokens"] == 100
+    assert generation_props["$ai_output_tokens"] == 30
+    assert generation_props["$ai_cache_read_input_tokens"] == 0
+
+
+def test_zero_input_tokens_with_cache_read(mock_client):
+    """Test edge case where input_tokens is 0 but cache_read_tokens exist.
+
+    This tests the falsy check in the conditional (line 757).
+    """
+    prompt = ChatPromptTemplate.from_messages([("user", "Edge case query")])
+
+    # Edge case: input_tokens is 0 (falsy), should skip subtraction
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response.",
+                usage_metadata={
+                    "input_tokens": 0,
+                    "output_tokens": 10,
+                    "total_tokens": 10,
+                    "cache_read_input_tokens": 50,
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should remain 0 (no subtraction because input_tokens is falsy)
+    assert generation_props["$ai_input_tokens"] == 0
+    assert generation_props["$ai_output_tokens"] == 10
+    assert generation_props["$ai_cache_read_input_tokens"] == 50
+
+
+def test_cache_write_tokens_not_subtracted_from_input(mock_client):
+    """Test that cache_creation_input_tokens (cache write) do NOT affect input_tokens.
+
+    Only cache_read_tokens should be subtracted from input_tokens, not cache_write_tokens.
+    """
+    prompt = ChatPromptTemplate.from_messages([("user", "Create cache")])
+
+    # Cache creation without cache read
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Creating cache.",
+                usage_metadata={
+                    "input_tokens": 1000,
+                    "output_tokens": 20,
+                    "total_tokens": 1020,
+                    "cache_creation_input_tokens": 800,  # Cache write, not read
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Creating cache."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should NOT be reduced by cache_creation_input_tokens
+    assert generation_props["$ai_input_tokens"] == 1000
+    assert generation_props["$ai_output_tokens"] == 20
+    assert generation_props["$ai_cache_creation_input_tokens"] == 800
+    assert generation_props["$ai_cache_read_input_tokens"] == 0
 
 
 def test_agent_action_and_finish_imports():

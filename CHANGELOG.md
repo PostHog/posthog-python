@@ -1,3 +1,7 @@
+# 6.7.13 - 2025-11-02
+
+- fix(llma): cache cost calculation in the LangChain callback
+
 # 6.7.12 - 2025-11-02
 
 - fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
