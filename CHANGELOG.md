@@ -1,6 +1,7 @@
-# Unreleased
+# 6.7.12 - 2025-11-02
 
 - fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
+- fix(ai/langchain): Add LangChain 1.0+ compatibility for CallbackHandler imports (fixes #362)
 
 # 6.7.12 - 2025-11-02
 

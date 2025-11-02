@@ -20,8 +20,14 @@ from typing import (
 )
 from uuid import UUID
 
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema.agent import AgentAction, AgentFinish
+try:
+    # LangChain 1.0+ and modern 0.x with langchain-core
+    from langchain_core.callbacks.base import BaseCallbackHandler
+    from langchain_core.agents import AgentAction, AgentFinish
+except (ImportError, ModuleNotFoundError):
+    # Fallback for older LangChain versions
+    from langchain.callbacks.base import BaseCallbackHandler
+    from langchain.schema.agent import AgentAction, AgentFinish
 from langchain_core.documents import Document
 from langchain_core.messages import (
     AIMessage,

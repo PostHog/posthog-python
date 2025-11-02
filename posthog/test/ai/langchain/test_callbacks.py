@@ -2083,3 +2083,46 @@ def test_cache_write_tokens_not_subtracted_from_input(mock_client):
     assert generation_props["$ai_output_tokens"] == 20
     assert generation_props["$ai_cache_creation_input_tokens"] == 800
     assert generation_props["$ai_cache_read_input_tokens"] == 0
+
+
+def test_agent_action_and_finish_imports():
+    """
+    Regression test for LangChain 1.0+ compatibility (Issue #362).
+    Verifies that AgentAction and AgentFinish can be imported and used.
+    This test ensures the imports work with both LangChain 0.x and 1.0+.
+    """
+    # Import the types that caused the compatibility issue
+    try:
+        from langchain_core.agents import AgentAction, AgentFinish
+    except (ImportError, ModuleNotFoundError):
+        from langchain.schema.agent import AgentAction, AgentFinish  # type: ignore
+
+    # Verify they're available in the callbacks module
+    from posthog.ai.langchain.callbacks import CallbackHandler
+
+    # Test on_agent_action with mock data
+    mock_client = MagicMock()
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    parent_run_id = uuid.uuid4()
+
+    # Create mock AgentAction
+    action = AgentAction(tool="test_tool", tool_input="test_input", log="test_log")
+
+    # Should not raise an exception
+    callbacks.on_agent_action(action, run_id=run_id, parent_run_id=parent_run_id)
+
+    # Verify parent was set
+    assert run_id in callbacks._parent_tree
+    assert callbacks._parent_tree[run_id] == parent_run_id
+
+    # Test on_agent_finish with mock data
+    finish = AgentFinish(return_values={"output": "test_output"}, log="finish_log")
+
+    # Should not raise an exception
+    callbacks.on_agent_finish(finish, run_id=run_id, parent_run_id=parent_run_id)
+
+    # Verify capture was called
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    assert call_args["event"] == "$ai_span"
