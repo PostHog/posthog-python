@@ -3,12 +3,18 @@ from posthog import contexts
 from posthog.client import Client
 
 try:
-    from asgiref.sync import iscoroutinefunction
+    from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 except ImportError:
-    # Fallback for older Django versions
+    # Fallback for older Django versions without asgiref
     import asyncio
 
     iscoroutinefunction = asyncio.iscoroutinefunction
+
+    # No-op fallback for markcoroutinefunction
+    # Older Django versions without asgiref typically don't support async middleware anyway
+    def markcoroutinefunction(func):
+        return func
+
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
@@ -39,26 +45,24 @@ class PosthogContextMiddleware:
     See the context documentation for more information. The extracted distinct ID and session ID, if found, are used to
     associate all events captured in the middleware context with the same distinct ID and session as currently active on the
     frontend. See the documentation for `set_context_session` and `identify_context` for more details.
+
+    This middleware is hybrid-capable: it supports both WSGI (sync) and ASGI (async) Django applications. The middleware
+    detects at initialization whether the next middleware in the chain is async or sync, and adapts its behavior accordingly.
+    This ensures compatibility with both pure sync and pure async middleware chains, as well as mixed chains in ASGI mode.
     """
 
-    # Django middleware capability flags
     sync_capable = True
     async_capable = True
 
     def __init__(self, get_response):
         # type: (Union[Callable[[HttpRequest], HttpResponse], Callable[[HttpRequest], Awaitable[HttpResponse]]]) -> None
+        self.get_response = get_response
         self._is_coroutine = iscoroutinefunction(get_response)
-        self._async_get_response = None  # type: Optional[Callable[[HttpRequest], Awaitable[HttpResponse]]]
-        self._sync_get_response = None  # type: Optional[Callable[[HttpRequest], HttpResponse]]
 
+        # Mark this instance as a coroutine function if get_response is async
+        # This is required for Django to correctly detect async middleware
         if self._is_coroutine:
-            self._async_get_response = cast(
-                "Callable[[HttpRequest], Awaitable[HttpResponse]]", get_response
-            )
-        else:
-            self._sync_get_response = cast(
-                "Callable[[HttpRequest], HttpResponse]", get_response
-            )
+            markcoroutinefunction(self)
 
         from django.conf import settings
 
@@ -181,40 +185,67 @@ class PosthogContextMiddleware:
         return user_id, email
 
     def __call__(self, request):
-        # type: (HttpRequest) -> HttpResponse
-        # Purely defensive around django's internal sync/async handling - this should be unreachable, but if it's reached, we may
-        # as well return something semi-meaningful
+        # type: (HttpRequest) -> Union[HttpResponse, Awaitable[HttpResponse]]
+        """
+        Unified entry point for both sync and async request handling.
+
+        When sync_capable and async_capable are both True, Django passes requests
+        without conversion. This method detects the mode and routes accordingly.
+        """
         if self._is_coroutine:
-            raise RuntimeError(
-                "PosthogContextMiddleware received sync call but get_response is async"
-            )
+            return self.__acall__(request)
+        else:
+            # Synchronous path
+            if self.request_filter and not self.request_filter(request):
+                return self.get_response(request)
 
-        if self.request_filter and not self.request_filter(request):
-            assert self._sync_get_response is not None
-            return self._sync_get_response(request)
+            with contexts.new_context(self.capture_exceptions, client=self.client):
+                for k, v in self.extract_tags(request).items():
+                    contexts.tag(k, v)
 
-        with contexts.new_context(self.capture_exceptions, client=self.client):
-            for k, v in self.extract_tags(request).items():
-                contexts.tag(k, v)
-
-            assert self._sync_get_response is not None
-            return self._sync_get_response(request)
+                return self.get_response(request)
 
     async def __acall__(self, request):
-        # type: (HttpRequest) -> HttpResponse
+        # type: (HttpRequest) -> Awaitable[HttpResponse]
+        """
+        Asynchronous entry point for async request handling.
+
+        This method is called when the middleware chain is async.
+        """
         if self.request_filter and not self.request_filter(request):
-            if self._async_get_response is not None:
-                return await self._async_get_response(request)
-            else:
-                assert self._sync_get_response is not None
-                return self._sync_get_response(request)
+            return await self.get_response(request)
 
         with contexts.new_context(self.capture_exceptions, client=self.client):
             for k, v in self.extract_tags(request).items():
                 contexts.tag(k, v)
 
-            if self._async_get_response is not None:
-                return await self._async_get_response(request)
-            else:
-                assert self._sync_get_response is not None
-                return self._sync_get_response(request)
+            return await self.get_response(request)
+
+    def process_exception(self, request, exception):
+        # type: (HttpRequest, Exception) -> None
+        """
+        Process exceptions from views and downstream middleware.
+
+        Django calls this WHILE still inside the context created by __call__,
+        so request tags have already been extracted and set. This method just
+        needs to capture the exception directly.
+
+        Django converts view exceptions into responses before they propagate through
+        the middleware stack, so the context manager in __call__/__acall__ never sees them.
+
+        Note: Django's process_exception is always synchronous, even for async views.
+        """
+        if self.request_filter and not self.request_filter(request):
+            return
+
+        if not self.capture_exceptions:
+            return
+
+        # Context and tags already set by __call__ or __acall__
+        # Just capture the exception
+        if self.client:
+            self.client.capture_exception(exception)
+        else:
+            from posthog import capture_exception
+
+            capture_exception(exception)

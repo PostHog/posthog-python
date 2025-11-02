@@ -1,6 +1,18 @@
-# 6.7.10 - 2025-10-24
+# Unreleased
+
+- fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
+
+# 6.7.12 - 2025-11-02
 
 - fix(llma): cache cost calculation in the LangChain callback
+
+# 6.7.11 - 2025-10-28
+
+- feat(ai): Add `$ai_framework` property for framework integrations (e.g. LangChain)
+
+# 6.7.10 - 2025-10-24
+
+- fix(django): Make middleware truly hybrid - compatible with both sync (WSGI) and async (ASGI) Django stacks without breaking sync-only deployments
 
 # 6.7.9 - 2025-10-22
 
