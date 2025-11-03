@@ -112,9 +112,18 @@ class PosthogContextMiddleware:
 
     def extract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
-        tags = {}
+        """Extract tags from request in sync context."""
+        user_id, user_email = self.extract_request_user(request)
+        return self._build_tags(request, user_id, user_email)
 
-        (user_id, user_email) = self.extract_request_user(request)
+    def _build_tags(self, request, user_id, user_email):
+        # type: (HttpRequest, Optional[str], Optional[str]) -> Dict[str, Any]
+        """
+        Build tags dict from request and user info.
+
+        Centralized tag extraction logic used by both sync and async paths.
+        """
+        tags = {}
 
         # Extract session ID from X-POSTHOG-SESSION-ID header
         session_id = request.headers.get("X-POSTHOG-SESSION-ID")
@@ -166,21 +175,78 @@ class PosthogContextMiddleware:
         return tags
 
     def extract_request_user(self, request):
+        # type: (HttpRequest) -> tuple[Optional[str], Optional[str]]
+        """Extract user ID and email from request in sync context."""
+        user = getattr(request, "user", None)
+        return self._resolve_user_details(user)
+
+    async def aextract_tags(self, request):
+        # type: (HttpRequest) -> Dict[str, Any]
+        """
+        Async version of extract_tags for use in async request handling.
+
+        Uses await request.auser() instead of request.user to avoid
+        SynchronousOnlyOperation in async context.
+
+        Follows Django's naming convention for async methods (auser, asave, etc.).
+        """
+        user_id, user_email = await self.aextract_request_user(request)
+        return self._build_tags(request, user_id, user_email)
+
+    async def aextract_request_user(self, request):
+        # type: (HttpRequest) -> tuple[Optional[str], Optional[str]]
+        """
+        Async version of extract_request_user for use in async request handling.
+
+        Uses await request.auser() instead of request.user to avoid
+        SynchronousOnlyOperation in async context.
+
+        Follows Django's naming convention for async methods (auser, asave, etc.).
+        """
+        auser = getattr(request, "auser", None)
+        if callable(auser):
+            try:
+                user = await auser()
+                return self._resolve_user_details(user)
+            except Exception:
+                # If auser() fails, return empty - don't break the request
+                # Real errors (permissions, broken auth) will be logged by Django
+                return None, None
+
+        # Fallback for test requests without auser
+        return None, None
+
+    def _resolve_user_details(self, user):
+        # type: (Any) -> tuple[Optional[str], Optional[str]]
+        """
+        Extract user ID and email from a user object.
+
+        Handles both authenticated and unauthenticated users, as well as
+        legacy Django where is_authenticated was a method.
+        """
         user_id = None
         email = None
 
-        user = getattr(request, "user", None)
+        if user is None:
+            return user_id, email
 
-        if user and getattr(user, "is_authenticated", False):
-            try:
-                user_id = str(user.pk)
-            except Exception:
-                pass
+        # Handle is_authenticated (property in modern Django, method in legacy)
+        is_authenticated = getattr(user, "is_authenticated", False)
+        if callable(is_authenticated):
+            is_authenticated = is_authenticated()
 
-            try:
-                email = str(user.email)
-            except Exception:
-                pass
+        if not is_authenticated:
+            return user_id, email
+
+        # Extract user primary key
+        user_pk = getattr(user, "pk", None)
+        if user_pk is not None:
+            user_id = str(user_pk)
+
+        # Extract user email
+        user_email = getattr(user, "email", None)
+        if user_email:
+            email = str(user_email)
 
         return user_id, email
 
@@ -211,12 +277,14 @@ class PosthogContextMiddleware:
         Asynchronous entry point for async request handling.
 
         This method is called when the middleware chain is async.
+        Uses aextract_tags() which calls request.auser() to avoid
+        SynchronousOnlyOperation when accessing user in async context.
         """
         if self.request_filter and not self.request_filter(request):
             return await self.get_response(request)
 
         with contexts.new_context(self.capture_exceptions, client=self.client):
-            for k, v in self.extract_tags(request).items():
+            for k, v in (await self.aextract_tags(request)).items():
                 contexts.tag(k, v)
 
             return await self.get_response(request)
