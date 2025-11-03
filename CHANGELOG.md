@@ -1,6 +1,20 @@
-# 6.8.0 - 2025-10-28
+# 6.8.0 - 2025-11-03
 
 - feat(llma): send web search calls to be used for LLM cost calculations
+
+# 6.7.14 - 2025-11-03
+
+- fix(django): Handle request.user access in async middleware context to prevent SynchronousOnlyOperation errors in Django 5+ (fixes #355)
+- test(django): Add Django 5 integration test suite with real ASGI application testing async middleware behavior
+
+# 6.7.13 - 2025-11-02
+
+- fix(llma): cache cost calculation in the LangChain callback
+
+# 6.7.12 - 2025-11-02
+
+- fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
+- fix(ai/langchain): Add LangChain 1.0+ compatibility for CallbackHandler imports (fixes #362)
 
 # 6.7.11 - 2025-10-28
 
@@ -9,7 +23,6 @@
 # 6.7.10 - 2025-10-24
 
 - fix(django): Make middleware truly hybrid - compatible with both sync (WSGI) and async (ASGI) Django stacks without breaking sync-only deployments
-- fix(django): Exception capture works correctly via context manager (addresses #329)
 
 # 6.7.9 - 2025-10-22
 

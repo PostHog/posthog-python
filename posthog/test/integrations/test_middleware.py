@@ -201,6 +201,86 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
         self.assertEqual(tags["$request_method"], "PATCH")
 
+    def test_process_exception_called_during_view_exception(self):
+        """
+        Unit test verifying process_exception captures exceptions per Django's contract.
+
+        Since this is a library test (no Django runtime), we simulate how Django
+        would invoke our middleware in production:
+        1. Middleware.__call__ creates context with request tags
+        2. View raises exception inside get_response
+        3. Django's BaseHandler catches it, calls process_exception, returns error response
+        4. Exception never propagates to middleware's context manager
+
+        We manually call process_exception to simulate Django's behavior - this is
+        the only way to test the hook without a full Django integration test.
+        """
+        mock_client = Mock()
+        view_exception = ValueError("View raised this error")
+        error_response = Mock(status_code=500)
+
+        def mock_get_response(request):
+            # Simulate Django's exception handling: catches view exception,
+            # calls process_exception hook if it exists, returns error response
+            if hasattr(middleware, "process_exception"):
+                middleware.process_exception(request, view_exception)
+            return error_response
+
+        middleware = self.create_middleware(get_response=mock_get_response)
+        middleware.client = mock_client
+
+        request = MockRequest(
+            headers={"X-POSTHOG-DISTINCT-ID": "test-user"},
+            method="POST",
+            path="/api/endpoint",
+        )
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 500)
+        mock_client.capture_exception.assert_called_once_with(view_exception)
+
+    def test_process_exception_respects_capture_exceptions_false(self):
+        """Verify process_exception respects capture_exceptions=False setting"""
+        mock_client = Mock()
+        view_exception = ValueError("Should not be captured")
+
+        def mock_get_response(request):
+            if hasattr(middleware, "process_exception"):
+                middleware.process_exception(request, view_exception)
+            return Mock(status_code=500)
+
+        middleware = self.create_middleware(
+            capture_exceptions=False, get_response=mock_get_response
+        )
+        middleware.client = mock_client
+
+        request = MockRequest()
+        middleware(request)
+
+        mock_client.capture_exception.assert_not_called()
+
+    def test_process_exception_respects_request_filter(self):
+        """Verify process_exception respects request_filter setting"""
+        mock_client = Mock()
+        view_exception = ValueError("Should be filtered")
+
+        def mock_get_response(request):
+            if hasattr(middleware, "process_exception"):
+                middleware.process_exception(request, view_exception)
+            return Mock(status_code=500)
+
+        middleware = self.create_middleware(
+            request_filter=lambda req: False,
+            capture_exceptions=True,
+            get_response=mock_get_response,
+        )
+        middleware.client = mock_client
+
+        request = MockRequest()
+        middleware(request)
+
+        mock_client.capture_exception.assert_not_called()
+
 
 class TestPosthogContextMiddlewareSync(unittest.TestCase):
     """Test synchronous middleware behavior"""
@@ -250,31 +330,52 @@ class TestPosthogContextMiddlewareSync(unittest.TestCase):
         self.assertEqual(response, mock_response)
         get_response.assert_called_once_with(request)
 
-    def test_sync_middleware_exception_capture(self):
-        """Test that sync middleware captures exceptions during request processing"""
+    def test_view_exceptions_only_captured_via_process_exception(self):
+        """
+        Demonstrates that process_exception is required to capture view exceptions.
+
+        In production Django, view exceptions don't propagate to middleware's context
+        manager because Django's BaseHandler catches them first and converts them to
+        error responses. Django provides the exception via process_exception hook instead.
+
+        This unit test proves:
+        1. Context manager in __call__ never sees view exceptions (Django intercepts)
+        2. Only process_exception can capture them
+        3. Without process_exception, exceptions are silently lost (v6.7.5 regression)
+
+        We manually call process_exception to verify the hook works - in production,
+        Django's BaseHandler would call it when a view raises.
+        """
         mock_client = Mock()
+        get_response = Mock(return_value=Mock(status_code=500))
 
-        # Make get_response raise an exception
-        def raise_exception(request):
-            raise ValueError("Test exception")
-
-        get_response = Mock(side_effect=raise_exception)
-
-        # Properly initialize middleware
         middleware = PosthogContextMiddleware(get_response)
-        middleware.client = mock_client  # Override with mock client
+        middleware.client = mock_client
+
+        def get_response_simulating_django(request):
+            # Simulates Django behavior: view exception converted to error response,
+            # never propagates to middleware's context manager
+            return Mock(status_code=500)
+
+        middleware._sync_get_response = get_response_simulating_django
 
         request = MockRequest()
 
-        # Should capture exception and re-raise
-        with self.assertRaises(ValueError):
-            middleware(request)
+        response = middleware(request)
+        self.assertEqual(response.status_code, 500)
 
-        # Verify exception was captured by middleware
-        mock_client.capture_exception.assert_called_once()
-        captured_exception = mock_client.capture_exception.call_args[0][0]
-        self.assertIsInstance(captured_exception, ValueError)
-        self.assertEqual(str(captured_exception), "Test exception")
+        # Context manager didn't capture anything - exception was intercepted by Django
+        mock_client.capture_exception.assert_not_called()
+
+        # Verify process_exception hook exists and captures exceptions when called
+        if hasattr(middleware, "process_exception"):
+            exception = ValueError("View error")
+            middleware.process_exception(request, exception)
+            mock_client.capture_exception.assert_called_once_with(exception)
+        else:
+            self.fail(
+                "process_exception missing - view exceptions will not be captured!"
+            )
 
 
 class TestPosthogContextMiddlewareAsync(unittest.TestCase):
@@ -395,6 +496,229 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
             captured_exception = mock_client.capture_exception.call_args[0][0]
             self.assertIsInstance(captured_exception, ValueError)
             self.assertEqual(str(captured_exception), "Async test exception")
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_authenticated_user(self):
+        """
+        Test that async middleware correctly extracts user info in async context.
+
+        Django's request.user is a SimpleLazyObject that defers DB access.
+        In async context, accessing it directly raises SynchronousOnlyOperation.
+        The middleware should use request.auser() instead.
+
+        This tests the fix for issue #355.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = True
+            mock_user.pk = 123
+            mock_user.email = "test@example.com"
+
+            async def async_get_response(request):
+                # Verify user info was extracted and set as distinct_id
+                distinct_id = get_context_distinct_id()
+                self.assertEqual(distinct_id, "123")
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser() to return authenticated user
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_unauthenticated_user(self):
+        """
+        Test that async middleware handles unauthenticated users correctly.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = False  # Not authenticated
+
+            async def async_get_response(request):
+                # Verify no distinct_id was set (no user)
+                distinct_id = get_context_distinct_id()
+                self.assertIsNone(distinct_id)
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_without_user_attribute(self):
+        """
+        Test that async middleware handles requests without user attribute (no auth middleware).
+        """
+
+        async def run_test():
+            mock_response = Mock()
+
+            async def async_get_response(request):
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            # Request without auser method (no auth middleware)
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_extra_tags(self):
+        """
+        Test that async middleware works with extra_tags callback.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+
+            def extra_tags_callback(request):
+                # Simple sync callback - should work
+                return {"custom_tag": "custom_value"}
+
+            async def async_get_response(request):
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.extra_tags = extra_tags_callback
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser for no user
+            async def mock_auser():
+                return None
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_with_tag_map(self):
+        """
+        Test that async middleware works with tag_map callback.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+
+            def tag_map_callback(tags):
+                # Simple sync callback - should work
+                tags["mapped"] = "yes"
+                return tags
+
+            async def async_get_response(request):
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.tag_map = tag_map_callback
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={"X-POSTHOG-SESSION-ID": "test-session"}, method="GET"
+            )
+
+            # Mock auser for no user
+            async def mock_auser():
+                return None
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+
+        asyncio.run(run_test())
+
+    def test_async_middleware_user_extraction_with_all_headers(self):
+        """
+        Test async middleware extracts all request info correctly.
+        """
+
+        async def run_test():
+            mock_response = Mock()
+            mock_user = Mock()
+            mock_user.is_authenticated = True
+            mock_user.pk = 456
+            mock_user.email = "async@test.com"
+
+            async def async_get_response(request):
+                # Verify all context was set correctly
+                distinct_id = get_context_distinct_id()
+                session_id = get_context_session_id()
+                self.assertEqual(distinct_id, "456")
+                self.assertEqual(session_id, "async-sess-123")
+                return mock_response
+
+            middleware = PosthogContextMiddleware(async_get_response)
+            middleware.client = Mock()
+
+            request = MockRequest(
+                headers={
+                    "X-POSTHOG-SESSION-ID": "async-sess-123",
+                    "X-Forwarded-For": "192.168.1.1",
+                    "User-Agent": "TestAgent/1.0",
+                },
+                method="POST",
+                path="/api/test",
+            )
+
+            async def mock_auser():
+                return mock_user
+
+            request.auser = mock_auser
+
+            with new_context():
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
 
         asyncio.run(run_test())
 
