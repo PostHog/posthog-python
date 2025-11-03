@@ -90,15 +90,15 @@ jobs:
               uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
               with:
                   enable-cache: true
-                  pyproject-file: 'test_project_django5/pyproject.toml'
+                  pyproject-file: 'integration_tests/django5/pyproject.toml'
 
             - name: Install Django 5 test project dependencies
               shell: bash
-              working-directory: test_project_django5
+              working-directory: integration_tests/django5
               run: |
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync
 
             - name: Run Django 5 middleware integration tests
-              working-directory: test_project_django5
+              working-directory: integration_tests/django5
               run: |
                   uv run pytest test_middleware.py test_exception_capture.py --verbose

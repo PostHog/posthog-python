@@ -19,3 +19,4 @@ pyrightconfig.json
 .env
 .DS_Store
 posthog-python-references.json
+.claude/settings.local.json
