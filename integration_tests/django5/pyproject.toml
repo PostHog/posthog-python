@@ -16,4 +16,4 @@ dependencies = [
 required-version = ">=0.5"
 
 [tool.uv.sources]
-posthog = { path = "..", editable = true }
+posthog = { path = "../..", editable = true }
