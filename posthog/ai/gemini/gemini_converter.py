@@ -472,8 +472,7 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
     usage_from_metadata = _extract_usage_from_metadata(chunk.usage_metadata)
 
     # Merge the usage from metadata with any web search count we found
-    for key, value in usage_from_metadata.items():
-        usage[key] = value
+    usage.update(usage_from_metadata)
 
     return usage
 
