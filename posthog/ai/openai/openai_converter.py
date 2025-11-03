@@ -263,7 +263,7 @@ def extract_openai_web_search_count(response: Any) -> int:
     1. Priority 1 (exact count): Check for output[].type == "web_search_call" (Responses API)
     2. Priority 2 (binary detection): Check for various web search indicators:
        - Root-level citations, search_results, or usage.search_context_size (Perplexity)
-       - Annotations with type "url_citation" in choices/output
+       - Annotations with type "url_citation" in choices/output (including delta for streaming)
 
     Args:
         response: The response from OpenAI API
@@ -275,6 +275,7 @@ def extract_openai_web_search_count(response: Any) -> int:
     # Priority 1: Check for exact count in Responses API output
     if hasattr(response, "output"):
         web_search_count = 0
+
         for item in response.output:
             if hasattr(item, "type") and item.type == "web_search_call":
                 web_search_count += 1
@@ -289,11 +290,13 @@ def extract_openai_web_search_count(response: Any) -> int:
     # Check root-level indicators (Perplexity)
     if hasattr(response, "citations"):
         citations = getattr(response, "citations")
+
         if citations and len(citations) > 0:
             return 1
 
     if hasattr(response, "search_results"):
         search_results = getattr(response, "search_results")
+
         if search_results and len(search_results) > 0:
             return 1
 
@@ -304,14 +307,36 @@ def extract_openai_web_search_count(response: Any) -> int:
     # Check for url_citation annotations in choices (Chat Completions)
     if hasattr(response, "choices"):
         for choice in response.choices:
+            # Check message.annotations (non-streaming or final chunk)
             if hasattr(choice, "message") and hasattr(choice.message, "annotations"):
                 annotations = choice.message.annotations
+
                 if annotations:
                     for annotation in annotations:
-                        if (
-                            hasattr(annotation, "type")
-                            and annotation.type == "url_citation"
-                        ):
+                        # Support both dict and object formats
+                        annotation_type = (
+                            annotation.get("type")
+                            if isinstance(annotation, dict)
+                            else getattr(annotation, "type", None)
+                        )
+
+                        if annotation_type == "url_citation":
+                            return 1
+
+            # Check delta.annotations (streaming chunks)
+            if hasattr(choice, "delta") and hasattr(choice.delta, "annotations"):
+                annotations = choice.delta.annotations
+
+                if annotations:
+                    for annotation in annotations:
+                        # Support both dict and object formats
+                        annotation_type = (
+                            annotation.get("type")
+                            if isinstance(annotation, dict)
+                            else getattr(annotation, "type", None)
+                        )
+
+                        if annotation_type == "url_citation":
                             return 1
 
     # Check for url_citation annotations in output (Responses API)
@@ -321,12 +346,17 @@ def extract_openai_web_search_count(response: Any) -> int:
                 for content_item in item.content:
                     if hasattr(content_item, "annotations"):
                         annotations = content_item.annotations
+
                         if annotations:
                             for annotation in annotations:
-                                if (
-                                    hasattr(annotation, "type")
-                                    and annotation.type == "url_citation"
-                                ):
+                                # Support both dict and object formats
+                                annotation_type = (
+                                    annotation.get("type")
+                                    if isinstance(annotation, dict)
+                                    else getattr(annotation, "type", None)
+                                )
+
+                                if annotation_type == "url_citation":
                                     return 1
 
     return 0

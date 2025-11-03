@@ -57,7 +57,7 @@ def merge_usage_stats(
         source_web_search = source.get("web_search_count")
         if source_web_search is not None:
             current = target.get("web_search_count") or 0
-            target["web_search_count"] = current + source_web_search
+            target["web_search_count"] = max(current, source_web_search)
 
     elif mode == "cumulative":
         # Replace with latest values (already cumulative)
