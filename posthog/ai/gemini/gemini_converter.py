@@ -343,7 +343,7 @@ def extract_gemini_web_search_count(response: Any) -> int:
     Extract web search count from Gemini response.
 
     Gemini bills per request that uses grounding, not per query.
-    Returns 1 if grounding_metadata is present, 0 otherwise.
+    Returns 1 if grounding_metadata is present with actual search data, 0 otherwise.
 
     Args:
         response: The response from Gemini API
@@ -359,7 +359,21 @@ def extract_gemini_web_search_count(response: Any) -> int:
                 hasattr(candidate, "grounding_metadata")
                 and candidate.grounding_metadata
             ):
-                return 1
+                grounding_metadata = candidate.grounding_metadata
+
+                # Check if web_search_queries exists and is non-empty
+                if hasattr(grounding_metadata, "web_search_queries"):
+                    queries = grounding_metadata.web_search_queries
+
+                    if queries is not None and len(queries) > 0:
+                        return 1
+
+                # Check if grounding_chunks exists and is non-empty
+                if hasattr(grounding_metadata, "grounding_chunks"):
+                    chunks = grounding_metadata.grounding_chunks
+
+                    if chunks is not None and len(chunks) > 0:
+                        return 1
 
             # Also check for google_search or grounding in function call names
             if hasattr(candidate, "content") and candidate.content:
@@ -369,6 +383,7 @@ def extract_gemini_web_search_count(response: Any) -> int:
                             function_name = getattr(
                                 part.function_call, "name", ""
                             ).lower()
+
                             if (
                                 "google_search" in function_name
                                 or "grounding" in function_name
