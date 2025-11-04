@@ -1,3 +1,7 @@
+# 6.8.0 - 2025-11-03
+
+- feat(llma): send web search calls to be used for LLM cost calculations
+
 # 6.7.14 - 2025-11-03
 
 - fix(django): Handle request.user access in async middleware context to prevent SynchronousOnlyOperation errors in Django 5+ (fixes #355)
