@@ -39,5 +39,19 @@
       ]
     }
   ],
-  "answered": false
+  "answered": true,
+  "answers": [
+    {
+      "questionId": "q1",
+      "selectedOption": "b) Use a PostHog or analytics-themed riddle (I can suggest options)"
+    },
+    {
+      "questionId": "q2",
+      "selectedOption": "a) At the end of the file as a hidden Easter egg (end of line 67)"
+    },
+    {
+      "questionId": "q3",
+      "selectedOption": "a) Fun Easter egg for developers discovering the repo (keep subtle/hidden)"
+    }
+  ]
 }
