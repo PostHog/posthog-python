@@ -1,0 +1,54 @@
+{
+  "actionabilityScore": 0.45,
+  "context": "Add a riddle to the README.md file of the PostHog Python SDK. The repository is a minimalist, development-focused Python library for analytics. The current README is 67 lines and primarily covers development setup and testing procedures.",
+  "keyFiles": [
+    "/Users/peterkirkham/dev/posthog-python/README.md"
+  ],
+  "blockers": [
+    "Task lacks critical specifications: no riddle content provided, no placement guidance, no format requirements",
+    "Unusual request for a technical SDK README - unclear if this is an easter egg, team tradition, or formal documentation requirement",
+    "No existing patterns or conventions in the repository for non-technical content"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What riddle content should be added to the README?",
+      "options": [
+        "a) A specific riddle you provide (please share the exact text and answer)",
+        "b) An original riddle related to PostHog/analytics/tracking",
+        "c) A developer/programming-themed riddle",
+        "d) A general/classic riddle"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where in the README should the riddle be placed?",
+      "options": [
+        "a) At the end as a new 'Fun Fact' or 'Easter Egg' section",
+        "b) At the beginning after the title and badges",
+        "c) In a new separate documentation file (RIDDLE.md, FUN.md, etc.)",
+        "d) Within the existing Development or Testing section"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "How should the riddle be formatted in the README?",
+      "options": [
+        "a) Riddle question with answer in a collapsible/spoiler section",
+        "b) Riddle question only (no answer shown)",
+        "c) Plain text with answer visible below the question",
+        "d) As a markdown code block or comment"
+      ]
+    },
+    {
+      "id": "q4",
+      "question": "What is the purpose of adding this riddle?",
+      "options": [
+        "a) Team easter egg or internal tradition",
+        "b) Fun engagement element for developers",
+        "c) Formal documentation addition",
+        "d) Part of onboarding or contribution process"
+      ]
+    }
+  ]
+}
