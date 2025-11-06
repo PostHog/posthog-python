@@ -10,6 +10,9 @@ from posthog.contexts import (
     tag as inner_tag,
     set_context_session as inner_set_context_session,
     identify_context as inner_identify_context,
+    set_capture_exception_code_variables_context as inner_set_capture_exception_code_variables_context,
+    set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
+    set_code_variables_ignore_patterns_context as inner_set_code_variables_ignore_patterns_context,
 )
 from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
 from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
@@ -20,13 +23,14 @@ __version__ = VERSION
 """Context management."""
 
 
-def new_context(fresh=False, capture_exceptions=True):
+def new_context(fresh=False, capture_exceptions=True, client=None):
     """
     Create a new context scope that will be active for the duration of the with block.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
         capture_exceptions: Whether to capture exceptions raised within the context (default: True)
+        client: Optional Posthog client instance to use for this context (default: None)
 
     Examples:
         ```python
@@ -39,7 +43,9 @@ def new_context(fresh=False, capture_exceptions=True):
     Category:
         Contexts
     """
-    return inner_new_context(fresh=fresh, capture_exceptions=capture_exceptions)
+    return inner_new_context(
+        fresh=fresh, capture_exceptions=capture_exceptions, client=client
+    )
 
 
 def scoped(fresh=False, capture_exceptions=True):
@@ -101,6 +107,27 @@ def identify_context(distinct_id: str):
         Identification
     """
     return inner_identify_context(distinct_id)
+
+
+def set_capture_exception_code_variables_context(enabled: bool):
+    """
+    Set whether code variables are captured for the current context.
+    """
+    return inner_set_capture_exception_code_variables_context(enabled)
+
+
+def set_code_variables_mask_patterns_context(mask_patterns: list):
+    """
+    Variable names matching these patterns will be masked with *** when capturing code variables.
+    """
+    return inner_set_code_variables_mask_patterns_context(mask_patterns)
+
+
+def set_code_variables_ignore_patterns_context(ignore_patterns: list):
+    """
+    Variable names matching these patterns will be ignored completely when capturing code variables.
+    """
+    return inner_set_code_variables_ignore_patterns_context(ignore_patterns)
 
 
 def tag(name: str, value: Any):
