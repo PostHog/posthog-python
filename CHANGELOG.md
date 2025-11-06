@@ -1,3 +1,7 @@
+# 6.9.0 - 2025-11-06
+
+- feat(error-tracking): add local variables capture
+
 # 6.8.0 - 2025-11-03
 
 - feat(llma): send web search calls to be used for LLM cost calculations
