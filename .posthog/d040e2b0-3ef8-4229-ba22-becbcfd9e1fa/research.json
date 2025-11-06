@@ -1,0 +1,43 @@
+{
+  "actionabilityScore": 0.45,
+  "context": "Task is to add a riddle to the README.md file of the PostHog Python SDK. The README is a professional, development-focused document (67 lines) with sections on testing, running locally, and release procedures. The technical capability to add content exists, but critical specifications are missing regarding riddle content, placement, and purpose.",
+  "keyFiles": [
+    "README.md"
+  ],
+  "blockers": [
+    "No riddle text specified - cannot determine what content to add",
+    "No placement guidance - unclear if this should be an Easter egg, new section, or integrated into existing content",
+    "No formatting preference specified - unclear if plain text, code block, or collapsible section",
+    "No context on purpose or approval - adding non-technical content to professional SDK README may require stakeholder alignment"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the specific riddle text that should be added to the README?",
+      "options": [
+        "a) Provide a specific riddle (with question and answer)",
+        "b) Use a PostHog or analytics-themed riddle (I can suggest options)",
+        "c) Use a generic developer/programming-themed riddle"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where should the riddle be placed in the README?",
+      "options": [
+        "a) At the end of the file as a hidden Easter egg (end of line 67)",
+        "b) In a new collapsible details section within the Development section",
+        "c) In an HTML comment (invisible unless viewing source)"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What is the intended purpose or audience for adding this riddle?",
+      "options": [
+        "a) Fun Easter egg for developers discovering the repo (keep subtle/hidden)",
+        "b) Engagement content for community (make visible and prominent)",
+        "c) Brand/personality expression (should reflect PostHog values)"
+      ]
+    }
+  ],
+  "answered": false
+}
