@@ -1124,9 +1124,9 @@ def test_anthropic_chain(mock_client):
     )
     chain = prompt | ChatAnthropic(
         api_key=ANTHROPIC_API_KEY,
-        model="claude-3-opus-20240229",
+        model="claude-sonnet-4-5-20250929",
         temperature=0,
-        max_tokens=1,
+        max_tokens=1024,
     )
     callbacks = CallbackHandler(
         mock_client,
@@ -1149,12 +1149,12 @@ def test_anthropic_chain(mock_client):
     assert gen_args["event"] == "$ai_generation"
     assert gen_props["$ai_trace_id"] == "test-trace-id"
     assert gen_props["$ai_provider"] == "anthropic"
-    assert gen_props["$ai_model"] == "claude-3-opus-20240229"
+    assert gen_props["$ai_model"] == "claude-sonnet-4-5-20250929"
     assert gen_props["foo"] == "bar"
 
     assert gen_props["$ai_model_parameters"] == {
         "temperature": 0.0,
-        "max_tokens": 1,
+        "max_tokens": 1024,
         "streaming": False,
     }
     assert gen_props["$ai_input"] == [
@@ -1170,7 +1170,7 @@ def test_anthropic_chain(mock_client):
         <= approximate_latency
     )
     assert gen_props["$ai_input_tokens"] == 17
-    assert gen_props["$ai_output_tokens"] == 1
+    assert gen_props["$ai_output_tokens"] == 4
 
     assert trace_args["event"] == "$ai_trace"
     assert trace_props["$ai_input_state"] == {}
@@ -1187,9 +1187,9 @@ async def test_async_anthropic_streaming(mock_client):
     )
     chain = prompt | ChatAnthropic(
         api_key=ANTHROPIC_API_KEY,
-        model="claude-3-opus-20240229",
+        model="claude-sonnet-4-5-20250929",
         temperature=0,
-        max_tokens=1,
+        max_tokens=1024,
         streaming=True,
         stream_usage=True,
     )

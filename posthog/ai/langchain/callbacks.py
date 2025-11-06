@@ -1,8 +1,8 @@
 try:
-    import langchain  # noqa: F401
+    import langchain_core  # noqa: F401
 except ImportError:
     raise ModuleNotFoundError(
-        "Please install LangChain to use this feature: 'pip install langchain'"
+        "Please install LangChain to use this feature: 'pip install langchain-core'"
     )
 
 import json
