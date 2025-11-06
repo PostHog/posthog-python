@@ -725,21 +725,7 @@ class Client(object):
         Examples:
             ```python
             # Set with distinct id
-            posthog.capture(
-                'event_name',
-                distinct_id='user-distinct-id',
-                properties={
-                    '$set': {'name': 'Max Hedgehog'},
-                    '$set_once': {'initial_url': '/blog'}
-                }
-            )
-            ```
-            ```python
-            # Set using context
-            from posthog import new_context, identify_context
-            with new_context():
-                identify_context('user-distinct-id')
-                posthog.capture('event_name')
+            posthog.set(distinct_id='user123', properties={'name': 'Max Hedgehog'})
             ```
 
         Category:
