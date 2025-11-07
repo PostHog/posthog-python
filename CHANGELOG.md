@@ -10,7 +10,9 @@
   - langchain-community: 0.3.29 → 0.4.1
   - langgraph: 0.6.6 → 1.0.2
 
-Drops Python 3.9 support, now requires Python 3.10+ (needed for LangChain v1.0)
+# 6.9.0 - 2025-11-06
+
+- feat(error-tracking): add local variables capture
 
 # 6.8.0 - 2025-11-03
 

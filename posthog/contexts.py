@@ -22,6 +22,9 @@ class ContextScope:
         self.session_id: Optional[str] = None
         self.distinct_id: Optional[str] = None
         self.tags: Dict[str, Any] = {}
+        self.capture_exception_code_variables: Optional[bool] = None
+        self.code_variables_mask_patterns: Optional[list] = None
+        self.code_variables_ignore_patterns: Optional[list] = None
 
     def set_session_id(self, session_id: str):
         self.session_id = session_id
@@ -31,6 +34,15 @@ class ContextScope:
 
     def add_tag(self, key: str, value: Any):
         self.tags[key] = value
+
+    def set_capture_exception_code_variables(self, enabled: bool):
+        self.capture_exception_code_variables = enabled
+
+    def set_code_variables_mask_patterns(self, mask_patterns: list):
+        self.code_variables_mask_patterns = mask_patterns
+
+    def set_code_variables_ignore_patterns(self, ignore_patterns: list):
+        self.code_variables_ignore_patterns = ignore_patterns
 
     def get_parent(self):
         return self.parent
@@ -58,6 +70,27 @@ class ContextScope:
             new_tags = self.parent.collect_tags()
             tags.update(new_tags)
         return tags
+
+    def get_capture_exception_code_variables(self) -> Optional[bool]:
+        if self.capture_exception_code_variables is not None:
+            return self.capture_exception_code_variables
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_capture_exception_code_variables()
+        return None
+
+    def get_code_variables_mask_patterns(self) -> Optional[list]:
+        if self.code_variables_mask_patterns is not None:
+            return self.code_variables_mask_patterns
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_code_variables_mask_patterns()
+        return None
+
+    def get_code_variables_ignore_patterns(self) -> Optional[list]:
+        if self.code_variables_ignore_patterns is not None:
+            return self.code_variables_ignore_patterns
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_code_variables_ignore_patterns()
+        return None
 
 
 _context_stack: contextvars.ContextVar[Optional[ContextScope]] = contextvars.ContextVar(
@@ -240,6 +273,54 @@ def get_context_distinct_id() -> Optional[str]:
     current_context = _get_current_context()
     if current_context:
         return current_context.get_distinct_id()
+    return None
+
+
+def set_capture_exception_code_variables_context(enabled: bool) -> None:
+    """
+    Set whether code variables are captured for the current context.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_capture_exception_code_variables(enabled)
+
+
+def set_code_variables_mask_patterns_context(mask_patterns: list) -> None:
+    """
+    Variable names matching these patterns will be masked with *** when capturing code variables.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_code_variables_mask_patterns(mask_patterns)
+
+
+def set_code_variables_ignore_patterns_context(ignore_patterns: list) -> None:
+    """
+    Variable names matching these patterns will be ignored completely when capturing code variables.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_code_variables_ignore_patterns(ignore_patterns)
+
+
+def get_capture_exception_code_variables_context() -> Optional[bool]:
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_capture_exception_code_variables()
+    return None
+
+
+def get_code_variables_mask_patterns_context() -> Optional[list]:
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_code_variables_mask_patterns()
+    return None
+
+
+def get_code_variables_ignore_patterns_context() -> Optional[list]:
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_code_variables_ignore_patterns()
     return None
 
 
