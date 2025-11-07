@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "6.9.0",
+    "version": "6.8.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -503,24 +503,6 @@
               "description": "",
               "isOptional": false,
               "type": "bool"
-            },
-            {
-              "name": "capture_exception_code_variables",
-              "description": "",
-              "isOptional": false,
-              "type": "bool"
-            },
-            {
-              "name": "code_variables_mask_patterns",
-              "description": "",
-              "isOptional": false,
-              "type": "any"
-            },
-            {
-              "name": "code_variables_ignore_patterns",
-              "description": "",
-              "isOptional": false,
-              "type": "any"
             }
           ],
           "showDocs": true,
@@ -2156,12 +2138,6 @@
               "description": "Whether to capture exceptions raised within the context (default: True)",
               "isOptional": false,
               "type": "bool"
-            },
-            {
-              "name": "client",
-              "description": "Optional Posthog client instance to use for this context (default: None)",
-              "isOptional": false,
-              "type": "any"
             }
           ],
           "showDocs": true,
@@ -2239,69 +2215,6 @@
               "code": "# Set person properties\nfrom posthog import capture\ncapture(\n    'distinct_id',\n    event='event_name',\n    properties={\n        '$set': {'name': 'Max Hedgehog'},\n        '$set_once': {'initial_url': '/blog'}\n    }\n)"
             }
           ]
-        },
-        {
-          "id": "set_capture_exception_code_variables_context",
-          "title": "set_capture_exception_code_variables_context",
-          "description": "Set whether code variables are captured for the current context.",
-          "details": "",
-          "category": null,
-          "params": [
-            {
-              "name": "enabled",
-              "description": "",
-              "isOptional": true,
-              "type": "bool"
-            }
-          ],
-          "showDocs": true,
-          "releaseTag": "public",
-          "returnType": {
-            "id": "return_type",
-            "name": "None"
-          }
-        },
-        {
-          "id": "set_code_variables_ignore_patterns_context",
-          "title": "set_code_variables_ignore_patterns_context",
-          "description": "Variable names matching these patterns will be ignored completely when capturing code variables.",
-          "details": "",
-          "category": null,
-          "params": [
-            {
-              "name": "ignore_patterns",
-              "description": "",
-              "isOptional": true,
-              "type": "list"
-            }
-          ],
-          "showDocs": true,
-          "releaseTag": "public",
-          "returnType": {
-            "id": "return_type",
-            "name": "None"
-          }
-        },
-        {
-          "id": "set_code_variables_mask_patterns_context",
-          "title": "set_code_variables_mask_patterns_context",
-          "description": "Variable names matching these patterns will be masked with *** when capturing code variables.",
-          "details": "",
-          "category": null,
-          "params": [
-            {
-              "name": "mask_patterns",
-              "description": "",
-              "isOptional": true,
-              "type": "list"
-            }
-          ],
-          "showDocs": true,
-          "releaseTag": "public",
-          "returnType": {
-            "id": "return_type",
-            "name": "None"
-          }
         },
         {
           "id": "set_context_session",

@@ -1,6 +1,14 @@
-# 6.7.15 - 2025-11-06
+# 6.9.1 - 2025-11-06
 
 - feat(ph-ai): Added `$ai_billable` property for LangChain framework at the LLM metadata level
+
+# 6.9.0 - 2025-11-06
+
+- feat(error-tracking): add local variables capture
+
+# 6.8.0 - 2025-11-03
+
+- feat(llma): send web search calls to be used for LLM cost calculations
 
 # 6.7.14 - 2025-11-03
 

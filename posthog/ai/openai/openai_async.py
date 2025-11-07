@@ -213,6 +213,15 @@ class WrappedResponses:
             **(posthog_properties or {}),
         }
 
+        # Add web search count if present
+        web_search_count = usage_stats.get("web_search_count")
+        if (
+            web_search_count is not None
+            and isinstance(web_search_count, int)
+            and web_search_count > 0
+        ):
+            event_properties["$ai_web_search_count"] = web_search_count
+
         if available_tool_calls:
             event_properties["$ai_tools"] = available_tool_calls
 
@@ -443,6 +452,16 @@ class WrappedCompletions:
             "$ai_base_url": str(self._client.base_url),
             **(posthog_properties or {}),
         }
+
+        # Add web search count if present
+        web_search_count = usage_stats.get("web_search_count")
+
+        if (
+            web_search_count is not None
+            and isinstance(web_search_count, int)
+            and web_search_count > 0
+        ):
+            event_properties["$ai_web_search_count"] = web_search_count
 
         if available_tool_calls:
             event_properties["$ai_tools"] = available_tool_calls
