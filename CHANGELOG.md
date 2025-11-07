@@ -1,3 +1,7 @@
+# 6.9.1 - 2025-11-07
+
+- fix(error-tracking): pass code variables config from init to client
+
 # 6.9.0 - 2025-11-06
 
 - feat(error-tracking): add local variables capture
