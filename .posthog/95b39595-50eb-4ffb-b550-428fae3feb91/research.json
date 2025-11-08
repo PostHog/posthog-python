@@ -38,5 +38,19 @@
       ]
     }
   ],
-  "answered": false
+  "answered": true,
+  "answers": [
+    {
+      "questionId": "q1",
+      "selectedOption": "Provide the exact riddle text to include"
+    },
+    {
+      "questionId": "q2",
+      "selectedOption": "At the end of the document in a new section like '## Fun Fact' or '## Easter Egg'"
+    },
+    {
+      "questionId": "q3",
+      "selectedOption": "Riddle with answer revealed (e.g., spoiler or expandable section)"
+    }
+  ]
 }
