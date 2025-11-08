@@ -1,0 +1,29 @@
+{
+  "actionabilityScore": 0.95,
+  "context": "Add a hedgehog riddle to the PostHog Python SDK README.md file. The task is straightforward—locate the existing README.md file and append a riddle about hedgehogs to it. The file exists at /Users/peterkirkham/dev/posthog-python/README.md and contains standard documentation for development, testing, and release procedures.",
+  "keyFiles": [
+    "/Users/peterkirkham/dev/posthog-python/README.md"
+  ],
+  "blockers": [],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Where in the README should the hedgehog riddle be placed?",
+      "options": [
+        "At the end of the file as a new 'Fun Facts' or 'Trivia' section",
+        "In the introduction section before 'Development' begins",
+        "Inline as a comment within one of the existing code blocks"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "What format should the riddle follow?",
+      "options": [
+        "Simple markdown text (plain paragraph)",
+        "Markdown blockquote format (> quoted text)",
+        "As part of structured documentation with a heading and formatted text"
+      ]
+    }
+  ],
+  "answered": false
+}
