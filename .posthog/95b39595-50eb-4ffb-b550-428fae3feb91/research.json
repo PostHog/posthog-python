@@ -1,0 +1,42 @@
+{
+  "actionabilityScore": 0.45,
+  "context": "Task is to add a riddle to the PostHog Python SDK README.md file. The README contains installation, development, and release instructions. The task scope is clear (add to README), but critical details about which riddle and where it should be placed are missing.",
+  "keyFiles": [
+    "/Users/peterkirkham/dev/posthog-python/README.md"
+  ],
+  "blockers": [
+    "No specific riddle content provided - unclear what riddle to add",
+    "Unclear placement strategy - should it be in a new section, at the end, or elsewhere?",
+    "Unclear presentation format - should answer be visible, hidden, or styled in a particular way?"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Which riddle should be added to the README?",
+      "options": [
+        "Provide the exact riddle text to include",
+        "Reference a specific category or theme (e.g., PostHog-related, programming-related, generic)",
+        "Include both the riddle and its answer in the README"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where should the riddle be placed in the README?",
+      "options": [
+        "At the end of the document in a new section like '## Fun Fact' or '## Easter Egg'",
+        "Integrated within an existing section (Development, Releasing Versions, etc.)",
+        "As a comment or hidden text in the document"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What presentation format for the riddle?",
+      "options": [
+        "Riddle only - readers discover the answer themselves",
+        "Riddle with answer revealed (e.g., spoiler or expandable section)",
+        "Riddle with answer in a code comment or HTML comment"
+      ]
+    }
+  ],
+  "answered": false
+}
