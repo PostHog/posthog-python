@@ -39,5 +39,19 @@
       ]
     }
   ],
-  "answered": false
+  "answered": true,
+  "answers": [
+    {
+      "questionId": "q1",
+      "selectedOption": "Create a Python/programming-themed riddle as a fun Easter egg"
+    },
+    {
+      "questionId": "q2",
+      "selectedOption": "As a callout box or blockquote after the main documentation link, before technical content"
+    },
+    {
+      "questionId": "q3",
+      "selectedOption": "Professional and on-brand: riddle related to PostHog, analytics, or the SDK's capabilities"
+    }
+  ]
 }
