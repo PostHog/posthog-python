@@ -1,0 +1,43 @@
+{
+  "actionabilityScore": 0.45,
+  "context": "The task is to add a riddle to the PostHog Python SDK README. The README is a professional, developer-focused document (67 lines) containing setup, testing, and release instructions with no existing creative or fun content sections.",
+  "keyFiles": [
+    "README.md"
+  ],
+  "blockers": [
+    "Riddle content not specified - unclear what riddle should be added",
+    "Placement strategy undefined - no guidance on where in the README it should go",
+    "Tone and purpose unclear - professional SDK vs. fun Easter egg intent",
+    "Format not specified - plain text, section, comment, or special formatting unknown"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What riddle should be added to the README?",
+      "options": [
+        "A specific riddle you have in mind (please provide the text)",
+        "Create a PostHog/analytics-themed riddle that fits the SDK's purpose",
+        "Create a Python/programming-themed riddle as a fun Easter egg"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where should the riddle be placed in the README?",
+      "options": [
+        "At the end of the file as a new optional 'Fun Facts' or 'Easter Egg' section",
+        "In an HTML comment at the end (visible in source but not rendered on GitHub)",
+        "As a callout box or blockquote after the main documentation link, before technical content"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What is the intent and tone for this riddle?",
+      "options": [
+        "Professional and on-brand: riddle related to PostHog, analytics, or the SDK's capabilities",
+        "Fun and quirky: light-hearted Easter egg to entertain contributors and curious readers",
+        "Interactive: include both riddle and answer (or hidden answer in HTML comment)"
+      ]
+    }
+  ],
+  "answered": false
+}
