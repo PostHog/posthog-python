@@ -1,4 +1,4 @@
-# 7.0.0 - 2025-11-06
+# 7.0.0 - 2025-11-10
 
 - chore(llma): update LLM provider SDKs to latest major versions
   - openai: 1.102.0 → 2.7.1
@@ -9,6 +9,10 @@
   - langchain-anthropic: 0.3.19 → 1.0.1
   - langchain-community: 0.3.29 → 0.4.1
   - langgraph: 0.6.6 → 1.0.2
+
+# 6.9.1 - 2025-11-07
+
+- fix(error-tracking): pass code variables config from init to client
 
 # 6.9.0 - 2025-11-06
 
