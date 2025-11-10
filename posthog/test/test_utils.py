@@ -133,6 +133,7 @@ class TestUtils(unittest.TestCase):
     @unittest.skipIf(sys.version_info < (3, 14), "Test only relevant for Python 3.14+")
     def test_clean_pydantic_v1_warning_on_python_314(self):
         """Verify that Pydantic V1 models emit a warning on Python 3.14+"""
+
         class ModelV1(BaseModelV1):
             foo: int
             bar: str
