@@ -14,6 +14,10 @@ from posthog.contexts import (
     set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
     set_code_variables_ignore_patterns_context as inner_set_code_variables_ignore_patterns_context,
 )
+from posthog.exception_utils import (
+    DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
+    DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
+)
 from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
 from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
 from posthog.version import VERSION
@@ -176,6 +180,10 @@ privacy_mode = False  # type: bool
 enable_local_evaluation = True  # type: bool
 
 default_client = None  # type: Optional[Client]
+
+capture_exception_code_variables = False
+code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
@@ -771,6 +779,9 @@ def setup() -> Client:
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
             enable_local_evaluation=enable_local_evaluation,
+            capture_exception_code_variables=capture_exception_code_variables,
+            code_variables_mask_patterns=code_variables_mask_patterns,
+            code_variables_ignore_patterns=code_variables_ignore_patterns,
         )
 
     # always set incase user changes it

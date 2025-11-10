@@ -1,6 +1,6 @@
-# 6.9.1 - 2025-11-06
+# 6.9.1 - 2025-11-07
 
-- feat(ph-ai): Added `$ai_billable` property for LangChain framework at the LLM metadata level
+- fix(error-tracking): pass code variables config from init to client
 
 # 6.9.0 - 2025-11-06
 
