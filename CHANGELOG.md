@@ -1,3 +1,7 @@
+# 6.9.2 - 2025-11-10
+
+- fix(llma): fix cache token double subtraction in Langchain for non-Anthropic providers causing negative costs
+
 # 6.9.1 - 2025-11-07
 
 - fix(error-tracking): pass code variables config from init to client
