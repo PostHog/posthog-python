@@ -1,0 +1,43 @@
+{
+  "actionabilityScore": 0.45,
+  "context": "The task is to add a riddle to the README.md file in the posthog-python repository. The README currently contains development setup instructions, testing guidelines, and release procedures. The task is vague regarding which riddle to add, where in the README to place it, and what purpose it should serve.",
+  "keyFiles": [
+    "/Users/peterkirkham/dev/posthog-python/README.md"
+  ],
+  "blockers": [
+    "Lack of clarity on riddle content - no specific riddle provided",
+    "Unclear placement context - where in the README should the riddle appear?",
+    "Missing purpose/rationale - why should a riddle be added to this technical documentation?",
+    "No guidance on tone/style - should the riddle relate to PostHog, Python, or be generic?"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What riddle content should be added to the README?",
+      "options": [
+        "Provide a specific riddle text (e.g., a programming-themed riddle, PostHog-related riddle, or general riddle)",
+        "Use a placeholder and let the developer choose an appropriate riddle later",
+        "Generate a riddle programmatically or reference an external source"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where in the README should the riddle be placed?",
+      "options": [
+        "At the top after the title/logo (prominent placement)",
+        "At the end of the file as a fun Easter egg",
+        "In a dedicated 'Fun Facts' or 'Easter Eggs' section"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What is the purpose/context for adding the riddle?",
+      "options": [
+        "Community engagement or fun element for developers reading the README",
+        "A specific challenge or game for contributors",
+        "Part of a themed update to the documentation"
+      ]
+    }
+  ],
+  "answered": false
+}
