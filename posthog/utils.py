@@ -71,10 +71,15 @@ def clean(item):
             item = item.model_dump()
         # v1
         elif hasattr(item, "dict") and callable(item.dict):
-            item = item.dict()
+            result = item.dict()
+            if not result and sys.version_info >= (3, 14):
+                log.warning(
+                    "Pydantic V1 models are not compatible with Python 3.14+. "
+                    "Please upgrade to Pydantic V2. Data may not be serialized correctly."
+                )
+            item = result
     except TypeError as e:
         log.debug(f"Could not serialize Pydantic-like model: {e}")
-        pass
     if isinstance(item, dict):
         return _clean_dict(item)
     if is_dataclass(item) and not isinstance(item, type):
