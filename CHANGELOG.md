@@ -1,5 +1,7 @@
 # 7.0.0 - 2025-11-10
 
+NB Python 3.9 is no longer supported
+
 - chore(llma): update LLM provider SDKs to latest major versions
   - openai: 1.102.0 → 2.7.1
   - anthropic: 0.64.0 → 0.72.0
