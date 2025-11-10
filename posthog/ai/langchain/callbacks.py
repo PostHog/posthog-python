@@ -79,8 +79,8 @@ class GenerationMetadata(SpanMetadata):
     """Base URL of the provider's API used in the run."""
     tools: Optional[List[Dict[str, Any]]] = None
     """Tools provided to the model."""
-    billable: bool = False
-    """Whether the generation is billable."""
+    custom_metadata: Optional[Dict[str, Any]] = None
+    """Custom metadata of the run."""
 
 
 RunMetadata = Union[SpanMetadata, GenerationMetadata]
@@ -422,8 +422,8 @@ class CallbackHandler(BaseCallbackHandler):
                 generation.model = model
             if provider := metadata.get("ls_provider"):
                 generation.provider = provider
-            if billable := metadata.get("posthog_ai_billable"):
-                generation.billable = billable
+
+            generation.custom_metadata = metadata.get("custom_metadata")
         try:
             base_url = serialized["kwargs"]["openai_api_base"]
             if base_url is not None:
@@ -568,8 +568,10 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_latency": run.latency,
             "$ai_base_url": run.base_url,
             "$ai_framework": "langchain",
-            "$ai_billable": run.billable,
         }
+
+        if run.custom_metadata:
+            event_properties.update(run.custom_metadata)
 
         if run.tools:
             event_properties["$ai_tools"] = run.tools
