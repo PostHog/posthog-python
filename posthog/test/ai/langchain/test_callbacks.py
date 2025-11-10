@@ -113,6 +113,7 @@ def test_metadata_capture(mock_client):
         base_url="https://us.posthog.com",
         name="test",
         end_time=None,
+        posthog_properties=None,
     )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -1269,6 +1270,7 @@ def test_metadata_tools(mock_client):
         name="test",
         tools=tools,
         end_time=None,
+        posthog_properties=None,
     )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -2128,8 +2130,8 @@ def test_agent_action_and_finish_imports():
     assert call_args["event"] == "$ai_span"
 
 
-def test_billable_field_in_generation_metadata(mock_client):
-    """Test that the billable field is properly stored in GenerationMetadata."""
+def test_posthog_properties_field_in_generation_metadata(mock_client):
+    """Test that posthog_properties is properly stored in GenerationMetadata."""
     callbacks = CallbackHandler(mock_client)
     run_id = uuid.uuid4()
 
@@ -2143,7 +2145,7 @@ def test_billable_field_in_generation_metadata(mock_client):
             metadata={
                 "ls_model_name": "gpt-4o",
                 "ls_provider": "openai",
-                "posthog_ai_billable": True,
+                "posthog_properties": {"$ai_billable": True},
             },
             name="test",
         )
@@ -2156,11 +2158,11 @@ def test_billable_field_in_generation_metadata(mock_client):
         provider="openai",
         base_url="https://api.openai.com",
         name="test",
-        billable=True,
+        posthog_properties={"$ai_billable": True},
         end_time=None,
     )
     assert callbacks._runs[run_id] == expected
-    assert callbacks._runs[run_id].billable is True
+    assert callbacks._runs[run_id].posthog_properties == {"$ai_billable": True}
 
     callbacks._pop_run_metadata(run_id)
 
@@ -2175,15 +2177,15 @@ def test_billable_field_in_generation_metadata(mock_client):
             metadata={
                 "ls_model_name": "gpt-4o",
                 "ls_provider": "openai",
-                "posthog_ai_billable": False,
+                "posthog_properties": {"$ai_billable": False},
             },
             name="test",
         )
 
-    assert callbacks._runs[run_id2].billable is False
+    assert callbacks._runs[run_id2].posthog_properties == {"$ai_billable": False}
     callbacks._pop_run_metadata(run_id2)
 
-    # Test default billable=False when not provided
+    # Test when posthog_properties not provided
     run_id3 = uuid.uuid4()
     with patch("time.time", return_value=1234567890):
         callbacks._set_llm_metadata(
@@ -2195,7 +2197,7 @@ def test_billable_field_in_generation_metadata(mock_client):
             name="test",
         )
 
-    assert callbacks._runs[run_id3].billable is False
+    assert callbacks._runs[run_id3].posthog_properties is None
 
 
 def test_billable_property_in_generation_event(mock_client):
@@ -2210,7 +2212,10 @@ def test_billable_property_in_generation_event(mock_client):
             {},
             run_id,
             messages=[{"role": "user", "content": "Test"}],
-            metadata={"posthog_ai_billable": True, "ls_model_name": "test-model"},
+            metadata={
+                "posthog_properties": {"$ai_billable": True},
+                "ls_model_name": "test-model",
+            },
             invocation_params={},
         )
 
@@ -2237,7 +2242,7 @@ def test_billable_property_in_generation_event(mock_client):
 
 
 def test_billable_defaults_to_false_in_event(mock_client):
-    """Test that $ai_billable defaults to False when not specified."""
+    """Test that $ai_billable is not present when not specified."""
     prompt = ChatPromptTemplate.from_messages([("user", "Test query")])
     model = FakeMessagesListChatModel(
         responses=[AIMessage(content="Test response")],
@@ -2255,7 +2260,7 @@ def test_billable_defaults_to_false_in_event(mock_client):
 
     assert generation_call is not None
     props = generation_call[1]["properties"]
-    assert props["$ai_billable"] is False
+    assert "$ai_billable" not in props
 
 
 def test_billable_with_real_chain(mock_client):
@@ -2271,12 +2276,12 @@ def test_billable_with_real_chain(mock_client):
             metadata={
                 "ls_model_name": "fake-model",
                 "ls_provider": "fake",
-                "posthog_ai_billable": True,
+                "posthog_properties": {"$ai_billable": True},
             },
             invocation_params={"temperature": 0.7},
         )
 
-    assert callbacks._runs[run_id].billable is True
+    assert callbacks._runs[run_id].posthog_properties == {"$ai_billable": True}
 
     mock_response = MagicMock()
     mock_response.generations = [[MagicMock()]]
