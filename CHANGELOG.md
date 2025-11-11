@@ -1,3 +1,7 @@
+# 6.9.3 - 2025-11-10
+
+- feat(ph-ai): PostHog properties dict in GenerationMetadata
+
 # 6.9.2 - 2025-11-10
 
 - fix(llma): fix cache token double subtraction in Langchain for non-Anthropic providers causing negative costs
