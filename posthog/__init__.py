@@ -18,8 +18,15 @@ from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
 )
-from posthog.feature_flags import InconclusiveMatchError, RequiresServerEvaluation
-from posthog.types import FeatureFlag, FlagsAndPayloads, FeatureFlagResult
+from posthog.feature_flags import (
+    InconclusiveMatchError as InconclusiveMatchError,
+    RequiresServerEvaluation as RequiresServerEvaluation,
+)
+from posthog.types import (
+    FeatureFlag,
+    FlagsAndPayloads,
+    FeatureFlagResult as FeatureFlagResult,
+)
 from posthog.version import VERSION
 
 __version__ = VERSION

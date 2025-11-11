@@ -315,7 +315,9 @@ class TestPosthogContextMiddlewareSync(unittest.TestCase):
         get_response = Mock(return_value=mock_response)
 
         # Create middleware with request filter that filters all requests
-        request_filter = lambda req: False
+        def request_filter(req):
+            return False
+
         middleware = PosthogContextMiddleware.__new__(PosthogContextMiddleware)
         middleware.get_response = get_response
         middleware._is_coroutine = False

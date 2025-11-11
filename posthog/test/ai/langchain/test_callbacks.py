@@ -1586,11 +1586,56 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 400
+    assert (
+        generation_props["$ai_input_tokens"] == 1200
+    )  # No provider metadata, no subtraction
     assert generation_props["$ai_output_tokens"] == 30
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
     assert generation_props["$ai_cache_read_input_tokens"] == 800
     assert generation_props["$ai_reasoning_tokens"] == 0
+
+
+def test_anthropic_provider_subtracts_cache_tokens(mock_client):
+    """Test that Anthropic provider correctly subtracts cache tokens from input tokens."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+
+    # Set up with Anthropic provider
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-3-sonnet"},
+    )
+
+    # Response with cache tokens: 1200 input (includes 800 cached)
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": 1200,
+                            "output_tokens": 50,
+                            "cache_read_input_tokens": 800,
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    generation_args = mock_client.capture.call_args_list[0][1]
+    assert generation_args["properties"]["$ai_input_tokens"] == 400  # 1200 - 800
+    assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
 
 
 def test_openai_cache_read_tokens(mock_client):
@@ -1628,7 +1673,7 @@ def test_openai_cache_read_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 50
+    assert generation_props["$ai_input_tokens"] == 150  # No subtraction for OpenAI
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
@@ -1710,7 +1755,7 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 200
+    assert generation_props["$ai_input_tokens"] == 500  # No subtraction for OpenAI
     assert generation_props["$ai_output_tokens"] == 100
     assert generation_props["$ai_cache_read_input_tokens"] == 300
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
@@ -1718,7 +1763,7 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
-def test_openai_reasoning_tokens(mock_client):
+def test_openai_reasoning_tokens_o4_mini(mock_client):
     model = ChatOpenAI(
         api_key=OPENAI_API_KEY, model="o4-mini", max_completion_tokens=10
     )
@@ -1919,8 +1964,8 @@ def test_cache_read_tokens_subtraction_from_input_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    # Input tokens should be reduced: 150 - 100 = 50
-    assert generation_props["$ai_input_tokens"] == 50
+    # Input tokens not reduced without provider metadata
+    assert generation_props["$ai_input_tokens"] == 150
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
 
@@ -1961,8 +2006,8 @@ def test_cache_read_tokens_subtraction_prevents_negative(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    # Input tokens should be 0, not negative: max(80 - 100, 0) = 0
-    assert generation_props["$ai_input_tokens"] == 0
+    # Input tokens not reduced without provider metadata
+    assert generation_props["$ai_input_tokens"] == 80
     assert generation_props["$ai_output_tokens"] == 20
     assert generation_props["$ai_cache_read_input_tokens"] == 100
 
