@@ -1,0 +1,2 @@
+I need to read the README.md file to understand its current structure and determine where to add the riddle section.
+Now I have all the information needed to create the implementation plan. The README ends at line 67, and I need to add a hedgehog-themed riddle at the end, plus create a RIDDLE_ANSWER.md file in the root directory.
