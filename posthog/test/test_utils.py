@@ -1,4 +1,3 @@
-import sys
 import time
 import unittest
 from dataclasses import dataclass
@@ -123,29 +122,10 @@ class TestUtils(unittest.TestCase):
             "bar": 2,
             "baz": None,
         }
-        # Pydantic V1 is not compatible with Python 3.14+
-        if sys.version_info < (3, 14):
-            assert utils.clean(ModelV1(foo=1, bar="2")) == {"foo": 1, "bar": "2"}
+        assert utils.clean(ModelV1(foo=1, bar="2")) == {"foo": 1, "bar": "2"}
         assert utils.clean(NestedModel(foo=ModelV2(foo="1", bar=2, baz="3"))) == {
             "foo": {"foo": "1", "bar": 2, "baz": "3"}
         }
-
-    @unittest.skipIf(sys.version_info < (3, 14), "Test only relevant for Python 3.14+")
-    def test_clean_pydantic_v1_warning_on_python_314(self):
-        """Verify that Pydantic V1 models emit a warning on Python 3.14+"""
-
-        class ModelV1(BaseModelV1):
-            foo: int
-            bar: str
-
-        with self.assertLogs("posthog", level="WARNING") as cm:
-            result = utils.clean(ModelV1(foo=1, bar="2"))
-            # V1 models return empty dict on Python 3.14+
-            assert result == {}
-
-        # Verify the warning was emitted
-        assert len(cm.output) == 1
-        assert "Pydantic V1 models are not compatible with Python 3.14+" in cm.output[0]
 
     def test_clean_pydantic_like_class(self) -> None:
         class Dummy:
