@@ -1,4 +1,4 @@
-# 7.0.0 - 2025-11-10
+# 7.0.0 - 2025-11-11
 
 NB Python 3.9 is no longer supported
 
@@ -11,6 +11,10 @@ NB Python 3.9 is no longer supported
   - langchain-anthropic: 0.3.19 → 1.0.1
   - langchain-community: 0.3.29 → 0.4.1
   - langgraph: 0.6.6 → 1.0.2
+
+# 6.9.2 - 2025-11-10
+
+- fix(llma): fix cache token double subtraction in Langchain for non-Anthropic providers causing negative costs
 
 # 6.9.1 - 2025-11-07
 

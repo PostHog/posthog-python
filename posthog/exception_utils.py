@@ -929,7 +929,7 @@ def _compile_patterns(patterns):
     for pattern in patterns:
         try:
             compiled.append(re.compile(pattern))
-        except:
+        except Exception:
             pass
     return compiled
 
