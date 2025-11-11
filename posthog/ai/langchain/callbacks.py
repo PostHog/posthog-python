@@ -570,7 +570,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_framework": "langchain",
         }
 
-        if run.posthog_properties:
+        if isinstance(run.posthog_properties, dict):
             event_properties.update(run.posthog_properties)
 
         if run.tools:
