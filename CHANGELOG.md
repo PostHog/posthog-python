@@ -1,3 +1,17 @@
+# 7.0.0 - 2025-11-11
+
+NB Python 3.9 is no longer supported
+
+- chore(llma): update LLM provider SDKs to latest major versions
+  - openai: 1.102.0 → 2.7.1
+  - anthropic: 0.64.0 → 0.72.0
+  - google-genai: 1.32.0 → 1.49.0
+  - langchain-core: 0.3.75 → 1.0.3
+  - langchain-openai: 0.3.32 → 1.0.2
+  - langchain-anthropic: 0.3.19 → 1.0.1
+  - langchain-community: 0.3.29 → 0.4.1
+  - langgraph: 0.6.6 → 1.0.2
+
 # 6.9.3 - 2025-11-10
 
 - feat(ph-ai): PostHog properties dict in GenerationMetadata

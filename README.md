@@ -30,8 +30,8 @@ We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
 ## PostHog recommends `uv` so...
 
 ```bash
-uv python install 3.9.19
-uv python pin 3.9.19
+uv python install 3.12
+uv python pin 3.12
 uv venv
 source env/bin/activate
 uv sync --extra dev --extra test
