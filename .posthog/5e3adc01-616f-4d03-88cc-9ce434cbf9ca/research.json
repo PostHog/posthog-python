@@ -1,0 +1,43 @@
+{
+  "actionabilityScore": 0.35,
+  "context": "Task requires adding a riddle to README.md and creating a new markdown file with the answer. This is a straightforward documentation modification task, but critical details are completely missing - no specification of what riddle to add or where in the README it should be placed.",
+  "keyFiles": [
+    "/Users/peterkirkham/dev/posthog-python/README.md"
+  ],
+  "blockers": [
+    "No riddle content specified - what riddle should be added?",
+    "No location specified - where in README should the riddle appear?",
+    "No answer file location/naming specified - where and what should the answer file be named?",
+    "Unclear if this is for documentation purposes, testing, or fun - affects implementation approach"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What riddle should be added to the README?",
+      "options": [
+        "Provide the exact riddle text to be added",
+        "Specify a riddle category/topic to help generate one",
+        "Reference an existing riddle or source"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where in the README should the riddle be placed?",
+      "options": [
+        "At the end of the README after existing sections",
+        "In a new 'Fun Fact' or 'Riddle' section at the top",
+        "Integrated into an existing section like Development or Testing"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What should the answer file be named and where should it be located?",
+      "options": [
+        "Create 'RIDDLE_ANSWER.md' in the root directory",
+        "Create 'docs/riddle-answer.md' in a docs folder",
+        "Create a file with a specific name/location you have in mind"
+      ]
+    }
+  ],
+  "answered": false
+}
