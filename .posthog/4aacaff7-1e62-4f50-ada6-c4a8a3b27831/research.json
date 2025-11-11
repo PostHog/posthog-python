@@ -1,0 +1,40 @@
+{
+  "actionabilityScore": 0.15,
+  "context": "The task description is too vague to evaluate. The repository already has a comprehensive, mature test suite with 11,000+ LOC of tests across pytest/unittest, async testing, AI integrations, and Django middleware. Without clarity on what new tests should be created, I cannot assess actionability.",
+  "keyFiles": [],
+  "blockers": [
+    "Task description is just the word 'test' - completely unclear what should be tested",
+    "Repository already has extensive existing test coverage - unclear if task is to expand, fix, or reorganize tests",
+    "No specification of what modules, features, or behaviors need testing"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What specific modules, features, or code areas need new tests?",
+      "options": [
+        "Expand existing test coverage for a specific module (e.g., add tests for uncovered edge cases in consumer.py, request.py, or size-limited dict)",
+        "Create tests for a new feature or integration that's missing coverage",
+        "Reorganize or improve existing tests (e.g., add more async tests, increase parameterization, improve mocking strategy)"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "What is the goal or context for this test creation?",
+      "options": [
+        "Increase code coverage percentage to meet a specific threshold target",
+        "Improve test reliability or add missing test patterns (e.g., more parameterized tests, better async coverage)",
+        "Test a recently added feature or bug fix that lacks test coverage"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "Are there specific test requirements or constraints?",
+      "options": [
+        "Follow existing patterns (pytest/unittest, use mock.patch, AsyncMock, freezegun as needed)",
+        "Introduce new testing tools or frameworks (e.g., switch to pure pytest fixtures, add property-based testing with hypothesis)",
+        "Focus on specific test categories (unit tests, integration tests, performance tests, or AI-specific tests)"
+      ]
+    }
+  ],
+  "answered": false
+}
