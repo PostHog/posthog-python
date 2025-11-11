@@ -113,6 +113,7 @@ def test_metadata_capture(mock_client):
         base_url="https://us.posthog.com",
         name="test",
         end_time=None,
+        posthog_properties=None,
     )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -1269,6 +1270,7 @@ def test_metadata_tools(mock_client):
         name="test",
         tools=tools,
         end_time=None,
+        posthog_properties=None,
     )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -2171,3 +2173,180 @@ def test_agent_action_and_finish_imports():
     assert mock_client.capture.call_count == 1
     call_args = mock_client.capture.call_args[1]
     assert call_args["event"] == "$ai_span"
+
+
+def test_posthog_properties_field_in_generation_metadata(mock_client):
+    """Test that posthog_properties is properly stored in GenerationMetadata."""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    # Test with billable=True
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com"}},
+            run_id,
+            messages=[{"role": "user", "content": "Test message"}],
+            invocation_params={"temperature": 0.5},
+            metadata={
+                "ls_model_name": "gpt-4o",
+                "ls_provider": "openai",
+                "posthog_properties": {"$ai_billable": True},
+            },
+            name="test",
+        )
+
+    expected = GenerationMetadata(
+        model="gpt-4o",
+        input=[{"role": "user", "content": "Test message"}],
+        start_time=1234567890,
+        model_params={"temperature": 0.5},
+        provider="openai",
+        base_url="https://api.openai.com",
+        name="test",
+        posthog_properties={"$ai_billable": True},
+        end_time=None,
+    )
+    assert callbacks._runs[run_id] == expected
+    assert callbacks._runs[run_id].posthog_properties == {"$ai_billable": True}
+
+    callbacks._pop_run_metadata(run_id)
+
+    # Test with billable=False (explicit)
+    run_id2 = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com"}},
+            run_id2,
+            messages=[{"role": "user", "content": "Test message"}],
+            invocation_params={"temperature": 0.5},
+            metadata={
+                "ls_model_name": "gpt-4o",
+                "ls_provider": "openai",
+                "posthog_properties": {"$ai_billable": False},
+            },
+            name="test",
+        )
+
+    assert callbacks._runs[run_id2].posthog_properties == {"$ai_billable": False}
+    callbacks._pop_run_metadata(run_id2)
+
+    # Test when posthog_properties not provided
+    run_id3 = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com"}},
+            run_id3,
+            messages=[{"role": "user", "content": "Test message"}],
+            invocation_params={"temperature": 0.5},
+            metadata={"ls_model_name": "gpt-4o", "ls_provider": "openai"},
+            name="test",
+        )
+
+    assert callbacks._runs[run_id3].posthog_properties is None
+
+
+def test_billable_property_in_generation_event(mock_client):
+    """Test that the billable property is captured in the $ai_generation event."""
+    callbacks = CallbackHandler(mock_client)
+
+    # We need to test the _set_llm_metadata directly since FakeMessagesListChatModel
+    # doesn't support metadata in the same way as real models
+    run_id = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {},
+            run_id,
+            messages=[{"role": "user", "content": "Test"}],
+            metadata={
+                "posthog_properties": {"$ai_billable": True},
+                "ls_model_name": "test-model",
+            },
+            invocation_params={},
+        )
+
+    mock_response = MagicMock()
+    mock_response.generations = [[MagicMock()]]
+
+    with patch("time.time", return_value=1234567891):
+        run = callbacks._pop_run_metadata(run_id)
+
+    callbacks._capture_generation(
+        trace_id=run_id,
+        run_id=run_id,
+        run=run,
+        output=mock_response,
+        parent_run_id=None,
+    )
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_billable"] is True
+
+
+def test_billable_defaults_to_false_in_event(mock_client):
+    """Test that $ai_billable is not present when not specified."""
+    prompt = ChatPromptTemplate.from_messages([("user", "Test query")])
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="Test response")],
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    chain.invoke({}, config={"callbacks": callbacks})
+
+    generation_call = None
+    for call in mock_client.capture.call_args_list:
+        if call[1]["event"] == "$ai_generation":
+            generation_call = call
+            break
+
+    assert generation_call is not None
+    props = generation_call[1]["properties"]
+    assert "$ai_billable" not in props
+
+
+def test_billable_with_real_chain(mock_client):
+    """Test billable tracking through a complete chain execution with mocked metadata."""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    with patch("time.time", return_value=1000.0):
+        callbacks._set_llm_metadata(
+            {},
+            run_id,
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            metadata={
+                "ls_model_name": "fake-model",
+                "ls_provider": "fake",
+                "posthog_properties": {"$ai_billable": True},
+            },
+            invocation_params={"temperature": 0.7},
+        )
+
+    assert callbacks._runs[run_id].posthog_properties == {"$ai_billable": True}
+
+    mock_response = MagicMock()
+    mock_response.generations = [[MagicMock()]]
+
+    with patch("time.time", return_value=1001.0):
+        run = callbacks._pop_run_metadata(run_id)
+
+    callbacks._capture_generation(
+        trace_id=run_id,
+        run_id=run_id,
+        run=run,
+        output=mock_response,
+        parent_run_id=None,
+    )
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_billable"] is True
+    assert props["$ai_model"] == "fake-model"
+    assert props["$ai_provider"] == "fake"
