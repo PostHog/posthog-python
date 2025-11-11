@@ -39,5 +39,20 @@
       ]
     }
   ],
-  "answered": false
+  "answered": true,
+  "answers": [
+    {
+      "questionId": "q1",
+      "selectedOption": "Something else? (Please specify)",
+      "customInput": "Hedgehogs"
+    },
+    {
+      "questionId": "q2",
+      "selectedOption": "At the end of the README after existing sections"
+    },
+    {
+      "questionId": "q3",
+      "selectedOption": "Create 'RIDDLE_ANSWER.md' in the root directory"
+    }
+  ]
 }
