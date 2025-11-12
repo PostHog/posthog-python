@@ -155,7 +155,7 @@ class PosthogContextMiddleware:
         # Extract IP address
         ip_address = request.headers.get("X-Forwarded-For")
         if ip_address:
-            tags["$ip_address"] = ip_address
+            tags["$ip"] = ip_address
 
         # Extract user agent
         user_agent = request.headers.get("User-Agent")
