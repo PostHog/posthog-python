@@ -96,7 +96,6 @@ def test_code_variables_capture(tmpdir):
     assert b"'my_number': 42" in output
     assert b"'my_bool': 'True'" in output
     assert b'"my_dict": "{\\"name\\": \\"test\\", \\"value\\": 123}"' in output
-    # With repr() fallback, objects without custom __repr__ show full repr including module and memory address
     assert b"<__main__.UnserializableObject object at" in output
     assert b"'my_password': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
     assert b"'__should_be_ignored':" not in output
@@ -336,7 +335,6 @@ def test_code_variables_enabled_then_disabled_in_context(tmpdir):
 
 
 def test_code_variables_repr_fallback(tmpdir):
-    """Test that repr() is used for variables that can't be JSON-serialized but can be repr'd"""
     app = tmpdir.join("app.py")
     app.write(
         dedent(
