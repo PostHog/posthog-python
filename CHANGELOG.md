@@ -1,3 +1,7 @@
+# 7.0.1 - 2025-11-15
+
+Try to use repr() when formatting code variables
+
 # 7.0.0 - 2025-11-11
 
 NB Python 3.9 is no longer supported
