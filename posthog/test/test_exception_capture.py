@@ -392,7 +392,7 @@ def test_code_variables_repr_fallback(tmpdir):
 
     assert "ZeroDivisionError" in output
     assert "code_variables" in output
-    
+
     assert "re.compile(" in output and "\\\\d+" in output
     assert "datetime.datetime(2024, 1, 15, 10, 30, 45)" in output
     assert "datetime.timedelta(days=5, seconds=10800)" in output

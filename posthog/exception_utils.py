@@ -972,7 +972,7 @@ def _serialize_variable_value(value, limiter, max_length=1024):
             result = repr(value)
             if len(result) > max_length:
                 result = result[: max_length - 3] + "..."
-            
+
             result_size = len(result)
             if not limiter.can_add(result_size):
                 return None
