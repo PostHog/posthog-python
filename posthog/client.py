@@ -991,21 +991,11 @@ class Client(object):
             context_mask = get_code_variables_mask_patterns_context()
             context_ignore = get_code_variables_ignore_patterns_context()
 
-            print("\n\n\nCAPTURING EXCEPTION\n\n\n")
-
             enabled = (
                 context_enabled
                 if context_enabled is not None
                 else self.capture_exception_code_variables
             )
-
-            print("Context enabled state: ", context_enabled)
-            print(
-                "Self capture_exception_code_variables: ",
-                self.capture_exception_code_variables,
-            )
-            print("Computed enabled state: ", enabled)
-
             mask_patterns = (
                 context_mask
                 if context_mask is not None
