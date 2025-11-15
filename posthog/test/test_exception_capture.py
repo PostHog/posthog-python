@@ -96,7 +96,7 @@ def test_code_variables_capture(tmpdir):
     assert b"'my_number': 42" in output
     assert b"'my_bool': 'True'" in output
     assert b'"my_dict": "{\\"name\\": \\"test\\", \\"value\\": 123}"' in output
-    assert b'"my_obj": "<UnserializableObject>"' in output
+    assert b"<__main__.UnserializableObject object at" in output
     assert b"'my_password': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
     assert b"'__should_be_ignored':" not in output
 
@@ -332,3 +332,77 @@ def test_code_variables_enabled_then_disabled_in_context(tmpdir):
     assert '"code_variables":' not in output
     assert "'my_var'" not in output
     assert "'important_value'" not in output
+
+
+def test_code_variables_repr_fallback(tmpdir):
+    app = tmpdir.join("app.py")
+    app.write(
+        dedent(
+            """
+    import os
+    import re
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    from fractions import Fraction
+    from posthog import Posthog
+    
+    class CustomReprClass:
+        def __repr__(self):
+            return '<CustomReprClass: custom representation>'
+    
+    posthog = Posthog(
+        'phc_x', 
+        host='https://eu.i.posthog.com', 
+        debug=True, 
+        enable_exception_autocapture=True,
+        capture_exception_code_variables=True,
+        project_root=os.path.dirname(os.path.abspath(__file__))
+    )
+    
+    def trigger_error():
+        my_regex = re.compile(r'\\d+')
+        my_datetime = datetime(2024, 1, 15, 10, 30, 45)
+        my_timedelta = timedelta(days=5, hours=3)
+        my_decimal = Decimal('123.456')
+        my_fraction = Fraction(3, 4)
+        my_set = {1, 2, 3}
+        my_frozenset = frozenset([4, 5, 6])
+        my_bytes = b'hello bytes'
+        my_bytearray = bytearray(b'mutable bytes')
+        my_memoryview = memoryview(b'memory view')
+        my_complex = complex(3, 4)
+        my_range = range(10)
+        my_custom = CustomReprClass()
+        my_lambda = lambda x: x * 2
+        my_function = trigger_error
+        
+        1/0
+    
+    trigger_error()
+    """
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
+
+    output = excinfo.value.output.decode("utf-8")
+
+    assert "ZeroDivisionError" in output
+    assert "code_variables" in output
+
+    assert "re.compile(" in output and "\\\\d+" in output
+    assert "datetime.datetime(2024, 1, 15, 10, 30, 45)" in output
+    assert "datetime.timedelta(days=5, seconds=10800)" in output
+    assert "Decimal('123.456')" in output
+    assert "Fraction(3, 4)" in output
+    assert "{1, 2, 3}" in output
+    assert "frozenset({4, 5, 6})" in output
+    assert "b'hello bytes'" in output
+    assert "bytearray(b'mutable bytes')" in output
+    assert "<memory at" in output
+    assert "(3+4j)" in output
+    assert "range(0, 10)" in output
+    assert "<CustomReprClass: custom representation>" in output
+    assert "<lambda>" in output
+    assert "<function trigger_error at" in output

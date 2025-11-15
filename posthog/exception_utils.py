@@ -969,19 +969,30 @@ def _serialize_variable_value(value, limiter, max_length=1024):
         return result
     except Exception:
         try:
-            fallback = f"<{type(value).__name__}>"
-            fallback_size = len(fallback)
-            if not limiter.can_add(fallback_size):
+            result = repr(value)
+            if len(result) > max_length:
+                result = result[: max_length - 3] + "..."
+
+            result_size = len(result)
+            if not limiter.can_add(result_size):
                 return None
-            limiter.add(fallback_size)
-            return fallback
+            limiter.add(result_size)
+            return result
         except Exception:
-            fallback = "<unserializable object>"
-            fallback_size = len(fallback)
-            if not limiter.can_add(fallback_size):
-                return None
-            limiter.add(fallback_size)
-            return fallback
+            try:
+                fallback = f"<{type(value).__name__}>"
+                fallback_size = len(fallback)
+                if not limiter.can_add(fallback_size):
+                    return None
+                limiter.add(fallback_size)
+                return fallback
+            except Exception:
+                fallback = "<unserializable object>"
+                fallback_size = len(fallback)
+                if not limiter.can_add(fallback_size):
+                    return None
+                limiter.add(fallback_size)
+                return fallback
 
 
 def _is_simple_type(value):
