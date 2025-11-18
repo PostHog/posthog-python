@@ -1,3 +1,4 @@
+import sys
 import time
 import unittest
 from dataclasses import dataclass
@@ -122,7 +123,9 @@ class TestUtils(unittest.TestCase):
             "bar": 2,
             "baz": None,
         }
-        assert utils.clean(ModelV1(foo=1, bar="2")) == {"foo": 1, "bar": "2"}
+        # Pydantic V1 is not compatible with Python 3.14+
+        if sys.version_info < (3, 14):
+            assert utils.clean(ModelV1(foo=1, bar="2")) == {"foo": 1, "bar": "2"}
         assert utils.clean(NestedModel(foo=ModelV2(foo="1", bar=2, baz="3"))) == {
             "foo": {"foo": "1", "bar": 2, "baz": "3"}
         }
