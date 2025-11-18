@@ -1,3 +1,8 @@
+# 7.0.2 - 2025-11-18
+
+Add support for Python 3.14.
+Projects upgrading to Python 3.14 should ensure any Pydantic models passed into the SDK use Pydantic v2, as Pydantic v1 is not compatible with Python 3.14.
+
 # 7.0.1 - 2025-11-15
 
 Try to use repr() when formatting code variables
