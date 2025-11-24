@@ -3802,6 +3802,7 @@ class TestCaptureCalls(unittest.TestCase):
                 },
             },
             "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+            "evaluatedAt": 1234567890,
         }
         client = Client(FAKE_TEST_API_KEY)
 
@@ -3821,6 +3822,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
                 "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+                "$feature_flag_evaluated_at": 1234567890,
             },
             groups={},
             disable_geoip=None,
