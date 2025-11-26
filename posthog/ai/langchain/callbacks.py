@@ -576,6 +576,12 @@ class CallbackHandler(BaseCallbackHandler):
         if run.tools:
             event_properties["$ai_tools"] = run.tools
 
+        if self._properties:
+            event_properties.update(self._properties)
+
+        if self._distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
             event_properties["$ai_error"] = _stringify_exception(output)
@@ -583,7 +589,10 @@ class CallbackHandler(BaseCallbackHandler):
 
             if self._ph_client.enable_exception_autocapture:
                 exception_id = self._ph_client.capture_exception(
-                    output, properties=event_properties
+                    output,
+                    distinct_id=self._distinct_id,
+                    groups=self._groups,
+                    properties=event_properties,
                 )
                 event_properties["$exception_event_id"] = exception_id
         else:
@@ -612,12 +621,6 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_output_choices"] = with_privacy_mode(
                 self._ph_client, self._privacy_mode, completions
             )
-
-        if self._properties:
-            event_properties.update(self._properties)
-
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
 
         self._ph_client.capture(
             distinct_id=self._distinct_id or trace_id,

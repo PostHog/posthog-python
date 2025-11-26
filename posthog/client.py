@@ -4,24 +4,33 @@ import os
 import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
-from typing_extensions import Unpack
 from uuid import uuid4
 
 from dateutil.tz import tzutc
 from six import string_types
+from typing_extensions import Unpack
 
-from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ID_TYPES, ExceptionArg
+from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.consumer import Consumer
+from posthog.contexts import (
+    _get_current_context,
+    get_capture_exception_code_variables_context,
+    get_code_variables_ignore_patterns_context,
+    get_code_variables_mask_patterns_context,
+    get_context_distinct_id,
+    get_context_session_id,
+    new_context,
+)
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
+    DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
+    DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
     exc_info_from_error,
+    exception_is_already_captured,
     exceptions_from_error_tuple,
     handle_in_app,
-    exception_is_already_captured,
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
-    DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
-    DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
 )
 from posthog.feature_flags import (
     InconclusiveMatchError,
@@ -37,15 +46,6 @@ from posthog.request import (
     flags,
     get,
     remote_config,
-)
-from posthog.contexts import (
-    _get_current_context,
-    get_context_distinct_id,
-    get_context_session_id,
-    get_capture_exception_code_variables_context,
-    get_code_variables_mask_patterns_context,
-    get_code_variables_ignore_patterns_context,
-    new_context,
 )
 from posthog.types import (
     FeatureFlag,
@@ -2016,9 +2016,9 @@ class Client(object):
             return None
 
         try:
-            from urllib.parse import urlparse, parse_qs
+            from urllib.parse import parse_qs, urlparse
         except ImportError:
-            from urlparse import urlparse, parse_qs
+            from urlparse import parse_qs, urlparse
 
         try:
             parsed = urlparse(cache_url)
