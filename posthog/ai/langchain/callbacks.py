@@ -22,8 +22,8 @@ from uuid import UUID
 
 try:
     # LangChain 1.0+ and modern 0.x with langchain-core
-    from langchain_core.callbacks.base import BaseCallbackHandler
     from langchain_core.agents import AgentAction, AgentFinish
+    from langchain_core.callbacks.base import BaseCallbackHandler
 except (ImportError, ModuleNotFoundError):
     # Fallback for older LangChain versions
     from langchain.callbacks.base import BaseCallbackHandler
@@ -35,15 +35,15 @@ from langchain_core.messages import (
     FunctionMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
     ToolCall,
+    ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
 from posthog import setup
-from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.ai.sanitization import sanitize_langchain
+from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -580,6 +580,12 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_http_status"] = _get_http_status(output)
             event_properties["$ai_error"] = _stringify_exception(output)
             event_properties["$ai_is_error"] = True
+
+            if self._ph_client.enable_exception_autocapture:
+                exception_id = self._ph_client.capture_exception(
+                    output, properties=event_properties
+                )
+                event_properties["$exception_event_id"] = exception_id
         else:
             # Add usage
             usage = _parse_usage(output, run.provider, run.model)
