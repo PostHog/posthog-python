@@ -506,6 +506,14 @@ class CallbackHandler(BaseCallbackHandler):
         if isinstance(outputs, BaseException):
             event_properties["$ai_error"] = _stringify_exception(outputs)
             event_properties["$ai_is_error"] = True
+            event_properties = _capture_exception_and_update_properties(
+                self._ph_client,
+                outputs,
+                self._distinct_id,
+                self._groups,
+                event_properties,
+            )
+
         elif outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(
                 self._ph_client, self._privacy_mode, outputs
@@ -587,14 +595,13 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_error"] = _stringify_exception(output)
             event_properties["$ai_is_error"] = True
 
-            if self._ph_client.enable_exception_autocapture:
-                exception_id = self._ph_client.capture_exception(
-                    output,
-                    distinct_id=self._distinct_id,
-                    groups=self._groups,
-                    properties=event_properties,
-                )
-                event_properties["$exception_event_id"] = exception_id
+            event_properties = _capture_exception_and_update_properties(
+                self._ph_client,
+                output,
+                self._distinct_id,
+                self._groups,
+                event_properties,
+            )
         else:
             # Add usage
             usage = _parse_usage(output, run.provider, run.model)
@@ -868,6 +875,26 @@ def _parse_usage(
                     break
 
     return llm_usage
+
+
+def _capture_exception_and_update_properties(
+    client: Client,
+    exception: BaseException,
+    distinct_id: Union[str, int, UUID],
+    groups: Optional[Dict[str, Any]],
+    event_properties: Dict[str, Any],
+):
+    if client.enable_exception_autocapture:
+        exception_id = client.capture_exception(
+            exception,
+            distinct_id=distinct_id,
+            groups=groups,
+            properties=event_properties,
+        )
+
+        event_properties["$exception_event_id"] = exception_id
+
+    return event_properties
 
 
 def _get_http_status(error: BaseException) -> int:
