@@ -1,0 +1,42 @@
+{
+  "actionabilityScore": 0.35,
+  "context": "Task requires adding a 'useful tip' to the PostHog Python README, but the specific tip content is undefined. The README structure and location for adding tips are unclear, and the value/purpose of the tip is not specified.",
+  "keyFiles": [
+    "/Users/jonathan/dev/posthog-python/README.md"
+  ],
+  "blockers": [
+    "No specific tip content provided - 'useful tip about the library' is too vague",
+    "Unclear where in the README structure the tip should be placed (new section, inline with existing content, etc.)",
+    "No context on the intended audience or purpose (developer ergonomics, common gotchas, best practices, performance, etc.)",
+    "Cannot verify if a tip would align with project documentation standards without seeing similar content"
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What category of tip should be added to the README?",
+      "options": [
+        "Developer ergonomics tip (e.g., recommending best practices for SDK usage like batching events, handling retries)",
+        "Common gotcha/troubleshooting tip (e.g., addressing frequently encountered issues like API key configuration, event timing)",
+        "Performance optimization tip (e.g., guidance on efficient event tracking, memory management, or batch processing)"
+      ]
+    },
+    {
+      "id": "q2",
+      "question": "Where should the tip be positioned in the README?",
+      "options": [
+        "Add new 'Tips & Best Practices' section after 'Development' heading, before 'Testing Locally'",
+        "Add as a highlighted callout box near the top after the docs link (before 'Development' section)",
+        "Integrate into the existing 'Running Locally' or 'Testing Locally' section with contextual guidance"
+      ]
+    },
+    {
+      "id": "q3",
+      "question": "What is the specific tip content to add?",
+      "options": [
+        "Provide the exact tip text that should be added to the README",
+        "Describe the tip topic/subject, and I can help draft appropriate markdown formatting"
+      ]
+    }
+  ],
+  "answered": false
+}
