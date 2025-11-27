@@ -1,3 +1,7 @@
+# 7.1.0 - 2025-11-26
+
+Add support for the async version of Gemini.
+
 # 7.0.2 - 2025-11-18
 
 Add support for Python 3.14.
