@@ -15,7 +15,7 @@ except ImportError:
 
 from posthog import setup
 from posthog.ai.utils import (
-    call_llm_and_track_usage,
+    call_llm_and_track_usage_async,
     capture_streaming_event,
     merge_usage_stats,
 )
@@ -28,18 +28,18 @@ from posthog.ai.sanitization import sanitize_gemini
 from posthog.client import Client as PostHogClient
 
 
-class Client:
+class AsyncClient:
     """
-    A drop-in replacement for genai.Client that automatically sends LLM usage events to PostHog.
+    An async drop-in replacement for genai.Client that automatically sends LLM usage events to PostHog.
 
     Usage:
-        client = Client(
+        client = AsyncClient(
             api_key="your_api_key",
             posthog_client=posthog_client,
             posthog_distinct_id="default_user",  # Optional defaults
             posthog_properties={"team": "ai"}    # Optional defaults
         )
-        response = client.models.generate_content(
+        response = await client.models.generate_content(
             model="gemini-2.0-flash",
             contents=["Hello world"],
             posthog_distinct_id="specific_user"  # Override default
@@ -86,7 +86,7 @@ class Client:
         if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")
 
-        self.models = Models(
+        self.models = AsyncModels(
             api_key=api_key,
             vertexai=vertexai,
             credentials=credentials,
@@ -103,9 +103,9 @@ class Client:
         )
 
 
-class Models:
+class AsyncModels:
     """
-    Models interface that mimics genai.Client().models with PostHog tracking.
+    Async Models interface that mimics genai.Client().aio.models with PostHog tracking.
     """
 
     _ph_client: PostHogClient  # Not None after __init__ validation
@@ -230,7 +230,7 @@ class Models:
 
         return distinct_id, call_trace_id, properties, privacy_mode, groups
 
-    def generate_content(
+    async def generate_content(
         self,
         model: str,
         contents,
@@ -244,7 +244,7 @@ class Models:
         """
         Generate content using Gemini's API while tracking usage in PostHog.
 
-        This method signature exactly matches genai.Client().models.generate_content()
+        This method signature exactly matches genai.Client().aio.models.generate_content()
         with additional PostHog tracking parameters.
 
         Args:
@@ -271,7 +271,7 @@ class Models:
 
         kwargs_with_contents = {"model": model, "contents": contents, **kwargs}
 
-        return call_llm_and_track_usage(
+        return await call_llm_and_track_usage_async(
             distinct_id,
             self._ph_client,
             "gemini",
@@ -280,11 +280,11 @@ class Models:
             privacy_mode,
             groups,
             self._base_url,
-            self._client.models.generate_content,
+            self._client.aio.models.generate_content,
             **kwargs_with_contents,
         )
 
-    def _generate_content_streaming(
+    async def _generate_content_streaming(
         self,
         model: str,
         contents,
@@ -300,13 +300,16 @@ class Models:
         accumulated_content = []
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
-        response = self._client.models.generate_content_stream(**kwargs_without_stream)
+        response = await self._client.aio.models.generate_content_stream(
+            **kwargs_without_stream
+        )
 
-        def generator():
+        async def async_generator():
             nonlocal usage_stats
             nonlocal accumulated_content
+
             try:
-                for chunk in response:
+                async for chunk in response:
                     # Extract usage stats from chunk
                     chunk_usage = extract_gemini_usage_from_chunk(chunk)
 
@@ -340,7 +343,7 @@ class Models:
                     accumulated_content,
                 )
 
-        return generator()
+        return async_generator()
 
     def _capture_streaming_event(
         self,
@@ -386,7 +389,7 @@ class Models:
         input_kwargs = {"contents": contents, **kwargs}
         return merge_system_prompt(input_kwargs, "gemini")
 
-    def generate_content_stream(
+    async def generate_content_stream(
         self,
         model: str,
         contents,
@@ -408,7 +411,7 @@ class Models:
             )
         )
 
-        return self._generate_content_streaming(
+        return await self._generate_content_streaming(
             model,
             contents,
             distinct_id,
