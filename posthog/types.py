@@ -123,6 +123,7 @@ class FlagsResponse(TypedDict, total=False):
     errorsWhileComputingFlags: bool
     requestId: str
     quotaLimit: Optional[List[str]]
+    evaluatedAt: Optional[int]
 
 
 class FlagsAndPayloads(TypedDict, total=True):

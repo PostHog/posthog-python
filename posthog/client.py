@@ -1419,6 +1419,7 @@ class Client(object):
         flag_result = None
         flag_details = None
         request_id = None
+        evaluated_at = None
 
         flag_value = self._locally_evaluate_flag(
             key, distinct_id, groups, person_properties, group_properties
@@ -1443,13 +1444,15 @@ class Client(object):
                 )
         elif not only_evaluate_locally:
             try:
-                flag_details, request_id = self._get_feature_flag_details_from_server(
-                    key,
-                    distinct_id,
-                    groups,
-                    person_properties,
-                    group_properties,
-                    disable_geoip,
+                flag_details, request_id, evaluated_at = (
+                    self._get_feature_flag_details_from_server(
+                        key,
+                        distinct_id,
+                        groups,
+                        person_properties,
+                        group_properties,
+                        disable_geoip,
+                    )
                 )
                 flag_result = FeatureFlagResult.from_flag_details(
                     flag_details, override_match_value
@@ -1488,6 +1491,7 @@ class Client(object):
                 groups,
                 disable_geoip,
                 request_id,
+                evaluated_at,
                 flag_details,
             )
 
@@ -1691,9 +1695,9 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, str],
         disable_geoip: Optional[bool],
-    ) -> tuple[Optional[FeatureFlag], Optional[str]]:
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int]]:
         """
-        Calls /flags and returns the flag details and request id
+        Calls /flags and returns the flag details, request id, and evaluated at timestamp
         """
         resp_data = self.get_flags_decision(
             distinct_id,
@@ -1704,9 +1708,10 @@ class Client(object):
             flag_keys_to_evaluate=[key],
         )
         request_id = resp_data.get("requestId")
+        evaluated_at = resp_data.get("evaluatedAt")
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
-        return flag_details, request_id
+        return flag_details, request_id, evaluated_at
 
     def _capture_feature_flag_called(
         self,
@@ -1718,6 +1723,7 @@ class Client(object):
         groups: Dict[str, str],
         disable_geoip: Optional[bool],
         request_id: Optional[str],
+        evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
     ):
         feature_flag_reported_key = (
@@ -1741,6 +1747,8 @@ class Client(object):
 
             if request_id:
                 properties["$feature_flag_request_id"] = request_id
+            if evaluated_at:
+                properties["$feature_flag_evaluated_at"] = evaluated_at
             if isinstance(flag_details, FeatureFlag):
                 if flag_details.reason and flag_details.reason.description:
                     properties["$feature_flag_reason"] = flag_details.reason.description
