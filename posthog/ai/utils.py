@@ -353,8 +353,8 @@ def call_llm_and_track_usage(
                     groups=posthog_groups,
                 )
 
-            if error:
-                raise error
+        if error:
+            raise error
 
     return response
 
@@ -474,8 +474,8 @@ async def call_llm_and_track_usage_async(
                     groups=posthog_groups,
                 )
 
-            if error:
-                raise error
+        if error:
+            raise error
 
     return response
 
