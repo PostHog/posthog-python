@@ -11,7 +11,10 @@ regardless of how they're passed to the providers:
 
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+from posthog.client import Client
+from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 
 class TestSystemPromptCapture(unittest.TestCase):
@@ -24,7 +27,8 @@ class TestSystemPromptCapture(unittest.TestCase):
         self.test_response = "I'm doing well, thank you!"
 
         # Create mock PostHog client
-        self.client = MagicMock()
+        self.client = Client(FAKE_TEST_API_KEY)
+        self.client._enqueue = MagicMock()
         self.client.privacy_mode = False
 
     def _assert_system_prompt_captured(self, captured_input):
@@ -53,10 +57,11 @@ class TestSystemPromptCapture(unittest.TestCase):
     def test_openai_messages_array_system_prompt(self):
         """Test OpenAI with system prompt in messages array."""
         try:
-            from posthog.ai.openai import OpenAI
             from openai.types.chat import ChatCompletion, ChatCompletionMessage
             from openai.types.chat.chat_completion import Choice
             from openai.types.completion_usage import CompletionUsage
+
+            from posthog.ai.openai import OpenAI
         except ImportError:
             self.skipTest("OpenAI package not available")
 
@@ -94,17 +99,18 @@ class TestSystemPromptCapture(unittest.TestCase):
                 model="gpt-4", messages=messages, posthog_distinct_id="test-user"
             )
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     def test_openai_separate_system_parameter(self):
         """Test OpenAI with system prompt as separate parameter."""
         try:
-            from posthog.ai.openai import OpenAI
             from openai.types.chat import ChatCompletion, ChatCompletionMessage
             from openai.types.chat.chat_completion import Choice
             from openai.types.completion_usage import CompletionUsage
+
+            from posthog.ai.openai import OpenAI
         except ImportError:
             self.skipTest("OpenAI package not available")
 
@@ -142,18 +148,21 @@ class TestSystemPromptCapture(unittest.TestCase):
                 posthog_distinct_id="test-user",
             )
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     def test_openai_streaming_system_parameter(self):
         """Test OpenAI streaming with system parameter."""
         try:
-            from posthog.ai.openai import OpenAI
-            from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+            from openai.types.chat.chat_completion_chunk import (
+                ChatCompletionChunk,
+                ChoiceDelta,
+            )
             from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
-            from openai.types.chat.chat_completion_chunk import ChoiceDelta
             from openai.types.completion_usage import CompletionUsage
+
+            from posthog.ai.openai import OpenAI
         except ImportError:
             self.skipTest("OpenAI package not available")
 
@@ -206,8 +215,8 @@ class TestSystemPromptCapture(unittest.TestCase):
 
             list(response_generator)  # Consume generator
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     # Anthropic Tests
@@ -239,8 +248,8 @@ class TestSystemPromptCapture(unittest.TestCase):
                 posthog_distinct_id="test-user",
             )
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     def test_anthropic_separate_system_parameter(self):
@@ -269,8 +278,8 @@ class TestSystemPromptCapture(unittest.TestCase):
                 posthog_distinct_id="test-user",
             )
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     # Gemini Tests
@@ -310,8 +319,8 @@ class TestSystemPromptCapture(unittest.TestCase):
                 posthog_distinct_id="test-user",
             )
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
 
     def test_gemini_system_instruction_parameter(self):
@@ -349,6 +358,6 @@ class TestSystemPromptCapture(unittest.TestCase):
                 posthog_distinct_id="test-user",
             )
 
-            self.assertEqual(len(self.client.capture.call_args_list), 1)
-            properties = self.client.capture.call_args_list[0][1]["properties"]
+            self.assertEqual(len(self.client._enqueue.call_args_list), 1)
+            properties = self.client._enqueue.call_args_list[0][0][0]["properties"]
             self._assert_system_prompt_captured(properties["$ai_input"])
