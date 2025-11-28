@@ -53,12 +53,15 @@ def _format_parts_as_content_blocks(parts: List[Any]) -> List[FormattedContentIt
         elif isinstance(part, str):
             content_blocks.append({"type": "text", "text": part})
 
-        # Handle dict with inline_data (images)
+        # Handle dict with inline_data (images, documents, etc.)
         elif isinstance(part, dict) and "inline_data" in part:
             inline_data = part["inline_data"]
+            mime_type = inline_data.get("mime_type", "")
+            content_type = "image" if mime_type.startswith("image/") else "document"
+
             content_blocks.append(
                 {
-                    "type": "image",
+                    "type": content_type,
                     "inline_data": inline_data,
                 }
             )
@@ -74,11 +77,15 @@ def _format_parts_as_content_blocks(parts: List[Any]) -> List[FormattedContentIt
             inline_data = part.inline_data
             # Convert to dict if needed
             if hasattr(inline_data, "mime_type") and hasattr(inline_data, "data"):
+                # Determine type based on mime_type
+                mime_type = inline_data.mime_type
+                content_type = "image" if mime_type.startswith("image/") else "document"
+
                 content_blocks.append(
                     {
-                        "type": "image",
+                        "type": content_type,
                         "inline_data": {
-                            "mime_type": inline_data.mime_type,
+                            "mime_type": mime_type,
                             "data": inline_data.data,
                         },
                     }
