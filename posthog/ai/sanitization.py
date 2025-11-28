@@ -8,7 +8,11 @@ REDACTED_IMAGE_PLACEHOLDER = "[base64 image redacted]"
 
 def _is_multimodal_enabled() -> bool:
     """Check if multimodal capture is enabled via environment variable."""
-    return os.environ.get("_INTERNAL_LLMA_MULTIMODAL", "").lower() in ("true", "1", "yes")
+    return os.environ.get("_INTERNAL_LLMA_MULTIMODAL", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
 
 def is_base64_data_url(text: str) -> bool:

@@ -409,7 +409,11 @@ class TestAIMultipartRequest(unittest.TestCase):
         os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
 
         input_data = [
-            {"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": "base64data"}}]}
+            {
+                "parts": [
+                    {"inline_data": {"mime_type": "image/jpeg", "data": "base64data"}}
+                ]
+            }
         ]
 
         result = sanitize_gemini(input_data)
@@ -509,7 +513,9 @@ class TestAIMultipartRequest(unittest.TestCase):
         ]
 
         result = sanitize_gemini(input_data)
-        self.assertEqual(result[0]["parts"][0]["inline_data"]["data"], "base64audiodata")
+        self.assertEqual(
+            result[0]["parts"][0]["inline_data"]["data"], "base64audiodata"
+        )
 
 
 if __name__ == "__main__":

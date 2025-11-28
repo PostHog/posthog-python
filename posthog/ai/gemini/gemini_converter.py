@@ -175,7 +175,8 @@ def _format_object_message(item: Any) -> FormattedMessage:
         content = item.content
 
         if isinstance(content, list):
-            content = _extract_text_from_parts(content)
+            content_blocks = _format_parts_as_content_blocks(content)
+            return {"role": role, "content": content_blocks}
 
         elif not isinstance(content, str):
             content = str(content)
