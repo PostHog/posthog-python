@@ -880,7 +880,7 @@ def _parse_usage(
 def _capture_exception_and_update_properties(
     client: Client,
     exception: BaseException,
-    distinct_id: Union[str, int, UUID],
+    distinct_id: Optional[Union[str, int, UUID]],
     groups: Optional[Dict[str, Any]],
     event_properties: Dict[str, Any],
 ):
