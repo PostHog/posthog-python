@@ -1,3 +1,8 @@
+# 7.2.0 - 2025-11-28
+
+Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
+Add reference to exception in LLMA trace and span events
+
 # 7.1.0 - 2025-11-26
 
 Add support for the async version of Gemini.
