@@ -37,6 +37,7 @@ class Consumer(Thread):
         retries=10,
         timeout=15,
         historical_migration=False,
+        use_ai_ingestion_pipeline=False,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -57,6 +58,7 @@ class Consumer(Thread):
         self.retries = retries
         self.timeout = timeout
         self.historical_migration = historical_migration
+        self.use_ai_ingestion_pipeline = use_ai_ingestion_pipeline
 
     def run(self):
         """Runs the consumer."""
@@ -136,17 +138,82 @@ class Consumer(Thread):
                 # retry on all other errors (eg. network)
                 return False
 
+        if self.use_ai_ingestion_pipeline:
+            ai_events = []
+            non_ai_events = []
+
+            for item in batch:
+                event_name = item.get("event", "")
+                if event_name.startswith("$ai_"):
+                    ai_events.append(item)
+                else:
+                    non_ai_events.append(item)
+
+            for ai_event in ai_events:
+                self._send_ai_event(ai_event, fatal_exception)
+
+            if non_ai_events:
+
+                @backoff.on_exception(
+                    backoff.expo,
+                    Exception,
+                    max_tries=self.retries + 1,
+                    giveup=fatal_exception,
+                )
+                def send_batch_request():
+                    batch_post(
+                        self.api_key,
+                        self.host,
+                        gzip=self.gzip,
+                        timeout=self.timeout,
+                        batch=non_ai_events,
+                        historical_migration=self.historical_migration,
+                    )
+
+                send_batch_request()
+        else:
+            @backoff.on_exception(
+                backoff.expo,
+                Exception,
+                max_tries=self.retries + 1,
+                giveup=fatal_exception,
+            )
+            def send_request():
+                batch_post(
+                    self.api_key,
+                    self.host,
+                    gzip=self.gzip,
+                    timeout=self.timeout,
+                    batch=batch,
+                    historical_migration=self.historical_migration,
+                )
+
+            send_request()
+
+    def _send_ai_event(self, event, fatal_exception):
+        """Send a single AI event to the /i/v0/ai endpoint"""
+        from posthog.request import ai_post
+        from posthog.utils import extract_ai_blob_properties
+
+        # Extract blob properties from the event
+        properties = event.get("properties", {})
+        cleaned_properties, blobs = extract_ai_blob_properties(properties)
+
         @backoff.on_exception(
             backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception
         )
-        def send_request():
-            batch_post(
+        def send_ai_request():
+            ai_post(
                 self.api_key,
                 self.host,
                 gzip=self.gzip,
                 timeout=self.timeout,
-                batch=batch,
-                historical_migration=self.historical_migration,
+                event_name=event.get("event"),
+                distinct_id=event.get("distinct_id"),
+                properties=cleaned_properties,
+                blobs=blobs,
+                timestamp=event.get("timestamp"),
+                uuid=event.get("uuid"),
             )
 
-        send_request()
+        send_ai_request()

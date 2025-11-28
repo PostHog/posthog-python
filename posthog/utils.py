@@ -517,3 +517,41 @@ def system_context() -> dict[str, Any]:
         "$os": os_name,
         "$os_version": os_version,
     }
+
+
+def extract_ai_blob_properties(
+    properties: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Extract AI blob properties from event properties for multipart upload.
+
+    Extracts $ai_input and $ai_output_choices from properties and returns
+    a tuple of (cleaned_properties, blobs_dict).
+
+    Args:
+        properties: Event properties dictionary
+
+    Returns:
+        Tuple of (cleaned_properties without blobs, blobs_dict with extracted blobs)
+
+    Examples:
+        >>> props = {"$ai_input": [...], "$ai_model": "gpt-4", "$ai_output_choices": [...]}
+        >>> cleaned, blobs = extract_ai_blob_properties(props)
+        >>> # cleaned = {"$ai_model": "gpt-4"}
+        >>> # blobs = {"$ai_input": [...], "$ai_output_choices": [...]}
+    """
+    # Properties to extract as blobs
+    blob_property_names = {"$ai_input", "$ai_output_choices"}
+
+    # Create a copy of properties without the blob properties
+    cleaned_properties = {
+        k: v for k, v in properties.items() if k not in blob_property_names
+    }
+
+    # Extract blob properties that are present and not None
+    blobs = {}
+    for prop_name in blob_property_names:
+        if prop_name in properties and properties[prop_name] is not None:
+            blobs[prop_name] = properties[prop_name]
+
+    return cleaned_properties, blobs

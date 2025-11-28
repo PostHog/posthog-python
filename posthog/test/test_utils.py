@@ -179,6 +179,75 @@ class TestUtils(unittest.TestCase):
             },
         }
 
+    def test_extract_ai_blob_properties_with_both_blobs(self):
+        """Test extracting both $ai_input and $ai_output_choices"""
+        properties = {
+            "$ai_input": [{"role": "user", "content": "test"}],
+            "$ai_output_choices": [{"role": "assistant", "content": "response"}],
+            "$ai_model": "gpt-4",
+            "$ai_provider": "openai",
+        }
+
+        cleaned, blobs = utils.extract_ai_blob_properties(properties)
+
+        assert cleaned == {
+            "$ai_model": "gpt-4",
+            "$ai_provider": "openai",
+        }
+        assert blobs == {
+            "$ai_input": [{"role": "user", "content": "test"}],
+            "$ai_output_choices": [{"role": "assistant", "content": "response"}],
+        }
+
+    def test_extract_ai_blob_properties_with_only_input(self):
+        """Test extracting only $ai_input"""
+        properties = {
+            "$ai_input": [{"role": "user", "content": "test"}],
+            "$ai_model": "gpt-4",
+        }
+
+        cleaned, blobs = utils.extract_ai_blob_properties(properties)
+
+        assert cleaned == {"$ai_model": "gpt-4"}
+        assert blobs == {"$ai_input": [{"role": "user", "content": "test"}]}
+
+    def test_extract_ai_blob_properties_with_none_values(self):
+        """Test that None blob values are not extracted"""
+        properties = {
+            "$ai_input": None,
+            "$ai_output_choices": [{"role": "assistant", "content": "response"}],
+            "$ai_model": "gpt-4",
+        }
+
+        cleaned, blobs = utils.extract_ai_blob_properties(properties)
+
+        assert cleaned == {"$ai_model": "gpt-4"}
+        assert blobs == {
+            "$ai_output_choices": [{"role": "assistant", "content": "response"}]
+        }
+
+    def test_extract_ai_blob_properties_no_blobs(self):
+        """Test extraction when no blob properties are present"""
+        properties = {
+            "$ai_model": "gpt-4",
+            "$ai_provider": "openai",
+            "$ai_tokens": 100,
+        }
+
+        cleaned, blobs = utils.extract_ai_blob_properties(properties)
+
+        assert cleaned == properties
+        assert blobs == {}
+
+    def test_extract_ai_blob_properties_empty_dict(self):
+        """Test extraction with empty properties dict"""
+        properties = {}
+
+        cleaned, blobs = utils.extract_ai_blob_properties(properties)
+
+        assert cleaned == {}
+        assert blobs == {}
+
 
 class TestFlagCache(unittest.TestCase):
     def setUp(self):
