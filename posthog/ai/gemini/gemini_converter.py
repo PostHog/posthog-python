@@ -29,35 +29,69 @@ class GeminiMessage(TypedDict, total=False):
     text: str
 
 
-def _extract_text_from_parts(parts: List[Any]) -> str:
+def _format_parts_as_content_blocks(parts: List[Any]) -> List[FormattedContentItem]:
     """
-    Extract and concatenate text from a parts array.
+    Format Gemini parts array into structured content blocks.
+
+    Preserves structure for multimodal content (text + images) instead of
+    concatenating everything into a string.
 
     Args:
-        parts: List of parts that may contain text content
+        parts: List of parts that may contain text, inline_data, etc.
 
     Returns:
-        Concatenated text from all parts
+        List of formatted content blocks
     """
-
-    content_parts = []
+    content_blocks: List[FormattedContentItem] = []
 
     for part in parts:
+        # Handle dict with text field
         if isinstance(part, dict) and "text" in part:
-            content_parts.append(part["text"])
+            content_blocks.append({"type": "text", "text": part["text"]})
 
+        # Handle string parts
         elif isinstance(part, str):
-            content_parts.append(part)
+            content_blocks.append({"type": "text", "text": part})
 
+        # Handle dict with inline_data (images)
+        elif isinstance(part, dict) and "inline_data" in part:
+            inline_data = part["inline_data"]
+            content_blocks.append(
+                {
+                    "type": "image",
+                    "inline_data": inline_data,
+                }
+            )
+
+        # Handle object with text attribute
         elif hasattr(part, "text"):
-            # Get the text attribute value
             text_value = getattr(part, "text", "")
-            content_parts.append(text_value if text_value else str(part))
+            if text_value:
+                content_blocks.append({"type": "text", "text": text_value})
 
-        else:
-            content_parts.append(str(part))
+        # Handle object with inline_data attribute
+        elif hasattr(part, "inline_data"):
+            inline_data = part.inline_data
+            # Convert to dict if needed
+            if hasattr(inline_data, "mime_type") and hasattr(inline_data, "data"):
+                content_blocks.append(
+                    {
+                        "type": "image",
+                        "inline_data": {
+                            "mime_type": inline_data.mime_type,
+                            "data": inline_data.data,
+                        },
+                    }
+                )
+            else:
+                content_blocks.append(
+                    {
+                        "type": "image",
+                        "inline_data": inline_data,
+                    }
+                )
 
-    return "".join(content_parts)
+    return content_blocks
 
 
 def _format_dict_message(item: Dict[str, Any]) -> FormattedMessage:
@@ -73,16 +107,17 @@ def _format_dict_message(item: Dict[str, Any]) -> FormattedMessage:
 
     # Handle dict format with parts array (Gemini-specific format)
     if "parts" in item and isinstance(item["parts"], list):
-        content = _extract_text_from_parts(item["parts"])
-        return {"role": item.get("role", "user"), "content": content}
+        content_blocks = _format_parts_as_content_blocks(item["parts"])
+        return {"role": item.get("role", "user"), "content": content_blocks}
 
     # Handle dict with content field
     if "content" in item:
         content = item["content"]
 
         if isinstance(content, list):
-            # If content is a list, extract text from it
-            content = _extract_text_from_parts(content)
+            # If content is a list, format it as content blocks
+            content_blocks = _format_parts_as_content_blocks(content)
+            return {"role": item.get("role", "user"), "content": content_blocks}
 
         elif not isinstance(content, str):
             content = str(content)
@@ -110,14 +145,14 @@ def _format_object_message(item: Any) -> FormattedMessage:
 
     # Handle object with parts attribute
     if hasattr(item, "parts") and hasattr(item.parts, "__iter__"):
-        content = _extract_text_from_parts(item.parts)
+        content_blocks = _format_parts_as_content_blocks(list(item.parts))
         role = getattr(item, "role", "user") if hasattr(item, "role") else "user"
 
         # Ensure role is a string
         if not isinstance(role, str):
             role = "user"
 
-        return {"role": role, "content": content}
+        return {"role": role, "content": content_blocks}
 
     # Handle object with text attribute
     if hasattr(item, "text"):
@@ -190,6 +225,29 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                                         "name": function_call.name,
                                         "arguments": function_call.args,
                                     },
+                                }
+                            )
+
+                        elif hasattr(part, "inline_data") and part.inline_data:
+                            # Handle audio/media inline data
+                            import base64
+
+                            inline_data = part.inline_data
+                            mime_type = getattr(inline_data, "mime_type", "audio/pcm")
+                            raw_data = getattr(inline_data, "data", b"")
+
+                            # Encode binary data as base64 string for JSON serialization
+                            if isinstance(raw_data, bytes):
+                                data = base64.b64encode(raw_data).decode("utf-8")
+                            else:
+                                # Already a string (base64)
+                                data = raw_data
+
+                            content.append(
+                                {
+                                    "type": "audio",
+                                    "mime_type": mime_type,
+                                    "data": data,
                                 }
                             )
 

@@ -1,8 +1,14 @@
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse
 
 REDACTED_IMAGE_PLACEHOLDER = "[base64 image redacted]"
+
+
+def _is_multimodal_enabled() -> bool:
+    """Check if multimodal capture is enabled via environment variable."""
+    return os.environ.get("_INTERNAL_LLMA_MULTIMODAL", "").lower() in ("true", "1", "yes")
 
 
 def is_base64_data_url(text: str) -> bool:
@@ -27,6 +33,9 @@ def is_raw_base64(text: str) -> bool:
 
 
 def redact_base64_data_url(value: Any) -> Any:
+    if _is_multimodal_enabled():
+        return value
+
     if not isinstance(value, str):
         return value
 
@@ -83,6 +92,11 @@ def sanitize_openai_image(item: Any) -> Any:
             },
         }
 
+    if item.get("type") == "audio" and "data" in item:
+        if _is_multimodal_enabled():
+            return item
+        return {**item, "data": REDACTED_IMAGE_PLACEHOLDER}
+
     return item
 
 
@@ -100,6 +114,9 @@ def sanitize_openai_response_image(item: Any) -> Any:
 
 
 def sanitize_anthropic_image(item: Any) -> Any:
+    if _is_multimodal_enabled():
+        return item
+
     if not isinstance(item, dict):
         return item
 
@@ -109,8 +126,6 @@ def sanitize_anthropic_image(item: Any) -> Any:
         and item["source"].get("type") == "base64"
         and "data" in item["source"]
     ):
-        # For Anthropic, if the source type is "base64", we should always redact the data
-        # The provider is explicitly telling us this is base64 data
         return {
             **item,
             "source": {
@@ -123,6 +138,9 @@ def sanitize_anthropic_image(item: Any) -> Any:
 
 
 def sanitize_gemini_part(part: Any) -> Any:
+    if _is_multimodal_enabled():
+        return part
+
     if not isinstance(part, dict):
         return part
 
@@ -131,8 +149,6 @@ def sanitize_gemini_part(part: Any) -> Any:
         and isinstance(part["inline_data"], dict)
         and "data" in part["inline_data"]
     ):
-        # For Gemini, the inline_data structure indicates base64 data
-        # We should redact any string data in this context
         return {
             **part,
             "inline_data": {
@@ -185,7 +201,9 @@ def sanitize_langchain_image(item: Any) -> Any:
         and isinstance(item.get("source"), dict)
         and "data" in item["source"]
     ):
-        # Anthropic style - raw base64 in structured format, always redact
+        if _is_multimodal_enabled():
+            return item
+
         return {
             **item,
             "source": {

@@ -67,6 +67,12 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                             }
                         )
 
+                # Handle audio output (gpt-4o-audio-preview)
+                if hasattr(choice.message, "audio") and choice.message.audio:
+                    # Convert Pydantic model to dict to capture all fields from OpenAI
+                    audio_dict = choice.message.audio.model_dump()
+                    content.append({"type": "audio", **audio_dict})
+
         if content:
             output.append(
                 {
