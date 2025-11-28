@@ -892,7 +892,8 @@ def _capture_exception_and_update_properties(
             properties=event_properties,
         )
 
-        event_properties["$exception_event_id"] = exception_id
+        if exception_id:
+            event_properties["$exception_event_id"] = exception_id
 
     return event_properties
 
