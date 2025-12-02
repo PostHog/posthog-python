@@ -232,6 +232,7 @@ class Client(object):
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
+        self._flags_etag: Optional[str] = None
         self.disabled = disabled
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
@@ -1183,11 +1184,24 @@ class Client(object):
                 f"/api/feature_flag/local_evaluation/?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
+                etag=self._flags_etag,
             )
 
-            self.feature_flags = response["flags"] or []
-            self.group_type_mapping = response["group_type_mapping"] or {}
-            self.cohorts = response["cohorts"] or {}
+            # Update stored ETag
+            if response.etag:
+                self._flags_etag = response.etag
+
+            # If 304 Not Modified, flags haven't changed - skip processing
+            if response.not_modified:
+                self.log.debug(
+                    "[FEATURE FLAGS] Flags not modified (304), using cached data"
+                )
+                self._last_feature_flag_poll = datetime.now(tz=tzutc())
+                return
+
+            self.feature_flags = response.data["flags"] or []
+            self.group_type_mapping = response.data["group_type_mapping"] or {}
+            self.cohorts = response.data["cohorts"] or {}
 
             # Check if flag definitions changed and update version
             if self.flag_cache and old_flags_by_key != (

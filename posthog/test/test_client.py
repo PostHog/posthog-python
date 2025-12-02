@@ -9,7 +9,7 @@ from parameterized import parameterized
 
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
-from posthog.request import APIError
+from posthog.request import APIError, GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
@@ -2095,13 +2095,21 @@ class TestClient(unittest.TestCase):
         self, patch_get, patch_poller
     ):
         """Test that when enable_local_evaluation=False, the poller is not started"""
-        patch_get.return_value = {
-            "flags": [
-                {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True}
-            ],
-            "group_type_mapping": {},
-            "cohorts": {},
-        }
+        patch_get.return_value = GetResponse(
+            data={
+                "flags": [
+                    {
+                        "id": 1,
+                        "name": "Beta Feature",
+                        "key": "beta-feature",
+                        "active": True,
+                    }
+                ],
+                "group_type_mapping": {},
+                "cohorts": {},
+            },
+            etag='"test-etag"',
+        )
 
         client = Client(
             FAKE_TEST_API_KEY,
@@ -2123,13 +2131,21 @@ class TestClient(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_enable_local_evaluation_true_starts_poller(self, patch_get, patch_poller):
         """Test that when enable_local_evaluation=True (default), the poller is started"""
-        patch_get.return_value = {
-            "flags": [
-                {"id": 1, "name": "Beta Feature", "key": "beta-feature", "active": True}
-            ],
-            "group_type_mapping": {},
-            "cohorts": {},
-        }
+        patch_get.return_value = GetResponse(
+            data={
+                "flags": [
+                    {
+                        "id": 1,
+                        "name": "Beta Feature",
+                        "key": "beta-feature",
+                        "active": True,
+                    }
+                ],
+                "group_type_mapping": {},
+                "cohorts": {},
+            },
+            etag='"test-etag"',
+        )
 
         client = Client(
             FAKE_TEST_API_KEY,

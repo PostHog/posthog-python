@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime
 from gzip import GzipFile
 from io import BytesIO
@@ -11,6 +12,16 @@ from urllib3.util.retry import Retry
 
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
+
+
+@dataclass
+class GetResponse:
+    """Response from a GET request with ETag support."""
+
+    data: Any
+    etag: Optional[str] = None
+    not_modified: bool = False
+
 
 # Retry on both connect and read errors
 # by default read errors will only retry idempotent HTTP methods (so not POST)
@@ -139,12 +150,13 @@ def remote_config(
     timeout: int = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
-    return get(
+    response = get(
         personal_api_key,
         f"/api/projects/@current/feature_flags/{key}/remote_config?token={project_api_key}",
         host,
         timeout,
     )
+    return response.data
 
 
 def batch_post(
@@ -162,15 +174,40 @@ def batch_post(
 
 
 def get(
-    api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None
-) -> requests.Response:
-    url = remove_trailing_slash(host or DEFAULT_HOST) + url
-    res = requests.get(
-        url,
-        headers={"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT},
-        timeout=timeout,
+    api_key: str,
+    url: str,
+    host: Optional[str] = None,
+    timeout: Optional[int] = None,
+    etag: Optional[str] = None,
+) -> GetResponse:
+    """
+    Make a GET request with optional ETag support.
+
+    If an etag is provided, sends If-None-Match header. Returns GetResponse with:
+    - not_modified=True and data=None if server returns 304
+    - not_modified=False and data=response if server returns 200
+    """
+    log = logging.getLogger("posthog")
+    full_url = remove_trailing_slash(host or DEFAULT_HOST) + url
+    headers = {"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}
+
+    if etag:
+        headers["If-None-Match"] = etag
+
+    res = requests.get(full_url, headers=headers, timeout=timeout)
+
+    # Handle 304 Not Modified
+    if res.status_code == 304:
+        log.debug(f"GET {full_url} returned 304 Not Modified")
+        response_etag = res.headers.get("ETag")
+        return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
+
+    # Handle normal response
+    data = _process_response(
+        res, success_message=f"GET {full_url} completed successfully"
     )
-    return _process_response(res, success_message=f"GET {url} completed successfully")
+    response_etag = res.headers.get("ETag")
+    return GetResponse(data=data, etag=response_etag, not_modified=False)
 
 
 class APIError(Exception):
