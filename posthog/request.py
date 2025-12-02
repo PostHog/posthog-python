@@ -194,7 +194,7 @@ def get(
     if etag:
         headers["If-None-Match"] = etag
 
-    res = requests.get(full_url, headers=headers, timeout=timeout)
+    res = _session.get(full_url, headers=headers, timeout=timeout)
 
     # Handle 304 Not Modified
     if res.status_code == 304:
