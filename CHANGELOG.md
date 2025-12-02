@@ -1,3 +1,7 @@
+# 6.8.0 - 2025-12-01
+
+- feat: add `$feature_flag_evaluated_at` properties to `$feature_flag_called` events
+
 # 6.7.5 - 2025-09-16
 
 - feat: Django middleware now supports async request handling.
