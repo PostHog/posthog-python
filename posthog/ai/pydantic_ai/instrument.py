@@ -12,7 +12,6 @@ from posthog.client import Client as PostHogClient
 def instrument_pydantic_ai(
     client: PostHogClient,
     distinct_id: Optional[str] = None,
-    privacy_mode: Optional[bool] = None,
     properties: Optional[Dict[str, Any]] = None,
     groups: Optional[Dict[str, Any]] = None,
     debug: bool = False,
@@ -39,8 +38,6 @@ def instrument_pydantic_ai(
         client: PostHog client instance for sending events
         distinct_id: Default distinct ID for all events. If not provided,
             events will use the trace ID as distinct_id.
-        privacy_mode: If True, message content will be redacted from events.
-            If not specified, inherits from client.privacy_mode.
         properties: Additional properties to include in all events
         groups: PostHog groups to associate with all events
         debug: Enable debug logging for troubleshooting
@@ -68,9 +65,7 @@ def instrument_pydantic_ai(
 
     from posthog.ai.pydantic_ai.exporter import PydanticAISpanExporter
 
-    # Resolve privacy_mode from client if not explicitly set
-    if privacy_mode is None:
-        privacy_mode = getattr(client, "privacy_mode", False)
+    privacy_mode = getattr(client, "privacy_mode", False)
 
     # Create the Pydantic AI-specific exporter (handles message format normalization)
     exporter = PydanticAISpanExporter(

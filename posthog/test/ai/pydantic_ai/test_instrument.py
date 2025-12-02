@@ -41,11 +41,14 @@ class TestInstrumentPydanticAI:
             settings = mock_instrument_all.call_args[0][0]
             assert isinstance(settings, InstrumentationSettings)
 
-    def test_privacy_mode_disables_content(self, mock_client):
+    def test_privacy_mode_disables_content(self):
         from posthog.ai.pydantic_ai import instrument_pydantic_ai
 
+        client = MagicMock()
+        client.privacy_mode = True
+
         with patch.object(Agent, "instrument_all") as mock_instrument_all:
-            instrument_pydantic_ai(mock_client, privacy_mode=True)
+            instrument_pydantic_ai(client)
 
             settings = mock_instrument_all.call_args[0][0]
             assert settings.include_content is False
@@ -54,7 +57,7 @@ class TestInstrumentPydanticAI:
         from posthog.ai.pydantic_ai import instrument_pydantic_ai
 
         with patch.object(Agent, "instrument_all") as mock_instrument_all:
-            instrument_pydantic_ai(mock_client, privacy_mode=False)
+            instrument_pydantic_ai(mock_client)
 
             settings = mock_instrument_all.call_args[0][0]
             assert settings.include_content is True
