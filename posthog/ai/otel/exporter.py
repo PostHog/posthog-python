@@ -231,10 +231,17 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
                 error_message,
             )
 
-        # Agent run span → skip (PostHog UI auto-creates trace wrapper from generation events)
-        # The $ai_trace_id on generation events is sufficient for grouping
+        # Agent run span → $ai_trace
         if self._is_agent_span(span_name, attrs):
-            return None  # Don't emit separate $ai_trace events
+            return self._create_trace_event(
+                span,
+                attrs,
+                trace_id,
+                span_id,
+                latency,
+                is_error,
+                error_message,
+            )
 
         # Tool execution span → $ai_span
         if self._is_tool_span(span_name, attrs):

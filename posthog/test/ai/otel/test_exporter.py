@@ -234,9 +234,9 @@ class TestGenerationEventCreation:
 
 
 class TestAgentSpanHandling:
-    """Tests for agent span handling (should be skipped)."""
+    """Tests for agent span handling ($ai_trace events)."""
 
-    def test_agent_span_is_skipped(self, mock_client):
+    def test_agent_span_creates_trace_event(self, mock_client):
         exporter = PostHogSpanExporter(mock_client, distinct_id="user_123")
 
         span = create_mock_span(
@@ -245,16 +245,21 @@ class TestAgentSpanHandling:
 
         exporter.export([span])
 
-        mock_client.capture.assert_not_called()
+        mock_client.capture.assert_called_once()
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["event"] == "$ai_trace"
+        assert call_kwargs["properties"]["$ai_span_name"] == "TestAgent"
 
-    def test_invoke_agent_span_is_skipped(self, mock_client):
+    def test_invoke_agent_span_creates_trace_event(self, mock_client):
         exporter = PostHogSpanExporter(mock_client, distinct_id="user_123")
 
         span = create_mock_span(name="invoke_agent", attributes={})
 
         exporter.export([span])
 
-        mock_client.capture.assert_not_called()
+        mock_client.capture.assert_called_once()
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["event"] == "$ai_trace"
 
 
 class TestToolSpanEventCreation:
