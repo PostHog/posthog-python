@@ -8,9 +8,14 @@ telemetry to PostHog.
 
 import json
 import logging
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Union
 
 from posthog.client import Client as PostHogClient
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+    from opentelemetry.trace import StatusCode
 
 try:
     from opentelemetry.sdk.trace import ReadableSpan
@@ -18,13 +23,10 @@ try:
     from opentelemetry.trace import StatusCode
 
     OTEL_AVAILABLE = True
+    _BASE_CLASS = SpanExporter
 except ImportError:
     OTEL_AVAILABLE = False
-    # Define stub types for type hints when OTel is not installed
-    ReadableSpan = Any  # type: ignore
-    SpanExporter = object  # type: ignore
-    SpanExportResult = Any  # type: ignore
-    StatusCode = Any  # type: ignore
+    _BASE_CLASS = object
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ class GenAIAttributes:
     SERVER_PORT = "server.port"
 
 
-class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
+class PostHogSpanExporter(_BASE_CLASS):  # type: ignore[valid-type,misc]
     """
     OpenTelemetry SpanExporter that sends AI/LLM spans to PostHog.
 
@@ -284,7 +286,7 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
         """Check if span represents an agent run."""
         return span_name in ("agent run", "invoke_agent") or attrs.get(
             GenAIAttributes.AGENT_NAME
-        )
+        ) is not None
 
     def _is_tool_span(self, span_name: str, attrs: Dict[str, Any]) -> bool:
         """Check if span represents a tool/function execution."""

@@ -5,24 +5,27 @@ This exporter wraps the generic PostHogSpanExporter and handles
 Pydantic AI-specific transformations like message format normalization.
 """
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 try:
     from opentelemetry.sdk.trace import ReadableSpan
     from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
     OTEL_AVAILABLE = True
+    _BASE_CLASS = SpanExporter
 except ImportError:
     OTEL_AVAILABLE = False
-    ReadableSpan = Any  # type: ignore
-    SpanExporter = object  # type: ignore
-    SpanExportResult = Any  # type: ignore
+    _BASE_CLASS = object
 
 from posthog.ai.otel import PostHogSpanExporter
 from posthog.client import Client as PostHogClient
 
 
-class PydanticAISpanExporter(SpanExporter if OTEL_AVAILABLE else object):
+class PydanticAISpanExporter(_BASE_CLASS):  # type: ignore[valid-type,misc]
     """
     SpanExporter for Pydantic AI that normalizes messages to OpenAI format.
 
