@@ -262,6 +262,10 @@ class Client(object):
 
         self.project_root = project_root
 
+        self.use_ai_ingestion_pipeline = os.environ.get(
+            "LLMA_INGESTION_PIPELINE", "false"
+        ).lower() in ("true", "1", "yes")
+
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = personal_api_key
         if debug:
@@ -309,6 +313,7 @@ class Client(object):
                     retries=max_retries,
                     timeout=timeout,
                     historical_migration=historical_migration,
+                    use_ai_ingestion_pipeline=self.use_ai_ingestion_pipeline,
                 )
                 self.consumers.append(consumer)
 
