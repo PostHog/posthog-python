@@ -5,6 +5,7 @@ This module provides a simple interface to instrument Pydantic AI agents
 with PostHog tracing.
 """
 
+from posthog.ai.pydantic_ai.exporter import PydanticAISpanExporter
 from posthog.ai.pydantic_ai.instrument import instrument_pydantic_ai
 
-__all__ = ["instrument_pydantic_ai"]
+__all__ = ["instrument_pydantic_ai", "PydanticAISpanExporter"]
