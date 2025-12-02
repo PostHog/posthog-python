@@ -1199,6 +1199,12 @@ class Client(object):
                 self._last_feature_flag_poll = datetime.now(tz=tzutc())
                 return
 
+            if response.data is None:
+                self.log.error(
+                    "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
+                )
+                return
+
             self.feature_flags = response.data["flags"] or []
             self.group_type_mapping = response.data["group_type_mapping"] or {}
             self.cohorts = response.data["cohorts"] or {}
