@@ -11,12 +11,47 @@ from posthog.request import (
     DatetimeSerializer,
     GetResponse,
     QuotaLimitError,
+    _mask_tokens_in_url,
     batch_post,
     decide,
     determine_server_host,
     get,
 )
 from posthog.test.test_utils import TEST_API_KEY
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        # Token with params after - masks keeping first 10 chars
+        (
+            "https://example.com/api/flags?token=phc_abc123xyz789&send_cohorts",
+            "https://example.com/api/flags?token=phc_abc123...&send_cohorts",
+        ),
+        # Token at end of URL
+        (
+            "https://example.com/api/flags?token=phc_abc123xyz789",
+            "https://example.com/api/flags?token=phc_abc123...",
+        ),
+        # No token - unchanged
+        (
+            "https://example.com/api/flags?other=value",
+            "https://example.com/api/flags?other=value",
+        ),
+        # Short token (<10 chars) - unchanged
+        (
+            "https://example.com/api/flags?token=short",
+            "https://example.com/api/flags?token=short",
+        ),
+        # Exactly 10 char token - gets ellipsis
+        (
+            "https://example.com/api/flags?token=1234567890",
+            "https://example.com/api/flags?token=1234567890...",
+        ),
+    ],
+)
+def test_mask_tokens_in_url(url, expected):
+    assert _mask_tokens_in_url(url) == expected
 
 
 class TestRequests(unittest.TestCase):

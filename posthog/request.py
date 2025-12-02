@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from gzip import GzipFile
@@ -12,6 +13,11 @@ from urllib3.util.retry import Retry
 
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
+
+
+def _mask_tokens_in_url(url: str) -> str:
+    """Mask token values in URLs for safe logging, keeping first 10 chars visible."""
+    return re.sub(r"(token=)([^&]{10})[^&]*", r"\1\2...", url)
 
 
 @dataclass
@@ -196,15 +202,17 @@ def get(
 
     res = _session.get(full_url, headers=headers, timeout=timeout)
 
+    masked_url = _mask_tokens_in_url(full_url)
+
     # Handle 304 Not Modified
     if res.status_code == 304:
-        log.debug(f"GET {full_url} returned 304 Not Modified")
+        log.debug(f"GET {masked_url} returned 304 Not Modified")
         response_etag = res.headers.get("ETag")
         return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
 
     # Handle normal response
     data = _process_response(
-        res, success_message=f"GET {full_url} completed successfully"
+        res, success_message=f"GET {masked_url} completed successfully"
     )
     response_etag = res.headers.get("ETag")
     return GetResponse(data=data, etag=response_etag, not_modified=False)
