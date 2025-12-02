@@ -111,14 +111,19 @@ class TestSpanClassification:
         exporter = PostHogSpanExporter(mock_client)
         assert exporter._is_agent_span("agent run", {}) is True
         assert exporter._is_agent_span("invoke_agent", {}) is True
-        assert exporter._is_agent_span("some_span", {"gen_ai.agent.name": "test"})  # truthy
+        assert exporter._is_agent_span(
+            "some_span", {"gen_ai.agent.name": "test"}
+        )  # truthy
         assert not exporter._is_agent_span("some_span", {})
 
     def test_is_tool_span(self, mock_client):
         exporter = PostHogSpanExporter(mock_client)
         assert exporter._is_tool_span("execute_tool get_weather", {}) is True
         assert exporter._is_tool_span("running tools", {}) is True
-        assert exporter._is_tool_span("some_span", {"gen_ai.tool.name": "get_weather"}) is True
+        assert (
+            exporter._is_tool_span("some_span", {"gen_ai.tool.name": "get_weather"})
+            is True
+        )
         assert exporter._is_tool_span("model call", {}) is False
 
 
@@ -135,8 +140,12 @@ class TestGenerationEventCreation:
                 "gen_ai.system": "openai",
                 "gen_ai.usage.input_tokens": 100,
                 "gen_ai.usage.output_tokens": 50,
-                "gen_ai.input.messages": json.dumps([{"role": "user", "content": "Hello"}]),
-                "gen_ai.output.messages": json.dumps([{"role": "assistant", "content": "Hi!"}]),
+                "gen_ai.input.messages": json.dumps(
+                    [{"role": "user", "content": "Hello"}]
+                ),
+                "gen_ai.output.messages": json.dumps(
+                    [{"role": "assistant", "content": "Hi!"}]
+                ),
             },
         )
 
@@ -178,14 +187,20 @@ class TestGenerationEventCreation:
         assert props["$ai_error"] == "Rate limit exceeded"
 
     def test_generation_event_privacy_mode(self, mock_client):
-        exporter = PostHogSpanExporter(mock_client, distinct_id="user_123", privacy_mode=True)
+        exporter = PostHogSpanExporter(
+            mock_client, distinct_id="user_123", privacy_mode=True
+        )
 
         span = create_mock_span(
             name="chat openai",
             attributes={
                 "gen_ai.request.model": "gpt-4",
-                "gen_ai.input.messages": json.dumps([{"role": "user", "content": "Secret data"}]),
-                "gen_ai.output.messages": json.dumps([{"role": "assistant", "content": "Response"}]),
+                "gen_ai.input.messages": json.dumps(
+                    [{"role": "user", "content": "Secret data"}]
+                ),
+                "gen_ai.output.messages": json.dumps(
+                    [{"role": "assistant", "content": "Response"}]
+                ),
             },
         )
 
@@ -224,7 +239,9 @@ class TestAgentSpanHandling:
     def test_agent_span_is_skipped(self, mock_client):
         exporter = PostHogSpanExporter(mock_client, distinct_id="user_123")
 
-        span = create_mock_span(name="agent run", attributes={"gen_ai.agent.name": "TestAgent"})
+        span = create_mock_span(
+            name="agent run", attributes={"gen_ai.agent.name": "TestAgent"}
+        )
 
         exporter.export([span])
 
@@ -250,7 +267,9 @@ class TestToolSpanEventCreation:
             name="execute_tool get_weather",
             attributes={
                 "gen_ai.tool.name": "get_weather",
-                "gen_ai.tool.call.arguments": json.dumps({"latitude": 37.7749, "longitude": -122.4194}),
+                "gen_ai.tool.call.arguments": json.dumps(
+                    {"latitude": 37.7749, "longitude": -122.4194}
+                ),
                 "gen_ai.tool.call.result": "Sunny, 72°F",
             },
             parent_span_id=0xABCDEF1234567890,
@@ -266,11 +285,16 @@ class TestToolSpanEventCreation:
         assert "$ai_trace_id" in props
         assert "$ai_span_id" in props
         assert "$ai_parent_id" in props
-        assert props["$ai_tool_arguments"] == {"latitude": 37.7749, "longitude": -122.4194}
+        assert props["$ai_tool_arguments"] == {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+        }
         assert props["$ai_tool_result"] == "Sunny, 72°F"
 
     def test_tool_span_privacy_mode(self, mock_client):
-        exporter = PostHogSpanExporter(mock_client, distinct_id="user_123", privacy_mode=True)
+        exporter = PostHogSpanExporter(
+            mock_client, distinct_id="user_123", privacy_mode=True
+        )
 
         span = create_mock_span(
             name="execute_tool get_weather",
@@ -294,7 +318,9 @@ class TestDistinctIdHandling:
     def test_distinct_id_from_constructor(self, mock_client):
         exporter = PostHogSpanExporter(mock_client, distinct_id="configured_user")
 
-        span = create_mock_span(name="chat openai", attributes={"gen_ai.request.model": "gpt-4"})
+        span = create_mock_span(
+            name="chat openai", attributes={"gen_ai.request.model": "gpt-4"}
+        )
 
         exporter.export([span])
 
@@ -326,12 +352,17 @@ class TestDistinctIdHandling:
 
         exporter.export([span])
 
-        assert mock_client.capture.call_args[1]["distinct_id"] == "abcdef1234567890abcdef1234567890"
+        assert (
+            mock_client.capture.call_args[1]["distinct_id"]
+            == "abcdef1234567890abcdef1234567890"
+        )
 
     def test_process_person_profile_false_when_no_distinct_id(self, mock_client):
         exporter = PostHogSpanExporter(mock_client)
 
-        span = create_mock_span(name="chat openai", attributes={"gen_ai.request.model": "gpt-4"})
+        span = create_mock_span(
+            name="chat openai", attributes={"gen_ai.request.model": "gpt-4"}
+        )
 
         exporter.export([span])
 
@@ -349,7 +380,9 @@ class TestAdditionalProperties:
             properties={"$ai_session_id": "session_abc", "custom_prop": "value"},
         )
 
-        span = create_mock_span(name="chat openai", attributes={"gen_ai.request.model": "gpt-4"})
+        span = create_mock_span(
+            name="chat openai", attributes={"gen_ai.request.model": "gpt-4"}
+        )
 
         exporter.export([span])
 
@@ -364,7 +397,9 @@ class TestAdditionalProperties:
             groups={"company": "posthog", "team": "product"},
         )
 
-        span = create_mock_span(name="chat openai", attributes={"gen_ai.request.model": "gpt-4"})
+        span = create_mock_span(
+            name="chat openai", attributes={"gen_ai.request.model": "gpt-4"}
+        )
 
         exporter.export([span])
 
@@ -380,7 +415,9 @@ class TestExportResult:
     def test_export_returns_success(self, mock_client):
         exporter = PostHogSpanExporter(mock_client, distinct_id="user_123")
 
-        span = create_mock_span(name="chat openai", attributes={"gen_ai.request.model": "gpt-4"})
+        span = create_mock_span(
+            name="chat openai", attributes={"gen_ai.request.model": "gpt-4"}
+        )
 
         result = exporter.export([span])
 
@@ -390,7 +427,9 @@ class TestExportResult:
         mock_client.capture.side_effect = Exception("Network error")
         exporter = PostHogSpanExporter(mock_client, distinct_id="user_123")
 
-        span = create_mock_span(name="chat openai", attributes={"gen_ai.request.model": "gpt-4"})
+        span = create_mock_span(
+            name="chat openai", attributes={"gen_ai.request.model": "gpt-4"}
+        )
 
         result = exporter.export([span])
 

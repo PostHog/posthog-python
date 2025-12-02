@@ -93,7 +93,9 @@ class PydanticAISpanExporter(SpanExporter if OTEL_AVAILABLE else object):
             normalized = self._normalize_messages(input_msgs)
             if normalized != input_msgs:
                 attrs["gen_ai.input.messages"] = (
-                    json.dumps(normalized) if isinstance(normalized, list) else normalized
+                    json.dumps(normalized)
+                    if isinstance(normalized, list)
+                    else normalized
                 )
                 modified = True
 
@@ -103,7 +105,9 @@ class PydanticAISpanExporter(SpanExporter if OTEL_AVAILABLE else object):
             normalized = self._normalize_messages(output_msgs)
             if normalized != output_msgs:
                 attrs["gen_ai.output.messages"] = (
-                    json.dumps(normalized) if isinstance(normalized, list) else normalized
+                    json.dumps(normalized)
+                    if isinstance(normalized, list)
+                    else normalized
                 )
                 modified = True
 
@@ -176,20 +180,24 @@ class PydanticAISpanExporter(SpanExporter if OTEL_AVAILABLE else object):
             if part_type == "text" and "content" in part:
                 text_parts.append(str(part["content"]))
             elif part_type == "tool_call":
-                tool_calls.append({
-                    "id": part.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": part.get("name", ""),
-                        "arguments": part.get("arguments", "{}"),
+                tool_calls.append(
+                    {
+                        "id": part.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": part.get("name", ""),
+                            "arguments": part.get("arguments", "{}"),
+                        },
                     }
-                })
+                )
 
         # Build normalized message
         normalized: Dict[str, Any] = {"role": role}
 
         if text_parts:
-            normalized["content"] = "\n".join(text_parts) if len(text_parts) > 1 else text_parts[0]
+            normalized["content"] = (
+                "\n".join(text_parts) if len(text_parts) > 1 else text_parts[0]
+            )
         elif not tool_calls:
             normalized["content"] = ""
 

@@ -67,7 +67,10 @@ class TestMessageNormalization:
         exporter = PydanticAISpanExporter(mock_client, distinct_id="user_123")
 
         pydantic_format = [
-            {"parts": [{"content": "Hello, how are you?", "type": "text"}], "role": "user"}
+            {
+                "parts": [{"content": "Hello, how are you?", "type": "text"}],
+                "role": "user",
+            }
         ]
         result = exporter._normalize_messages(pydantic_format)
 
@@ -168,7 +171,9 @@ class TestMessageNormalization:
         ]
         result = exporter._normalize_messages(pydantic_format)
 
-        assert result == [{"content": "Done!", "role": "assistant", "finish_reason": "stop"}]
+        assert result == [
+            {"content": "Done!", "role": "assistant", "finish_reason": "stop"}
+        ]
 
     def test_normalize_already_openai_format(self, mock_client):
         exporter = PydanticAISpanExporter(mock_client, distinct_id="user_123")
@@ -301,7 +306,12 @@ class TestEndToEndExport:
         exporter = PydanticAISpanExporter(mock_client, distinct_id="user_123")
 
         pydantic_input = json.dumps(
-            [{"parts": [{"content": "What's the weather?", "type": "text"}], "role": "user"}]
+            [
+                {
+                    "parts": [{"content": "What's the weather?", "type": "text"}],
+                    "role": "user",
+                }
+            ]
         )
         pydantic_output = json.dumps(
             [
@@ -329,7 +339,9 @@ class TestEndToEndExport:
         mock_client.capture.assert_called_once()
 
         props = mock_client.capture.call_args[1]["properties"]
-        assert props["$ai_input"] == [{"content": "What's the weather?", "role": "user"}]
+        assert props["$ai_input"] == [
+            {"content": "What's the weather?", "role": "user"}
+        ]
         assert props["$ai_output_choices"] == [
             {"content": "It's sunny!", "role": "assistant", "finish_reason": "stop"}
         ]
@@ -440,7 +452,10 @@ class TestToolAttributeMapping:
         transformed = exporter._transform_span(span)
 
         # Should preserve existing GenAI attribute, not overwrite
-        assert transformed.attributes["gen_ai.tool.call.arguments"] == '{"existing": "value"}'
+        assert (
+            transformed.attributes["gen_ai.tool.call.arguments"]
+            == '{"existing": "value"}'
+        )
 
     def test_tool_span_export_with_mapped_attributes(self, mock_client):
         exporter = PydanticAISpanExporter(mock_client, distinct_id="user_123")

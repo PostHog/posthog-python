@@ -212,9 +212,7 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
         trace_id = self._format_trace_id_as_uuid(span.context.trace_id)
         # Span IDs remain as hex (no dashes needed)
         span_id = format(span.context.span_id, "016x")
-        parent_span_id = (
-            format(span.parent.span_id, "016x") if span.parent else None
-        )
+        parent_span_id = format(span.parent.span_id, "016x") if span.parent else None
 
         # Check for error status
         is_error = span.status.status_code == StatusCode.ERROR if span.status else False
@@ -223,7 +221,14 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
         # Model request span → $ai_generation
         if self._is_generation_span(span_name, attrs):
             return self._create_generation_event(
-                span, attrs, trace_id, span_id, parent_span_id, latency, is_error, error_message
+                span,
+                attrs,
+                trace_id,
+                span_id,
+                parent_span_id,
+                latency,
+                is_error,
+                error_message,
             )
 
         # Agent run span → skip (PostHog UI auto-creates trace wrapper from generation events)
@@ -234,13 +239,27 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
         # Tool execution span → $ai_span
         if self._is_tool_span(span_name, attrs):
             return self._create_tool_span_event(
-                span, attrs, trace_id, span_id, parent_span_id, latency, is_error, error_message
+                span,
+                attrs,
+                trace_id,
+                span_id,
+                parent_span_id,
+                latency,
+                is_error,
+                error_message,
             )
 
         # Generic span that might be part of AI workflow
         if self._is_ai_related_span(span_name, attrs):
             return self._create_span_event(
-                span, attrs, trace_id, span_id, parent_span_id, latency, is_error, error_message
+                span,
+                attrs,
+                trace_id,
+                span_id,
+                parent_span_id,
+                latency,
+                is_error,
+                error_message,
             )
 
         return None
@@ -507,9 +526,7 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
 
         return {"name": "$ai_span", "properties": properties}
 
-    def _parse_json_attr(
-        self, value: Optional[Union[str, Any]]
-    ) -> Optional[Any]:
+    def _parse_json_attr(self, value: Optional[Union[str, Any]]) -> Optional[Any]:
         """Parse a JSON string attribute, returning the value as-is if already parsed."""
         if value is None:
             return None
