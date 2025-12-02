@@ -19,8 +19,15 @@ from posthog.exception_utils import (
     handle_in_app,
     exception_is_already_captured,
     mark_exception_as_captured,
+    try_attach_code_variables_to_frames,
+    DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
+    DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
 )
-from posthog.feature_flags import InconclusiveMatchError, match_feature_flag_properties
+from posthog.feature_flags import (
+    InconclusiveMatchError,
+    RequiresServerEvaluation,
+    match_feature_flag_properties,
+)
 from posthog.poller import Poller
 from posthog.request import (
     DEFAULT_HOST,
@@ -35,6 +42,9 @@ from posthog.contexts import (
     _get_current_context,
     get_context_distinct_id,
     get_context_session_id,
+    get_capture_exception_code_variables_context,
+    get_code_variables_mask_patterns_context,
+    get_code_variables_ignore_patterns_context,
     new_context,
 )
 from posthog.types import (
@@ -56,7 +66,6 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     guess_timezone,
-    remove_trailing_slash,
     system_context,
 )
 from posthog.version import VERSION
@@ -175,6 +184,9 @@ class Client(object):
         before_send=None,
         flag_fallback_cache_url=None,
         enable_local_evaluation=True,
+        capture_exception_code_variables=False,
+        code_variables_mask_patterns=None,
+        code_variables_ignore_patterns=None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -230,6 +242,18 @@ class Client(object):
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
 
+        self.capture_exception_code_variables = capture_exception_code_variables
+        self.code_variables_mask_patterns = (
+            code_variables_mask_patterns
+            if code_variables_mask_patterns is not None
+            else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+        )
+        self.code_variables_ignore_patterns = (
+            code_variables_ignore_patterns
+            if code_variables_ignore_patterns is not None
+            else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+        )
+
         if project_root is None:
             try:
                 project_root = os.getcwd()
@@ -271,8 +295,9 @@ class Client(object):
             # to call flush().
             if send:
                 atexit.register(self.join)
-            for n in range(thread):
-                self.consumers = []
+
+            self.consumers = []
+            for _ in range(thread):
                 consumer = Consumer(
                     self.queue,
                     self.api_key,
@@ -701,21 +726,7 @@ class Client(object):
         Examples:
             ```python
             # Set with distinct id
-            posthog.capture(
-                'event_name',
-                distinct_id='user-distinct-id',
-                properties={
-                    '$set': {'name': 'Max Hedgehog'},
-                    '$set_once': {'initial_url': '/blog'}
-                }
-            )
-            ```
-            ```python
-            # Set using context
-            from posthog import new_context, identify_context
-            with new_context():
-                identify_context('user-distinct-id')
-                posthog.capture('event_name')
+            posthog.set(distinct_id='user123', properties={'name': 'Max Hedgehog'})
             ```
 
         Category:
@@ -973,9 +984,36 @@ class Client(object):
                     "value"
                 ),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_personURL": f"{remove_trailing_slash(self.raw_host)}/project/{self.api_key}/person/{distinct_id}",
                 **properties,
             }
+
+            context_enabled = get_capture_exception_code_variables_context()
+            context_mask = get_code_variables_mask_patterns_context()
+            context_ignore = get_code_variables_ignore_patterns_context()
+
+            enabled = (
+                context_enabled
+                if context_enabled is not None
+                else self.capture_exception_code_variables
+            )
+            mask_patterns = (
+                context_mask
+                if context_mask is not None
+                else self.code_variables_mask_patterns
+            )
+            ignore_patterns = (
+                context_ignore
+                if context_ignore is not None
+                else self.code_variables_ignore_patterns
+            )
+
+            if enabled:
+                try_attach_code_variables_to_frames(
+                    all_exceptions_with_trace_and_in_app,
+                    exc_info,
+                    mask_patterns=mask_patterns,
+                    ignore_patterns=ignore_patterns,
+                )
 
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
@@ -1588,7 +1626,7 @@ class Client(object):
                     self.log.debug(
                         f"Successfully computed flag locally: {key} -> {response}"
                     )
-                except InconclusiveMatchError as e:
+                except (RequiresServerEvaluation, InconclusiveMatchError) as e:
                     self.log.debug(f"Failed to compute flag {key} locally: {e}")
                 except Exception as e:
                     self.log.exception(

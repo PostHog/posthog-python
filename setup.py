@@ -14,7 +14,7 @@ long_description = """
 PostHog is developer-friendly, self-hosted product analytics.
 posthog-python is the python package.
 
-This package requires Python 3.9 or higher.
+This package requires Python 3.10 or higher.
 """
 
 # Minimal setup.py for backward compatibility

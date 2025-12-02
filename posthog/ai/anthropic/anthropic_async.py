@@ -14,14 +14,9 @@ from posthog import setup
 from posthog.ai.types import StreamingContentBlock, TokenUsage, ToolInProgress
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
-    extract_available_tool_calls,
-    get_model_params,
-    merge_system_prompt,
     merge_usage_stats,
-    with_privacy_mode,
 )
 from posthog.ai.anthropic.anthropic_converter import (
-    format_anthropic_streaming_content,
     extract_anthropic_usage_from_event,
     handle_anthropic_content_block_start,
     handle_anthropic_text_delta,
@@ -220,66 +215,34 @@ class AsyncWrappedMessages(AsyncMessages):
         content_blocks: List[StreamingContentBlock],
         accumulated_content: str,
     ):
-        if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+        from posthog.ai.types import StreamingEventData
+        from posthog.ai.anthropic.anthropic_converter import (
+            format_anthropic_streaming_input,
+            format_anthropic_streaming_output_complete,
+        )
+        from posthog.ai.utils import capture_streaming_event
 
-        # Format output using converter
-        formatted_content = format_anthropic_streaming_content(content_blocks)
-        formatted_output = []
+        # Prepare standardized event data
+        formatted_input = format_anthropic_streaming_input(kwargs)
+        sanitized_input = sanitize_anthropic(formatted_input)
 
-        if formatted_content:
-            formatted_output = [{"role": "assistant", "content": formatted_content}]
-        else:
-            # Fallback to accumulated content if no blocks
-            formatted_output = [
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": accumulated_content}],
-                }
-            ]
-
-        event_properties = {
-            "$ai_provider": "anthropic",
-            "$ai_model": kwargs.get("model"),
-            "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                sanitize_anthropic(merge_system_prompt(kwargs, "anthropic")),
+        event_data = StreamingEventData(
+            provider="anthropic",
+            model=kwargs.get("model", "unknown"),
+            base_url=str(self._client.base_url),
+            kwargs=kwargs,
+            formatted_input=sanitized_input,
+            formatted_output=format_anthropic_streaming_output_complete(
+                content_blocks, accumulated_content
             ),
-            "$ai_output_choices": with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                formatted_output,
-            ),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
-            "$ai_output_tokens": usage_stats.get("output_tokens", 0),
-            "$ai_cache_read_input_tokens": usage_stats.get(
-                "cache_read_input_tokens", 0
-            ),
-            "$ai_cache_creation_input_tokens": usage_stats.get(
-                "cache_creation_input_tokens", 0
-            ),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(self._client.base_url),
-            **(posthog_properties or {}),
-        }
+            usage_stats=usage_stats,
+            latency=latency,
+            distinct_id=posthog_distinct_id,
+            trace_id=posthog_trace_id,
+            properties=posthog_properties,
+            privacy_mode=posthog_privacy_mode,
+            groups=posthog_groups,
+        )
 
-        # Add tools if available
-        available_tools = extract_available_tool_calls("anthropic", kwargs)
-
-        if available_tools:
-            event_properties["$ai_tools"] = available_tools
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
-                properties=event_properties,
-                groups=posthog_groups,
-            )
+        # Use the common capture function
+        capture_streaming_event(self._client._ph_client, event_data)

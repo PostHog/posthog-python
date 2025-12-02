@@ -128,7 +128,7 @@ class WrappedResponses:
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
         final_content = []
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
@@ -212,6 +212,15 @@ class WrappedResponses:
             "$ai_base_url": str(self._client.base_url),
             **(posthog_properties or {}),
         }
+
+        # Add web search count if present
+        web_search_count = usage_stats.get("web_search_count")
+        if (
+            web_search_count is not None
+            and isinstance(web_search_count, int)
+            and web_search_count > 0
+        ):
+            event_properties["$ai_web_search_count"] = web_search_count
 
         if available_tool_calls:
             event_properties["$ai_tools"] = available_tool_calls
@@ -345,7 +354,7 @@ class WrappedCompletions:
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
@@ -444,6 +453,16 @@ class WrappedCompletions:
             **(posthog_properties or {}),
         }
 
+        # Add web search count if present
+        web_search_count = usage_stats.get("web_search_count")
+
+        if (
+            web_search_count is not None
+            and isinstance(web_search_count, int)
+            and web_search_count > 0
+        ):
+            event_properties["$ai_web_search_count"] = web_search_count
+
         if available_tool_calls:
             event_properties["$ai_tools"] = available_tool_calls
 
@@ -499,7 +518,7 @@ class WrappedEmbeddings:
             posthog_trace_id = str(uuid.uuid4())
 
         start_time = time.time()
-        response = self._original.create(**kwargs)
+        response = await self._original.create(**kwargs)
         end_time = time.time()
 
         # Extract usage statistics if available

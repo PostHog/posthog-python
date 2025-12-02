@@ -304,7 +304,7 @@ class Models:
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_content
             try:
                 for chunk in response:
                     # Extract usage stats from chunk

@@ -113,6 +113,7 @@ def test_metadata_capture(mock_client):
         base_url="https://us.posthog.com",
         name="test",
         end_time=None,
+        posthog_properties=None,
     )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -204,6 +205,7 @@ def test_basic_chat_chain(mock_client, stream):
     # Generation is second
     assert generation_args["event"] == "$ai_generation"
     assert "distinct_id" in generation_args
+    assert generation_props["$ai_framework"] == "langchain"
     assert "$ai_model" in generation_props
     assert "$ai_provider" in generation_props
     assert generation_props["$ai_input"] == [
@@ -1123,9 +1125,9 @@ def test_anthropic_chain(mock_client):
     )
     chain = prompt | ChatAnthropic(
         api_key=ANTHROPIC_API_KEY,
-        model="claude-3-opus-20240229",
+        model="claude-sonnet-4-5-20250929",
         temperature=0,
-        max_tokens=1,
+        max_tokens=1024,
     )
     callbacks = CallbackHandler(
         mock_client,
@@ -1148,12 +1150,12 @@ def test_anthropic_chain(mock_client):
     assert gen_args["event"] == "$ai_generation"
     assert gen_props["$ai_trace_id"] == "test-trace-id"
     assert gen_props["$ai_provider"] == "anthropic"
-    assert gen_props["$ai_model"] == "claude-3-opus-20240229"
+    assert gen_props["$ai_model"] == "claude-sonnet-4-5-20250929"
     assert gen_props["foo"] == "bar"
 
     assert gen_props["$ai_model_parameters"] == {
         "temperature": 0.0,
-        "max_tokens": 1,
+        "max_tokens": 1024,
         "streaming": False,
     }
     assert gen_props["$ai_input"] == [
@@ -1169,7 +1171,7 @@ def test_anthropic_chain(mock_client):
         <= approximate_latency
     )
     assert gen_props["$ai_input_tokens"] == 17
-    assert gen_props["$ai_output_tokens"] == 1
+    assert gen_props["$ai_output_tokens"] == 4
 
     assert trace_args["event"] == "$ai_trace"
     assert trace_props["$ai_input_state"] == {}
@@ -1186,9 +1188,9 @@ async def test_async_anthropic_streaming(mock_client):
     )
     chain = prompt | ChatAnthropic(
         api_key=ANTHROPIC_API_KEY,
-        model="claude-3-opus-20240229",
+        model="claude-sonnet-4-5-20250929",
         temperature=0,
-        max_tokens=1,
+        max_tokens=1024,
         streaming=True,
         stream_usage=True,
     )
@@ -1268,6 +1270,7 @@ def test_metadata_tools(mock_client):
         name="test",
         tools=tools,
         end_time=None,
+        posthog_properties=None,
     )
     assert callbacks._runs[run_id] == expected
     with patch("time.time", return_value=1234567891):
@@ -1564,9 +1567,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
             AIMessage(
                 content="Using cached analysis to provide quick response.",
                 usage_metadata={
-                    "input_tokens": 200,
+                    "input_tokens": 1200,
                     "output_tokens": 30,
-                    "total_tokens": 1030,
+                    "total_tokens": 1230,
                     "cache_read_input_tokens": 800,  # Anthropic cache read
                 },
             )
@@ -1583,11 +1586,56 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 200
+    assert (
+        generation_props["$ai_input_tokens"] == 1200
+    )  # No provider metadata, no subtraction
     assert generation_props["$ai_output_tokens"] == 30
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
     assert generation_props["$ai_cache_read_input_tokens"] == 800
     assert generation_props["$ai_reasoning_tokens"] == 0
+
+
+def test_anthropic_provider_subtracts_cache_tokens(mock_client):
+    """Test that Anthropic provider correctly subtracts cache tokens from input tokens."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+
+    # Set up with Anthropic provider
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-3-sonnet"},
+    )
+
+    # Response with cache tokens: 1200 input (includes 800 cached)
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": 1200,
+                            "output_tokens": 50,
+                            "cache_read_input_tokens": 800,
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    generation_args = mock_client.capture.call_args_list[0][1]
+    assert generation_args["properties"]["$ai_input_tokens"] == 400  # 1200 - 800
+    assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
 
 
 def test_openai_cache_read_tokens(mock_client):
@@ -1625,7 +1673,7 @@ def test_openai_cache_read_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 150
+    assert generation_props["$ai_input_tokens"] == 150  # No subtraction for OpenAI
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
@@ -1707,7 +1755,7 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
-    assert generation_props["$ai_input_tokens"] == 500
+    assert generation_props["$ai_input_tokens"] == 500  # No subtraction for OpenAI
     assert generation_props["$ai_output_tokens"] == 100
     assert generation_props["$ai_cache_read_input_tokens"] == 300
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
@@ -1715,7 +1763,7 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
-def test_openai_reasoning_tokens(mock_client):
+def test_openai_reasoning_tokens_o4_mini(mock_client):
     model = ChatOpenAI(
         api_key=OPENAI_API_KEY, model="o4-mini", max_completion_tokens=10
     )
@@ -1876,3 +1924,429 @@ def test_tool_definition(mock_client):
     assert props["$ai_latency"] == 1.0
     # Verify that tools are captured in the $ai_tools property
     assert props["$ai_tools"] == tools
+
+
+def test_cache_read_tokens_subtraction_from_input_tokens(mock_client):
+    """Test that cache_read_tokens are properly subtracted from input_tokens.
+
+    This tests the logic in callbacks.py lines 757-758:
+        if normalized_usage.input_tokens and normalized_usage.cache_read_tokens:
+            normalized_usage.input_tokens = max(normalized_usage.input_tokens - normalized_usage.cache_read_tokens, 0)
+    """
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Use the cached prompt for this request")]
+    )
+
+    # Scenario 1: input_tokens includes cache_read_tokens (typical case)
+    # input_tokens=150 includes 100 cache_read tokens, so actual input is 50
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response using cached prompt context.",
+                usage_metadata={
+                    "input_tokens": 150,  # Total includes cache reads
+                    "output_tokens": 40,
+                    "total_tokens": 190,
+                    "cache_read_input_tokens": 100,  # 100 tokens read from cache
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response using cached prompt context."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens not reduced without provider metadata
+    assert generation_props["$ai_input_tokens"] == 150
+    assert generation_props["$ai_output_tokens"] == 40
+    assert generation_props["$ai_cache_read_input_tokens"] == 100
+
+
+def test_cache_read_tokens_subtraction_prevents_negative(mock_client):
+    """Test that cache_read_tokens subtraction doesn't result in negative input_tokens.
+
+    This tests the max(..., 0) part of the logic in callbacks.py lines 757-758.
+    """
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Edge case with large cache read")]
+    )
+
+    # Edge case: cache_read_tokens >= input_tokens
+    # This could happen in some API responses where accounting differs
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response with edge case token counts.",
+                usage_metadata={
+                    "input_tokens": 80,
+                    "output_tokens": 20,
+                    "total_tokens": 100,
+                    "cache_read_input_tokens": 100,  # More than input_tokens
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response with edge case token counts."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens not reduced without provider metadata
+    assert generation_props["$ai_input_tokens"] == 80
+    assert generation_props["$ai_output_tokens"] == 20
+    assert generation_props["$ai_cache_read_input_tokens"] == 100
+
+
+def test_no_cache_read_tokens_no_subtraction(mock_client):
+    """Test that when there are no cache_read_tokens, input_tokens remain unchanged.
+
+    This tests the conditional check before the subtraction in callbacks.py line 757.
+    """
+    prompt = ChatPromptTemplate.from_messages(
+        [("user", "Normal request without cache")]
+    )
+
+    # No cache usage - input_tokens should remain as-is
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response without cache.",
+                usage_metadata={
+                    "input_tokens": 100,
+                    "output_tokens": 30,
+                    "total_tokens": 130,
+                    # No cache_read_input_tokens
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response without cache."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should remain unchanged at 100
+    assert generation_props["$ai_input_tokens"] == 100
+    assert generation_props["$ai_output_tokens"] == 30
+    assert generation_props["$ai_cache_read_input_tokens"] == 0
+
+
+def test_zero_input_tokens_with_cache_read(mock_client):
+    """Test edge case where input_tokens is 0 but cache_read_tokens exist.
+
+    This tests the falsy check in the conditional (line 757).
+    """
+    prompt = ChatPromptTemplate.from_messages([("user", "Edge case query")])
+
+    # Edge case: input_tokens is 0 (falsy), should skip subtraction
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Response.",
+                usage_metadata={
+                    "input_tokens": 0,
+                    "output_tokens": 10,
+                    "total_tokens": 10,
+                    "cache_read_input_tokens": 50,
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Response."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should remain 0 (no subtraction because input_tokens is falsy)
+    assert generation_props["$ai_input_tokens"] == 0
+    assert generation_props["$ai_output_tokens"] == 10
+    assert generation_props["$ai_cache_read_input_tokens"] == 50
+
+
+def test_cache_write_tokens_not_subtracted_from_input(mock_client):
+    """Test that cache_creation_input_tokens (cache write) do NOT affect input_tokens.
+
+    Only cache_read_tokens should be subtracted from input_tokens, not cache_write_tokens.
+    """
+    prompt = ChatPromptTemplate.from_messages([("user", "Create cache")])
+
+    # Cache creation without cache read
+    model = FakeMessagesListChatModel(
+        responses=[
+            AIMessage(
+                content="Creating cache.",
+                usage_metadata={
+                    "input_tokens": 1000,
+                    "output_tokens": 20,
+                    "total_tokens": 1020,
+                    "cache_creation_input_tokens": 800,  # Cache write, not read
+                },
+            )
+        ]
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    result = chain.invoke({}, config={"callbacks": callbacks})
+
+    assert result.content == "Creating cache."
+    assert mock_client.capture.call_count == 3
+
+    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_props = generation_args["properties"]
+
+    assert generation_args["event"] == "$ai_generation"
+    # Input tokens should NOT be reduced by cache_creation_input_tokens
+    assert generation_props["$ai_input_tokens"] == 1000
+    assert generation_props["$ai_output_tokens"] == 20
+    assert generation_props["$ai_cache_creation_input_tokens"] == 800
+    assert generation_props["$ai_cache_read_input_tokens"] == 0
+
+
+def test_agent_action_and_finish_imports():
+    """
+    Regression test for LangChain 1.0+ compatibility (Issue #362).
+    Verifies that AgentAction and AgentFinish can be imported and used.
+    This test ensures the imports work with both LangChain 0.x and 1.0+.
+    """
+    # Import the types that caused the compatibility issue
+    try:
+        from langchain_core.agents import AgentAction, AgentFinish
+    except (ImportError, ModuleNotFoundError):
+        from langchain.schema.agent import AgentAction, AgentFinish  # type: ignore
+
+    # Verify they're available in the callbacks module
+    from posthog.ai.langchain.callbacks import CallbackHandler
+
+    # Test on_agent_action with mock data
+    mock_client = MagicMock()
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    parent_run_id = uuid.uuid4()
+
+    # Create mock AgentAction
+    action = AgentAction(tool="test_tool", tool_input="test_input", log="test_log")
+
+    # Should not raise an exception
+    callbacks.on_agent_action(action, run_id=run_id, parent_run_id=parent_run_id)
+
+    # Verify parent was set
+    assert run_id in callbacks._parent_tree
+    assert callbacks._parent_tree[run_id] == parent_run_id
+
+    # Test on_agent_finish with mock data
+    finish = AgentFinish(return_values={"output": "test_output"}, log="finish_log")
+
+    # Should not raise an exception
+    callbacks.on_agent_finish(finish, run_id=run_id, parent_run_id=parent_run_id)
+
+    # Verify capture was called
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    assert call_args["event"] == "$ai_span"
+
+
+def test_posthog_properties_field_in_generation_metadata(mock_client):
+    """Test that posthog_properties is properly stored in GenerationMetadata."""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    # Test with billable=True
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com"}},
+            run_id,
+            messages=[{"role": "user", "content": "Test message"}],
+            invocation_params={"temperature": 0.5},
+            metadata={
+                "ls_model_name": "gpt-4o",
+                "ls_provider": "openai",
+                "posthog_properties": {"$ai_billable": True},
+            },
+            name="test",
+        )
+
+    expected = GenerationMetadata(
+        model="gpt-4o",
+        input=[{"role": "user", "content": "Test message"}],
+        start_time=1234567890,
+        model_params={"temperature": 0.5},
+        provider="openai",
+        base_url="https://api.openai.com",
+        name="test",
+        posthog_properties={"$ai_billable": True},
+        end_time=None,
+    )
+    assert callbacks._runs[run_id] == expected
+    assert callbacks._runs[run_id].posthog_properties == {"$ai_billable": True}
+
+    callbacks._pop_run_metadata(run_id)
+
+    # Test with billable=False (explicit)
+    run_id2 = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com"}},
+            run_id2,
+            messages=[{"role": "user", "content": "Test message"}],
+            invocation_params={"temperature": 0.5},
+            metadata={
+                "ls_model_name": "gpt-4o",
+                "ls_provider": "openai",
+                "posthog_properties": {"$ai_billable": False},
+            },
+            name="test",
+        )
+
+    assert callbacks._runs[run_id2].posthog_properties == {"$ai_billable": False}
+    callbacks._pop_run_metadata(run_id2)
+
+    # Test when posthog_properties not provided
+    run_id3 = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {"kwargs": {"openai_api_base": "https://api.openai.com"}},
+            run_id3,
+            messages=[{"role": "user", "content": "Test message"}],
+            invocation_params={"temperature": 0.5},
+            metadata={"ls_model_name": "gpt-4o", "ls_provider": "openai"},
+            name="test",
+        )
+
+    assert callbacks._runs[run_id3].posthog_properties is None
+
+
+def test_billable_property_in_generation_event(mock_client):
+    """Test that the billable property is captured in the $ai_generation event."""
+    callbacks = CallbackHandler(mock_client)
+
+    # We need to test the _set_llm_metadata directly since FakeMessagesListChatModel
+    # doesn't support metadata in the same way as real models
+    run_id = uuid.uuid4()
+    with patch("time.time", return_value=1234567890):
+        callbacks._set_llm_metadata(
+            {},
+            run_id,
+            messages=[{"role": "user", "content": "Test"}],
+            metadata={
+                "posthog_properties": {"$ai_billable": True},
+                "ls_model_name": "test-model",
+            },
+            invocation_params={},
+        )
+
+    mock_response = MagicMock()
+    mock_response.generations = [[MagicMock()]]
+
+    with patch("time.time", return_value=1234567891):
+        run = callbacks._pop_run_metadata(run_id)
+
+    callbacks._capture_generation(
+        trace_id=run_id,
+        run_id=run_id,
+        run=run,
+        output=mock_response,
+        parent_run_id=None,
+    )
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_billable"] is True
+
+
+def test_billable_defaults_to_false_in_event(mock_client):
+    """Test that $ai_billable is not present when not specified."""
+    prompt = ChatPromptTemplate.from_messages([("user", "Test query")])
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="Test response")],
+    )
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = prompt | model
+    chain.invoke({}, config={"callbacks": callbacks})
+
+    generation_call = None
+    for call in mock_client.capture.call_args_list:
+        if call[1]["event"] == "$ai_generation":
+            generation_call = call
+            break
+
+    assert generation_call is not None
+    props = generation_call[1]["properties"]
+    assert "$ai_billable" not in props
+
+
+def test_billable_with_real_chain(mock_client):
+    """Test billable tracking through a complete chain execution with mocked metadata."""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    with patch("time.time", return_value=1000.0):
+        callbacks._set_llm_metadata(
+            {},
+            run_id,
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            metadata={
+                "ls_model_name": "fake-model",
+                "ls_provider": "fake",
+                "posthog_properties": {"$ai_billable": True},
+            },
+            invocation_params={"temperature": 0.7},
+        )
+
+    assert callbacks._runs[run_id].posthog_properties == {"$ai_billable": True}
+
+    mock_response = MagicMock()
+    mock_response.generations = [[MagicMock()]]
+
+    with patch("time.time", return_value=1001.0):
+        run = callbacks._pop_run_metadata(run_id)
+
+    callbacks._capture_generation(
+        trace_id=run_id,
+        run_id=run_id,
+        run=run,
+        output=mock_response,
+        parent_run_id=None,
+    )
+
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_billable"] is True
+    assert props["$ai_model"] == "fake-model"
+    assert props["$ai_provider"] == "fake"

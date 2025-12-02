@@ -1,6 +1,93 @@
-# 6.8.0 - 2025-12-01
+# 7.2.0 - 2025-12-01
 
-- feat: add `$feature_flag_evaluated_at` properties to `$feature_flag_called` events
+feat: add $feature_flag_evaluated_at properties to $feature_flag_called events
+
+
+# 7.1.0 - 2025-11-26
+
+Add support for the async version of Gemini.
+
+# 7.0.2 - 2025-11-18
+
+Add support for Python 3.14.
+Projects upgrading to Python 3.14 should ensure any Pydantic models passed into the SDK use Pydantic v2, as Pydantic v1 is not compatible with Python 3.14.
+
+# 7.0.1 - 2025-11-15
+
+Try to use repr() when formatting code variables
+
+# 7.0.0 - 2025-11-11
+
+NB Python 3.9 is no longer supported
+
+- chore(llma): update LLM provider SDKs to latest major versions
+  - openai: 1.102.0 → 2.7.1
+  - anthropic: 0.64.0 → 0.72.0
+  - google-genai: 1.32.0 → 1.49.0
+  - langchain-core: 0.3.75 → 1.0.3
+  - langchain-openai: 0.3.32 → 1.0.2
+  - langchain-anthropic: 0.3.19 → 1.0.1
+  - langchain-community: 0.3.29 → 0.4.1
+  - langgraph: 0.6.6 → 1.0.2
+
+# 6.9.3 - 2025-11-10
+
+- feat(ph-ai): PostHog properties dict in GenerationMetadata
+
+# 6.9.2 - 2025-11-10
+
+- fix(llma): fix cache token double subtraction in Langchain for non-Anthropic providers causing negative costs
+
+# 6.9.1 - 2025-11-07
+
+- fix(error-tracking): pass code variables config from init to client
+
+# 6.9.0 - 2025-11-06
+
+- feat(error-tracking): add local variables capture
+
+# 6.8.0 - 2025-11-03
+
+- feat(llma): send web search calls to be used for LLM cost calculations
+
+# 6.7.14 - 2025-11-03
+
+- fix(django): Handle request.user access in async middleware context to prevent SynchronousOnlyOperation errors in Django 5+ (fixes #355)
+- test(django): Add Django 5 integration test suite with real ASGI application testing async middleware behavior
+
+# 6.7.13 - 2025-11-02
+
+- fix(llma): cache cost calculation in the LangChain callback
+
+# 6.7.12 - 2025-11-02
+
+- fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
+- fix(ai/langchain): Add LangChain 1.0+ compatibility for CallbackHandler imports (fixes #362)
+
+# 6.7.11 - 2025-10-28
+
+- feat(ai): Add `$ai_framework` property for framework integrations (e.g. LangChain)
+
+# 6.7.10 - 2025-10-24
+
+- fix(django): Make middleware truly hybrid - compatible with both sync (WSGI) and async (ASGI) Django stacks without breaking sync-only deployments
+
+# 6.7.9 - 2025-10-22
+
+- fix(flags): multi-condition flags with static cohorts returning wrong variants
+
+# 6.7.8 - 2025-10-16
+
+- fix(llma): missing async for OpenAI's streaming implementation
+
+# 6.7.7 - 2025-10-14
+
+- fix: remove deprecated attribute $exception_personURL from exception events
+
+# 6.7.6 - 2025-09-16
+
+- fix: don't sort condition sets with variant overrides to the top
+- fix: Prevent core Client methods from raising exceptions
 
 # 6.7.5 - 2025-09-16
 

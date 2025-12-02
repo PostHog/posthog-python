@@ -2804,73 +2804,61 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
-    def test_flag_with_multiple_variant_overrides(self, patch_flags):
-        patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
+    def test_conditions_evaluated_in_order(self, patch_flags):
+        patch_flags.return_value = {"featureFlags": {"order-test": "server-variant"}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         client.feature_flags = [
             {
                 "id": 1,
-                "name": "Beta Feature",
-                "key": "beta-feature",
+                "name": "Order Test Flag",
+                "key": "order-test",
                 "active": True,
-                "rollout_percentage": 100,
                 "filters": {
                     "groups": [
                         {
                             "rollout_percentage": 100,
-                            # The override applies even if the first condition matches all and gives everyone their default group
                         },
                         {
                             "properties": [
                                 {
                                     "key": "email",
                                     "type": "person",
-                                    "value": "test@posthog.com",
-                                    "operator": "exact",
+                                    "value": "@vip.com",
+                                    "operator": "icontains",
                                 }
                             ],
                             "rollout_percentage": 100,
-                            "variant": "second-variant",
+                            "variant": "vip-variant",
                         },
-                        {"rollout_percentage": 50, "variant": "third-variant"},
                     ],
                     "multivariate": {
                         "variants": [
                             {
-                                "key": "first-variant",
-                                "name": "First Variant",
-                                "rollout_percentage": 50,
+                                "key": "control",
+                                "name": "Control",
+                                "rollout_percentage": 100,
                             },
                             {
-                                "key": "second-variant",
-                                "name": "Second Variant",
-                                "rollout_percentage": 25,
-                            },
-                            {
-                                "key": "third-variant",
-                                "name": "Third Variant",
-                                "rollout_percentage": 25,
+                                "key": "vip-variant",
+                                "name": "VIP Variant",
+                                "rollout_percentage": 0,
                             },
                         ]
                     },
                 },
             }
         ]
-        self.assertEqual(
-            client.get_feature_flag(
-                "beta-feature",
-                "test_id",
-                person_properties={"email": "test@posthog.com"},
-            ),
-            "second-variant",
+
+        # Even though user@vip.com would match the second condition with variant override,
+        # they should match the first condition and get control
+        result = client.get_feature_flag(
+            "order-test",
+            "user123",
+            person_properties={"email": "user@vip.com"},
         )
-        self.assertEqual(
-            client.get_feature_flag("beta-feature", "example_id"), "third-variant"
-        )
-        self.assertEqual(
-            client.get_feature_flag("beta-feature", "another_id"), "second-variant"
-        )
-        # decide not called because this can be evaluated locally
+        self.assertEqual(result, "control")
+
+        # server not called because this can be evaluated locally
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
@@ -3024,6 +3012,75 @@ class TestLocalEvaluation(unittest.TestCase):
             "some-payload",
         )
         self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_fallback_to_api_when_flag_has_static_cohort_in_multi_condition(
+        self, patch_get, patch_flags
+    ):
+        """
+        When a flag has multiple conditions and one contains a static cohort,
+        the SDK should fallback to API for the entire flag, not just skip that
+        condition and evaluate the next one locally.
+
+        This prevents returning wrong variants when later conditions could match
+        locally but the user is actually in the static cohort.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        # Mock the local flags response - cohort 999 is NOT in cohorts map (static cohort)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "multi-condition-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "id", "value": 999, "type": "cohort"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "set-1",
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "$geoip_country_code",
+                                    "operator": "exact",
+                                    "value": ["DE"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "set-8",
+                        },
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "set-1", "rollout_percentage": 50},
+                            {"key": "set-8", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            }
+        ]
+        client.cohorts = {}  # Note: cohort 999 is NOT here - it's a static cohort
+
+        # Mock the API response - user is in the static cohort
+        patch_flags.return_value = {"featureFlags": {"multi-condition-flag": "set-1"}}
+
+        result = client.get_feature_flag(
+            "multi-condition-flag",
+            "test-distinct-id",
+            person_properties={"$geoip_country_code": "DE"},
+        )
+
+        # Should return the API result (set-1), not local evaluation (set-8)
+        self.assertEqual(result, "set-1")
+
+        # Verify API was called (fallback occurred)
+        self.assertEqual(patch_flags.call_count, 1)
 
 
 class TestMatchProperties(unittest.TestCase):
@@ -4019,6 +4076,60 @@ class TestCaptureCalls(unittest.TestCase):
         )
 
         patch_capture.reset_mock()
+
+    @mock.patch("posthog.client.flags")
+    def test_fallback_to_api_in_get_feature_flag_payload_when_flag_has_static_cohort(
+        self, patch_flags
+    ):
+        """
+        Test that get_feature_flag_payload falls back to API when evaluating
+        a flag with static cohorts, similar to get_feature_flag behavior.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        # Mock the local flags response - cohort 999 is NOT in cohorts map (static cohort)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Multi-condition Flag",
+                "key": "multi-condition-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"key": "id", "value": 999, "type": "cohort"}
+                            ],
+                            "rollout_percentage": 100,
+                            "variant": "variant-1",
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [{"key": "variant-1", "rollout_percentage": 100}]
+                    },
+                    "payloads": {"variant-1": '{"message": "local-payload"}'},
+                },
+            }
+        ]
+        client.cohorts = {}  # Note: cohort 999 is NOT here - it's a static cohort
+
+        # Mock the API response - user is in the static cohort
+        patch_flags.return_value = {
+            "featureFlags": {"multi-condition-flag": "variant-1"},
+            "featureFlagPayloads": {"multi-condition-flag": '{"message": "from-api"}'},
+        }
+
+        # Call get_feature_flag_payload without match_value to trigger evaluation
+        result = client.get_feature_flag_payload(
+            "multi-condition-flag",
+            "test-distinct-id",
+        )
+
+        # Should return the API payload, not local payload
+        self.assertEqual(result, {"message": "from-api"})
+
+        # Verify API was called (fallback occurred)
+        self.assertEqual(patch_flags.call_count, 1)
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")

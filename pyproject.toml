@@ -10,18 +10,18 @@ authors = [{ name = "PostHog", email = "hey@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "requests>=2.7,<3.0",
@@ -66,13 +66,13 @@ test = [
     "pytest-timeout",
     "pytest-asyncio",
     "django",
-    "openai",
-    "anthropic",
-    "langgraph>=0.4.8",
-    "langchain-core>=0.3.65",
-    "langchain-community>=0.3.25",
-    "langchain-openai>=0.3.22",
-    "langchain-anthropic>=0.3.15",
+    "openai>=2.0",
+    "anthropic>=0.72",
+    "langgraph>=1.0",
+    "langchain-core>=1.0",
+    "langchain-community>=0.4",
+    "langchain-openai>=1.0",
+    "langchain-anthropic>=1.0",
     "google-genai",
     "pydantic",
     "parameterized>=0.8.1",
@@ -96,3 +96,5 @@ version = { attr = "posthog.version.VERSION" }
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+testpaths = ["posthog/test"]
+norecursedirs = ["integration_tests"]
