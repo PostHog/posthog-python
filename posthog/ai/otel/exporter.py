@@ -492,7 +492,7 @@ class PostHogSpanExporter(SpanExporter if OTEL_AVAILABLE else object):
             "$ai_span_name": span.name,
             "$ai_latency": latency,
             "$ai_is_error": is_error,
-            "$ai_framework": "pydantic-ai",
+            "$ai_framework": "opentelemetry",
             **self._properties,
         }
 
