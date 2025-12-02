@@ -154,9 +154,9 @@ class TestGet(unittest.TestCase):
         mock_response = requests.Response()
         mock_response.status_code = 200
         mock_response.headers["ETag"] = '"abc123"'
-        mock_response._content = json.dumps(
-            {"flags": [{"key": "test-flag"}]}
-        ).encode("utf-8")
+        mock_response._content = json.dumps({"flags": [{"key": "test-flag"}]}).encode(
+            "utf-8"
+        )
         mock_get.return_value = mock_response
 
         response = get("api_key", "/test-url", host="https://example.com")
@@ -279,7 +279,9 @@ class TestGet(unittest.TestCase):
 
         call_kwargs = mock_get.call_args[1]
         self.assertIn("User-Agent", call_kwargs["headers"])
-        self.assertTrue(call_kwargs["headers"]["User-Agent"].startswith("posthog-python/"))
+        self.assertTrue(
+            call_kwargs["headers"]["User-Agent"].startswith("posthog-python/")
+        )
 
     @mock.patch("posthog.request._session.get")
     def test_get_passes_timeout(self, mock_get):
