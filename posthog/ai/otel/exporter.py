@@ -284,9 +284,10 @@ class PostHogSpanExporter(_BASE_CLASS):  # type: ignore[valid-type,misc]
 
     def _is_agent_span(self, span_name: str, attrs: Dict[str, Any]) -> bool:
         """Check if span represents an agent run."""
-        return span_name in ("agent run", "invoke_agent") or attrs.get(
-            GenAIAttributes.AGENT_NAME
-        ) is not None
+        return (
+            span_name in ("agent run", "invoke_agent")
+            or attrs.get(GenAIAttributes.AGENT_NAME) is not None
+        )
 
     def _is_tool_span(self, span_name: str, attrs: Dict[str, Any]) -> bool:
         """Check if span represents a tool/function execution."""
