@@ -40,7 +40,6 @@ result = await agent.run("What's the weather in San Francisco?")
 instrument_pydantic_ai(
     client=posthog,           # PostHog client instance
     distinct_id="user_123",   # User identifier for events
-    privacy_mode=False,       # Set True to exclude message content
     properties={              # Additional properties for all events
         "$ai_session_id": "session_abc",
     },
@@ -51,13 +50,15 @@ instrument_pydantic_ai(
 )
 ```
 
+Privacy mode is inherited from the client - set `privacy_mode=True` when creating your PostHog client to exclude message content.
+
 ## What Gets Captured
 
 ### Model Calls (`$ai_generation` events)
 
 Every LLM API call creates an event with:
 - Model name and provider
-- Input/output messages (unless `privacy_mode=True`)
+- Input/output messages (unless privacy mode is enabled on the client)
 - Token usage (input, output)
 - Latency
 - Error status
