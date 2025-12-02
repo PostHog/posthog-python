@@ -3,14 +3,14 @@ Tests for PydanticAISpanExporter - handles Pydantic AI message format normalizat
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 try:
     from opentelemetry.sdk.trace import ReadableSpan
     from opentelemetry.sdk.trace.export import SpanExportResult
-    from opentelemetry.trace import SpanContext, Status, StatusCode, TraceFlags
+    from opentelemetry.trace import StatusCode
 
     from posthog.ai.pydantic_ai.exporter import PydanticAISpanExporter
 
