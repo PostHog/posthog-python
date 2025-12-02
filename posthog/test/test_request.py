@@ -7,13 +7,51 @@ import pytest
 import requests
 
 from posthog.request import (
+    APIError,
     DatetimeSerializer,
+    GetResponse,
     QuotaLimitError,
+    _mask_tokens_in_url,
     batch_post,
     decide,
     determine_server_host,
+    get,
 )
 from posthog.test.test_utils import TEST_API_KEY
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        # Token with params after - masks keeping first 10 chars
+        (
+            "https://example.com/api/flags?token=phc_abc123xyz789&send_cohorts",
+            "https://example.com/api/flags?token=phc_abc123...&send_cohorts",
+        ),
+        # Token at end of URL
+        (
+            "https://example.com/api/flags?token=phc_abc123xyz789",
+            "https://example.com/api/flags?token=phc_abc123...",
+        ),
+        # No token - unchanged
+        (
+            "https://example.com/api/flags?other=value",
+            "https://example.com/api/flags?other=value",
+        ),
+        # Short token (<10 chars) - unchanged
+        (
+            "https://example.com/api/flags?token=short",
+            "https://example.com/api/flags?token=short",
+        ),
+        # Exactly 10 char token - gets ellipsis
+        (
+            "https://example.com/api/flags?token=1234567890",
+            "https://example.com/api/flags?token=1234567890...",
+        ),
+    ],
+)
+def test_mask_tokens_in_url(url, expected):
+    assert _mask_tokens_in_url(url) == expected
 
 
 class TestRequests(unittest.TestCase):
@@ -105,6 +143,184 @@ class TestRequests(unittest.TestCase):
         with mock.patch("posthog.request._session.post", return_value=mock_response):
             response = decide("fake_key", "fake_host")
             self.assertEqual(response["featureFlags"], {"flag1": True})
+
+
+class TestGet(unittest.TestCase):
+    """Unit tests for the get() function HTTP-level behavior."""
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_returns_data_and_etag(self, mock_get):
+        """Test that get() returns GetResponse with data and etag from headers."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response.headers["ETag"] = '"abc123"'
+        mock_response._content = json.dumps({"flags": [{"key": "test-flag"}]}).encode(
+            "utf-8"
+        )
+        mock_get.return_value = mock_response
+
+        response = get("api_key", "/test-url", host="https://example.com")
+
+        self.assertIsInstance(response, GetResponse)
+        self.assertEqual(response.data, {"flags": [{"key": "test-flag"}]})
+        self.assertEqual(response.etag, '"abc123"')
+        self.assertFalse(response.not_modified)
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_sends_if_none_match_header_when_etag_provided(self, mock_get):
+        """Test that If-None-Match header is sent when etag parameter is provided."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response.headers["ETag"] = '"new-etag"'
+        mock_response._content = json.dumps({"flags": []}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("api_key", "/test-url", host="https://example.com", etag='"previous-etag"')
+
+        call_kwargs = mock_get.call_args[1]
+        self.assertEqual(call_kwargs["headers"]["If-None-Match"], '"previous-etag"')
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_does_not_send_if_none_match_when_no_etag(self, mock_get):
+        """Test that If-None-Match header is not sent when no etag provided."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({"flags": []}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("api_key", "/test-url", host="https://example.com")
+
+        call_kwargs = mock_get.call_args[1]
+        self.assertNotIn("If-None-Match", call_kwargs["headers"])
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_handles_304_not_modified(self, mock_get):
+        """Test that 304 Not Modified response returns not_modified=True with no data."""
+        mock_response = requests.Response()
+        mock_response.status_code = 304
+        mock_response.headers["ETag"] = '"unchanged-etag"'
+        mock_get.return_value = mock_response
+
+        response = get(
+            "api_key", "/test-url", host="https://example.com", etag='"unchanged-etag"'
+        )
+
+        self.assertIsInstance(response, GetResponse)
+        self.assertIsNone(response.data)
+        self.assertEqual(response.etag, '"unchanged-etag"')
+        self.assertTrue(response.not_modified)
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_304_without_etag_header_uses_request_etag(self, mock_get):
+        """Test that 304 response without ETag header falls back to request etag."""
+        mock_response = requests.Response()
+        mock_response.status_code = 304
+        # Server doesn't return ETag header on 304
+        mock_get.return_value = mock_response
+
+        response = get(
+            "api_key", "/test-url", host="https://example.com", etag='"original-etag"'
+        )
+
+        self.assertTrue(response.not_modified)
+        self.assertEqual(response.etag, '"original-etag"')
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_200_without_etag_header(self, mock_get):
+        """Test that 200 response without ETag header returns None for etag."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({"flags": []}).encode("utf-8")
+        # No ETag header
+        mock_get.return_value = mock_response
+
+        response = get("api_key", "/test-url", host="https://example.com")
+
+        self.assertFalse(response.not_modified)
+        self.assertIsNone(response.etag)
+        self.assertEqual(response.data, {"flags": []})
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_error_response_raises_api_error(self, mock_get):
+        """Test that error responses raise APIError."""
+        mock_response = requests.Response()
+        mock_response.status_code = 401
+        mock_response._content = json.dumps({"detail": "Unauthorized"}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        with self.assertRaises(APIError) as ctx:
+            get("bad_key", "/test-url", host="https://example.com")
+
+        self.assertEqual(ctx.exception.status, 401)
+        self.assertEqual(ctx.exception.message, "Unauthorized")
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_sends_authorization_header(self, mock_get):
+        """Test that Authorization header is sent with Bearer token."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("my-api-key", "/test-url", host="https://example.com")
+
+        call_kwargs = mock_get.call_args[1]
+        self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer my-api-key")
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_sends_user_agent_header(self, mock_get):
+        """Test that User-Agent header is sent."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("api_key", "/test-url", host="https://example.com")
+
+        call_kwargs = mock_get.call_args[1]
+        self.assertIn("User-Agent", call_kwargs["headers"])
+        self.assertTrue(
+            call_kwargs["headers"]["User-Agent"].startswith("posthog-python/")
+        )
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_passes_timeout(self, mock_get):
+        """Test that timeout parameter is passed to the request."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("api_key", "/test-url", host="https://example.com", timeout=30)
+
+        call_kwargs = mock_get.call_args[1]
+        self.assertEqual(call_kwargs["timeout"], 30)
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_constructs_full_url(self, mock_get):
+        """Test that host and url are combined correctly."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("api_key", "/api/flags", host="https://example.com")
+
+        call_args = mock_get.call_args[0]
+        self.assertEqual(call_args[0], "https://example.com/api/flags")
+
+    @mock.patch("posthog.request._session.get")
+    def test_get_removes_trailing_slash_from_host(self, mock_get):
+        """Test that trailing slash is removed from host."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({}).encode("utf-8")
+        mock_get.return_value = mock_response
+
+        get("api_key", "/api/flags", host="https://example.com/")
+
+        call_args = mock_get.call_args[0]
+        self.assertEqual(call_args[0], "https://example.com/api/flags")
 
 
 @pytest.mark.parametrize(
