@@ -753,6 +753,96 @@ class TestClient(unittest.TestCase):
             self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
+    def test_capture_with_send_feature_flags_true_and_local_evaluation_uses_local_flags(
+        self, patch_flags
+    ):
+        """Test that send_feature_flags=True with local evaluation enabled uses local flags without API call"""
+        patch_flags.return_value = {"featureFlags": {"remote-flag": "remote-variant"}}
+
+        multivariate_flag = {
+            "id": 1,
+            "name": "Beta Feature",
+            "key": "beta-feature-local",
+            "active": True,
+            "rollout_percentage": 100,
+            "filters": {
+                "groups": [
+                    {
+                        "rollout_percentage": 100,
+                    },
+                ],
+                "multivariate": {
+                    "variants": [
+                        {
+                            "key": "first-variant",
+                            "name": "First Variant",
+                            "rollout_percentage": 50,
+                        },
+                        {
+                            "key": "second-variant",
+                            "name": "Second Variant",
+                            "rollout_percentage": 50,
+                        },
+                    ]
+                },
+            },
+        }
+        simple_flag = {
+            "id": 2,
+            "name": "Simple Flag",
+            "key": "simple-flag",
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "rollout_percentage": 100,
+                    }
+                ],
+            },
+        }
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                personal_api_key=FAKE_TEST_API_KEY,
+                sync_mode=True,
+            )
+            client.feature_flags = [multivariate_flag, simple_flag]
+
+            msg_uuid = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                send_feature_flags=True,
+            )
+            self.assertIsNotNone(msg_uuid)
+            self.assertFalse(self.failed)
+
+            # Get the enqueued message from the mock
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["event"], "python test event")
+            self.assertEqual(msg["distinct_id"], "distinct_id")
+
+            # Verify local flags are included in the event
+            self.assertIn("$feature/beta-feature-local", msg["properties"])
+            self.assertIn("$feature/simple-flag", msg["properties"])
+            self.assertEqual(msg["properties"]["$feature/simple-flag"], True)
+
+            # Verify active feature flags are set correctly
+            active_flags = msg["properties"]["$active_feature_flags"]
+            self.assertIn("beta-feature-local", active_flags)
+            self.assertIn("simple-flag", active_flags)
+
+            # The remote flag should NOT be included since we used local evaluation
+            self.assertNotIn("$feature/remote-flag", msg["properties"])
+
+            # CRITICAL: Verify the /flags API was NOT called
+            self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
     def test_capture_with_send_feature_flags_options_only_evaluate_locally_true(
         self, patch_flags
     ):
