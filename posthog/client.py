@@ -1187,9 +1187,8 @@ class Client(object):
                 etag=self._flags_etag,
             )
 
-            # Update stored ETag
-            if response.etag:
-                self._flags_etag = response.etag
+            # Update stored ETag (clear if server stops sending one)
+            self._flags_etag = response.etag
 
             # If 304 Not Modified, flags haven't changed - skip processing
             if response.not_modified:

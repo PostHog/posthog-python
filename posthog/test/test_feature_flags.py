@@ -2480,6 +2480,39 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(client._flags_etag, '"etag-v2"')
         self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
 
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_clears_etag_when_server_stops_sending(
+        self, patch_get, patch_poll
+    ):
+        """Test that ETag is cleared when server stops sending it"""
+        patch_get.side_effect = [
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v1", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"etag-v1"',
+            ),
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v2", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag=None,  # Server stopped sending ETag
+            ),
+        ]
+
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.load_feature_flags()
+        self.assertEqual(client._flags_etag, '"etag-v1"')
+
+        client._load_feature_flags()
+        self.assertIsNone(client._flags_etag)
+        self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
+
     def test_load_feature_flags_wrong_key(self):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
 
