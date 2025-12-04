@@ -623,7 +623,28 @@ class Client(object):
         if flag_options["should_send"]:
             try:
                 if flag_options["only_evaluate_locally"] is True:
-                    # Only use local evaluation
+                    # Local evaluation explicitly requested
+                    feature_variants = self.get_all_flags(
+                        distinct_id,
+                        groups=(groups or {}),
+                        person_properties=flag_options["person_properties"],
+                        group_properties=flag_options["group_properties"],
+                        disable_geoip=disable_geoip,
+                        only_evaluate_locally=True,
+                        flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                    )
+                elif flag_options["only_evaluate_locally"] is False:
+                    # Remote evaluation explicitly requested
+                    feature_variants = self.get_feature_variants(
+                        distinct_id,
+                        groups,
+                        person_properties=flag_options["person_properties"],
+                        group_properties=flag_options["group_properties"],
+                        disable_geoip=disable_geoip,
+                        flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                    )
+                elif self.feature_flags:
+                    # Local flags available, prefer local evaluation
                     feature_variants = self.get_all_flags(
                         distinct_id,
                         groups=(groups or {}),
@@ -634,7 +655,7 @@ class Client(object):
                         flag_keys_to_evaluate=flag_options["flag_keys_filter"],
                     )
                 else:
-                    # Default behavior - use remote evaluation
+                    # Fall back to remote evaluation
                     feature_variants = self.get_feature_variants(
                         distinct_id,
                         groups,
