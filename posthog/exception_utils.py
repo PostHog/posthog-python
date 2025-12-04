@@ -54,6 +54,7 @@ DEFAULT_CODE_VARIABLES_MASK_PATTERNS = [
     r"(?i).*privatekey.*",
     r"(?i).*private_key.*",
     r"(?i).*token.*",
+    r"(?i).*aws_secret_access_key.*",
 ]
 
 DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
@@ -1046,7 +1047,10 @@ def serialize_code_variables(
             serialized = _serialize_variable_value(value, limiter, max_length)
             if serialized is None:
                 break
-            result[name] = serialized
+            if isinstance(serialized, str) and _pattern_matches(serialized, compiled_mask):
+                result[name] = CODE_VARIABLES_REDACTED_VALUE
+            else:
+                result[name] = serialized
 
     return result
 

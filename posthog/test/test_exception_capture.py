@@ -60,7 +60,8 @@ def test_code_variables_capture(tmpdir):
         my_bool = True
         my_dict = {"name": "test", "value": 123}
         my_obj = UnserializableObject()
-        my_password = "secret123"  # Should be masked by default
+        my_password = "secret123"  # Should be masked by default (name matches)
+        my_innocent_var = "contains_password_here"  # Should be masked by default (value matches)
         __should_be_ignored = "hidden"  # Should be ignored by default
         
         1/0  # Trigger exception
@@ -98,6 +99,7 @@ def test_code_variables_capture(tmpdir):
     assert b'"my_dict": "{\\"name\\": \\"test\\", \\"value\\": 123}"' in output
     assert b"<__main__.UnserializableObject object at" in output
     assert b"'my_password': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
+    assert b"'my_innocent_var': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
     assert b"'__should_be_ignored':" not in output
 
     # Variables from intermediate_function frame
