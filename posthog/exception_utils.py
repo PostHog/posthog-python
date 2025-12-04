@@ -54,7 +54,7 @@ DEFAULT_CODE_VARIABLES_MASK_PATTERNS = [
     r"(?i).*privatekey.*",
     r"(?i).*private_key.*",
     r"(?i).*token.*",
-    r"(?i).*aws_secret_access_key.*",
+    r"(?i).*aws_access_key_id.*",
 ]
 
 DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
