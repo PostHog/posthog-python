@@ -1047,7 +1047,9 @@ def serialize_code_variables(
             serialized = _serialize_variable_value(value, limiter, max_length)
             if serialized is None:
                 break
-            if isinstance(serialized, str) and _pattern_matches(serialized, compiled_mask):
+            if isinstance(serialized, str) and _pattern_matches(
+                serialized, compiled_mask
+            ):
                 result[name] = CODE_VARIABLES_REDACTED_VALUE
             else:
                 result[name] = serialized

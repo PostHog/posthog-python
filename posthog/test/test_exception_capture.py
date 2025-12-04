@@ -99,7 +99,9 @@ def test_code_variables_capture(tmpdir):
     assert b'"my_dict": "{\\"name\\": \\"test\\", \\"value\\": 123}"' in output
     assert b"<__main__.UnserializableObject object at" in output
     assert b"'my_password': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
-    assert b"'my_innocent_var': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
+    assert (
+        b"'my_innocent_var': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
+    )
     assert b"'__should_be_ignored':" not in output
 
     # Variables from intermediate_function frame
