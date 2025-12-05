@@ -38,7 +38,7 @@ def test_code_variables_capture(tmpdir):
     app = tmpdir.join("app.py")
     app.write(
         dedent(
-            f"""
+            """
     import os
     from posthog import Posthog
     
@@ -58,26 +58,26 @@ def test_code_variables_capture(tmpdir):
         my_string = "hello world"
         my_number = 42
         my_bool = True
-        my_dict = {{"name": "test", "value": 123}}
-        my_sensitive_dict = {{
+        my_dict = {"name": "test", "value": 123}
+        my_sensitive_dict = {
             "safe_key": "safe_value",
             "password": "secret123",  # key matches pattern -> should be masked
             "other_key": "contains_password_here",  # value matches pattern -> should be masked
-        }}
-        my_nested_dict = {{
-            "level1": {{
-                "level2": {{
+        }
+        my_nested_dict = {
+            "level1": {
+                "level2": {
                     "api_key": "nested_secret",  # deeply nested key matches
                     "data": "contains_token_here",  # deeply nested value matches
                     "safe": "visible",
-                }}
-            }}
-        }}
+                }
+            }
+        }
         my_list = ["safe_item", "has_password_inside", "another_safe"]
         my_tuple = ("tuple_safe", "secret_in_value", "tuple_also_safe")
         my_list_of_dicts = [
-            {{"id": 1, "password": "list_dict_secret"}},
-            {{"id": 2, "value": "safe_value"}},
+            {"id": 1, "password": "list_dict_secret"},
+            {"id": 2, "value": "safe_value"},
         ]
         my_obj = UnserializableObject()
         my_password = "secret123"  # Should be masked by default (name matches)
