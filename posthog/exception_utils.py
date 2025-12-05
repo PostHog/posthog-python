@@ -55,6 +55,9 @@ DEFAULT_CODE_VARIABLES_MASK_PATTERNS = [
     r"(?i).*private_key.*",
     r"(?i).*token.*",
     r"(?i).*aws_access_key_id.*",
+    r"(?i).*_pass",
+    r"(?i)sk_.*",
+    r"(?i).*jwt.*",
 ]
 
 DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
@@ -1083,6 +1086,15 @@ def serialize_code_variables(
 
 
 def try_attach_code_variables_to_frames(
+    all_exceptions, exc_info, mask_patterns, ignore_patterns
+):
+    try:
+        attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns)
+    except Exception:
+        pass
+
+
+def attach_code_variables_to_frames(
     all_exceptions, exc_info, mask_patterns, ignore_patterns
 ):
     exc_type, exc_value, traceback = exc_info
