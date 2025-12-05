@@ -1089,7 +1089,9 @@ def try_attach_code_variables_to_frames(
     all_exceptions, exc_info, mask_patterns, ignore_patterns
 ):
     try:
-        attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns)
+        attach_code_variables_to_frames(
+            all_exceptions, exc_info, mask_patterns, ignore_patterns
+        )
     except Exception:
         pass
 
