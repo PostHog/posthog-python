@@ -38,7 +38,7 @@ def test_code_variables_capture(tmpdir):
     app = tmpdir.join("app.py")
     app.write(
         dedent(
-            """
+            f"""
     import os
     from posthog import Posthog
     
@@ -58,7 +58,12 @@ def test_code_variables_capture(tmpdir):
         my_string = "hello world"
         my_number = 42
         my_bool = True
-        my_dict = {"name": "test", "value": 123}
+        my_dict = {{"name": "test", "value": 123}}
+        my_sensitive_dict = {{
+            "safe_key": "safe_value",
+            "password": "secret123",  # key matches pattern -> should be masked
+            "other_key": "contains_password_here",  # value matches pattern -> should be masked
+        }}
         my_obj = UnserializableObject()
         my_password = "secret123"  # Should be masked by default (name matches)
         my_innocent_var = "contains_password_here"  # Should be masked by default (value matches)
@@ -97,6 +102,10 @@ def test_code_variables_capture(tmpdir):
     assert b"'my_number': 42" in output
     assert b"'my_bool': 'True'" in output
     assert b'"my_dict": "{\\"name\\": \\"test\\", \\"value\\": 123}"' in output
+    # Dict with sensitive keys/values should have those masked
+    assert b'"safe_key": "safe_value"' in output
+    assert b'"password": "$$_posthog_redacted_based_on_masking_rules_$$"' in output
+    assert b'"other_key": "$$_posthog_redacted_based_on_masking_rules_$$"' in output
     assert b"<__main__.UnserializableObject object at" in output
     assert b"'my_password': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
     assert (

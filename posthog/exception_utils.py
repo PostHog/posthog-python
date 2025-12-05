@@ -942,7 +942,31 @@ def _pattern_matches(name, patterns):
     return False
 
 
-def _serialize_variable_value(value, limiter, max_length=1024):
+def _mask_sensitive_data(value, compiled_mask):
+    if not compiled_mask:
+        return value
+
+    if isinstance(value, dict):
+        result = {}
+        for k, v in value.items():
+            key_str = str(k) if not isinstance(k, str) else k
+            if _pattern_matches(key_str, compiled_mask):
+                result[k] = CODE_VARIABLES_REDACTED_VALUE
+            else:
+                result[k] = _mask_sensitive_data(v, compiled_mask)
+        return result
+    elif isinstance(value, (list, tuple)):
+        masked_items = [_mask_sensitive_data(item, compiled_mask) for item in value]
+        return type(value)(masked_items)
+    elif isinstance(value, str):
+        if _pattern_matches(value, compiled_mask):
+            return CODE_VARIABLES_REDACTED_VALUE
+        return value
+    else:
+        return value
+
+
+def _serialize_variable_value(value, limiter, max_length=1024, compiled_mask=None):
     try:
         if value is None:
             result = "None"
@@ -955,9 +979,13 @@ def _serialize_variable_value(value, limiter, max_length=1024):
             limiter.add(result_size)
             return value
         elif isinstance(value, str):
-            result = value
+            if compiled_mask and _pattern_matches(value, compiled_mask):
+                result = CODE_VARIABLES_REDACTED_VALUE
+            else:
+                result = value
         else:
-            result = json.dumps(value)
+            masked_value = _mask_sensitive_data(value, compiled_mask)
+            result = json.dumps(masked_value)
 
         if len(result) > max_length:
             result = result[: max_length - 3] + "..."
@@ -1044,15 +1072,10 @@ def serialize_code_variables(
             limiter.add(redacted_size)
             result[name] = redacted_value
         else:
-            serialized = _serialize_variable_value(value, limiter, max_length)
+            serialized = _serialize_variable_value(value, limiter, max_length, compiled_mask)
             if serialized is None:
                 break
-            if isinstance(serialized, str) and _pattern_matches(
-                serialized, compiled_mask
-            ):
-                result[name] = CODE_VARIABLES_REDACTED_VALUE
-            else:
-                result[name] = serialized
+            result[name] = serialized
 
     return result
 
