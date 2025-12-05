@@ -1072,7 +1072,9 @@ def serialize_code_variables(
             limiter.add(redacted_size)
             result[name] = redacted_value
         else:
-            serialized = _serialize_variable_value(value, limiter, max_length, compiled_mask)
+            serialized = _serialize_variable_value(
+                value, limiter, max_length, compiled_mask
+            )
             if serialized is None:
                 break
             result[name] = serialized
