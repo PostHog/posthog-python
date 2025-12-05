@@ -1,7 +1,10 @@
+# 7.3.0 - 2025-12-05
+
+feat: improve code variables capture masking
+
 # 7.2.0 - 2025-12-01
 
 feat: add $feature_flag_evaluated_at properties to $feature_flag_called events
-
 
 # 7.1.0 - 2025-11-26
 
