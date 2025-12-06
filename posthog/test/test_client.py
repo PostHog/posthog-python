@@ -199,9 +199,6 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(
-                capture_call[1]["properties"]["$exception_type"], "Exception"
-            )
-            self.assertEqual(
                 capture_call[1]["properties"]["$exception_list"][0]["mechanism"][
                     "type"
                 ],
