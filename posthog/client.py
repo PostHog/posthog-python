@@ -1002,9 +1002,6 @@ class Client(object):
 
             properties = {
                 "$exception_type": all_exceptions_with_trace_and_in_app[0].get("type"),
-                "$exception_message": all_exceptions_with_trace_and_in_app[0].get(
-                    "value"
-                ),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 **properties,
             }

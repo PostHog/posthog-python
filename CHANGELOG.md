@@ -1,3 +1,7 @@
+# 7.4.0 - 2025-12-06
+
+fix: remove unused $exception_message
+
 # 7.3.0 - 2025-12-05
 
 feat: improve code variables capture masking
