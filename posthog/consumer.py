@@ -89,7 +89,8 @@ class Consumer(Thread):
             # mark items as acknowledged from queue
             for item in batch:
                 self.queue.task_done()
-            return success
+
+        return success
 
     def next(self):
         """Return the next batch of items to upload."""
