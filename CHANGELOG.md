@@ -1,6 +1,6 @@
-# 7.4.0 - 2025-12-06
+# 7.3.1 - 2025-12-06
 
-fix: remove unused $exception_message
+fix: remove unused $exception_message and $exception_type
 
 # 7.3.0 - 2025-12-05
 
