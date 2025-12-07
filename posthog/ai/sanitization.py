@@ -70,6 +70,12 @@ def sanitize_openai_image(item: Any) -> Any:
     if not isinstance(item, dict):
         return item
 
+    if item.get("type") == "input_image" and isinstance(item.get("image_url"), str):
+        return {
+            **item,
+            "image_url": redact_base64_data_url(item["image_url"]),
+        }
+
     if (
         item.get("type") == "image_url"
         and isinstance(item.get("image_url"), dict)
