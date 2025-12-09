@@ -6,16 +6,21 @@ import mock
 import pytest
 import requests
 
+import posthog.request as request_module
 from posthog.request import (
     APIError,
     DatetimeSerializer,
     GetResponse,
+    KEEP_ALIVE_SOCKET_OPTIONS,
     QuotaLimitError,
     _mask_tokens_in_url,
     batch_post,
     decide,
     determine_server_host,
+    disable_connection_reuse,
+    enable_keep_alive,
     get,
+    set_socket_options,
 )
 from posthog.test.test_utils import TEST_API_KEY
 
@@ -344,3 +349,47 @@ class TestGet(unittest.TestCase):
 )
 def test_routing_to_custom_host(host, expected):
     assert determine_server_host(host) == expected
+
+
+def test_enable_keep_alive_sets_socket_options():
+    try:
+        enable_keep_alive()
+        from posthog.request import _session
+
+        adapter = _session.get_adapter("https://example.com")
+        assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+    finally:
+        set_socket_options(None)
+
+
+def test_set_socket_options_clears_with_none():
+    try:
+        enable_keep_alive()
+        set_socket_options(None)
+        from posthog.request import _session
+
+        adapter = _session.get_adapter("https://example.com")
+        assert adapter.socket_options is None
+    finally:
+        set_socket_options(None)
+
+
+def test_disable_connection_reuse_creates_fresh_sessions():
+    try:
+        disable_connection_reuse()
+        session1 = request_module._get_session()
+        session2 = request_module._get_session()
+        assert session1 is not session2
+    finally:
+        request_module._pooling_enabled = True
+
+
+def test_set_socket_options_is_idempotent():
+    try:
+        enable_keep_alive()
+        session1 = request_module._session
+        enable_keep_alive()
+        session2 = request_module._session
+        assert session1 is session2
+    finally:
+        set_socket_options(None)
