@@ -85,6 +85,14 @@ def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.S
 
 
 _session = _build_session()
+_socket_options: Optional[SocketOptions] = None
+_pooling_enabled = True
+
+
+def _get_session() -> requests.Session:
+    if _pooling_enabled:
+        return _session
+    return _build_session(_socket_options)
 
 
 def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
@@ -95,13 +103,20 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
         from posthog import set_socket_options
         set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
     """
-    global _session
+    global _session, _socket_options
+    _socket_options = socket_options
     _session = _build_session(socket_options)
 
 
 def enable_keep_alive() -> None:
     """Enable TCP keepalive to prevent idle connections from being dropped."""
     set_socket_options(KEEP_ALIVE_SOCKET_OPTIONS)
+
+
+def disable_connection_reuse() -> None:
+    """Disable connection reuse, creating a fresh connection for each request."""
+    global _pooling_enabled
+    _pooling_enabled = False
 
 
 US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
@@ -148,7 +163,7 @@ def post(
             gz.write(data.encode("utf-8"))
         data = buf.getvalue()
 
-    res = _session.post(url, data=data, headers=headers, timeout=timeout)
+    res = _get_session().post(url, data=data, headers=headers, timeout=timeout)
 
     if res.status_code == 200:
         log.debug("data uploaded successfully")
@@ -263,7 +278,7 @@ def get(
     if etag:
         headers["If-None-Match"] = etag
 
-    res = _session.get(full_url, headers=headers, timeout=timeout)
+    res = _get_session().get(full_url, headers=headers, timeout=timeout)
 
     masked_url = _mask_tokens_in_url(full_url)
 

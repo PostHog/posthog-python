@@ -6,6 +6,7 @@ import mock
 import pytest
 import requests
 
+import posthog.request as request_module
 from posthog.request import (
     APIError,
     DatetimeSerializer,
@@ -16,6 +17,7 @@ from posthog.request import (
     batch_post,
     decide,
     determine_server_host,
+    disable_connection_reuse,
     enable_keep_alive,
     get,
     set_socket_options,
@@ -370,3 +372,13 @@ def test_set_socket_options_clears_with_none():
         assert adapter.socket_options is None
     finally:
         set_socket_options(None)
+
+
+def test_disable_connection_reuse_creates_fresh_sessions():
+    try:
+        disable_connection_reuse()
+        session1 = request_module._get_session()
+        session2 = request_module._get_session()
+        assert session1 is not session2
+    finally:
+        request_module._pooling_enabled = True

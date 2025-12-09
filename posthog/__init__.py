@@ -23,6 +23,7 @@ from posthog.feature_flags import (
     RequiresServerEvaluation as RequiresServerEvaluation,
 )
 from posthog.request import (
+    disable_connection_reuse as disable_connection_reuse,
     enable_keep_alive as enable_keep_alive,
     set_socket_options as set_socket_options,
     SocketOptions as SocketOptions,
