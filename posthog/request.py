@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Tuple, Union
 
 import requests
 from dateutil.tz import tzutc
-from requests.adapters import HTTPAdapter
+from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
 from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
