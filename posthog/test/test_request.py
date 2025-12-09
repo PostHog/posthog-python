@@ -10,12 +10,15 @@ from posthog.request import (
     APIError,
     DatetimeSerializer,
     GetResponse,
+    KEEP_ALIVE_SOCKET_OPTIONS,
     QuotaLimitError,
     _mask_tokens_in_url,
     batch_post,
     decide,
     determine_server_host,
+    enable_keep_alive,
     get,
+    set_socket_options,
 )
 from posthog.test.test_utils import TEST_API_KEY
 
@@ -344,3 +347,19 @@ class TestGet(unittest.TestCase):
 )
 def test_routing_to_custom_host(host, expected):
     assert determine_server_host(host) == expected
+
+
+def test_enable_keep_alive_sets_socket_options():
+    enable_keep_alive()
+    from posthog.request import _session
+
+    adapter = _session.get_adapter("https://example.com")
+    assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+
+
+def test_set_socket_options_clears_with_none():
+    set_socket_options(None)
+    from posthog.request import _session
+
+    adapter = _session.get_adapter("https://example.com")
+    assert adapter.socket_options is None
