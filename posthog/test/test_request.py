@@ -350,16 +350,23 @@ def test_routing_to_custom_host(host, expected):
 
 
 def test_enable_keep_alive_sets_socket_options():
-    enable_keep_alive()
-    from posthog.request import _session
+    try:
+        enable_keep_alive()
+        from posthog.request import _session
 
-    adapter = _session.get_adapter("https://example.com")
-    assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+        adapter = _session.get_adapter("https://example.com")
+        assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+    finally:
+        set_socket_options(None)
 
 
 def test_set_socket_options_clears_with_none():
-    set_socket_options(None)
-    from posthog.request import _session
+    try:
+        enable_keep_alive()
+        set_socket_options(None)
+        from posthog.request import _session
 
-    adapter = _session.get_adapter("https://example.com")
-    assert adapter.socket_options is None
+        adapter = _session.get_adapter("https://example.com")
+        assert adapter.socket_options is None
+    finally:
+        set_socket_options(None)
