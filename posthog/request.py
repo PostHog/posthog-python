@@ -104,6 +104,8 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
         set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
     """
     global _session, _socket_options
+    if socket_options == _socket_options:
+        return
     _socket_options = socket_options
     _session = _build_session(socket_options)
 

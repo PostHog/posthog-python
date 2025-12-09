@@ -382,3 +382,14 @@ def test_disable_connection_reuse_creates_fresh_sessions():
         assert session1 is not session2
     finally:
         request_module._pooling_enabled = True
+
+
+def test_set_socket_options_is_idempotent():
+    try:
+        enable_keep_alive()
+        session1 = request_module._session
+        enable_keep_alive()
+        session2 = request_module._session
+        assert session1 is session2
+    finally:
+        set_socket_options(None)
