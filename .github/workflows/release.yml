@@ -12,9 +12,6 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    env:
-      TWINE_USERNAME: __token__
-      TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
     permissions:
       contents: write
     steps:
@@ -41,6 +38,9 @@ jobs:
         run: uv sync --extra dev
 
       - name: Push releases to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: uv run make release && uv run make release_analytics
 
       - name: Create GitHub release
