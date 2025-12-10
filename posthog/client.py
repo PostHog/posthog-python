@@ -363,9 +363,9 @@ class Client(object):
             for flag in self._feature_flags
             if flag.get("key") is not None
         }
-        assert (
-            self.feature_flags_by_key is not None
-        ), "feature_flags_by_key should be initialized when feature_flags is set"
+        assert self.feature_flags_by_key is not None, (
+            "feature_flags_by_key should be initialized when feature_flags is set"
+        )
 
     def get_feature_variants(
         self,
@@ -1731,9 +1731,9 @@ class Client(object):
         response = None
 
         if self.feature_flags:
-            assert (
-                self.feature_flags_by_key is not None
-            ), "feature_flags_by_key should be initialized when feature_flags is set"
+            assert self.feature_flags_by_key is not None, (
+                "feature_flags_by_key should be initialized when feature_flags is set"
+            )
             # Local evaluation
             flag = self.feature_flags_by_key.get(key)
             if flag:
