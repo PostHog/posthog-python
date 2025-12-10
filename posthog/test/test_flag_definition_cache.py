@@ -597,9 +597,7 @@ class TestDataIntegrity(TestFlagDefinitionCacheProvider):
 
         # Verify cache was updated
         self.assertEqual(self.cache_provider.on_received_call_count, 1)
-        self.assertEqual(
-            self.cache_provider.stored_data["flags"][0]["key"], "new-flag"
-        )
+        self.assertEqual(self.cache_provider.stored_data["flags"][0]["key"], "new-flag")
 
         client.join()
 
