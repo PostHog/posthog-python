@@ -227,8 +227,8 @@ class Client(object):
         self.timeout = timeout
         self._feature_flags = None  # private variable to store flags
         self.feature_flags_by_key = None
-        self.group_type_mapping = None
-        self.cohorts = None
+        self.group_type_mapping: Optional[dict[str, str]] = None
+        self.cohorts: Optional[dict[str, Any]] = None
         self.poll_interval = poll_interval
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
@@ -1417,7 +1417,8 @@ class Client(object):
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
         if aggregation_group_type_index is not None:
-            group_name = self.group_type_mapping.get(str(aggregation_group_type_index))
+            group_type_mapping = self.group_type_mapping or {}
+            group_name = group_type_mapping.get(str(aggregation_group_type_index))
 
             if not group_name:
                 self.log.warning(
