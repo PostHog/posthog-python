@@ -12,15 +12,13 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    env:
-      TWINE_USERNAME: __token__
-      TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+    permissions:
+      contents: write
     steps:
       - name: Checkout the repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
         with:
           fetch-depth: 0
-          token: ${{ secrets.POSTHOG_BOT_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
@@ -40,12 +38,13 @@ jobs:
         run: uv sync --extra dev
 
       - name: Push releases to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: uv run make release && uv run make release_analytics
 
       - name: Create GitHub release
         uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.POSTHOG_BOT_PAT }}
         with:
           tag_name: v${{ env.REPO_VERSION }}
           release_name: ${{ env.REPO_VERSION }}
