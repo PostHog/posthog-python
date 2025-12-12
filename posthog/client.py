@@ -1213,9 +1213,9 @@ class Client(object):
         self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
     ) -> None:
         """Update internal flag state from cache data and invalidate evaluation cache if changed."""
-        self.feature_flags = data.get("flags") or []
-        self.group_type_mapping = data.get("group_type_mapping") or {}
-        self.cohorts = data.get("cohorts") or {}
+        self.feature_flags = data["flags"]
+        self.group_type_mapping = data["group_type_mapping"]
+        self.cohorts = data["cohorts"]
 
         # Invalidate evaluation cache if flag definitions changed
         if (

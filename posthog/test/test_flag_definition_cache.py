@@ -368,55 +368,6 @@ class TestErrorHandling(TestFlagDefinitionCacheProvider):
         # Shutdown was called
         self.assertEqual(self.cache_provider.shutdown_call_count, 1)
 
-    @mock.patch("posthog.client.get")
-    def test_handles_cache_data_missing_keys_gracefully(self, mock_get):
-        """When cache returns data missing optional keys, should handle gracefully."""
-        self.cache_provider.should_fetch_return_value = False
-        # Missing 'cohorts' key - should use .get() default
-        self.cache_provider.stored_data = {
-            "flags": [{"key": "test-flag", "active": True, "filters": {}}],
-            "group_type_mapping": {"0": "company"},
-        }
-
-        client = self._create_client_with_cache()
-        client._load_feature_flags()
-
-        # Should not call API
-        mock_get.assert_not_called()
-
-        # Flags should be loaded
-        self.assertEqual(len(client.feature_flags), 1)
-        self.assertEqual(client.feature_flags[0]["key"], "test-flag")
-
-        # Missing cohorts should default to empty dict
-        self.assertEqual(client.cohorts, {})
-
-        client.join()
-
-    @mock.patch("posthog.client.get")
-    def test_handles_cache_data_with_none_values(self, mock_get):
-        """When cache returns data with None values, should use fallback defaults."""
-        self.cache_provider.should_fetch_return_value = False
-        # All values are None - should use 'or []' / 'or {}' fallbacks
-        self.cache_provider.stored_data = {
-            "flags": None,
-            "group_type_mapping": None,
-            "cohorts": None,
-        }
-
-        client = self._create_client_with_cache()
-        client._load_feature_flags()
-
-        # Should not call API
-        mock_get.assert_not_called()
-
-        # All fields should have safe defaults
-        self.assertEqual(client.feature_flags, [])
-        self.assertEqual(client.group_type_mapping, {})
-        self.assertEqual(client.cohorts, {})
-
-        client.join()
-
 
 class TestShutdownLifecycle(TestFlagDefinitionCacheProvider):
     """Tests for shutdown lifecycle."""
