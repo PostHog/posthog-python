@@ -28,6 +28,10 @@ from posthog.feature_flags import (
     RequiresServerEvaluation,
     match_feature_flag_properties,
 )
+from posthog.flag_definition_cache import (
+    FlagDefinitionCacheData,
+    FlagDefinitionCacheProvider,
+)
 from posthog.poller import Poller
 from posthog.request import (
     DEFAULT_HOST,
@@ -184,6 +188,7 @@ class Client(object):
         before_send=None,
         flag_fallback_cache_url=None,
         enable_local_evaluation=True,
+        flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None,
         capture_exception_code_variables=False,
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
@@ -222,8 +227,8 @@ class Client(object):
         self.timeout = timeout
         self._feature_flags = None  # private variable to store flags
         self.feature_flags_by_key = None
-        self.group_type_mapping = None
-        self.cohorts = None
+        self.group_type_mapping: Optional[dict[str, str]] = None
+        self.cohorts: Optional[dict[str, Any]] = None
         self.poll_interval = poll_interval
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
@@ -233,6 +238,7 @@ class Client(object):
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
+        self._flag_definition_cache_provider = flag_definition_cache_provider
         self.disabled = disabled
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
@@ -1165,16 +1171,24 @@ class Client(object):
             posthog.join()
             ```
         """
-        for consumer in self.consumers:
-            consumer.pause()
-            try:
-                consumer.join()
-            except RuntimeError:
-                # consumer thread has not started
-                pass
+        if self.consumers:
+            for consumer in self.consumers:
+                consumer.pause()
+                try:
+                    consumer.join()
+                except RuntimeError:
+                    # consumer thread has not started
+                    pass
 
         if self.poller:
             self.poller.stop()
+
+        # Shutdown the cache provider (release locks, cleanup)
+        if self._flag_definition_cache_provider:
+            try:
+                self._flag_definition_cache_provider.shutdown()
+            except Exception as e:
+                self.log.error(f"[FEATURE FLAGS] Cache provider shutdown error: {e}")
 
     def shutdown(self):
         """
@@ -1191,7 +1205,71 @@ class Client(object):
         if self.exception_capture:
             self.exception_capture.close()
 
+    def _update_flag_state(
+        self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
+    ) -> None:
+        """Update internal flag state from cache data and invalidate evaluation cache if changed."""
+        self.feature_flags = data["flags"]
+        self.group_type_mapping = data["group_type_mapping"]
+        self.cohorts = data["cohorts"]
+
+        # Invalidate evaluation cache if flag definitions changed
+        if (
+            self.flag_cache
+            and old_flags_by_key is not None
+            and old_flags_by_key != (self.feature_flags_by_key or {})
+        ):
+            old_version = self.flag_definition_version
+            self.flag_definition_version += 1
+            self.flag_cache.invalidate_version(old_version)
+
     def _load_feature_flags(self):
+        should_fetch = True
+        if self._flag_definition_cache_provider:
+            try:
+                should_fetch = (
+                    self._flag_definition_cache_provider.should_fetch_flag_definitions()
+                )
+            except Exception as e:
+                self.log.error(
+                    f"[FEATURE FLAGS] Cache provider should_fetch error: {e}"
+                )
+                # Fail-safe: fetch from API if cache provider errors
+                should_fetch = True
+
+        # If not fetching, try to get from cache
+        if not should_fetch and self._flag_definition_cache_provider:
+            try:
+                cached_data = (
+                    self._flag_definition_cache_provider.get_flag_definitions()
+                )
+                if cached_data:
+                    self.log.debug(
+                        "[FEATURE FLAGS] Using cached flag definitions from external cache"
+                    )
+                    self._update_flag_state(
+                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
+                    )
+                    self._last_feature_flag_poll = datetime.now(tz=tzutc())
+                    return
+                else:
+                    # Emergency fallback: if cache is empty and we have no flags, fetch anyway.
+                    # There's really no other way of recovering in this case.
+                    if not self.feature_flags:
+                        self.log.debug(
+                            "[FEATURE FLAGS] Cache empty and no flags loaded, falling back to API fetch"
+                        )
+                        should_fetch = True
+            except Exception as e:
+                self.log.error(f"[FEATURE FLAGS] Cache provider get error: {e}")
+                # Fail-safe: fetch from API if cache provider errors
+                should_fetch = True
+
+        if should_fetch:
+            self._fetch_feature_flags_from_api()
+
+    def _fetch_feature_flags_from_api(self):
+        """Fetch feature flags from the PostHog API."""
         try:
             # Store old flags to detect changes
             old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
@@ -1221,17 +1299,21 @@ class Client(object):
                 )
                 return
 
-            self.feature_flags = response.data["flags"] or []
-            self.group_type_mapping = response.data["group_type_mapping"] or {}
-            self.cohorts = response.data["cohorts"] or {}
+            self._update_flag_state(response.data, old_flags_by_key=old_flags_by_key)
 
-            # Check if flag definitions changed and update version
-            if self.flag_cache and old_flags_by_key != (
-                self.feature_flags_by_key or {}
-            ):
-                old_version = self.flag_definition_version
-                self.flag_definition_version += 1
-                self.flag_cache.invalidate_version(old_version)
+            # Store in external cache if provider is configured
+            if self._flag_definition_cache_provider:
+                try:
+                    self._flag_definition_cache_provider.on_flag_definitions_received(
+                        {
+                            "flags": self.feature_flags or [],
+                            "group_type_mapping": self.group_type_mapping or {},
+                            "cohorts": self.cohorts or {},
+                        }
+                    )
+                except Exception as e:
+                    self.log.error(f"[FEATURE FLAGS] Cache provider store error: {e}")
+                    # Flags are already in memory, so continue normally
 
         except APIError as e:
             if e.status == 401:
@@ -1331,7 +1413,8 @@ class Client(object):
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
         if aggregation_group_type_index is not None:
-            group_name = self.group_type_mapping.get(str(aggregation_group_type_index))
+            group_type_mapping = self.group_type_mapping or {}
+            group_name = group_type_mapping.get(str(aggregation_group_type_index))
 
             if not group_name:
                 self.log.warning(
