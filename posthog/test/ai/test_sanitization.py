@@ -69,6 +69,25 @@ class TestSanitization(unittest.TestCase):
         )
         self.assertEqual(result[0]["content"][1]["image_url"]["detail"], "high")
 
+    def test_sanitize_openai_input_image(self):
+        input_data = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": self.sample_base64_image,
+                    }
+                ],
+            }
+        ]
+
+        result = sanitize_openai(input_data)
+
+        self.assertEqual(
+            result[0]["content"][0]["image_url"], REDACTED_IMAGE_PLACEHOLDER
+        )
+
     def test_sanitize_openai_preserves_regular_urls(self):
         input_data = [
             {
