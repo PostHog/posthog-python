@@ -70,7 +70,7 @@ class RedisFlagCache(FlagDefinitionCacheProvider):
         return 0
     """
 
-    def __init__(self, redis: Redis, service_key: str):
+    def __init__(self, redis: Redis[str], service_key: str):
         """
         Initialize the Redis flag cache.
 
