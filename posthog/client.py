@@ -229,7 +229,7 @@ class Client(object):
         self.gzip = gzip
         self.timeout = timeout
         self._feature_flags = None  # private variable to store flags
-        self.feature_flags_by_key = None
+        self.feature_flags_by_key: Optional[dict[str, dict]] = None
         self.group_type_mapping: Optional[dict[str, str]] = None
         self.cohorts: Optional[dict[str, Any]] = None
         self.poll_interval = poll_interval
@@ -254,7 +254,7 @@ class Client(object):
         self.realtime_flags = realtime_flags
         self.on_feature_flags_update = on_feature_flags_update
         self.sse_connection = None  # type: Optional[Any]
-        self.sse_response = None
+        self.sse_response = None  # type: Optional[Any]
         self.sse_connected = False
         self._sse_lock = threading.Lock()
         self._flags_lock = (
@@ -1265,7 +1265,9 @@ class Client(object):
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
                     with self._flags_lock:
-                        old_flags_copy = self.feature_flags_by_key or {}
+                        old_flags_copy: dict[str, dict] = (
+                            self.feature_flags_by_key or {}
+                        )
                     self._update_flag_state(
                         cached_data, old_flags_by_key=old_flags_copy
                     )
@@ -1943,25 +1945,24 @@ class Client(object):
     def _compute_payload_locally(
         self, key: str, match_value: FlagValue
     ) -> Optional[str]:
-        payload = None
-
         with self._flags_lock:
             if self.feature_flags_by_key is None:
-                return payload
+                return None
 
             flag_definition = self.feature_flags_by_key.get(key)
-            if flag_definition:
-                flag_filters = flag_definition.get("filters") or {}
-                flag_payloads = flag_filters.get("payloads") or {}
-                # For boolean flags, convert True to "true"
-                # For multivariate flags, use the variant string as-is
-                lookup_value = (
-                    "true"
-                    if isinstance(match_value, bool) and match_value
-                    else str(match_value)
-                )
-                payload = flag_payloads.get(lookup_value, None)
-        return payload
+            if not flag_definition:
+                return None
+
+            flag_filters = flag_definition.get("filters") or {}
+            flag_payloads = flag_filters.get("payloads") or {}
+            # For boolean flags, convert True to "true"
+            # For multivariate flags, use the variant string as-is
+            lookup_value = (
+                "true"
+                if isinstance(match_value, bool) and match_value
+                else str(match_value)
+            )
+            return flag_payloads.get(lookup_value, None)
 
     def get_all_flags(
         self,
@@ -2265,9 +2266,6 @@ class Client(object):
             self.sse_connected = True
 
         try:
-            import threading
-            import json
-
             # Use requests with stream=True for SSE
             import requests
 
@@ -2279,6 +2277,8 @@ class Client(object):
 
             def sse_listener():
                 """Background thread to listen for SSE messages"""
+                import json
+
                 try:
                     response = requests.get(
                         url, headers=headers, stream=True, timeout=None
@@ -2419,6 +2419,8 @@ class Client(object):
                         self.feature_flags = []
 
                     # Update the lookup table
+                    # mypy doesn't track that the setter ensures feature_flags_by_key is a dict
+                    assert self.feature_flags_by_key is not None
                     self.feature_flags_by_key[flag_key] = flag_data
 
                     # Update or add to the array
