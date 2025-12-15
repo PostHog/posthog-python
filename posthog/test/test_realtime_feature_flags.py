@@ -1,7 +1,5 @@
-import json
 import time
 import unittest
-from threading import Thread
 from unittest import mock
 
 from posthog.client import Client
