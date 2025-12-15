@@ -253,6 +253,7 @@ class Client(object):
         self.realtime_flags = realtime_flags
         self.on_feature_flags_update = on_feature_flags_update
         self.sse_connection = None  # type: Optional[Any]
+        self.sse_response = None
         self.sse_connected = False
 
         self.capture_exception_code_variables = capture_exception_code_variables
@@ -2264,36 +2265,41 @@ class Client(object):
             def sse_listener():
                 """Background thread to listen for SSE messages"""
                 try:
-                    with requests.get(
+                    response = requests.get(
                         url, headers=headers, stream=True, timeout=None
-                    ) as response:
-                        if response.status_code != 200:
-                            self.log.warning(
-                                f"[FEATURE FLAGS] SSE connection failed with status {response.status_code}"
-                            )
-                            self.sse_connected = False
-                            return
+                    )
+                    self.sse_response = response
 
-                        self.sse_connected = True
-                        self.log.debug("[FEATURE FLAGS] SSE connection established")
+                    if response.status_code != 200:
+                        self.log.warning(
+                            f"[FEATURE FLAGS] SSE connection failed with status {response.status_code}"
+                        )
+                        self.sse_connected = False
+                        return
 
-                        # Process the stream line by line
-                        for line in response.iter_lines():
-                            if not line:
-                                continue
+                    self.sse_connected = True
+                    self.log.debug("[FEATURE FLAGS] SSE connection established")
 
-                            line = line.decode("utf-8")
+                    # Process the stream line by line, checking sse_connected periodically
+                    for line in response.iter_lines():
+                        if not self.sse_connected:
+                            break
 
-                            # SSE format: "data: {...}"
-                            if line.startswith("data: "):
-                                data_str = line[6:]  # Remove "data: " prefix
-                                try:
-                                    flag_data = json.loads(data_str)
-                                    self._process_flag_update(flag_data)
-                                except json.JSONDecodeError as e:
-                                    self.log.warning(
-                                        f"[FEATURE FLAGS] Failed to parse SSE message: {e}"
-                                    )
+                        if not line:
+                            continue
+
+                        line = line.decode("utf-8")
+
+                        # SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            try:
+                                flag_data = json.loads(data_str)
+                                self._process_flag_update(flag_data)
+                            except json.JSONDecodeError as e:
+                                self.log.warning(
+                                    f"[FEATURE FLAGS] Failed to parse SSE message: {e}"
+                                )
                 except Exception as e:
                     self.log.warning(
                         f"[FEATURE FLAGS] SSE connection error: {e}. Reconnecting in 5 seconds..."
@@ -2306,6 +2312,13 @@ class Client(object):
 
                         time.sleep(5)
                         self._setup_sse_connection()
+                finally:
+                    if self.sse_response:
+                        try:
+                            self.sse_response.close()
+                        except Exception:
+                            pass
+                        self.sse_response = None
 
             # Start the SSE listener in a daemon thread
             sse_thread = threading.Thread(target=sse_listener, daemon=True)
@@ -2325,9 +2338,16 @@ class Client(object):
         """
         if self.sse_connection:
             self.log.debug("[FEATURE FLAGS] Closing SSE connection")
-            # Note: We can't directly stop the thread, but setting sse_connected to False
-            # will prevent reconnection attempts
             self.sse_connected = False
+
+            # Close the response to interrupt iter_lines()
+            if self.sse_response:
+                try:
+                    self.sse_response.close()
+                except Exception:
+                    pass
+                self.sse_response = None
+
             self.sse_connection = None
 
     def _process_flag_update(self, flag_data):
