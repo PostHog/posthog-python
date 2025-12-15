@@ -241,6 +241,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             groups={},
             disable_geoip=None,
         )
+        # Verify error property is NOT present on successful evaluation
+        captured_properties = patch_capture.call_args[1]["properties"]
+        self.assertNotIn("$feature_flag_error", captured_properties)
 
     @mock.patch.object(Client, "capture")
     def test_get_feature_flag_result_variant_local_evaluation(self, patch_capture):
@@ -295,6 +298,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             groups={},
             disable_geoip=None,
         )
+        # Verify error property is NOT present on successful evaluation
+        captured_properties = patch_capture.call_args[1]["properties"]
+        self.assertNotIn("$feature_flag_error", captured_properties)
 
         another_flag_result = self.client.get_feature_flag_result(
             "person-flag", "another-distinct-id", person_properties={"region": "USA"}
@@ -360,6 +366,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             groups={},
             disable_geoip=None,
         )
+        # Verify error property is NOT present on successful evaluation
+        captured_properties = patch_capture.call_args[1]["properties"]
+        self.assertNotIn("$feature_flag_error", captured_properties)
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
@@ -403,6 +412,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             groups={},
             disable_geoip=None,
         )
+        # Verify error property is NOT present on successful evaluation
+        captured_properties = patch_capture.call_args[1]["properties"]
+        self.assertNotIn("$feature_flag_error", captured_properties)
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
@@ -650,6 +662,181 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": "quota_limited",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+
+class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
+    """Tests for stale cache fallback behavior when flag evaluation fails.
+
+    When the PostHog API is unavailable (timeout, connection error, etc.), the SDK
+    falls back to stale cached flag values if available. These tests verify that:
+    1. The stale cached value is returned when an error occurs
+    2. The $feature_flag_error property is still set (for debugging)
+    3. The response reflects the cached value, not None
+    """
+
+    def set_fail(self, e, batch):
+        """Mark the failure handler"""
+        print("FAIL", e, batch)  # noqa: T201
+        self.failed = True
+
+    def setUp(self):
+        self.failed = False
+        # Create client with memory-based flag cache enabled
+        self.client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            flag_fallback_cache_url="memory://local/?ttl=300&size=10000",
+        )
+
+    def _populate_stale_cache(self, distinct_id, flag_key, flag_result):
+        """Pre-populate the flag cache with a value that will be used for stale fallback."""
+        self.client.flag_cache.set_cached_flag(
+            distinct_id,
+            flag_key,
+            flag_result,
+            flag_definition_version=self.client.flag_definition_version,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_timeout_error_returns_stale_cached_value(self, patch_capture, patch_flags):
+        """Test that timeout errors return stale cached value when available."""
+        from posthog.request import RequestsTimeout
+
+        # Pre-populate cache with a flag result
+        cached_result = FeatureFlagResult.from_value_and_payload(
+            "my-flag", "cached-variant", '{"from": "cache"}'
+        )
+        self._populate_stale_cache("some-distinct-id", "my-flag", cached_result)
+
+        # Simulate timeout error
+        patch_flags.side_effect = RequestsTimeout("Request timed out")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        # Should return the stale cached value
+        self.assertIsNotNone(flag_result)
+        self.assertEqual(flag_result.variant, "cached-variant")
+        self.assertEqual(flag_result.payload, {"from": "cache"})
+
+        # Error should still be tracked for debugging
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": "cached-variant",
+                "locally_evaluated": False,
+                "$feature/my-flag": "cached-variant",
+                "$feature_flag_payload": {"from": "cache"},
+                "$feature_flag_error": "timeout",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_connection_error_returns_stale_cached_value(
+        self, patch_capture, patch_flags
+    ):
+        """Test that connection errors return stale cached value when available."""
+        from posthog.request import RequestsConnectionError
+
+        # Pre-populate cache with a boolean flag result
+        cached_result = FeatureFlagResult.from_value_and_payload("my-flag", True, None)
+        self._populate_stale_cache("some-distinct-id", "my-flag", cached_result)
+
+        # Simulate connection error
+        patch_flags.side_effect = RequestsConnectionError("Connection refused")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        # Should return the stale cached value
+        self.assertIsNotNone(flag_result)
+        self.assertEqual(flag_result.enabled, True)
+        self.assertIsNone(flag_result.variant)
+
+        # Error should still be tracked
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": True,
+                "locally_evaluated": False,
+                "$feature/my-flag": True,
+                "$feature_flag_error": "connection_error",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_api_error_returns_stale_cached_value(self, patch_capture, patch_flags):
+        """Test that API errors return stale cached value when available."""
+        from posthog.request import APIError
+
+        # Pre-populate cache
+        cached_result = FeatureFlagResult.from_value_and_payload(
+            "my-flag", "control", None
+        )
+        self._populate_stale_cache("some-distinct-id", "my-flag", cached_result)
+
+        # Simulate API error
+        patch_flags.side_effect = APIError(503, "Service unavailable")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        # Should return the stale cached value
+        self.assertIsNotNone(flag_result)
+        self.assertEqual(flag_result.variant, "control")
+
+        # Error should still be tracked with status code
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": "control",
+                "locally_evaluated": False,
+                "$feature/my-flag": "control",
+                "$feature_flag_error": "api_error_503",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_error_without_cache_returns_none(self, patch_capture, patch_flags):
+        """Test that errors return None when no stale cache is available."""
+        from posthog.request import RequestsTimeout
+
+        # Do NOT populate cache - no fallback available
+
+        patch_flags.side_effect = RequestsTimeout("Request timed out")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        # Should return None since no cache available
+        self.assertIsNone(flag_result)
+
+        # Error should still be tracked
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/my-flag": None,
+                "$feature_flag_error": "timeout",
             },
             groups={},
             disable_geoip=None,
