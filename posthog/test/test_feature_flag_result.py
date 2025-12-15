@@ -559,9 +559,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     def test_get_feature_flag_result_timeout_error(self, patch_capture, patch_flags):
         """Test that timeout errors are captured specifically."""
-        import requests.exceptions
+        from posthog.request import RequestsTimeout
 
-        patch_flags.side_effect = requests.exceptions.Timeout("Request timed out")
+        patch_flags.side_effect = RequestsTimeout("Request timed out")
 
         flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
 
@@ -584,11 +584,9 @@ class TestGetFeatureFlagResult(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     def test_get_feature_flag_result_connection_error(self, patch_capture, patch_flags):
         """Test that connection errors are captured specifically."""
-        import requests.exceptions
+        from posthog.request import RequestsConnectionError
 
-        patch_flags.side_effect = requests.exceptions.ConnectionError(
-            "Connection refused"
-        )
+        patch_flags.side_effect = RequestsConnectionError("Connection refused")
 
         flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
 

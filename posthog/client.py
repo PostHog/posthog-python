@@ -37,13 +37,14 @@ from posthog.request import (
     DEFAULT_HOST,
     APIError,
     QuotaLimitError,
+    RequestsConnectionError,
+    RequestsTimeout,
     batch_post,
     determine_server_host,
     flags,
     get,
     remote_config,
 )
-import requests.exceptions
 from posthog.contexts import (
     _get_current_context,
     get_context_distinct_id,
@@ -1597,10 +1598,10 @@ class Client(object):
             except QuotaLimitError as e:
                 self.log.exception(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 feature_flag_error = "quota_limited"
-            except requests.exceptions.Timeout as e:
+            except RequestsTimeout as e:
                 self.log.exception(f"[FEATURE FLAGS] Request timed out: {e}")
                 feature_flag_error = "timeout"
-            except requests.exceptions.ConnectionError as e:
+            except RequestsConnectionError as e:
                 self.log.exception(f"[FEATURE FLAGS] Connection error: {e}")
                 feature_flag_error = "connection_error"
             except APIError as e:

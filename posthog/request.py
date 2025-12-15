@@ -312,6 +312,12 @@ class QuotaLimitError(APIError):
     pass
 
 
+# Re-export requests exceptions for use in client.py
+# This keeps all requests library imports centralized in this module
+RequestsTimeout = requests.exceptions.Timeout
+RequestsConnectionError = requests.exceptions.ConnectionError
+
+
 class DatetimeSerializer(json.JSONEncoder):
     def default(self, obj: Any):
         if isinstance(obj, (date, datetime)):
