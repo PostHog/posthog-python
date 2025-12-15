@@ -438,6 +438,220 @@ class TestGetFeatureFlagResult(unittest.TestCase):
                 "$feature_flag_response": None,
                 "locally_evaluated": False,
                 "$feature/no-person-flag": None,
+                "$feature_flag_error": "flag_missing",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_with_errors_while_computing_flags(
+        self, patch_capture, patch_flags
+    ):
+        """Test that errors_while_computing_flags is included in the $feature_flag_called event.
+
+        When the server returns errorsWhileComputingFlags=true, it indicates that there
+        was an error computing one or more flags. We include this in the event so users
+        can identify and debug flag evaluation issues.
+        """
+        patch_flags.return_value = {
+            "flags": {
+                "my-flag": {
+                    "key": "my-flag",
+                    "enabled": True,
+                    "variant": None,
+                    "reason": {"description": "Matched condition set 1"},
+                    "metadata": {"id": 1, "version": 1, "payload": None},
+                },
+            },
+            "requestId": "test-request-id-789",
+            "errorsWhileComputingFlags": True,
+        }
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertEqual(flag_result.enabled, True)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": True,
+                "locally_evaluated": False,
+                "$feature/my-flag": True,
+                "$feature_flag_request_id": "test-request-id-789",
+                "$feature_flag_reason": "Matched condition set 1",
+                "$feature_flag_id": 1,
+                "$feature_flag_version": 1,
+                "$feature_flag_error": "errors_while_computing_flags",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_flag_not_in_response(
+        self, patch_capture, patch_flags
+    ):
+        """Test that when a flag is not in the API response, we capture flag_missing error.
+
+        This happens when a flag doesn't exist or the user doesn't match any conditions.
+        """
+        patch_flags.return_value = {
+            "flags": {
+                "other-flag": {
+                    "key": "other-flag",
+                    "enabled": True,
+                    "variant": None,
+                    "reason": {"description": "Matched condition set 1"},
+                    "metadata": {"id": 1, "version": 1, "payload": None},
+                },
+            },
+            "requestId": "test-request-id-456",
+        }
+
+        flag_result = self.client.get_feature_flag_result(
+            "missing-flag", "some-distinct-id"
+        )
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "missing-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/missing-flag": None,
+                "$feature_flag_request_id": "test-request-id-456",
+                "$feature_flag_error": "flag_missing",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_unknown_error(self, patch_capture, patch_flags):
+        """Test that unexpected exceptions are captured as unknown_error."""
+        patch_flags.side_effect = Exception("Unexpected error")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/my-flag": None,
+                "$feature_flag_error": "unknown_error",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_timeout_error(self, patch_capture, patch_flags):
+        """Test that timeout errors are captured specifically."""
+        import requests.exceptions
+
+        patch_flags.side_effect = requests.exceptions.Timeout("Request timed out")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/my-flag": None,
+                "$feature_flag_error": "timeout",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_connection_error(self, patch_capture, patch_flags):
+        """Test that connection errors are captured specifically."""
+        import requests.exceptions
+
+        patch_flags.side_effect = requests.exceptions.ConnectionError(
+            "Connection refused"
+        )
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/my-flag": None,
+                "$feature_flag_error": "connection_error",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_api_error(self, patch_capture, patch_flags):
+        """Test that API errors include the status code."""
+        from posthog.request import APIError
+
+        patch_flags.side_effect = APIError(500, "Internal server error")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/my-flag": None,
+                "$feature_flag_error": "api_error_500",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_quota_limited(self, patch_capture, patch_flags):
+        """Test that quota limit errors are captured specifically."""
+        from posthog.request import QuotaLimitError
+
+        patch_flags.side_effect = QuotaLimitError(429, "Rate limit exceeded")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/my-flag": None,
+                "$feature_flag_error": "quota_limited",
             },
             groups={},
             disable_geoip=None,

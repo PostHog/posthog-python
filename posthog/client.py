@@ -36,12 +36,14 @@ from posthog.poller import Poller
 from posthog.request import (
     DEFAULT_HOST,
     APIError,
+    QuotaLimitError,
     batch_post,
     determine_server_host,
     flags,
     get,
     remote_config,
 )
+import requests.exceptions
 from posthog.contexts import (
     _get_current_context,
     get_context_distinct_id,
@@ -1539,6 +1541,7 @@ class Client(object):
         flag_details = None
         request_id = None
         evaluated_at = None
+        feature_flag_error: Optional[str] = None
 
         flag_value = self._locally_evaluate_flag(
             key, distinct_id, groups, person_properties, group_properties
@@ -1563,7 +1566,7 @@ class Client(object):
                 )
         elif not only_evaluate_locally:
             try:
-                flag_details, request_id, evaluated_at = (
+                flag_details, request_id, evaluated_at, errors_while_computing = (
                     self._get_feature_flag_details_from_server(
                         key,
                         distinct_id,
@@ -1573,6 +1576,11 @@ class Client(object):
                         disable_geoip,
                     )
                 )
+                if errors_while_computing:
+                    feature_flag_error = "errors_while_computing_flags"
+                elif flag_details is None:
+                    feature_flag_error = "flag_missing"
+
                 flag_result = FeatureFlagResult.from_flag_details(
                     flag_details, override_match_value
                 )
@@ -1586,9 +1594,23 @@ class Client(object):
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
+            except QuotaLimitError as e:
+                self.log.exception(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+                feature_flag_error = "quota_limited"
+            except requests.exceptions.Timeout as e:
+                self.log.exception(f"[FEATURE FLAGS] Request timed out: {e}")
+                feature_flag_error = "timeout"
+            except requests.exceptions.ConnectionError as e:
+                self.log.exception(f"[FEATURE FLAGS] Connection error: {e}")
+                feature_flag_error = "connection_error"
+            except APIError as e:
+                self.log.exception(f"[FEATURE FLAGS] API error: {e}")
+                feature_flag_error = f"api_error_{e.status}"
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+                feature_flag_error = "unknown_error"
 
+            if feature_flag_error:
                 # Fallback to cached value if remote evaluation fails
                 if self.flag_cache:
                     stale_result = self.flag_cache.get_stale_cached_flag(
@@ -1612,6 +1634,7 @@ class Client(object):
                 request_id,
                 evaluated_at,
                 flag_details,
+                feature_flag_error,
             )
 
         return flag_result
@@ -1814,9 +1837,10 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, str],
         disable_geoip: Optional[bool],
-    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int]]:
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
         """
-        Calls /flags and returns the flag details, request id, and evaluated at timestamp
+        Calls /flags and returns the flag details, request id, evaluated at timestamp,
+        and whether there were errors while computing flags.
         """
         resp_data = self.get_flags_decision(
             distinct_id,
@@ -1828,9 +1852,10 @@ class Client(object):
         )
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
+        errors_while_computing = resp_data.get("errorsWhileComputingFlags", False)
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
-        return flag_details, request_id, evaluated_at
+        return flag_details, request_id, evaluated_at, errors_while_computing
 
     def _capture_feature_flag_called(
         self,
@@ -1844,6 +1869,7 @@ class Client(object):
         request_id: Optional[str],
         evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
+        feature_flag_error: Optional[str] = None,
     ):
         feature_flag_reported_key = (
             f"{key}_{'::null::' if response is None else str(response)}"
@@ -1878,6 +1904,8 @@ class Client(object):
                         )
                     if flag_details.metadata.id:
                         properties["$feature_flag_id"] = flag_details.metadata.id
+            if feature_flag_error:
+                properties["$feature_flag_error"] = feature_flag_error
 
             self.capture(
                 "$feature_flag_called",
