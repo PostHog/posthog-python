@@ -2267,7 +2267,7 @@ class Client(object):
 
         try:
             # Use requests with stream=True for SSE
-            import requests
+            import requests  # type: ignore[import-untyped]
 
             url = f"{self.host}/flags/definitions/stream?api_key={self.api_key}"
             headers = {
