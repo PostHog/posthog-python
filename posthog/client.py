@@ -1590,10 +1590,13 @@ class Client(object):
                         disable_geoip,
                     )
                 )
+                errors = []
                 if errors_while_computing:
-                    feature_flag_error = "errors_while_computing_flags"
-                elif flag_details is None:
-                    feature_flag_error = "flag_missing"
+                    errors.append("errors_while_computing_flags")
+                if flag_details is None:
+                    errors.append("flag_missing")
+                if errors:
+                    feature_flag_error = ",".join(errors)
 
                 flag_result = FeatureFlagResult.from_flag_details(
                     flag_details, override_match_value

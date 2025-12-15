@@ -546,6 +546,42 @@ class TestGetFeatureFlagResult(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
+    def test_get_feature_flag_result_errors_computing_and_flag_missing(
+        self, patch_capture, patch_flags
+    ):
+        """Test that both errors are reported when errorsWhileComputingFlags=true AND flag is missing.
+
+        This can happen when the server encounters errors computing flags AND the requested
+        flag is not in the response. Both conditions should be reported for debugging.
+        """
+        patch_flags.return_value = {
+            "flags": {},  # Flag is missing
+            "requestId": "test-request-id-999",
+            "errorsWhileComputingFlags": True,  # But errors also occurred
+        }
+
+        flag_result = self.client.get_feature_flag_result(
+            "missing-flag", "some-distinct-id"
+        )
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_called_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "missing-flag",
+                "$feature_flag_response": None,
+                "locally_evaluated": False,
+                "$feature/missing-flag": None,
+                "$feature_flag_request_id": "test-request-id-999",
+                "$feature_flag_error": "errors_while_computing_flags,flag_missing",
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
     def test_get_feature_flag_result_unknown_error(self, patch_capture, patch_flags):
         """Test that unexpected exceptions are captured as unknown_error."""
         patch_flags.side_effect = Exception("Unexpected error")
