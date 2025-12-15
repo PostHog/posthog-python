@@ -257,6 +257,9 @@ class Client(object):
         self.sse_response = None
         self.sse_connected = False
         self._sse_lock = threading.Lock()
+        self._flags_lock = (
+            threading.Lock()
+        )  # Protects feature_flags and feature_flags_by_key
 
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -1222,19 +1225,20 @@ class Client(object):
         self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
     ) -> None:
         """Update internal flag state from cache data and invalidate evaluation cache if changed."""
-        self.feature_flags = data["flags"]
-        self.group_type_mapping = data["group_type_mapping"]
-        self.cohorts = data["cohorts"]
+        with self._flags_lock:
+            self.feature_flags = data["flags"]
+            self.group_type_mapping = data["group_type_mapping"]
+            self.cohorts = data["cohorts"]
 
-        # Invalidate evaluation cache if flag definitions changed
-        if (
-            self.flag_cache
-            and old_flags_by_key is not None
-            and old_flags_by_key != (self.feature_flags_by_key or {})
-        ):
-            old_version = self.flag_definition_version
-            self.flag_definition_version += 1
-            self.flag_cache.invalidate_version(old_version)
+            # Invalidate evaluation cache if flag definitions changed
+            if (
+                self.flag_cache
+                and old_flags_by_key is not None
+                and old_flags_by_key != (self.feature_flags_by_key or {})
+            ):
+                old_version = self.flag_definition_version
+                self.flag_definition_version += 1
+                self.flag_cache.invalidate_version(old_version)
 
     def _load_feature_flags(self):
         should_fetch = True
@@ -1260,8 +1264,10 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
+                    with self._flags_lock:
+                        old_flags_copy = self.feature_flags_by_key or {}
                     self._update_flag_state(
-                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
+                        cached_data, old_flags_by_key=old_flags_copy
                     )
                     self._last_feature_flag_poll = datetime.now(tz=tzutc())
                     return
@@ -1285,7 +1291,8 @@ class Client(object):
         """Fetch feature flags from the PostHog API."""
         try:
             # Store old flags to detect changes
-            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+            with self._flags_lock:
+                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
 
             response = get(
                 self.personal_api_key,
@@ -1744,30 +1751,33 @@ class Client(object):
             self.load_feature_flags()
         response = None
 
-        if self.feature_flags:
-            assert self.feature_flags_by_key is not None, (
-                "feature_flags_by_key should be initialized when feature_flags is set"
-            )
-            # Local evaluation
-            flag = self.feature_flags_by_key.get(key)
-            if flag:
-                try:
-                    response = self._compute_flag_locally(
-                        flag,
-                        distinct_id,
-                        groups=groups,
-                        person_properties=person_properties,
-                        group_properties=group_properties,
-                    )
-                    self.log.debug(
-                        f"Successfully computed flag locally: {key} -> {response}"
-                    )
-                except (RequiresServerEvaluation, InconclusiveMatchError) as e:
-                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
-                except Exception as e:
-                    self.log.exception(
-                        f"[FEATURE FLAGS] Error while computing variant locally: {e}"
-                    )
+        flag = None
+        with self._flags_lock:
+            if self.feature_flags:
+                assert self.feature_flags_by_key is not None, (
+                    "feature_flags_by_key should be initialized when feature_flags is set"
+                )
+                # Local evaluation - copy flag to avoid holding lock during computation
+                flag = self.feature_flags_by_key.get(key)
+
+        if flag:
+            try:
+                response = self._compute_flag_locally(
+                    flag,
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                )
+                self.log.debug(
+                    f"Successfully computed flag locally: {key} -> {response}"
+                )
+            except (RequiresServerEvaluation, InconclusiveMatchError) as e:
+                self.log.debug(f"Failed to compute flag {key} locally: {e}")
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Error while computing variant locally: {e}"
+                )
         return response
 
     def get_feature_flag_payload(
@@ -1935,21 +1945,22 @@ class Client(object):
     ) -> Optional[str]:
         payload = None
 
-        if self.feature_flags_by_key is None:
-            return payload
+        with self._flags_lock:
+            if self.feature_flags_by_key is None:
+                return payload
 
-        flag_definition = self.feature_flags_by_key.get(key)
-        if flag_definition:
-            flag_filters = flag_definition.get("filters") or {}
-            flag_payloads = flag_filters.get("payloads") or {}
-            # For boolean flags, convert True to "true"
-            # For multivariate flags, use the variant string as-is
-            lookup_value = (
-                "true"
-                if isinstance(match_value, bool) and match_value
-                else str(match_value)
-            )
-            payload = flag_payloads.get(lookup_value, None)
+            flag_definition = self.feature_flags_by_key.get(key)
+            if flag_definition:
+                flag_filters = flag_definition.get("filters") or {}
+                flag_payloads = flag_filters.get("payloads") or {}
+                # For boolean flags, convert True to "true"
+                # For multivariate flags, use the variant string as-is
+                lookup_value = (
+                    "true"
+                    if isinstance(match_value, bool) and match_value
+                    else str(match_value)
+                )
+                payload = flag_payloads.get(lookup_value, None)
         return payload
 
     def get_all_flags(
@@ -2372,53 +2383,57 @@ class Client(object):
 
             is_deleted = flag_data.get("deleted", False)
 
-            # Handle flag deletion
-            if is_deleted:
-                self.log.debug(f"[FEATURE FLAGS] Deleting flag: {flag_key}")
-                if self.feature_flags_by_key and flag_key in self.feature_flags_by_key:
-                    del self.feature_flags_by_key[flag_key]
+            with self._flags_lock:
+                # Handle flag deletion
+                if is_deleted:
+                    self.log.debug(f"[FEATURE FLAGS] Deleting flag: {flag_key}")
+                    if (
+                        self.feature_flags_by_key
+                        and flag_key in self.feature_flags_by_key
+                    ):
+                        del self.feature_flags_by_key[flag_key]
 
-                # Also remove from the array
-                if self.feature_flags:
-                    self.feature_flags = [
-                        f for f in self.feature_flags if f.get("key") != flag_key
-                    ]
+                    # Also remove from the array
+                    if self.feature_flags:
+                        self.feature_flags = [
+                            f for f in self.feature_flags if f.get("key") != flag_key
+                        ]
 
-                # Invalidate cache for this flag
-                if self.flag_cache:
-                    old_version = self.flag_definition_version
-                    self.flag_definition_version += 1
-                    self.flag_cache.invalidate_version(old_version)
+                    # Invalidate cache for this flag
+                    if self.flag_cache:
+                        old_version = self.flag_definition_version
+                        self.flag_definition_version += 1
+                        self.flag_cache.invalidate_version(old_version)
 
-            else:
-                # Update or add flag
-                self.log.debug(f"[FEATURE FLAGS] Updating flag: {flag_key}")
+                else:
+                    # Update or add flag
+                    self.log.debug(f"[FEATURE FLAGS] Updating flag: {flag_key}")
 
-                if self.feature_flags_by_key is None:
-                    self.feature_flags_by_key = {}
+                    if self.feature_flags_by_key is None:
+                        self.feature_flags_by_key = {}
 
-                if self.feature_flags is None:
-                    self.feature_flags = []
+                    if self.feature_flags is None:
+                        self.feature_flags = []
 
-                # Update the lookup table
-                self.feature_flags_by_key[flag_key] = flag_data
+                    # Update the lookup table
+                    self.feature_flags_by_key[flag_key] = flag_data
 
-                # Update or add to the array
-                flag_exists = False
-                for i, f in enumerate(self.feature_flags):
-                    if f.get("key") == flag_key:
-                        self.feature_flags[i] = flag_data
-                        flag_exists = True
-                        break
+                    # Update or add to the array
+                    flag_exists = False
+                    for i, f in enumerate(self.feature_flags):
+                        if f.get("key") == flag_key:
+                            self.feature_flags[i] = flag_data
+                            flag_exists = True
+                            break
 
-                if not flag_exists:
-                    self.feature_flags.append(flag_data)
+                    if not flag_exists:
+                        self.feature_flags.append(flag_data)
 
-                # Invalidate cache when flag definitions change
-                if self.flag_cache:
-                    old_version = self.flag_definition_version
-                    self.flag_definition_version += 1
-                    self.flag_cache.invalidate_version(old_version)
+                    # Invalidate cache when flag definitions change
+                    if self.flag_cache:
+                        old_version = self.flag_definition_version
+                        self.flag_definition_version += 1
+                        self.flag_cache.invalidate_version(old_version)
 
             # Call the user's callback if provided
             if self.on_feature_flags_update:
