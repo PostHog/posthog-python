@@ -1,3 +1,19 @@
+# 7.3.1 - 2025-12-06
+
+fix: remove unused $exception_message and $exception_type
+
+# 7.3.0 - 2025-12-05
+
+feat: improve code variables capture masking
+
+# 7.2.0 - 2025-12-01
+
+feat: add $feature_flag_evaluated_at properties to $feature_flag_called events
+
+# 7.1.0 - 2025-11-26
+
+Add support for the async version of Gemini.
+
 # 7.0.2 - 2025-11-18
 
 Add support for Python 3.14.

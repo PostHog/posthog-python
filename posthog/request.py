@@ -1,30 +1,126 @@
 import json
 import logging
+import re
 import secrets
+import socket
+from dataclasses import dataclass
 from datetime import date, datetime
 from gzip import GzipFile
 from io import BytesIO
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
 from uuid import uuid4
 
 import requests
 from dateutil.tz import tzutc
+from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
+from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
-# Retry on both connect and read errors
-# by default read errors will only retry idempotent HTTP methods (so not POST)
-adapter = requests.adapters.HTTPAdapter(
-    max_retries=Retry(
-        total=2,
-        connect=2,
-        read=2,
+SocketOptions = List[Tuple[int, int, Union[int, bytes]]]
+
+KEEPALIVE_IDLE_SECONDS = 60
+KEEPALIVE_INTERVAL_SECONDS = 60
+KEEPALIVE_PROBE_COUNT = 3
+
+# TCP keepalive probes idle connections to prevent them from being dropped.
+# SO_KEEPALIVE is cross-platform, but timing options vary:
+# - Linux: TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT
+# - macOS: only SO_KEEPALIVE (uses system defaults)
+# - Windows: TCP_KEEPIDLE, TCP_KEEPINTVL (since Windows 10 1709)
+KEEP_ALIVE_SOCKET_OPTIONS: SocketOptions = list(
+    HTTPConnection.default_socket_options
+) + [
+    (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+]
+for attr, value in [
+    ("TCP_KEEPIDLE", KEEPALIVE_IDLE_SECONDS),
+    ("TCP_KEEPINTVL", KEEPALIVE_INTERVAL_SECONDS),
+    ("TCP_KEEPCNT", KEEPALIVE_PROBE_COUNT),
+]:
+    if hasattr(socket, attr):
+        KEEP_ALIVE_SOCKET_OPTIONS.append((socket.SOL_TCP, getattr(socket, attr), value))
+
+
+def _mask_tokens_in_url(url: str) -> str:
+    """Mask token values in URLs for safe logging, keeping first 10 chars visible."""
+    return re.sub(r"(token=)([^&]{10})[^&]*", r"\1\2...", url)
+
+
+@dataclass
+class GetResponse:
+    """Response from a GET request with ETag support."""
+
+    data: Any
+    etag: Optional[str] = None
+    not_modified: bool = False
+
+
+class HTTPAdapterWithSocketOptions(HTTPAdapter):
+    """HTTPAdapter with configurable socket options."""
+
+    def __init__(self, *args, socket_options: Optional[SocketOptions] = None, **kwargs):
+        self.socket_options = socket_options
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        if self.socket_options is not None:
+            kwargs["socket_options"] = self.socket_options
+        super().init_poolmanager(*args, **kwargs)
+
+
+def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.Session:
+    adapter = HTTPAdapterWithSocketOptions(
+        max_retries=Retry(
+            total=2,
+            connect=2,
+            read=2,
+        ),
+        socket_options=socket_options,
     )
-)
-_session = requests.sessions.Session()
-_session.mount("https://", adapter)
+    session = requests.sessions.Session()
+    session.mount("https://", adapter)
+    return session
+
+
+_session = _build_session()
+_socket_options: Optional[SocketOptions] = None
+_pooling_enabled = True
+
+
+def _get_session() -> requests.Session:
+    if _pooling_enabled:
+        return _session
+    return _build_session(_socket_options)
+
+
+def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
+    """
+    Configure socket options for all HTTP connections.
+
+    Example:
+        from posthog import set_socket_options
+        set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
+    """
+    global _session, _socket_options
+    if socket_options == _socket_options:
+        return
+    _socket_options = socket_options
+    _session = _build_session(socket_options)
+
+
+def enable_keep_alive() -> None:
+    """Enable TCP keepalive to prevent idle connections from being dropped."""
+    set_socket_options(KEEP_ALIVE_SOCKET_OPTIONS)
+
+
+def disable_connection_reuse() -> None:
+    """Disable connection reuse, creating a fresh connection for each request."""
+    global _pooling_enabled
+    _pooling_enabled = False
+
 
 US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
 EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
@@ -70,7 +166,7 @@ def post(
             gz.write(data.encode("utf-8"))
         data = buf.getvalue()
 
-    res = _session.post(url, data=data, headers=headers, timeout=timeout)
+    res = _get_session().post(url, data=data, headers=headers, timeout=timeout)
 
     if res.status_code == 200:
         log.debug("data uploaded successfully")
@@ -141,12 +237,13 @@ def remote_config(
     timeout: int = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
-    return get(
+    response = get(
         personal_api_key,
         f"/api/projects/@current/feature_flags/{key}/remote_config?token={project_api_key}",
         host,
         timeout,
     )
+    return response.data
 
 
 def batch_post(
@@ -164,15 +261,42 @@ def batch_post(
 
 
 def get(
-    api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None
-) -> requests.Response:
-    url = remove_trailing_slash(host or DEFAULT_HOST) + url
-    res = requests.get(
-        url,
-        headers={"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT},
-        timeout=timeout,
+    api_key: str,
+    url: str,
+    host: Optional[str] = None,
+    timeout: Optional[int] = None,
+    etag: Optional[str] = None,
+) -> GetResponse:
+    """
+    Make a GET request with optional ETag support.
+
+    If an etag is provided, sends If-None-Match header. Returns GetResponse with:
+    - not_modified=True and data=None if server returns 304
+    - not_modified=False and data=response if server returns 200
+    """
+    log = logging.getLogger("posthog")
+    full_url = remove_trailing_slash(host or DEFAULT_HOST) + url
+    headers = {"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}
+
+    if etag:
+        headers["If-None-Match"] = etag
+
+    res = _get_session().get(full_url, headers=headers, timeout=timeout)
+
+    masked_url = _mask_tokens_in_url(full_url)
+
+    # Handle 304 Not Modified
+    if res.status_code == 304:
+        log.debug(f"GET {masked_url} returned 304 Not Modified")
+        response_etag = res.headers.get("ETag")
+        return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
+
+    # Handle normal response
+    data = _process_response(
+        res, success_message=f"GET {masked_url} completed successfully"
     )
-    return _process_response(res, success_message=f"GET {url} completed successfully")
+    response_etag = res.headers.get("ETag")
+    return GetResponse(data=data, etag=response_etag, not_modified=False)
 
 
 class APIError(Exception):
