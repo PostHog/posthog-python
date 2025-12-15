@@ -2351,10 +2351,13 @@ class Client(object):
 
     def _close_sse_connection(self):
         """
-        Close the active SSE connection.
+        Close the active SSE connection and prevent reconnection.
         """
         if self.sse_connection:
             self.log.debug("[FEATURE FLAGS] Closing SSE connection")
+            # Disable realtime flags to prevent reconnection
+            self.realtime_flags = False
+
             with self._sse_lock:
                 self.sse_connected = False
 
