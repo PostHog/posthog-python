@@ -1509,6 +1509,19 @@ class Client(object):
             return None
         return bool(response)
 
+    def _get_stale_flag_fallback(
+        self, distinct_id: ID_TYPES, key: str
+    ) -> Optional[FeatureFlagResult]:
+        """Returns a stale cached flag value if available, otherwise None."""
+        if self.flag_cache:
+            stale_result = self.flag_cache.get_stale_cached_flag(distinct_id, key)
+            if stale_result:
+                self.log.info(
+                    f"[FEATURE FLAGS] Using stale cached value for flag {key}"
+                )
+                return stale_result
+        return None
+
     def _get_feature_flag_result(
         self,
         key: str,
@@ -1596,32 +1609,25 @@ class Client(object):
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
             except QuotaLimitError as e:
-                self.log.exception(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 feature_flag_error = "quota_limited"
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except RequestsTimeout as e:
-                self.log.exception(f"[FEATURE FLAGS] Request timed out: {e}")
+                self.log.warning(f"[FEATURE FLAGS] Request timed out: {e}")
                 feature_flag_error = "timeout"
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except RequestsConnectionError as e:
-                self.log.exception(f"[FEATURE FLAGS] Connection error: {e}")
+                self.log.warning(f"[FEATURE FLAGS] Connection error: {e}")
                 feature_flag_error = "connection_error"
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except APIError as e:
-                self.log.exception(f"[FEATURE FLAGS] API error: {e}")
+                self.log.warning(f"[FEATURE FLAGS] API error: {e}")
                 feature_flag_error = f"api_error_{e.status}"
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
                 feature_flag_error = "unknown_error"
-
-            if feature_flag_error:
-                # Fallback to cached value if remote evaluation fails
-                if self.flag_cache:
-                    stale_result = self.flag_cache.get_stale_cached_flag(
-                        distinct_id, key
-                    )
-                    if stale_result:
-                        self.log.info(
-                            f"[FEATURE FLAGS] Using stale cached value for flag {key}"
-                        )
-                        flag_result = stale_result
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
 
         if send_feature_flag_events:
             self._capture_feature_flag_called(
