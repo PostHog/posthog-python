@@ -2269,9 +2269,9 @@ class Client(object):
             # Use requests with stream=True for SSE
             import requests  # type: ignore[import-untyped]
 
-            url = f"{self.host}/flags/definitions/stream?api_key={self.api_key}"
+            url = f"{self.host}/flags/definitions/stream"
             headers = {
-                "Authorization": f"Bearer {self.personal_api_key}",
+                "Authorization": f"Bearer {self.api_key}",
                 "Accept": "text/event-stream",
             }
 
