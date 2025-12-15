@@ -132,7 +132,9 @@ class TestRealtimeFeatureFlags(unittest.TestCase):
 
         # Verify flag was updated
         self.assertIn("test-flag", client.feature_flags_by_key)
-        self.assertEqual(client.feature_flags_by_key["test-flag"]["name"], "Updated Test Flag")
+        self.assertEqual(
+            client.feature_flags_by_key["test-flag"]["name"], "Updated Test Flag"
+        )
         self.assertFalse(client.feature_flags_by_key["test-flag"]["active"])
 
         # Cleanup
@@ -289,7 +291,6 @@ class TestRealtimeFeatureFlags(unittest.TestCase):
         self.assertFalse(client.sse_connected)
         self.assertIsNone(client.sse_connection)
 
-
     @mock.patch("posthog.client.get")
     def test_on_feature_flags_update_callback(self, mock_get):
         """Test that the callback is called when flags are updated"""
@@ -306,9 +307,7 @@ class TestRealtimeFeatureFlags(unittest.TestCase):
         callback_calls = []
 
         def flag_update_callback(flag_key, flag_data):
-            callback_calls.append(
-                {"flag_key": flag_key, "flag_data": flag_data}
-            )
+            callback_calls.append({"flag_key": flag_key, "flag_data": flag_data})
 
         client = Client(
             FAKE_TEST_API_KEY,

@@ -2,6 +2,7 @@ import atexit
 import logging
 import os
 import sys
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
@@ -255,6 +256,7 @@ class Client(object):
         self.sse_connection = None  # type: Optional[Any]
         self.sse_response = None
         self.sse_connected = False
+        self._sse_lock = threading.Lock()
 
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -2245,9 +2247,11 @@ class Client(object):
             )
             return
 
-        if self.sse_connected:
-            self.log.debug("[FEATURE FLAGS] SSE connection already established")
-            return
+        with self._sse_lock:
+            if self.sse_connected:
+                self.log.debug("[FEATURE FLAGS] SSE connection already established")
+                return
+            self.sse_connected = True
 
         try:
             import threading
@@ -2274,16 +2278,17 @@ class Client(object):
                         self.log.warning(
                             f"[FEATURE FLAGS] SSE connection failed with status {response.status_code}"
                         )
-                        self.sse_connected = False
+                        with self._sse_lock:
+                            self.sse_connected = False
                         return
 
-                    self.sse_connected = True
                     self.log.debug("[FEATURE FLAGS] SSE connection established")
 
                     # Process the stream line by line, checking sse_connected periodically
                     for line in response.iter_lines():
-                        if not self.sse_connected:
-                            break
+                        with self._sse_lock:
+                            if not self.sse_connected:
+                                break
 
                         if not line:
                             continue
@@ -2304,7 +2309,8 @@ class Client(object):
                     self.log.warning(
                         f"[FEATURE FLAGS] SSE connection error: {e}. Reconnecting in 5 seconds..."
                     )
-                    self.sse_connected = False
+                    with self._sse_lock:
+                        self.sse_connected = False
 
                     # Attempt to reconnect after 5 seconds if realtime_flags is still enabled
                     if self.realtime_flags:
@@ -2338,7 +2344,8 @@ class Client(object):
         """
         if self.sse_connection:
             self.log.debug("[FEATURE FLAGS] Closing SSE connection")
-            self.sse_connected = False
+            with self._sse_lock:
+                self.sse_connected = False
 
             # Close the response to interrupt iter_lines()
             if self.sse_response:
