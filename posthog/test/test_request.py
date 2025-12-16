@@ -19,6 +19,7 @@ from posthog.request import (
     determine_server_host,
     disable_connection_reuse,
     enable_keep_alive,
+    flags,
     get,
     set_socket_options,
 )
@@ -393,3 +394,66 @@ def test_set_socket_options_is_idempotent():
         assert session1 is session2
     finally:
         set_socket_options(None)
+
+
+class TestFlagsSession(unittest.TestCase):
+    """Tests for flags session configuration."""
+
+    def test_retry_status_forcelist_excludes_rate_limits(self):
+        """Verify 429 (rate limit) is NOT retried - need to wait, not hammer."""
+        from posthog.request import RETRY_STATUS_FORCELIST
+
+        self.assertNotIn(429, RETRY_STATUS_FORCELIST)
+
+    def test_retry_status_forcelist_excludes_quota_errors(self):
+        """Verify 402 (payment required/quota) is NOT retried - won't resolve."""
+        from posthog.request import RETRY_STATUS_FORCELIST
+
+        self.assertNotIn(402, RETRY_STATUS_FORCELIST)
+
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_uses_flags_session(self, mock_get_flags_session):
+        """flags() uses the dedicated flags session, not the general session."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "featureFlags": {"test-flag": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
+
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+        mock_get_flags_session.return_value = mock_session
+
+        result = flags("test-key", "https://test.posthog.com", distinct_id="user123")
+
+        self.assertEqual(result["featureFlags"]["test-flag"], True)
+        mock_get_flags_session.assert_called_once()
+        mock_session.post.assert_called_once()
+
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_no_retry_on_quota_limit(self, mock_get_flags_session):
+        """flags() raises QuotaLimitError without retrying (at application level)."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "quotaLimited": ["feature_flags"],
+                "featureFlags": {},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
+
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+        mock_get_flags_session.return_value = mock_session
+
+        with self.assertRaises(QuotaLimitError):
+            flags("test-key", "https://test.posthog.com", distinct_id="user123")
+
+        # QuotaLimitError is raised after response is received, not retried
+        self.assertEqual(mock_session.post.call_count, 1)
