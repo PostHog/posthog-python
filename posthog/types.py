@@ -336,7 +336,7 @@ class FeatureFlagError:
     UNKNOWN_ERROR = "unknown_error"
 
     @staticmethod
-    def api_error(status: int) -> str:
+    def api_error(status: Union[int, str]) -> str:
         """Generate API error string with status code.
 
         Args:
