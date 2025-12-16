@@ -2,6 +2,7 @@ import atexit
 import logging
 import os
 import sys
+import warnings
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
@@ -1788,7 +1789,7 @@ class Client(object):
         person_properties=None,
         group_properties=None,
         only_evaluate_locally=False,
-        send_feature_flag_events=True,
+        send_feature_flag_events=False,
         disable_geoip=None,
     ):
         """
@@ -1802,7 +1803,7 @@ class Client(object):
             person_properties: A dictionary of person properties.
             group_properties: A dictionary of group properties.
             only_evaluate_locally: Whether to only evaluate locally.
-            send_feature_flag_events: Whether to send feature flag events.
+            send_feature_flag_events: Deprecated. Use get_feature_flag() instead if you need events.
             disable_geoip: Whether to disable GeoIP for this request.
 
         Examples:
@@ -1818,6 +1819,14 @@ class Client(object):
         Category:
             Feature flags
         """
+        if send_feature_flag_events:
+            warnings.warn(
+                "send_feature_flag_events is deprecated in get_feature_flag_payload() and will be removed "
+                "in a future version. Use get_feature_flag() if you want to send $feature_flag_called events.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         feature_flag_result = self._get_feature_flag_result(
             key,
             distinct_id,
