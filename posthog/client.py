@@ -56,6 +56,7 @@ from posthog.contexts import (
 )
 from posthog.types import (
     FeatureFlag,
+    FeatureFlagError,
     FeatureFlagResult,
     FlagMetadata,
     FlagsAndPayloads,
@@ -1592,9 +1593,9 @@ class Client(object):
                 )
                 errors = []
                 if errors_while_computing:
-                    errors.append("errors_while_computing_flags")
+                    errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
                 if flag_details is None:
-                    errors.append("flag_missing")
+                    errors.append(FeatureFlagError.FLAG_MISSING)
                 if errors:
                     feature_flag_error = ",".join(errors)
 
@@ -1613,23 +1614,23 @@ class Client(object):
                 )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
-                feature_flag_error = "quota_limited"
+                feature_flag_error = FeatureFlagError.QUOTA_LIMITED
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except RequestsTimeout as e:
                 self.log.warning(f"[FEATURE FLAGS] Request timed out: {e}")
-                feature_flag_error = "timeout"
+                feature_flag_error = FeatureFlagError.TIMEOUT
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except RequestsConnectionError as e:
                 self.log.warning(f"[FEATURE FLAGS] Connection error: {e}")
-                feature_flag_error = "connection_error"
+                feature_flag_error = FeatureFlagError.CONNECTION_ERROR
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except APIError as e:
                 self.log.warning(f"[FEATURE FLAGS] API error: {e}")
-                feature_flag_error = f"api_error_{e.status}"
+                feature_flag_error = FeatureFlagError.api_error(e.status)
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
-                feature_flag_error = "unknown_error"
+                feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
 
         if send_feature_flag_events:
