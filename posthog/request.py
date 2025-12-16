@@ -8,7 +8,6 @@ from gzip import GzipFile
 from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union
 
-
 import requests
 from dateutil.tz import tzutc
 from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
@@ -42,6 +41,9 @@ for attr, value in [
     if hasattr(socket, attr):
         KEEP_ALIVE_SOCKET_OPTIONS.append((socket.SOL_TCP, getattr(socket, attr), value))
 
+# Status codes that indicate transient server errors worth retrying
+RETRY_STATUS_FORCELIST = [408, 500, 502, 503, 504]
+
 
 def _mask_tokens_in_url(url: str) -> str:
     """Mask token values in URLs for safe logging, keeping first 10 chars visible."""
@@ -71,6 +73,7 @@ class HTTPAdapterWithSocketOptions(HTTPAdapter):
 
 
 def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.Session:
+    """Build a session for general requests (batch, decide, etc.)."""
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(
             total=2,
@@ -79,12 +82,40 @@ def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.S
         ),
         socket_options=socket_options,
     )
-    session = requests.sessions.Session()
+    session = requests.Session()
+    session.mount("https://", adapter)
+    return session
+
+
+def _build_flags_session(
+    socket_options: Optional[SocketOptions] = None,
+) -> requests.Session:
+    """
+    Build a session for feature flag requests with POST retries.
+
+    Feature flag requests are idempotent (read-only), so retrying POST
+    requests is safe. This session retries on transient server errors
+    (408, 5xx) and network failures with exponential backoff
+    (0.5s, 1s delays between retries).
+    """
+    adapter = HTTPAdapterWithSocketOptions(
+        max_retries=Retry(
+            total=2,
+            connect=2,
+            read=2,
+            backoff_factor=0.5,
+            status_forcelist=RETRY_STATUS_FORCELIST,
+            allowed_methods=["POST"],
+        ),
+        socket_options=socket_options,
+    )
+    session = requests.Session()
     session.mount("https://", adapter)
     return session
 
 
 _session = _build_session()
+_flags_session = _build_flags_session()
 _socket_options: Optional[SocketOptions] = None
 _pooling_enabled = True
 
@@ -95,6 +126,12 @@ def _get_session() -> requests.Session:
     return _build_session(_socket_options)
 
 
+def _get_flags_session() -> requests.Session:
+    if _pooling_enabled:
+        return _flags_session
+    return _build_flags_session(_socket_options)
+
+
 def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
     """
     Configure socket options for all HTTP connections.
@@ -103,11 +140,12 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
         from posthog import set_socket_options
         set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
     """
-    global _session, _socket_options
+    global _session, _flags_session, _socket_options
     if socket_options == _socket_options:
         return
     _socket_options = socket_options
     _session = _build_session(socket_options)
+    _flags_session = _build_flags_session(socket_options)
 
 
 def enable_keep_alive() -> None:
@@ -145,6 +183,7 @@ def post(
     path=None,
     gzip: bool = False,
     timeout: int = 15,
+    session: Optional[requests.Session] = None,
     **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the API"""
@@ -165,7 +204,9 @@ def post(
             gz.write(data.encode("utf-8"))
         data = buf.getvalue()
 
-    res = _get_session().post(url, data=data, headers=headers, timeout=timeout)
+    res = (session or _get_session()).post(
+        url, data=data, headers=headers, timeout=timeout
+    )
 
     if res.status_code == 200:
         log.debug("data uploaded successfully")
@@ -221,8 +262,16 @@ def flags(
     timeout: int = 15,
     **kwargs,
 ) -> Any:
-    """Post the `kwargs to the flags API endpoint"""
-    res = post(api_key, host, "/flags/?v=2", gzip, timeout, **kwargs)
+    """Post the kwargs to the flags API endpoint with automatic retries."""
+    res = post(
+        api_key,
+        host,
+        "/flags/?v=2",
+        gzip,
+        timeout,
+        session=_get_flags_session(),
+        **kwargs,
+    )
     return _process_response(
         res, success_message="Feature flags evaluated successfully"
     )
