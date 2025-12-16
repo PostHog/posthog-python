@@ -2,6 +2,7 @@ import atexit
 import logging
 import os
 import sys
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
@@ -196,6 +197,8 @@ class Client(object):
         capture_exception_code_variables=False,
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
+        realtime_flags=False,
+        on_feature_flags_update=None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -230,7 +233,7 @@ class Client(object):
         self.gzip = gzip
         self.timeout = timeout
         self._feature_flags = None  # private variable to store flags
-        self.feature_flags_by_key = None
+        self.feature_flags_by_key: Optional[dict[str, dict]] = None
         self.group_type_mapping: Optional[dict[str, str]] = None
         self.cohorts: Optional[dict[str, Any]] = None
         self.poll_interval = poll_interval
@@ -252,6 +255,15 @@ class Client(object):
         self.exception_capture = None
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
+        self.realtime_flags = realtime_flags
+        self.on_feature_flags_update = on_feature_flags_update
+        self.sse_connection = None  # type: Optional[Any]
+        self.sse_response = None  # type: Optional[Any]
+        self.sse_connected = False
+        self._sse_lock = threading.Lock()
+        self._flags_lock = (
+            threading.Lock()
+        )  # Protects feature_flags and feature_flags_by_key
 
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -1194,6 +1206,10 @@ class Client(object):
             except Exception as e:
                 self.log.error(f"[FEATURE FLAGS] Cache provider shutdown error: {e}")
 
+        # Close SSE connection
+        if self.sse_connection:
+            self._close_sse_connection()
+
     def shutdown(self):
         """
         Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
@@ -1213,19 +1229,20 @@ class Client(object):
         self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
     ) -> None:
         """Update internal flag state from cache data and invalidate evaluation cache if changed."""
-        self.feature_flags = data["flags"]
-        self.group_type_mapping = data["group_type_mapping"]
-        self.cohorts = data["cohorts"]
+        with self._flags_lock:
+            self.feature_flags = data["flags"]
+            self.group_type_mapping = data["group_type_mapping"]
+            self.cohorts = data["cohorts"]
 
-        # Invalidate evaluation cache if flag definitions changed
-        if (
-            self.flag_cache
-            and old_flags_by_key is not None
-            and old_flags_by_key != (self.feature_flags_by_key or {})
-        ):
-            old_version = self.flag_definition_version
-            self.flag_definition_version += 1
-            self.flag_cache.invalidate_version(old_version)
+            # Invalidate evaluation cache if flag definitions changed
+            if (
+                self.flag_cache
+                and old_flags_by_key is not None
+                and old_flags_by_key != (self.feature_flags_by_key or {})
+            ):
+                old_version = self.flag_definition_version
+                self.flag_definition_version += 1
+                self.flag_cache.invalidate_version(old_version)
 
     def _load_feature_flags(self):
         should_fetch = True
@@ -1251,8 +1268,12 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
+                    with self._flags_lock:
+                        old_flags_copy: dict[str, dict] = (
+                            self.feature_flags_by_key or {}
+                        )
                     self._update_flag_state(
-                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
+                        cached_data, old_flags_by_key=old_flags_copy
                     )
                     self._last_feature_flag_poll = datetime.now(tz=tzutc())
                     return
@@ -1276,7 +1297,8 @@ class Client(object):
         """Fetch feature flags from the PostHog API."""
         try:
             # Store old flags to detect changes
-            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+            with self._flags_lock:
+                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
 
             response = get(
                 self.personal_api_key,
@@ -1318,6 +1340,10 @@ class Client(object):
                 except Exception as e:
                     self.log.error(f"[FEATURE FLAGS] Cache provider store error: {e}")
                     # Flags are already in memory, so continue normally
+
+            # Setup SSE connection if realtime_flags is enabled
+            if self.realtime_flags and not self.sse_connected:
+                self._setup_sse_connection()
 
         except APIError as e:
             if e.status == 401:
@@ -1761,30 +1787,33 @@ class Client(object):
             self.load_feature_flags()
         response = None
 
-        if self.feature_flags:
-            assert self.feature_flags_by_key is not None, (
-                "feature_flags_by_key should be initialized when feature_flags is set"
-            )
-            # Local evaluation
-            flag = self.feature_flags_by_key.get(key)
-            if flag:
-                try:
-                    response = self._compute_flag_locally(
-                        flag,
-                        distinct_id,
-                        groups=groups,
-                        person_properties=person_properties,
-                        group_properties=group_properties,
-                    )
-                    self.log.debug(
-                        f"Successfully computed flag locally: {key} -> {response}"
-                    )
-                except (RequiresServerEvaluation, InconclusiveMatchError) as e:
-                    self.log.debug(f"Failed to compute flag {key} locally: {e}")
-                except Exception as e:
-                    self.log.exception(
-                        f"[FEATURE FLAGS] Error while computing variant locally: {e}"
-                    )
+        flag = None
+        with self._flags_lock:
+            if self.feature_flags:
+                assert self.feature_flags_by_key is not None, (
+                    "feature_flags_by_key should be initialized when feature_flags is set"
+                )
+                # Local evaluation - copy flag to avoid holding lock during computation
+                flag = self.feature_flags_by_key.get(key)
+
+        if flag:
+            try:
+                response = self._compute_flag_locally(
+                    flag,
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                )
+                self.log.debug(
+                    f"Successfully computed flag locally: {key} -> {response}"
+                )
+            except (RequiresServerEvaluation, InconclusiveMatchError) as e:
+                self.log.debug(f"Failed to compute flag {key} locally: {e}")
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Error while computing variant locally: {e}"
+                )
         return response
 
     def get_feature_flag_payload(
@@ -1955,13 +1984,14 @@ class Client(object):
     def _compute_payload_locally(
         self, key: str, match_value: FlagValue
     ) -> Optional[str]:
-        payload = None
+        with self._flags_lock:
+            if self.feature_flags_by_key is None:
+                return None
 
-        if self.feature_flags_by_key is None:
-            return payload
+            flag_definition = self.feature_flags_by_key.get(key)
+            if not flag_definition:
+                return None
 
-        flag_definition = self.feature_flags_by_key.get(key)
-        if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
             # For boolean flags, convert True to "true"
@@ -1971,8 +2001,7 @@ class Client(object):
                 if isinstance(match_value, bool) and match_value
                 else str(match_value)
             )
-            payload = flag_payloads.get(lookup_value, None)
-        return payload
+            return flag_payloads.get(lookup_value, None)
 
     def get_all_flags(
         self,
@@ -2258,6 +2287,212 @@ class Client(object):
                 }
 
         return all_person_properties, all_group_properties
+
+    def _setup_sse_connection(self):
+        """
+        Establish a real-time connection using Server-Sent Events to receive feature flag updates.
+        """
+        if not self.personal_api_key:
+            self.log.warning(
+                "[FEATURE FLAGS] Cannot establish real-time connection without personal_api_key"
+            )
+            return
+
+        with self._sse_lock:
+            if self.sse_connected:
+                self.log.debug("[FEATURE FLAGS] SSE connection already established")
+                return
+            self.sse_connected = True
+
+        try:
+            # Use requests with stream=True for SSE
+            import requests  # type: ignore[import-untyped]
+
+            url = f"{self.host}/flags/definitions/stream"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "text/event-stream",
+            }
+
+            def sse_listener():
+                """Background thread to listen for SSE messages"""
+                import json
+
+                try:
+                    response = requests.get(
+                        url, headers=headers, stream=True, timeout=None
+                    )
+                    self.sse_response = response
+
+                    if response.status_code != 200:
+                        self.log.warning(
+                            f"[FEATURE FLAGS] SSE connection failed with status {response.status_code}"
+                        )
+                        with self._sse_lock:
+                            self.sse_connected = False
+                        return
+
+                    self.log.debug("[FEATURE FLAGS] SSE connection established")
+
+                    # Process the stream line by line, checking sse_connected periodically
+                    for line in response.iter_lines():
+                        with self._sse_lock:
+                            if not self.sse_connected:
+                                break
+
+                        if not line:
+                            continue
+
+                        line = line.decode("utf-8")
+
+                        # SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            try:
+                                flag_data = json.loads(data_str)
+                                self._process_flag_update(flag_data)
+                            except json.JSONDecodeError as e:
+                                self.log.warning(
+                                    f"[FEATURE FLAGS] Failed to parse SSE message: {e}"
+                                )
+                except Exception as e:
+                    self.log.warning(
+                        f"[FEATURE FLAGS] SSE connection error: {e}. Reconnecting in 5 seconds..."
+                    )
+                    with self._sse_lock:
+                        self.sse_connected = False
+
+                    # Attempt to reconnect after 5 seconds if realtime_flags is still enabled
+                    if self.realtime_flags:
+                        import time
+
+                        time.sleep(5)
+                        self._setup_sse_connection()
+                finally:
+                    if self.sse_response:
+                        try:
+                            self.sse_response.close()
+                        except Exception:
+                            pass
+                        self.sse_response = None
+
+            # Start the SSE listener in a daemon thread
+            sse_thread = threading.Thread(target=sse_listener, daemon=True)
+            sse_thread.start()
+            self.sse_connection = sse_thread
+
+        except ImportError:
+            self.log.warning(
+                "[FEATURE FLAGS] requests library required for real-time flags"
+            )
+        except Exception as e:
+            self.log.exception(f"[FEATURE FLAGS] Failed to setup SSE connection: {e}")
+
+    def _close_sse_connection(self):
+        """
+        Close the active SSE connection and prevent reconnection.
+        """
+        if self.sse_connection:
+            self.log.debug("[FEATURE FLAGS] Closing SSE connection")
+            # Disable realtime flags to prevent reconnection
+            self.realtime_flags = False
+
+            with self._sse_lock:
+                self.sse_connected = False
+
+            # Close the response to interrupt iter_lines()
+            if self.sse_response:
+                try:
+                    self.sse_response.close()
+                except Exception:
+                    pass
+                self.sse_response = None
+
+            self.sse_connection = None
+
+    def _process_flag_update(self, flag_data):
+        """
+        Process incoming flag updates from SSE messages.
+
+        Args:
+            flag_data: The flag data from the SSE message
+        """
+        try:
+            flag_key = flag_data.get("key")
+            if not flag_key:
+                self.log.warning("[FEATURE FLAGS] Received flag update without key")
+                return
+
+            is_deleted = flag_data.get("deleted", False)
+
+            with self._flags_lock:
+                # Handle flag deletion
+                if is_deleted:
+                    self.log.debug(f"[FEATURE FLAGS] Deleting flag: {flag_key}")
+                    if (
+                        self.feature_flags_by_key
+                        and flag_key in self.feature_flags_by_key
+                    ):
+                        del self.feature_flags_by_key[flag_key]
+
+                    # Also remove from the array
+                    if self.feature_flags:
+                        self.feature_flags = [
+                            f for f in self.feature_flags if f.get("key") != flag_key
+                        ]
+
+                    # Invalidate cache for this flag
+                    if self.flag_cache:
+                        old_version = self.flag_definition_version
+                        self.flag_definition_version += 1
+                        self.flag_cache.invalidate_version(old_version)
+
+                else:
+                    # Update or add flag
+                    self.log.debug(f"[FEATURE FLAGS] Updating flag: {flag_key}")
+
+                    if self.feature_flags_by_key is None:
+                        self.feature_flags_by_key = {}
+
+                    if self.feature_flags is None:
+                        self.feature_flags = []
+
+                    # Update the lookup table
+                    # mypy doesn't track that the setter ensures feature_flags_by_key is a dict
+                    assert self.feature_flags_by_key is not None
+                    self.feature_flags_by_key[flag_key] = flag_data
+
+                    # Update or add to the array
+                    flag_exists = False
+                    for i, f in enumerate(self.feature_flags):
+                        if f.get("key") == flag_key:
+                            self.feature_flags[i] = flag_data
+                            flag_exists = True
+                            break
+
+                    if not flag_exists:
+                        self.feature_flags.append(flag_data)
+
+                    # Invalidate cache when flag definitions change
+                    if self.flag_cache:
+                        old_version = self.flag_definition_version
+                        self.flag_definition_version += 1
+                        self.flag_cache.invalidate_version(old_version)
+
+            # Call the user's callback if provided
+            if self.on_feature_flags_update:
+                try:
+                    self.on_feature_flags_update(
+                        flag_key=flag_key,
+                        flag_data=flag_data,
+                    )
+                except Exception as e:
+                    self.log.exception(
+                        f"[FEATURE FLAGS] Error in on_feature_flags_update callback: {e}"
+                    )
+
+        except Exception as e:
+            self.log.exception(f"[FEATURE FLAGS] Error processing flag update: {e}")
 
 
 def stringify_id(val):
