@@ -1,3 +1,4 @@
+import re
 import os
 import unittest
 
@@ -12,6 +13,7 @@ from posthog.ai.sanitization import (
     is_raw_base64,
     REDACTED_IMAGE_PLACEHOLDER,
 )
+from posthog.request import build_ai_multipart_request
 
 
 class TestSanitization(unittest.TestCase):
@@ -333,6 +335,213 @@ class TestSanitization(unittest.TestCase):
 
 
 class TestAIMultipartRequest(unittest.TestCase):
+    """Tests for building AI multipart requests."""
+
+    def test_build_basic_multipart_request(self):
+        """Test building a basic multipart request with one blob."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {"$ai_model": "gpt-4", "$ai_provider": "openai"}
+        blobs = {"$ai_input": [{"role": "user", "content": "test message"}]}
+        timestamp = "2024-01-15T10:30:00Z"
+        event_uuid = "test-uuid-123"
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+            timestamp=timestamp,
+            event_uuid=event_uuid,
+        )
+
+        # Verify body is bytes
+        assert isinstance(body, bytes)
+        assert isinstance(boundary, str)
+
+        # Decode body for inspection
+        body_str = body.decode("utf-8")
+
+        # Verify boundary format
+        assert boundary.startswith("----WebKitFormBoundary")
+        assert (
+            len(boundary) == 54
+        )  # "----WebKitFormBoundary" (22 chars) + token_hex(16) (32 chars)
+
+        # Verify all parts are present
+        assert f"--{boundary}" in body_str
+        assert 'name="event"' in body_str
+        assert 'name="event.properties"' in body_str
+        assert 'name="event.properties.$ai_input"' in body_str
+
+        # Verify event part contains expected data
+        assert '"event": "$ai_generation"' in body_str
+        assert '"distinct_id": "test_user"' in body_str
+        assert '"uuid": "test-uuid-123"' in body_str
+        assert '"timestamp": "2024-01-15T10:30:00Z"' in body_str
+
+        # Verify properties part
+        assert '"$ai_model": "gpt-4"' in body_str
+        assert '"$ai_provider": "openai"' in body_str
+
+        # Verify blob part
+        assert '"role": "user"' in body_str
+        assert '"content": "test message"' in body_str
+
+        # Verify final boundary
+        assert f"--{boundary}--" in body_str
+
+    def test_build_multipart_with_multiple_blobs(self):
+        """Test building a multipart request with multiple blobs."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {"$ai_model": "gpt-4"}
+        blobs = {
+            "$ai_input": [{"role": "user", "content": "input"}],
+            "$ai_output_choices": [{"role": "assistant", "content": "output"}],
+        }
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+        )
+
+        body_str = body.decode("utf-8")
+
+        # Verify both blob parts are present
+        assert 'name="event.properties.$ai_input"' in body_str
+        assert 'name="event.properties.$ai_output_choices"' in body_str
+        assert '"content": "input"' in body_str
+        assert '"content": "output"' in body_str
+
+    def test_build_multipart_no_blobs(self):
+        """Test building a multipart request with no blobs."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {"$ai_model": "gpt-4"}
+        blobs = {}
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+        )
+
+        body_str = body.decode("utf-8")
+
+        # Should still have event and properties parts
+        assert 'name="event"' in body_str
+        assert 'name="event.properties"' in body_str
+
+        # Should not have any blob parts
+        assert 'name="event.properties.$ai_input"' not in body_str
+        assert 'name="event.properties.$ai_output_choices"' not in body_str
+
+    def test_build_multipart_auto_generates_uuid(self):
+        """Test that UUID is auto-generated if not provided."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {}
+        blobs = {}
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+            event_uuid=None,  # Don't provide UUID
+        )
+
+        body_str = body.decode("utf-8")
+
+        # Should have a UUID in the event part
+        assert '"uuid":' in body_str
+
+        # Extract and verify it's a valid UUID format (basic check)
+        uuid_pattern = r'"uuid":\s*"([0-9a-f-]+)"'
+        match = re.search(uuid_pattern, body_str)
+        assert match is not None
+        uuid_str = match.group(1)
+        assert len(uuid_str) == 36  # Standard UUID string length
+
+    def test_build_multipart_without_timestamp(self):
+        """Test building request without timestamp."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {}
+        blobs = {}
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+            timestamp=None,
+        )
+
+        body_str = body.decode("utf-8")
+
+        # Should not have timestamp in event part
+        assert '"timestamp"' not in body_str
+
+    def test_build_multipart_content_types(self):
+        """Test that all parts have correct Content-Type headers."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {"$ai_model": "gpt-4"}
+        blobs = {"$ai_input": [{"role": "user", "content": "test"}]}
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+        )
+
+        body_str = body.decode("utf-8")
+
+        # All parts should have application/json Content-Type
+        parts = body_str.split(f"--{boundary}")
+        for part in parts:
+            if 'name="' in part:  # Skip empty parts
+                assert "Content-Type: application/json" in part
+
+    def test_build_multipart_complex_nested_data(self):
+        """Test with complex nested JSON structures in blobs."""
+        event_name = "$ai_generation"
+        distinct_id = "test_user"
+        properties = {"$ai_model": "gpt-4"}
+        blobs = {
+            "$ai_input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/image.jpg"},
+                        },
+                    ],
+                }
+            ]
+        }
+
+        body, boundary = build_ai_multipart_request(
+            event_name=event_name,
+            distinct_id=distinct_id,
+            properties=properties,
+            blobs=blobs,
+        )
+
+        body_str = body.decode("utf-8")
+
+        # Verify nested structure is properly encoded
+        assert '"type": "text"' in body_str
+        assert '"type": "image_url"' in body_str
+        assert "https://example.com/image.jpg" in body_str
     """Test that _INTERNAL_LLMA_MULTIMODAL environment variable controls sanitization."""
 
     def tearDown(self):
