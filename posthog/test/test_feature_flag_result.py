@@ -195,7 +195,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print("FAIL", e, batch)  # noqa: T201
         self.failed = True
 
     def setUp(self):
@@ -722,7 +721,6 @@ class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
 
     def set_fail(self, e, batch):
         """Mark the failure handler"""
-        print("FAIL", e, batch)  # noqa: T201
         self.failed = True
 
     def setUp(self):
