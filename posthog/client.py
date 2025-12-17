@@ -2,6 +2,7 @@ import atexit
 import logging
 import os
 import sys
+import warnings
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 from typing_extensions import Unpack
@@ -1827,6 +1828,12 @@ class Client(object):
         Category:
             Feature flags
         """
+        warnings.warn(
+            "get_feature_flag_payload is deprecated and will be removed in a future version. "
+            "Please use get_feature_flag_result instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         feature_flag_result = self._get_feature_flag_result(
             key,
             distinct_id,
