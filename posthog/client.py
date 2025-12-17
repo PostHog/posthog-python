@@ -680,15 +680,6 @@ class Client(object):
                     f"[FEATURE FLAGS] Unable to get feature variants: {e}"
                 )
 
-        elif self.feature_flags and event != "$feature_flag_called":
-            # Local evaluation is enabled, flags are loaded, so try and get all flags we can without going to the server
-            feature_variants = self.get_all_flags(
-                distinct_id,
-                groups=(groups or {}),
-                disable_geoip=disable_geoip,
-                only_evaluate_locally=True,
-            )
-
         for feature, variant in (feature_variants or {}).items():
             extra_properties[f"$feature/{feature}"] = variant
 
@@ -1798,7 +1789,7 @@ class Client(object):
         person_properties=None,
         group_properties=None,
         only_evaluate_locally=False,
-        send_feature_flag_events=True,
+        send_feature_flag_events=False,
         disable_geoip=None,
     ):
         """
@@ -1812,7 +1803,7 @@ class Client(object):
             person_properties: A dictionary of person properties.
             group_properties: A dictionary of group properties.
             only_evaluate_locally: Whether to only evaluate locally.
-            send_feature_flag_events: Whether to send feature flag events.
+            send_feature_flag_events: Deprecated. Use get_feature_flag() instead if you need events.
             disable_geoip: Whether to disable GeoIP for this request.
 
         Examples:
@@ -1834,6 +1825,14 @@ class Client(object):
             DeprecationWarning,
             stacklevel=2,
         )
+        if send_feature_flag_events:
+            warnings.warn(
+                "send_feature_flag_events is deprecated in get_feature_flag_payload() and will be removed "
+                "in a future version. Use get_feature_flag() if you want to send $feature_flag_called events.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         feature_flag_result = self._get_feature_flag_result(
             key,
             distinct_id,
