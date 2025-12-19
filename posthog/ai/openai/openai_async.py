@@ -449,7 +449,7 @@ class WrappedCompletions:
             posthog_trace_id = str(uuid.uuid4())
 
         # Use model from kwargs, fallback to model from response
-        model = kwargs.get("model") or model_from_response
+        model = kwargs.get("model") or model_from_response or "unknown"
 
         event_properties = {
             "$ai_provider": "openai",
