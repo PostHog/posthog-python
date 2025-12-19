@@ -1944,6 +1944,52 @@ def test_non_streaming_responses_api_extracts_model_from_response(mock_client):
         assert props["$ai_model"] == "gpt-4o-mini-stored"
 
 
+def test_non_streaming_returns_none_when_no_model(mock_client):
+    """Test that non-streaming returns None (not 'unknown') when model is not available anywhere."""
+    # Create a response without model attribute using real OpenAI types
+    mock_response = ChatCompletion(
+        id="test",
+        model="",  # Will be removed below
+        object="chat.completion",
+        created=int(time.time()),
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=CompletionUsage(
+            completion_tokens=5,
+            prompt_tokens=10,
+            total_tokens=15,
+        ),
+    )
+    # Remove model attribute to simulate missing model
+    object.__delattr__(mock_response, "model")
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model in kwargs and response has no model
+        client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Should be None, NOT "unknown" (to avoid incorrect cost matching)
+        assert props["$ai_model"] is None
+
+
 def test_streaming_falls_back_to_unknown_when_no_model(mock_client):
     """Test that streaming falls back to 'unknown' when model is not available anywhere."""
     from unittest.mock import MagicMock
