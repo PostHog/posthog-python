@@ -59,8 +59,29 @@ def test_code_variables_capture(tmpdir):
         my_number = 42
         my_bool = True
         my_dict = {"name": "test", "value": 123}
+        my_sensitive_dict = {
+            "safe_key": "safe_value",
+            "password": "secret123",  # key matches pattern -> should be masked
+            "other_key": "contains_password_here",  # value matches pattern -> should be masked
+        }
+        my_nested_dict = {
+            "level1": {
+                "level2": {
+                    "api_key": "nested_secret",  # deeply nested key matches
+                    "data": "contains_token_here",  # deeply nested value matches
+                    "safe": "visible",
+                }
+            }
+        }
+        my_list = ["safe_item", "has_password_inside", "another_safe"]
+        my_tuple = ("tuple_safe", "secret_in_value", "tuple_also_safe")
+        my_list_of_dicts = [
+            {"id": 1, "password": "list_dict_secret"},
+            {"id": 2, "value": "safe_value"},
+        ]
         my_obj = UnserializableObject()
-        my_password = "secret123"  # Should be masked by default
+        my_password = "secret123"  # Should be masked by default (name matches)
+        my_innocent_var = "contains_password_here"  # Should be masked by default (value matches)
         __should_be_ignored = "hidden"  # Should be ignored by default
         
         1/0  # Trigger exception
@@ -96,8 +117,31 @@ def test_code_variables_capture(tmpdir):
     assert b"'my_number': 42" in output
     assert b"'my_bool': 'True'" in output
     assert b'"my_dict": "{\\"name\\": \\"test\\", \\"value\\": 123}"' in output
+    assert (
+        b'{\\"safe_key\\": \\"safe_value\\", \\"password\\": \\"$$_posthog_redacted_based_on_masking_rules_$$\\", \\"other_key\\": \\"$$_posthog_redacted_based_on_masking_rules_$$\\"}'
+        in output
+    )
+    assert (
+        b'{\\"level1\\": {\\"level2\\": {\\"api_key\\": \\"$$_posthog_redacted_based_on_masking_rules_$$\\", \\"data\\": \\"$$_posthog_redacted_based_on_masking_rules_$$\\", \\"safe\\": \\"visible\\"}}}'
+        in output
+    )
+    assert (
+        b'[\\"safe_item\\", \\"$$_posthog_redacted_based_on_masking_rules_$$\\", \\"another_safe\\"]'
+        in output
+    )
+    assert (
+        b'[\\"tuple_safe\\", \\"$$_posthog_redacted_based_on_masking_rules_$$\\", \\"tuple_also_safe\\"]'
+        in output
+    )
+    assert (
+        b'[{\\"id\\": 1, \\"password\\": \\"$$_posthog_redacted_based_on_masking_rules_$$\\"}, {\\"id\\": 2, \\"value\\": \\"safe_value\\"}]'
+        in output
+    )
     assert b"<__main__.UnserializableObject object at" in output
     assert b"'my_password': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
+    assert (
+        b"'my_innocent_var': '$$_posthog_redacted_based_on_masking_rules_$$'" in output
+    )
     assert b"'__should_be_ignored':" not in output
 
     # Variables from intermediate_function frame

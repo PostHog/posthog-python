@@ -39,6 +39,16 @@ from posthog.feature_flags import (
 from posthog.feature_flags import (
     RequiresServerEvaluation as RequiresServerEvaluation,
 )
+from posthog.flag_definition_cache import (
+    FlagDefinitionCacheData as FlagDefinitionCacheData,
+    FlagDefinitionCacheProvider as FlagDefinitionCacheProvider,
+)
+from posthog.request import (
+    disable_connection_reuse as disable_connection_reuse,
+    enable_keep_alive as enable_keep_alive,
+    set_socket_options as set_socket_options,
+    SocketOptions as SocketOptions,
+)
 from posthog.types import (
     FeatureFlag,
     FlagsAndPayloads,

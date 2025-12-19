@@ -1,6 +1,25 @@
-# 7.2.1 - 2025-12-19
+# 7.4.1 - 2025-12-19
 
 feat: add `in_app_modules` option to control code variables capturing
+
+# 7.4.0 - 2025-12-16
+
+feat: Add automatic retries for feature flag requests
+
+Feature flag API requests now automatically retry on transient failures:
+- Network errors (connection refused, DNS failures, timeouts)
+- Server errors (500, 502, 503, 504)
+- Up to 2 retries with exponential backoff (0.5s, 1s delays)
+
+Rate limit (429) and quota (402) errors are not retried.
+
+# 7.3.1 - 2025-12-06
+
+fix: remove unused $exception_message and $exception_type
+
+# 7.3.0 - 2025-12-05
+
+feat: improve code variables capture masking
 
 # 7.2.0 - 2025-12-01
 
