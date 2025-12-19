@@ -285,9 +285,7 @@ def call_llm_and_track_usage(
 
         event_properties = {
             "$ai_provider": provider,
-            "$ai_model": kwargs.get("model")
-            or getattr(response, "model", None)
-            or "unknown",
+            "$ai_model": kwargs.get("model") or getattr(response, "model", None),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 ph_client, posthog_privacy_mode, sanitized_messages
@@ -398,9 +396,7 @@ async def call_llm_and_track_usage_async(
 
         event_properties = {
             "$ai_provider": provider,
-            "$ai_model": kwargs.get("model")
-            or getattr(response, "model", None)
-            or "unknown",
+            "$ai_model": kwargs.get("model") or getattr(response, "model", None),
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 ph_client, posthog_privacy_mode, sanitized_messages
