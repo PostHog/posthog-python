@@ -1,3 +1,9 @@
+# 7.4.1 - 2025-12-19
+
+fix: extract model from response for OpenAI stored prompts
+
+When using OpenAI stored prompts, the model is defined in the OpenAI dashboard rather than passed in the API request. This fix adds a fallback to extract the model from the response object when not provided in kwargs, ensuring generations show up with the correct model and enabling cost calculations.
+
 # 7.4.0 - 2025-12-16
 
 feat: Add automatic retries for feature flag requests
