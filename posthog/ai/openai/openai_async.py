@@ -128,14 +128,23 @@ class WrappedResponses:
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
         final_content = []
+        model_from_response: Optional[str] = None
         response = await self._original.create(**kwargs)
 
         async def async_generator():
             nonlocal usage_stats
             nonlocal final_content  # noqa: F824
+            nonlocal model_from_response
 
             try:
                 async for chunk in response:
+                    # Extract model from response object in chunk (for stored prompts)
+                    if hasattr(chunk, "response") and chunk.response:
+                        if model_from_response is None and hasattr(
+                            chunk.response, "model"
+                        ):
+                            model_from_response = chunk.response.model
+
                     # Extract usage stats from chunk
                     chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
 
@@ -166,6 +175,7 @@ class WrappedResponses:
                     latency,
                     output,
                     extract_available_tool_calls("openai", kwargs),
+                    model_from_response,
                 )
 
         return async_generator()
@@ -182,13 +192,17 @@ class WrappedResponses:
         latency: float,
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
+        model_from_response: Optional[str] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
+        # Use model from kwargs, fallback to model from response
+        model = kwargs.get("model") or model_from_response or "unknown"
+
         event_properties = {
             "$ai_provider": "openai",
-            "$ai_model": kwargs.get("model"),
+            "$ai_model": model,
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
@@ -350,6 +364,7 @@ class WrappedCompletions:
         usage_stats: TokenUsage = TokenUsage()
         accumulated_content = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
+        model_from_response: Optional[str] = None
 
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
@@ -360,9 +375,14 @@ class WrappedCompletions:
             nonlocal usage_stats
             nonlocal accumulated_content  # noqa: F824
             nonlocal accumulated_tool_calls
+            nonlocal model_from_response
 
             try:
                 async for chunk in response:
+                    # Extract model from chunk (Chat Completions chunks have model field)
+                    if model_from_response is None and hasattr(chunk, "model"):
+                        model_from_response = chunk.model
+
                     # Extract usage stats from chunk
                     chunk_usage = extract_openai_usage_from_chunk(chunk, "chat")
                     if chunk_usage:
@@ -405,6 +425,7 @@ class WrappedCompletions:
                     accumulated_content,
                     tool_calls_list,
                     extract_available_tool_calls("openai", kwargs),
+                    model_from_response,
                 )
 
         return async_generator()
@@ -422,13 +443,17 @@ class WrappedCompletions:
         output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
+        model_from_response: Optional[str] = None,
     ):
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
+        # Use model from kwargs, fallback to model from response
+        model = kwargs.get("model") or model_from_response or "unknown"
+
         event_properties = {
             "$ai_provider": "openai",
-            "$ai_model": kwargs.get("model"),
+            "$ai_model": model,
             "$ai_model_parameters": get_model_params(kwargs),
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
