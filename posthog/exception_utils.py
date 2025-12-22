@@ -14,23 +14,23 @@ import types
 from datetime import datetime
 from types import FrameType, TracebackType  # noqa: F401
 from typing import (  # noqa: F401
+    TYPE_CHECKING,
     Any,
     Dict,
     Iterator,
     List,
     Literal,
     Optional,
+    Pattern,
     Set,
     Tuple,
     TypedDict,
     TypeVar,
     Union,
     cast,
-    TYPE_CHECKING,
-    Pattern,
 )
 
-from posthog.args import ExcInfo, ExceptionArg  # noqa: F401
+from posthog.args import ExceptionArg, ExcInfo  # noqa: F401
 
 try:
     # Python 3.11

@@ -1,3 +1,7 @@
+# 7.4.2 - 2025-12-22
+
+feat: add `in_app_modules` option to control code variables capturing
+
 # 7.4.1 - 2025-12-19
 
 fix: extract model from response for OpenAI stored prompts

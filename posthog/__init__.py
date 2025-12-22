@@ -1,18 +1,33 @@
 import datetime  # noqa: F401
-from typing import Callable, Dict, Optional, Any  # noqa: F401
+from typing import Any, Callable, Dict, Optional  # noqa: F401
+
 from typing_extensions import Unpack
 
-from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ExceptionArg
+from posthog.args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.client import Client
 from posthog.contexts import (
-    new_context as inner_new_context,
-    scoped as inner_scoped,
-    tag as inner_tag,
-    set_context_session as inner_set_context_session,
     identify_context as inner_identify_context,
+)
+from posthog.contexts import (
+    new_context as inner_new_context,
+)
+from posthog.contexts import (
+    scoped as inner_scoped,
+)
+from posthog.contexts import (
     set_capture_exception_code_variables_context as inner_set_capture_exception_code_variables_context,
-    set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
+)
+from posthog.contexts import (
     set_code_variables_ignore_patterns_context as inner_set_code_variables_ignore_patterns_context,
+)
+from posthog.contexts import (
+    set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
+)
+from posthog.contexts import (
+    set_context_session as inner_set_context_session,
+)
+from posthog.contexts import (
+    tag as inner_tag,
 )
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
@@ -20,6 +35,8 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flags import (
     InconclusiveMatchError as InconclusiveMatchError,
+)
+from posthog.feature_flags import (
     RequiresServerEvaluation as RequiresServerEvaluation,
 )
 from posthog.flag_definition_cache import (
@@ -35,6 +52,8 @@ from posthog.request import (
 from posthog.types import (
     FeatureFlag,
     FlagsAndPayloads,
+)
+from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
 )
 from posthog.version import VERSION
@@ -201,6 +220,7 @@ default_client = None  # type: Optional[Client]
 capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+in_app_modules = None  # type: Optional[list[str]]
 
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
@@ -799,6 +819,7 @@ def setup() -> Client:
             capture_exception_code_variables=capture_exception_code_variables,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
+            in_app_modules=in_app_modules,
         )
 
     # always set incase user changes it
