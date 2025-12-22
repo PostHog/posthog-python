@@ -44,7 +44,11 @@ class TestClient(unittest.TestCase):
 
     def test_empty_flush(self):
         self.client.flush()
-
+    def test_get_feature_flag_payload_deprecation_warning(self):
+        # This tells Python: "Expect a DeprecationWarning in the next line"
+        with self.assertWarns(DeprecationWarning):
+            self.client.get_feature_flag_payload("key", "distinct_id")
+            
     def test_basic_capture(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
