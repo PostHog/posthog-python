@@ -273,7 +273,7 @@ def capture():
         kwargs = {"distinct_id": distinct_id, "properties": properties}
         if timestamp:
             # Parse ISO8601 timestamp
-            from dateutil.parser import parse
+            from dateutil.parser import parse  # type: ignore[import-untyped]
 
             kwargs["timestamp"] = parse(timestamp)
 
