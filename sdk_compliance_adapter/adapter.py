@@ -5,17 +5,15 @@ This adapter implements the SDK Test Adapter Interface defined in the PostHog Ca
 It wraps the posthog-python SDK and exposes a REST API for the test harness to exercise.
 """
 
-import json
 import logging
 import os
 import threading
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, jsonify, request
 
-from posthog import Client, Posthog
+from posthog import Client
 from posthog.request import batch_post as original_batch_post
 from posthog.version import VERSION
 
@@ -31,7 +29,14 @@ app = Flask(__name__)
 class RequestInfo:
     """Information about an HTTP request made by the SDK"""
 
-    def __init__(self, timestamp_ms: int, status_code: int, retry_attempt: int, event_count: int, uuid_list: List[str]):
+    def __init__(
+        self,
+        timestamp_ms: int,
+        status_code: int,
+        retry_attempt: int,
+        event_count: int,
+        uuid_list: List[str],
+    ):
         self.timestamp_ms = timestamp_ms
         self.status_code = status_code
         self.retry_attempt = retry_attempt
@@ -145,7 +150,13 @@ def create_batch_id(batch: List[Dict]) -> str:
     return "-".join(uuids[:3])  # Use first 3 UUIDs as batch ID
 
 
-def patched_batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs):
+def patched_batch_post(
+    api_key: str,
+    host: Optional[str] = None,
+    gzip: bool = False,
+    timeout: int = 15,
+    **kwargs,
+):
     """Patched version of batch_post that tracks requests"""
     batch = kwargs.get("batch", [])
     batch_id = create_batch_id(batch)
@@ -158,19 +169,21 @@ def patched_batch_post(api_key: str, host: Optional[str] = None, gzip: bool = Fa
         return response
     except Exception as e:
         # Record failed request
-        status_code = getattr(e, "status_code", 500) if hasattr(e, "status_code") else 500
+        status_code = (
+            getattr(e, "status_code", 500) if hasattr(e, "status_code") else 500
+        )
         state.record_request(status_code, batch, batch_id)
         state.record_error(str(e))
         raise
 
 
 # Monkey-patch the batch_post function
-import posthog.request
+import posthog.request  # noqa: E402
 
 posthog.request.batch_post = patched_batch_post
 
 # Also patch in consumer module
-import posthog.consumer
+import posthog.consumer  # noqa: E402
 
 posthog.consumer.batch_post = patched_batch_post
 
@@ -178,7 +191,13 @@ posthog.consumer.batch_post = patched_batch_post
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint"""
-    return jsonify({"sdk_name": "posthog-python", "sdk_version": VERSION, "adapter_version": "1.0.0"})
+    return jsonify(
+        {
+            "sdk_name": "posthog-python",
+            "sdk_version": VERSION,
+            "adapter_version": "1.0.0",
+        }
+    )
 
 
 @app.route("/init", methods=["POST"])
@@ -294,7 +313,9 @@ def identify():
             state.increment_captured()
 
         if properties_set_once:
-            state.client.set_once(distinct_id=distinct_id, properties=properties_set_once)
+            state.client.set_once(
+                distinct_id=distinct_id, properties=properties_set_once
+            )
             state.increment_captured()
 
         logger.info(f"Identified user: {distinct_id}")
