@@ -647,21 +647,29 @@ class WrappedTranscriptions:
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        start_time = time.time()
-        response = await self._original.create(**kwargs)
-        end_time = time.time()
-
-        latency = end_time - start_time
-
-        # Extract file info
+        # Extract file info before API call
         file_obj = kwargs.get("file")
         file_name = getattr(file_obj, "name", None) if file_obj else None
 
+        start_time = time.time()
+        error = None
+        http_status = 200
+        response = None
+
+        try:
+            response = await self._original.create(**kwargs)
+        except Exception as e:
+            error = e
+            http_status = getattr(e, "status_code", 0)
+
+        end_time = time.time()
+        latency = end_time - start_time
+
         # Extract transcription output
-        output_text = getattr(response, "text", None)
+        output_text = getattr(response, "text", None) if response else None
 
         # Extract duration if available (verbose_json response format)
-        duration = getattr(response, "duration", None)
+        duration = getattr(response, "duration", None) if response else None
 
         # Build event properties
         event_properties = {
@@ -677,7 +685,7 @@ class WrappedTranscriptions:
                 posthog_privacy_mode,
                 output_text,
             ),
-            "$ai_http_status": 200,
+            "$ai_http_status": http_status,
             "$ai_latency": latency,
             "$ai_trace_id": posthog_trace_id,
             "$ai_base_url": str(self._client.base_url),
@@ -691,6 +699,11 @@ class WrappedTranscriptions:
         if duration is not None:
             event_properties["$ai_audio_duration"] = duration
 
+        # Add error properties if an error occurred
+        if error is not None:
+            event_properties["$ai_is_error"] = True
+            event_properties["$ai_error"] = str(error)
+
         if posthog_distinct_id is None:
             event_properties["$process_person_profile"] = False
 
@@ -702,6 +715,10 @@ class WrappedTranscriptions:
                 properties=event_properties,
                 groups=posthog_groups,
             )
+
+        # Re-raise the error after capturing the event
+        if error is not None:
+            raise error
 
         return response
 
