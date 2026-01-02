@@ -20,6 +20,7 @@ try:
     from openai.types.completion_usage import CompletionUsage
     from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
     from openai.types.embedding import Embedding
+    from openai.types.audio import Transcription
     from openai.types.responses import (
         Response,
         ResponseOutputMessage,
@@ -2132,3 +2133,209 @@ async def test_async_streaming_responses_extracts_model_from_response(mock_clien
     props = call_args["properties"]
 
     assert props["$ai_model"] == "gpt-4o-mini-async-stored"
+
+
+# Tests for audio transcriptions
+
+
+@pytest.fixture
+def mock_transcription_response():
+    return Transcription(text="Hello world, this is a test transcription.")
+
+
+@pytest.fixture
+def mock_transcription_response_with_duration():
+    return Transcription(
+        text="Hello world, this is a test transcription.",
+        duration=12.5,
+    )
+
+
+def test_transcription(mock_client, mock_transcription_response):
+    """Test basic transcription tracking."""
+    from io import BytesIO
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    with patch(
+        "openai.resources.audio.transcriptions.Transcriptions.create",
+        return_value=mock_transcription_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=mock_file,
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_transcription_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_transcription"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "whisper-1"
+        assert props["$ai_input"] == "test_audio.mp3"
+        assert props["$ai_output_text"] == "Hello world, this is a test transcription."
+        assert props["$ai_http_status"] == 200
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+
+
+def test_transcription_with_duration(
+    mock_client, mock_transcription_response_with_duration
+):
+    """Test transcription tracking with audio duration."""
+    from io import BytesIO
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    with patch(
+        "openai.resources.audio.transcriptions.Transcriptions.create",
+        return_value=mock_transcription_response_with_duration,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=mock_file,
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_transcription_response_with_duration
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert props["$ai_audio_duration"] == 12.5
+
+
+def test_transcription_with_language(mock_client, mock_transcription_response):
+    """Test transcription tracking with language parameter."""
+    from io import BytesIO
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    with patch(
+        "openai.resources.audio.transcriptions.Transcriptions.create",
+        return_value=mock_transcription_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=mock_file,
+            language="en",
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_transcription_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert props["$ai_language"] == "en"
+
+
+def test_transcription_groups(mock_client, mock_transcription_response):
+    """Test transcription tracking with groups."""
+    from io import BytesIO
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    with patch(
+        "openai.resources.audio.transcriptions.Transcriptions.create",
+        return_value=mock_transcription_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=mock_file,
+            posthog_distinct_id="test-id",
+            posthog_groups={"company": "test_company"},
+        )
+
+        assert response == mock_transcription_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+
+        assert call_args["groups"] == {"company": "test_company"}
+
+
+def test_transcription_privacy_mode(mock_client, mock_transcription_response):
+    """Test transcription tracking with privacy mode enabled."""
+    from io import BytesIO
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    with patch(
+        "openai.resources.audio.transcriptions.Transcriptions.create",
+        return_value=mock_transcription_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=mock_file,
+            posthog_distinct_id="test-id",
+            posthog_privacy_mode=True,
+        )
+
+        assert response == mock_transcription_response
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Input and output should be redacted
+        assert props["$ai_input"] is None
+        assert props["$ai_output_text"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_transcription(mock_client, mock_transcription_response):
+    """Test async transcription tracking."""
+    from io import BytesIO
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    mock_create = AsyncMock(return_value=mock_transcription_response)
+
+    with patch(
+        "openai.resources.audio.transcriptions.AsyncTranscriptions.create",
+        new=mock_create,
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.audio.transcriptions.create(
+            model="whisper-1",
+            file=mock_file,
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+    assert response == mock_transcription_response
+    assert mock_create.await_count == 1
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_transcription"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "whisper-1"
+    assert props["$ai_input"] == "test_audio.mp3"
+    assert props["$ai_output_text"] == "Hello world, this is a test transcription."
+    assert props["foo"] == "bar"
+    assert isinstance(props["$ai_latency"], float)

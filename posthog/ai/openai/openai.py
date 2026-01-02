@@ -51,6 +51,7 @@ class OpenAI(openai.OpenAI):
         self._original_embeddings = getattr(self, "embeddings", None)
         self._original_beta = getattr(self, "beta", None)
         self._original_responses = getattr(self, "responses", None)
+        self._original_audio = getattr(self, "audio", None)
 
         # Replace with wrapped versions (only if originals exist)
         if self._original_chat is not None:
@@ -64,6 +65,9 @@ class OpenAI(openai.OpenAI):
 
         if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
+
+        if self._original_audio is not None:
+            self.audio = WrappedAudio(self, self._original_audio)
 
 
 class WrappedResponses:
@@ -527,6 +531,119 @@ class WrappedEmbeddings:
             self._client._ph_client.capture(
                 distinct_id=posthog_distinct_id or posthog_trace_id,
                 event="$ai_embedding",
+                properties=event_properties,
+                groups=posthog_groups,
+            )
+
+        return response
+
+
+class WrappedAudio:
+    """Wrapper for OpenAI audio that tracks usage in PostHog."""
+
+    def __init__(self, client: OpenAI, original_audio):
+        self._client = client
+        self._original = original_audio
+
+    def __getattr__(self, name):
+        """Fallback to original audio object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
+
+    @property
+    def transcriptions(self):
+        return WrappedTranscriptions(self._client, self._original.transcriptions)
+
+
+class WrappedTranscriptions:
+    """Wrapper for OpenAI audio transcriptions that tracks usage in PostHog."""
+
+    def __init__(self, client: OpenAI, original_transcriptions):
+        self._client = client
+        self._original = original_transcriptions
+
+    def __getattr__(self, name):
+        """Fallback to original transcriptions object for any methods we don't explicitly handle."""
+        return getattr(self._original, name)
+
+    def create(
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Create a transcription using OpenAI's 'audio.transcriptions.create' method,
+        and track usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional ID to associate with the usage event.
+            posthog_trace_id: Optional trace UUID for linking events.
+            posthog_properties: Optional dictionary of extra properties to include in the event.
+            posthog_privacy_mode: Whether to anonymize the input and output.
+            posthog_groups: Optional dictionary of groups to associate with the event.
+            **kwargs: Any additional parameters for the OpenAI Transcriptions API.
+
+        Returns:
+            The response from OpenAI's audio.transcriptions.create call.
+        """
+        if posthog_trace_id is None:
+            posthog_trace_id = str(uuid.uuid4())
+
+        start_time = time.time()
+        response = self._original.create(**kwargs)
+        end_time = time.time()
+
+        latency = end_time - start_time
+
+        # Extract file info
+        file_obj = kwargs.get("file")
+        file_name = getattr(file_obj, "name", None) if file_obj else None
+
+        # Extract transcription output
+        output_text = getattr(response, "text", None)
+
+        # Extract duration if available (verbose_json response format)
+        duration = getattr(response, "duration", None)
+
+        # Build event properties
+        event_properties = {
+            "$ai_provider": "openai",
+            "$ai_model": kwargs.get("model"),
+            "$ai_input": with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                file_name,
+            ),
+            "$ai_output_text": with_privacy_mode(
+                self._client._ph_client,
+                posthog_privacy_mode,
+                output_text,
+            ),
+            "$ai_http_status": 200,
+            "$ai_latency": latency,
+            "$ai_trace_id": posthog_trace_id,
+            "$ai_base_url": str(self._client.base_url),
+            **(posthog_properties or {}),
+        }
+
+        # Add optional properties
+        if kwargs.get("language"):
+            event_properties["$ai_language"] = kwargs.get("language")
+
+        if duration is not None:
+            event_properties["$ai_audio_duration"] = duration
+
+        if posthog_distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
+        # Capture event
+        if hasattr(self._client._ph_client, "capture"):
+            self._client._ph_client.capture(
+                distinct_id=posthog_distinct_id or posthog_trace_id,
+                event="$ai_transcription",
                 properties=event_properties,
                 groups=posthog_groups,
             )
