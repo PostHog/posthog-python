@@ -1638,6 +1638,95 @@ def test_anthropic_provider_subtracts_cache_tokens(mock_client):
     assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
 
 
+def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
+    """Test that Anthropic provider correctly subtracts cache write tokens from input tokens."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+
+    # Set up with Anthropic provider
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-3-sonnet"},
+    )
+
+    # Response with cache creation: 1000 input (includes 800 being written to cache)
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": 1000,
+                            "output_tokens": 50,
+                            "cache_creation_input_tokens": 800,
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    generation_args = mock_client.capture.call_args_list[0][1]
+    assert generation_args["properties"]["$ai_input_tokens"] == 200  # 1000 - 800
+    assert generation_args["properties"]["$ai_cache_creation_input_tokens"] == 800
+
+
+def test_anthropic_provider_subtracts_both_cache_read_and_write_tokens(mock_client):
+    """Test that Anthropic provider correctly subtracts both cache read and write tokens."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+
+    # Set up with Anthropic provider
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-3-sonnet"},
+    )
+
+    # Response with both cache read and creation
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": 2000,
+                            "output_tokens": 50,
+                            "cache_read_input_tokens": 800,
+                            "cache_creation_input_tokens": 500,
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    generation_args = mock_client.capture.call_args_list[0][1]
+    # 2000 - 800 (read) - 500 (write) = 700
+    assert generation_args["properties"]["$ai_input_tokens"] == 700
+    assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
+    assert generation_args["properties"]["$ai_cache_creation_input_tokens"] == 500
+
+
 def test_openai_cache_read_tokens(mock_client):
     """Test that OpenAI cache read tokens are captured correctly."""
     prompt = ChatPromptTemplate.from_messages(
@@ -2092,10 +2181,12 @@ def test_zero_input_tokens_with_cache_read(mock_client):
     assert generation_props["$ai_cache_read_input_tokens"] == 50
 
 
-def test_cache_write_tokens_not_subtracted_from_input(mock_client):
-    """Test that cache_creation_input_tokens (cache write) do NOT affect input_tokens.
+def test_non_anthropic_cache_write_tokens_not_subtracted_from_input(mock_client):
+    """Test that cache_creation_input_tokens do NOT affect input_tokens for non-Anthropic providers.
 
-    Only cache_read_tokens should be subtracted from input_tokens, not cache_write_tokens.
+    When no provider metadata is set (or for non-Anthropic providers), cache tokens should
+    NOT be subtracted from input_tokens. This is because different providers report tokens
+    differently - only Anthropic's LangChain integration requires subtraction.
     """
     prompt = ChatPromptTemplate.from_messages([("user", "Create cache")])
 

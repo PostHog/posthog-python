@@ -1,3 +1,7 @@
+# 7.4.3 - 2026-01-02
+
+Fixes cache creation cost for Langchain with Anthropic
+
 # 7.4.2 - 2025-12-22
 
 feat: add `in_app_modules` option to control code variables capturing
@@ -13,6 +17,7 @@ When using OpenAI stored prompts, the model is defined in the OpenAI dashboard r
 feat: Add automatic retries for feature flag requests
 
 Feature flag API requests now automatically retry on transient failures:
+
 - Network errors (connection refused, DNS failures, timeouts)
 - Server errors (500, 502, 503, 504)
 - Up to 2 retries with exponential backoff (0.5s, 1s delays)
