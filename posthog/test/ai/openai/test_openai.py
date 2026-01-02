@@ -2337,5 +2337,49 @@ async def test_async_transcription(mock_client, mock_transcription_response):
     assert props["$ai_model"] == "whisper-1"
     assert props["$ai_input"] == "test_audio.mp3"
     assert props["$ai_output_text"] == "Hello world, this is a test transcription."
+    assert props["$ai_http_status"] == 200
     assert props["foo"] == "bar"
     assert isinstance(props["$ai_latency"], float)
+
+
+def test_transcription_error(mock_client):
+    """Test transcription error handling."""
+    from io import BytesIO
+
+    from openai import APIError
+
+    mock_file = BytesIO(b"fake audio data")
+    mock_file.name = "test_audio.mp3"
+
+    error = APIError(
+        message="Invalid audio file",
+        request=None,
+        body=None,
+    )
+    error.status_code = 400
+
+    with patch(
+        "openai.resources.audio.transcriptions.Transcriptions.create",
+        side_effect=error,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        with pytest.raises(APIError):
+            client.audio.transcriptions.create(
+                model="whisper-1",
+                file=mock_file,
+                posthog_distinct_id="test-id",
+            )
+
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["event"] == "$ai_transcription"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "whisper-1"
+        assert props["$ai_http_status"] == 400
+        assert props["$ai_is_error"] is True
+        assert "Invalid audio file" in props["$ai_error"]
+        assert props["$ai_output_text"] is None
