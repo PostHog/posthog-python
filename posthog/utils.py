@@ -541,7 +541,7 @@ def extract_ai_blob_properties(
         >>> # blobs = {"$ai_input": [...], "$ai_output_choices": [...]}
     """
     # Properties to extract as blobs
-    blob_property_names = {"$ai_input", "$ai_output_choices"}
+    blob_property_names = {"$ai_input", "$ai_output_choices", "$ai_embedding_vector"}
 
     # Create a copy of properties without the blob properties
     cleaned_properties = {

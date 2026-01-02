@@ -270,7 +270,7 @@ class Client(object):
         self.project_root = project_root
 
         self.use_ai_ingestion_pipeline = os.environ.get(
-            "LLMA_INGESTION_PIPELINE", "false"
+            "_INTERNAL_LLMA_INGESTION_PIPELINE", "false"
         ).lower() in ("true", "1", "yes")
 
         # personal_api_key: This should be a generated Personal API Key, private

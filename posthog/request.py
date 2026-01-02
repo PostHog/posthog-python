@@ -383,9 +383,10 @@ def build_ai_multipart_request(
 
     # Part 3+: blob parts
     for blob_name, blob_value in blobs.items():
+        blob_id = str(uuid4())
         parts.append(f"--{boundary}\r\n".encode())
         parts.append(
-            f'Content-Disposition: form-data; name="event.properties.{blob_name}"\r\n'.encode()
+            f'Content-Disposition: form-data; name="event.properties.{blob_name}"; filename="{blob_id}"\r\n'.encode()
         )
         parts.append(b"Content-Type: application/json\r\n\r\n")
         parts.append(json.dumps(blob_value, cls=DatetimeSerializer).encode("utf-8"))
