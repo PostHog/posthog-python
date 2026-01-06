@@ -789,9 +789,11 @@ def _parse_usage_model(
             for mapped_key, dataclass_key in field_mapping.items()
         },
     )
-    # For Anthropic providers, LangChain reports input_tokens as the sum of input and cache read tokens.
+    # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
     # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.
-    # For other providers (OpenAI, etc.), input_tokens already includes cache tokens as expected.
+    # Both cache_read and cache_write tokens should be subtracted since Anthropic's raw API
+    # reports input_tokens as tokens NOT read from or used to create a cache.
+    # For other providers (OpenAI, etc.), input_tokens already excludes cache tokens as expected.
     # Match logic consistent with plugin-server: exact match on provider OR substring match on model
     is_anthropic = False
     if provider and provider.lower() == "anthropic":
@@ -799,14 +801,14 @@ def _parse_usage_model(
     elif model and "anthropic" in model.lower():
         is_anthropic = True
 
-    if (
-        is_anthropic
-        and normalized_usage.input_tokens
-        and normalized_usage.cache_read_tokens
-    ):
-        normalized_usage.input_tokens = max(
-            normalized_usage.input_tokens - normalized_usage.cache_read_tokens, 0
+    if is_anthropic and normalized_usage.input_tokens:
+        cache_tokens = (normalized_usage.cache_read_tokens or 0) + (
+            normalized_usage.cache_write_tokens or 0
         )
+        if cache_tokens > 0:
+            normalized_usage.input_tokens = max(
+                normalized_usage.input_tokens - cache_tokens, 0
+            )
     return normalized_usage
 
 

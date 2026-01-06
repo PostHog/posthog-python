@@ -392,7 +392,9 @@ async def test_async_client_different_input_formats(
     )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
-    assert props["$ai_input"] == [{"role": "user", "content": "hey"}]
+    assert props["$ai_input"] == [
+        {"role": "user", "content": [{"type": "text", "text": "hey"}]}
+    ]
 
     # Test multiple parts in the parts array
     mock_client.reset_mock()
@@ -403,7 +405,15 @@ async def test_async_client_different_input_formats(
     )
     call_args = mock_client.capture.call_args[1]
     props = call_args["properties"]
-    assert props["$ai_input"] == [{"role": "user", "content": "Hello world"}]
+    assert props["$ai_input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello "},
+                {"type": "text", "text": "world"},
+            ],
+        }
+    ]
 
     # Test list input with string
     mock_client.capture.reset_mock()

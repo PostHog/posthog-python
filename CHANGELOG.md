@@ -1,7 +1,45 @@
-# 7.2.0 - 2025-11-28
+# 7.5.0 - 2026-01-06
 
-Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
-Add reference to exception in LLMA trace and span events
+feat: Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
+feat: Add reference to exception in LLMA trace and span events
+
+# 7.4.3 - 2026-01-02
+
+Fixes cache creation cost for Langchain with Anthropic
+
+# 7.4.2 - 2025-12-22
+
+feat: add `in_app_modules` option to control code variables capturing
+
+# 7.4.1 - 2025-12-19
+
+fix: extract model from response for OpenAI stored prompts
+
+When using OpenAI stored prompts, the model is defined in the OpenAI dashboard rather than passed in the API request. This fix adds a fallback to extract the model from the response object when not provided in kwargs, ensuring generations show up with the correct model and enabling cost calculations.
+
+# 7.4.0 - 2025-12-16
+
+feat: Add automatic retries for feature flag requests
+
+Feature flag API requests now automatically retry on transient failures:
+
+- Network errors (connection refused, DNS failures, timeouts)
+- Server errors (500, 502, 503, 504)
+- Up to 2 retries with exponential backoff (0.5s, 1s delays)
+
+Rate limit (429) and quota (402) errors are not retried.
+
+# 7.3.1 - 2025-12-06
+
+fix: remove unused $exception_message and $exception_type
+
+# 7.3.0 - 2025-12-05
+
+feat: improve code variables capture masking
+
+# 7.2.0 - 2025-12-01
+
+feat: add $feature_flag_evaluated_at properties to $feature_flag_called events
 
 # 7.1.0 - 2025-11-26
 

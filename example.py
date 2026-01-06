@@ -35,54 +35,40 @@ project_key = os.getenv("POSTHOG_PROJECT_API_KEY", "")
 personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "")
 host = os.getenv("POSTHOG_HOST", "http://localhost:8000")
 
-# Check if credentials are provided
-if not project_key or not personal_api_key:
-    print("❌ Missing PostHog credentials!")
-    print(
-        "   Please set POSTHOG_PROJECT_API_KEY and POSTHOG_PERSONAL_API_KEY environment variables"
-    )
+# Check if project key is provided (required)
+if not project_key:
+    print("❌ Missing PostHog project API key!")
+    print("   Please set POSTHOG_PROJECT_API_KEY environment variable")
     print("   or copy .env.example to .env and fill in your values")
     exit(1)
 
-# Test authentication before proceeding
-print("🔑 Testing PostHog authentication...")
+# Configure PostHog with credentials
+posthog.debug = False
+posthog.api_key = project_key
+posthog.project_api_key = project_key
+posthog.host = host
+posthog.poll_interval = 10
 
-try:
-    # Configure PostHog with credentials
-    posthog.debug = False  # Keep quiet during auth test
-    posthog.api_key = project_key
-    posthog.project_api_key = project_key
+# Check if personal API key is available for local evaluation
+local_eval_available = bool(personal_api_key)
+if personal_api_key:
     posthog.personal_api_key = personal_api_key
-    posthog.host = host
-    posthog.poll_interval = 10
 
-    # Test by attempting to get feature flags (this validates both keys)
-    # This will fail if credentials are invalid
-    test_flags = posthog.get_all_flags("test_user", only_evaluate_locally=True)
-
-    # If we get here without exception, credentials work
-    print("✅ Authentication successful!")
-    print(f"   Project API Key: {project_key[:9]}...")
-    print("   Personal API Key: [REDACTED]")
-    print(f"   Host: {host}\n\n")
-
-except Exception as e:
-    print("❌ Authentication failed!")
-    print(f"   Error: {e}")
-    print("\n   Please check your credentials:")
-    print("   - POSTHOG_PROJECT_API_KEY: Project API key from PostHog settings")
-    print(
-        "   - POSTHOG_PERSONAL_API_KEY: Personal API key (required for local evaluation)"
-    )
-    print("   - POSTHOG_HOST: Your PostHog instance URL")
-    exit(1)
+print("🔑 PostHog Configuration:")
+print(f"   Project API Key: {project_key[:9]}...")
+if local_eval_available:
+    print("   Personal API Key: [SET]")
+else:
+    print("   Personal API Key: [NOT SET] - Local evaluation examples will be skipped")
+print(f"   Host: {host}\n")
 
 # Display menu and get user choice
 print("🚀 PostHog Python SDK Demo - Choose an example to run:\n")
 print("1. Identify and capture examples")
-print("2. Feature flag local evaluation examples")
+local_eval_note = "" if local_eval_available else " [requires personal API key]"
+print(f"2. Feature flag local evaluation examples{local_eval_note}")
 print("3. Feature flag payload examples")
-print("4. Flag dependencies examples")
+print(f"4. Flag dependencies examples{local_eval_note}")
 print("5. Context management and tagging examples")
 print("6. Run all examples")
 print("7. Exit")
@@ -148,6 +134,14 @@ if choice == "1":
     )
 
 elif choice == "2":
+    if not local_eval_available:
+        print("\n❌ This example requires a personal API key for local evaluation.")
+        print(
+            "   Set POSTHOG_PERSONAL_API_KEY environment variable to run this example."
+        )
+        posthog.shutdown()
+        exit(1)
+
     print("\n" + "=" * 60)
     print("FEATURE FLAG LOCAL EVALUATION EXAMPLES")
     print("=" * 60)
@@ -215,6 +209,14 @@ elif choice == "3":
         print(f"Value (variant or enabled): {result.get_value()}")
 
 elif choice == "4":
+    if not local_eval_available:
+        print("\n❌ This example requires a personal API key for local evaluation.")
+        print(
+            "   Set POSTHOG_PERSONAL_API_KEY environment variable to run this example."
+        )
+        posthog.shutdown()
+        exit(1)
+
     print("\n" + "=" * 60)
     print("FLAG DEPENDENCIES EXAMPLES")
     print("=" * 60)
@@ -429,6 +431,8 @@ elif choice == "5":
 
 elif choice == "6":
     print("\n🔄 Running all examples...")
+    if not local_eval_available:
+        print("   (Skipping local evaluation examples - no personal API key set)\n")
 
     # Run example 1
     print(f"\n{'🔸' * 20} IDENTIFY AND CAPTURE {'🔸' * 20}")
@@ -447,35 +451,37 @@ elif choice == "6":
         distinct_id="new_distinct_id", properties={"email": "something@something.com"}
     )
 
-    # Run example 2
-    print(f"\n{'🔸' * 20} FEATURE FLAGS {'🔸' * 20}")
-    print("🏁 Testing basic feature flags...")
-    print(f"beta-feature: {posthog.feature_enabled('beta-feature', 'distinct_id')}")
-    print(
-        f"Sydney user: {posthog.feature_enabled('test-flag', 'random_id_12345', person_properties={'$geoip_city_name': 'Sydney'})}"
-    )
+    # Run example 2 (requires local evaluation)
+    if local_eval_available:
+        print(f"\n{'🔸' * 20} FEATURE FLAGS {'🔸' * 20}")
+        print("🏁 Testing basic feature flags...")
+        print(f"beta-feature: {posthog.feature_enabled('beta-feature', 'distinct_id')}")
+        print(
+            f"Sydney user: {posthog.feature_enabled('test-flag', 'random_id_12345', person_properties={'$geoip_city_name': 'Sydney'})}"
+        )
 
     # Run example 3
     print(f"\n{'🔸' * 20} PAYLOADS {'🔸' * 20}")
     print("📦 Testing payloads...")
     print(f"Payload: {posthog.get_feature_flag_payload('beta-feature', 'distinct_id')}")
 
-    # Run example 4
-    print(f"\n{'🔸' * 20} FLAG DEPENDENCIES {'🔸' * 20}")
-    print("🔗 Testing flag dependencies...")
-    result1 = posthog.feature_enabled(
-        "test-flag-dependency",
-        "demo_user",
-        person_properties={"email": "user@example.com"},
-        only_evaluate_locally=True,
-    )
-    result2 = posthog.feature_enabled(
-        "test-flag-dependency",
-        "demo_user2",
-        person_properties={"email": "user@other.com"},
-        only_evaluate_locally=True,
-    )
-    print(f"✅ @example.com user: {result1}, regular user: {result2}")
+    # Run example 4 (requires local evaluation)
+    if local_eval_available:
+        print(f"\n{'🔸' * 20} FLAG DEPENDENCIES {'🔸' * 20}")
+        print("🔗 Testing flag dependencies...")
+        result1 = posthog.feature_enabled(
+            "test-flag-dependency",
+            "demo_user",
+            person_properties={"email": "user@example.com"},
+            only_evaluate_locally=True,
+        )
+        result2 = posthog.feature_enabled(
+            "test-flag-dependency",
+            "demo_user2",
+            person_properties={"email": "user@other.com"},
+            only_evaluate_locally=True,
+        )
+        print(f"✅ @example.com user: {result1}, regular user: {result2}")
 
     # Run example 5
     print(f"\n{'🔸' * 20} CONTEXT MANAGEMENT {'🔸' * 20}")

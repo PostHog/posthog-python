@@ -11,7 +11,7 @@ from posthog.feature_flags import (
     match_property,
     relative_date_parse_for_feature_flag_matching,
 )
-from posthog.request import APIError
+from posthog.request import APIError, GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 
@@ -2348,23 +2348,27 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags(self, patch_get, patch_poll):
-        patch_get.return_value = {
-            "flags": [
-                {
-                    "id": 1,
-                    "name": "Beta Feature",
-                    "key": "beta-feature",
-                    "active": True,
-                },
-                {
-                    "id": 2,
-                    "name": "Alpha Feature",
-                    "key": "alpha-feature",
-                    "active": False,
-                },
-            ],
-            "group_type_mapping": {"0": "company"},
-        }
+        patch_get.return_value = GetResponse(
+            data={
+                "flags": [
+                    {
+                        "id": 1,
+                        "name": "Beta Feature",
+                        "key": "beta-feature",
+                        "active": True,
+                    },
+                    {
+                        "id": 2,
+                        "name": "Alpha Feature",
+                        "key": "alpha-feature",
+                        "active": False,
+                    },
+                ],
+                "group_type_mapping": {"0": "company"},
+                "cohorts": {},
+            },
+            etag='"abc123"',
+        )
         client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             client.load_feature_flags()
@@ -2375,6 +2379,139 @@ class TestLocalEvaluation(unittest.TestCase):
             client._last_feature_flag_poll.isoformat(), "2020-01-01T12:01:00+00:00"
         )
         self.assertEqual(patch_poll.call_count, 1)
+        # Verify ETag is stored
+        self.assertEqual(client._flags_etag, '"abc123"')
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_sends_etag_on_subsequent_requests(
+        self, patch_get, patch_poll
+    ):
+        """Test that the ETag is sent in If-None-Match header on subsequent requests"""
+        patch_get.return_value = GetResponse(
+            data={
+                "flags": [{"id": 1, "key": "beta-feature", "active": True}],
+                "group_type_mapping": {},
+                "cohorts": {},
+            },
+            etag='"initial-etag"',
+        )
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.load_feature_flags()
+
+        # First call should have no etag
+        first_call_kwargs = patch_get.call_args_list[0][1]
+        self.assertIsNone(first_call_kwargs.get("etag"))
+
+        # Simulate second call
+        client._load_feature_flags()
+
+        # Second call should have the etag
+        second_call_kwargs = patch_get.call_args_list[1][1]
+        self.assertEqual(second_call_kwargs.get("etag"), '"initial-etag"')
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_304_not_modified(self, patch_get, patch_poll):
+        """Test that 304 Not Modified responses skip flag processing"""
+        # First response with flags
+        initial_response = GetResponse(
+            data={
+                "flags": [{"id": 1, "key": "beta-feature", "active": True}],
+                "group_type_mapping": {"0": "company"},
+                "cohorts": {},
+            },
+            etag='"test-etag"',
+        )
+        # Second response is 304 Not Modified
+        not_modified_response = GetResponse(
+            data=None,
+            etag='"test-etag"',
+            not_modified=True,
+        )
+        patch_get.side_effect = [initial_response, not_modified_response]
+
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.load_feature_flags()
+
+        # Verify initial flags are loaded
+        self.assertEqual(len(client.feature_flags), 1)
+        self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
+        self.assertEqual(client.group_type_mapping, {"0": "company"})
+
+        # Second call with 304
+        client._load_feature_flags()
+
+        # Flags should still be the same (not cleared)
+        self.assertEqual(len(client.feature_flags), 1)
+        self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
+        self.assertEqual(client.group_type_mapping, {"0": "company"})
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_etag_updated_on_new_response(
+        self, patch_get, patch_poll
+    ):
+        """Test that ETag is updated when flags change"""
+        patch_get.side_effect = [
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v1", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"etag-v1"',
+            ),
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v2", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"etag-v2"',
+            ),
+        ]
+
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.load_feature_flags()
+        self.assertEqual(client._flags_etag, '"etag-v1"')
+
+        client._load_feature_flags()
+        self.assertEqual(client._flags_etag, '"etag-v2"')
+        self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_clears_etag_when_server_stops_sending(
+        self, patch_get, patch_poll
+    ):
+        """Test that ETag is cleared when server stops sending it"""
+        patch_get.side_effect = [
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v1", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"etag-v1"',
+            ),
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v2", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag=None,  # Server stopped sending ETag
+            ),
+        ]
+
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client.load_feature_flags()
+        self.assertEqual(client._flags_etag, '"etag-v1"')
+
+        client._load_feature_flags()
+        self.assertIsNone(client._flags_etag)
+        self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
 
     def test_load_feature_flags_wrong_key(self):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -2925,6 +3062,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "some-distinct-id",
                 match_value=True,
                 person_properties={"region": "USA"},
+                send_feature_flag_events=True,
             ),
             300,
         )
@@ -3859,6 +3997,7 @@ class TestCaptureCalls(unittest.TestCase):
                 },
             },
             "requestId": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+            "evaluatedAt": 1234567890,
         }
         client = Client(FAKE_TEST_API_KEY)
 
@@ -3878,6 +4017,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_id": 23,
                 "$feature_flag_version": 42,
                 "$feature_flag_request_id": "18043bf7-9cf6-44cd-b959-9662ee20d371",
+                "$feature_flag_evaluated_at": 1234567890,
             },
             groups={},
             disable_geoip=None,
@@ -3912,7 +4052,9 @@ class TestCaptureCalls(unittest.TestCase):
 
         self.assertEqual(
             client.get_feature_flag_payload(
-                "decide-flag-with-payload", "some-distinct-id"
+                "decide-flag-with-payload",
+                "some-distinct-id",
+                send_feature_flag_events=True,
             ),
             {"foo": "bar"},
         )
@@ -3988,9 +4130,10 @@ class TestCaptureCalls(unittest.TestCase):
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
-    def test_capture_is_called_in_get_feature_flag_payload(
+    def test_get_feature_flag_payload_does_not_send_feature_flag_called_events(
         self, patch_flags, patch_capture
     ):
+        """Test that get_feature_flag_payload does NOT send $feature_flag_called events"""
         patch_flags.return_value = {
             "featureFlags": {"person-flag": True},
             "featureFlagPayloads": {"person-flag": 300},
@@ -4012,68 +4155,18 @@ class TestCaptureCalls(unittest.TestCase):
                             "rollout_percentage": 100,
                         }
                     ],
+                    "payloads": {"true": '"payload"'},
                 },
             }
         ]
 
-        # Call get_feature_flag_payload with match_value=None to trigger get_feature_flag
-        client.get_feature_flag_payload(
+        payload = client.get_feature_flag_payload(
             key="person-flag",
             distinct_id="some-distinct-id",
             person_properties={"region": "USA", "name": "Aloha"},
         )
-
-        # Assert that capture was called once, with the correct parameters
-        self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with(
-            "$feature_flag_called",
-            distinct_id="some-distinct-id",
-            properties={
-                "$feature_flag": "person-flag",
-                "$feature_flag_response": True,
-                "locally_evaluated": True,
-                "$feature/person-flag": True,
-            },
-            groups={},
-            disable_geoip=None,
-        )
-
-        # Reset mocks for further tests
-        patch_capture.reset_mock()
-        patch_flags.reset_mock()
-
-        # Call get_feature_flag_payload again for the same user; capture should not be called again because we've already reported an event for this distinct_id + flag
-        client.get_feature_flag_payload(
-            key="person-flag",
-            distinct_id="some-distinct-id",
-            person_properties={"region": "USA", "name": "Aloha"},
-        )
-
+        self.assertIsNotNone(payload)
         self.assertEqual(patch_capture.call_count, 0)
-        patch_capture.reset_mock()
-
-        # Call get_feature_flag_payload for a different user; capture should be called
-        client.get_feature_flag_payload(
-            key="person-flag",
-            distinct_id="some-distinct-id2",
-            person_properties={"region": "USA", "name": "Aloha"},
-        )
-
-        self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with(
-            "$feature_flag_called",
-            distinct_id="some-distinct-id2",
-            properties={
-                "$feature_flag": "person-flag",
-                "$feature_flag_response": True,
-                "locally_evaluated": True,
-                "$feature/person-flag": True,
-            },
-            groups={},
-            disable_geoip=None,
-        )
-
-        patch_capture.reset_mock()
 
     @mock.patch("posthog.client.flags")
     def test_fallback_to_api_in_get_feature_flag_payload_when_flag_has_static_cohort(

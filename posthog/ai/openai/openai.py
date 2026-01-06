@@ -124,14 +124,23 @@ class WrappedResponses:
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
         final_content = []
+        model_from_response: Optional[str] = None
         response = self._original.create(**kwargs)
 
         def generator():
             nonlocal usage_stats
             nonlocal final_content  # noqa: F824
+            nonlocal model_from_response
 
             try:
                 for chunk in response:
+                    # Extract model from response object in chunk (for stored prompts)
+                    if hasattr(chunk, "response") and chunk.response:
+                        if model_from_response is None and hasattr(
+                            chunk.response, "model"
+                        ):
+                            model_from_response = chunk.response.model
+
                     # Extract usage stats from chunk
                     chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
 
@@ -161,6 +170,7 @@ class WrappedResponses:
                     latency,
                     output,
                     None,  # Responses API doesn't have tools
+                    model_from_response,
                 )
 
         return generator()
@@ -177,6 +187,7 @@ class WrappedResponses:
         latency: float,
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
+        model_from_response: Optional[str] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.openai.openai_converter import (
@@ -189,9 +200,12 @@ class WrappedResponses:
         formatted_input = format_openai_streaming_input(kwargs, "responses")
         sanitized_input = sanitize_openai_response(formatted_input)
 
+        # Use model from kwargs, fallback to model from response
+        model = kwargs.get("model") or model_from_response or "unknown"
+
         event_data = StreamingEventData(
             provider="openai",
-            model=kwargs.get("model", "unknown"),
+            model=model,
             base_url=str(self._client.base_url),
             kwargs=kwargs,
             formatted_input=sanitized_input,
@@ -320,6 +334,7 @@ class WrappedCompletions:
         usage_stats: TokenUsage = TokenUsage()
         accumulated_content = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
+        model_from_response: Optional[str] = None
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
@@ -329,9 +344,14 @@ class WrappedCompletions:
             nonlocal usage_stats
             nonlocal accumulated_content  # noqa: F824
             nonlocal accumulated_tool_calls
+            nonlocal model_from_response
 
             try:
                 for chunk in response:
+                    # Extract model from chunk (Chat Completions chunks have model field)
+                    if model_from_response is None and hasattr(chunk, "model"):
+                        model_from_response = chunk.model
+
                     # Extract usage stats from chunk
                     chunk_usage = extract_openai_usage_from_chunk(chunk, "chat")
 
@@ -376,6 +396,7 @@ class WrappedCompletions:
                     accumulated_content,
                     tool_calls_list,
                     extract_available_tool_calls("openai", kwargs),
+                    model_from_response,
                 )
 
         return generator()
@@ -393,6 +414,7 @@ class WrappedCompletions:
         output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
+        model_from_response: Optional[str] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.openai.openai_converter import (
@@ -405,9 +427,12 @@ class WrappedCompletions:
         formatted_input = format_openai_streaming_input(kwargs, "chat")
         sanitized_input = sanitize_openai(formatted_input)
 
+        # Use model from kwargs, fallback to model from response
+        model = kwargs.get("model") or model_from_response or "unknown"
+
         event_data = StreamingEventData(
             provider="openai",
-            model=kwargs.get("model", "unknown"),
+            model=model,
             base_url=str(self._client.base_url),
             kwargs=kwargs,
             formatted_input=sanitized_input,
