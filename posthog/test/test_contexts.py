@@ -191,6 +191,32 @@ class TestContexts(unittest.TestCase):
             assert get_context_distinct_id() == "user123"
             assert get_context_session_id() == "session456"
 
+    def test_child_tags_override_parent_tags_in_non_fresh_context(self):
+        with new_context(fresh=True):
+            tag("shared_key", "parent_value")
+            tag("parent_only", "parent")
+
+            with new_context(fresh=False):
+                # Child should inherit parent tags
+                assert get_tags()["parent_only"] == "parent"
+
+                # Child sets same key - should override parent
+                tag("shared_key", "child_value")
+                tag("child_only", "child")
+
+                tags = get_tags()
+                # Child value should win for shared key
+                assert tags["shared_key"] == "child_value"
+                # Both parent and child tags should be present
+                assert tags["parent_only"] == "parent"
+                assert tags["child_only"] == "child"
+
+            # Parent context should be unchanged
+            parent_tags = get_tags()
+            assert parent_tags["shared_key"] == "parent_value"
+            assert parent_tags["parent_only"] == "parent"
+            assert "child_only" not in parent_tags
+
     def test_scoped_decorator_with_context_ids(self):
         @scoped()
         def function_with_context():

@@ -2441,3 +2441,206 @@ def test_billable_with_real_chain(mock_client):
     assert props["$ai_billable"] is True
     assert props["$ai_model"] == "fake-model"
     assert props["$ai_provider"] == "fake"
+
+
+# Exception Capture Integration Tests
+
+
+def test_exception_autocapture_on_span_error():
+    """Test that capture_exception is called when a span errors and autocapture is enabled."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-123"
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # Verify capture_exception was called
+    assert mock_client.capture_exception.call_count == 1
+    exception_call = mock_client.capture_exception.call_args
+    assert isinstance(exception_call[0][0], ValueError)
+    assert str(exception_call[0][0]) == "test error"
+
+
+def test_exception_autocapture_adds_exception_id_to_span_event():
+    """Test that $exception_event_id is added to the span event properties."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-456"
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # Find the span event (should have $ai_is_error=True)
+    span_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("properties", {}).get("$ai_is_error") is True
+    ]
+    assert len(span_calls) >= 1
+
+    span_props = span_calls[0][1]["properties"]
+    assert span_props["$exception_event_id"] == "exception-uuid-456"
+    assert span_props["$ai_error"] == "ValueError: test error"
+
+
+def test_exception_autocapture_disabled_does_not_capture():
+    """Test that capture_exception is NOT called when autocapture is disabled."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = False
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # Verify capture_exception was NOT called
+    assert mock_client.capture_exception.call_count == 0
+
+    # But the span event should still have error info
+    span_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("properties", {}).get("$ai_is_error") is True
+    ]
+    assert len(span_calls) >= 1
+
+    span_props = span_calls[0][1]["properties"]
+    assert "$exception_event_id" not in span_props
+    assert span_props["$ai_error"] == "ValueError: test error"
+
+
+def test_exception_autocapture_on_llm_generation_error(mock_client):
+    """Test that capture_exception is called when an LLM generation fails."""
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-789"
+
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    # Simulate LLM start
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+    )
+
+    # Simulate LLM error
+    error = Exception("API rate limit exceeded")
+    callbacks.on_llm_error(error, run_id=run_id)
+
+    # Verify capture_exception was called
+    assert mock_client.capture_exception.call_count == 1
+    exception_call = mock_client.capture_exception.call_args
+    assert exception_call[0][0] is error
+
+    # Verify the generation event has $exception_event_id
+    generation_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("event") == "$ai_generation"
+    ]
+    assert len(generation_calls) == 1
+
+    gen_props = generation_calls[0][1]["properties"]
+    assert gen_props["$exception_event_id"] == "exception-uuid-789"
+    assert gen_props["$ai_is_error"] is True
+
+
+def test_exception_autocapture_passes_ai_properties_to_exception():
+    """Test that AI properties are passed to the exception event."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-abc"
+
+    callbacks = CallbackHandler(
+        mock_client,
+        distinct_id="user-123",
+        properties={"custom_prop": "custom_value"},
+    )
+    run_id = uuid.uuid4()
+
+    # Simulate LLM start
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+    )
+
+    # Simulate LLM error
+    error = Exception("API error")
+    callbacks.on_llm_error(error, run_id=run_id)
+
+    # Verify capture_exception received the properties
+    exception_call = mock_client.capture_exception.call_args
+    props = exception_call[1]["properties"]
+
+    # Should have AI-related properties
+    assert "$ai_trace_id" in props
+    assert "$ai_is_error" in props
+    assert props["$ai_is_error"] is True
+
+    # Should have distinct_id passed through
+    assert exception_call[1]["distinct_id"] == "user-123"
+
+
+def test_exception_autocapture_none_return_no_exception_id():
+    """Test that when capture_exception returns None, no $exception_event_id is added."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = (
+        None  # e.g., exception already captured
+    )
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # capture_exception was called but returned None
+    assert mock_client.capture_exception.call_count == 1
+
+    # Span event should NOT have $exception_event_id
+    span_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("properties", {}).get("$ai_is_error") is True
+    ]
+    assert len(span_calls) >= 1
+
+    span_props = span_calls[0][1]["properties"]
+    assert "$exception_event_id" not in span_props

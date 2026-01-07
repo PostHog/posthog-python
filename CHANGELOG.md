@@ -1,3 +1,8 @@
+# 7.5.0 - 2026-01-06
+
+feat: Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
+feat: Add reference to exception in LLMA trace and span events
+
 # 7.4.3 - 2026-01-02
 
 Fixes cache creation cost for Langchain with Anthropic
