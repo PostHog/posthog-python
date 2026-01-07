@@ -62,14 +62,13 @@ class ContextScope:
         return None
 
     def collect_tags(self) -> Dict[str, Any]:
-        tags = self.tags.copy()
         if self.parent and not self.fresh:
             # We want child tags to take precedence over parent tags,
-            # so we can't use a simple update here, instead collecting
-            # the parent tags and then updating with the child tags.
-            new_tags = self.parent.collect_tags()
-            tags.update(new_tags)
-        return tags
+            # so collect parent tags first, then update with child tags.
+            tags = self.parent.collect_tags()
+            tags.update(self.tags)
+            return tags
+        return self.tags.copy()
 
     def get_capture_exception_code_variables(self) -> Optional[bool]:
         if self.capture_exception_code_variables is not None:
