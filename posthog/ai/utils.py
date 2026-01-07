@@ -257,7 +257,7 @@ def call_llm_and_track_usage(
     usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
-    with new_context(client=ph_client, capture_exceptions=False, fresh=True):
+    with new_context(client=ph_client, capture_exceptions=False):
         if posthog_distinct_id:
             identify_context(posthog_distinct_id)
 
@@ -379,7 +379,7 @@ async def call_llm_and_track_usage_async(
     usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
-    with new_context(client=ph_client, capture_exceptions=False, fresh=True):
+    with new_context(client=ph_client, capture_exceptions=False):
         if posthog_distinct_id:
             identify_context(posthog_distinct_id)
 
