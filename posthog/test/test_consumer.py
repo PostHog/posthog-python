@@ -194,3 +194,40 @@ class TestConsumer(unittest.TestCase):
                 q.put(track)
             q.join()
             self.assertEqual(mock_post.call_count, 2)
+
+    def test_upload_exception_calls_on_error_and_does_not_raise(self):
+        on_error_called = []
+
+        def on_error(e, batch):
+            on_error_called.append((e, batch))
+
+        q = Queue()
+        consumer = Consumer(q, TEST_API_KEY, on_error=on_error)
+        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
+        q.put(track)
+
+        with mock.patch.object(
+            consumer, "request", side_effect=Exception("request failed")
+        ):
+            result = consumer.upload()
+
+        self.assertFalse(result)
+        self.assertEqual(len(on_error_called), 1)
+        self.assertIsInstance(on_error_called[0][0], Exception)
+        self.assertEqual(str(on_error_called[0][0]), "request failed")
+
+    def test_upload_exception_in_on_error_does_not_raise(self):
+        def on_error(e, batch):
+            raise Exception("on_error failed")
+
+        q = Queue()
+        consumer = Consumer(q, TEST_API_KEY, on_error=on_error)
+        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
+        q.put(track)
+
+        with mock.patch.object(
+            consumer, "request", side_effect=Exception("request failed")
+        ):
+            result = consumer.upload()
+
+        self.assertFalse(result)
