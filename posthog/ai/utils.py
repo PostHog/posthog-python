@@ -272,6 +272,9 @@ def call_llm_and_track_usage(
                 "$ai_is_error": True,
                 "$ai_error": exc.__str__(),
             }
+            # TODO: Add exception capture for OpenAI/Anthropic/Gemini wrappers when
+            # enable_exception_autocapture is True, similar to LangChain callbacks.
+            # See _capture_exception_and_update_properties in langchain/callbacks.py
         finally:
             end_time = time.time()
             latency = end_time - start_time
@@ -394,6 +397,9 @@ async def call_llm_and_track_usage_async(
                 "$ai_is_error": True,
                 "$ai_error": exc.__str__(),
             }
+            # TODO: Add exception capture for OpenAI/Anthropic/Gemini wrappers when
+            # enable_exception_autocapture is True, similar to LangChain callbacks.
+            # See _capture_exception_and_update_properties in langchain/callbacks.py
         finally:
             end_time = time.time()
             latency = end_time - start_time
