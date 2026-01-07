@@ -3,6 +3,7 @@ import time
 import unittest
 
 import mock
+from parameterized import parameterized
 
 try:
     from queue import Queue
@@ -12,6 +13,10 @@ except ImportError:
 from posthog.consumer import MAX_MSG_SIZE, Consumer
 from posthog.request import APIError
 from posthog.test.test_utils import TEST_API_KEY
+
+
+def _track_event(event_name="python event"):
+    return {"type": "track", "event": event_name, "distinct_id": "distinct_id"}
 
 
 class TestConsumer(unittest.TestCase):
@@ -43,8 +48,7 @@ class TestConsumer(unittest.TestCase):
     def test_upload(self):
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY)
-        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
-        q.put(track)
+        q.put(_track_event())
         success = consumer.upload()
         self.assertTrue(success)
 
@@ -57,13 +61,8 @@ class TestConsumer(unittest.TestCase):
         consumer = Consumer(q, TEST_API_KEY, flush_at=10, flush_interval=flush_interval)
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.start()
-            for i in range(0, 3):
-                track = {
-                    "type": "track",
-                    "event": "python event %d" % i,
-                    "distinct_id": "distinct_id",
-                }
-                q.put(track)
+            for i in range(3):
+                q.put(_track_event("python event %d" % i))
                 time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 3)
 
@@ -78,81 +77,51 @@ class TestConsumer(unittest.TestCase):
         )
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.start()
-            for i in range(0, flush_at * 2):
-                track = {
-                    "type": "track",
-                    "event": "python event %d" % i,
-                    "distinct_id": "distinct_id",
-                }
-                q.put(track)
+            for i in range(flush_at * 2):
+                q.put(_track_event("python event %d" % i))
             time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 2)
 
     def test_request(self):
         consumer = Consumer(None, TEST_API_KEY)
-        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
-        consumer.request([track])
+        consumer.request([_track_event()])
 
-    def _test_request_retry(self, consumer, expected_exception, exception_count):
+    def _run_retry_test(self, exception, exception_count, retries=10):
+        call_count = [0]
+
         def mock_post(*args, **kwargs):
-            mock_post.call_count += 1
-            if mock_post.call_count <= exception_count:
-                raise expected_exception
+            call_count[0] += 1
+            if call_count[0] <= exception_count:
+                raise exception
 
-        mock_post.call_count = 0
-
+        consumer = Consumer(None, TEST_API_KEY, retries=retries)
         with mock.patch(
             "posthog.consumer.batch_post", mock.Mock(side_effect=mock_post)
         ):
-            track = {
-                "type": "track",
-                "event": "python event",
-                "distinct_id": "distinct_id",
-            }
-            # request() should succeed if the number of exceptions raised is
-            # less than the retries paramater.
-            if exception_count <= consumer.retries:
-                consumer.request([track])
+            if exception_count <= retries:
+                consumer.request([_track_event()])
             else:
-                # if exceptions are raised more times than the retries
-                # parameter, we expect the exception to be returned to
-                # the caller.
-                try:
-                    consumer.request([track])
-                except type(expected_exception) as exc:
-                    self.assertEqual(exc, expected_exception)
-                else:
-                    self.fail(
-                        "request() should raise an exception if still failing after %d retries"
-                        % consumer.retries
-                    )
+                with self.assertRaises(type(exception)):
+                    consumer.request([_track_event()])
 
-    def test_request_retry(self):
-        # we should retry on general errors
-        consumer = Consumer(None, TEST_API_KEY)
-        self._test_request_retry(consumer, Exception("generic exception"), 2)
+    @parameterized.expand(
+        [
+            ("general_errors", Exception("generic exception"), 2),
+            ("server_errors", APIError(500, "Internal Server Error"), 2),
+            ("rate_limit_errors", APIError(429, "Too Many Requests"), 2),
+        ]
+    )
+    def test_request_retries_on_retriable_errors(
+        self, _name, exception, exception_count
+    ):
+        self._run_retry_test(exception, exception_count)
 
-        # we should retry on server errors
-        consumer = Consumer(None, TEST_API_KEY)
-        self._test_request_retry(consumer, APIError(500, "Internal Server Error"), 2)
+    def test_request_does_not_retry_client_errors(self):
+        with self.assertRaises(APIError):
+            self._run_retry_test(APIError(400, "Client Errors"), 1)
 
-        # we should retry on HTTP 429 errors
-        consumer = Consumer(None, TEST_API_KEY)
-        self._test_request_retry(consumer, APIError(429, "Too Many Requests"), 2)
-
-        # we should NOT retry on other client errors
-        consumer = Consumer(None, TEST_API_KEY)
-        api_error = APIError(400, "Client Errors")
-        try:
-            self._test_request_retry(consumer, api_error, 1)
-        except APIError:
-            pass
-        else:
-            self.fail("request() should not retry on client errors")
-
-        # test for number of exceptions raise > retries value
-        consumer = Consumer(None, TEST_API_KEY, retries=3)
-        self._test_request_retry(consumer, APIError(500, "Internal Server Error"), 3)
+    def test_request_fails_when_exceptions_exceed_retries(self):
+        self._run_retry_test(APIError(500, "Internal Server Error"), 4, retries=3)
 
     def test_pause(self):
         consumer = Consumer(None, TEST_API_KEY)
@@ -195,15 +164,25 @@ class TestConsumer(unittest.TestCase):
             q.join()
             self.assertEqual(mock_post.call_count, 2)
 
-    def test_upload_exception_calls_on_error_and_does_not_raise(self):
+    @parameterized.expand(
+        [
+            ("on_error_succeeds", False),
+            ("on_error_raises", True),
+        ]
+    )
+    def test_upload_exception_calls_on_error_and_does_not_raise(
+        self, _name, on_error_raises
+    ):
         on_error_called = []
 
         def on_error(e, batch):
             on_error_called.append((e, batch))
+            if on_error_raises:
+                raise Exception("on_error failed")
 
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY, on_error=on_error)
-        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
+        track = _track_event()
         q.put(track)
 
         with mock.patch.object(
@@ -213,21 +192,5 @@ class TestConsumer(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(len(on_error_called), 1)
-        self.assertIsInstance(on_error_called[0][0], Exception)
         self.assertEqual(str(on_error_called[0][0]), "request failed")
-
-    def test_upload_exception_in_on_error_does_not_raise(self):
-        def on_error(e, batch):
-            raise Exception("on_error failed")
-
-        q = Queue()
-        consumer = Consumer(q, TEST_API_KEY, on_error=on_error)
-        track = {"type": "track", "event": "python event", "distinct_id": "distinct_id"}
-        q.put(track)
-
-        with mock.patch.object(
-            consumer, "request", side_effect=Exception("request failed")
-        ):
-            result = consumer.upload()
-
-        self.assertFalse(result)
+        self.assertEqual(on_error_called[0][1], [track])
