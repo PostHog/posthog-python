@@ -29,6 +29,9 @@ from posthog.contexts import (
 from posthog.contexts import (
     tag as inner_tag,
 )
+from posthog.contexts import (
+    get_tags as inner_get_tags,
+)
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
@@ -188,6 +191,19 @@ def tag(name: str, value: Any):
         Contexts
     """
     return inner_tag(name, value)
+
+
+def get_tags() -> Dict[str, Any]:
+    """
+    Get all tags from the current context.
+
+    Returns:
+        Dict of all tags in the current context
+
+    Category:
+        Contexts
+    """
+    return inner_get_tags()
 
 
 """Settings."""

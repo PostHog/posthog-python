@@ -2,7 +2,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, cast
 
-from posthog import identify_context, new_context, tag
+from posthog import get_tags, identify_context, new_context, tag
 from posthog.ai.sanitization import (
     sanitize_anthropic,
     sanitize_gemini,
@@ -289,7 +289,7 @@ def call_llm_and_track_usage(
             sanitized_messages = sanitize_messages(messages, provider)
 
             tag("$ai_provider", provider)
-            tag("$ai_model", kwargs.get("model"))
+            tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
             tag("$ai_model_parameters", get_model_params(kwargs))
             tag(
                 "$ai_input",
@@ -347,6 +347,7 @@ def call_llm_and_track_usage(
                     distinct_id=posthog_distinct_id or posthog_trace_id,
                     event="$ai_generation",
                     properties={
+                        **get_tags(),
                         **(posthog_properties or {}),
                         **(error_params or {}),
                     },
@@ -410,7 +411,7 @@ async def call_llm_and_track_usage_async(
             sanitized_messages = sanitize_messages(messages, provider)
 
             tag("$ai_provider", provider)
-            tag("$ai_model", kwargs.get("model"))
+            tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
             tag("$ai_model_parameters", get_model_params(kwargs))
             tag(
                 "$ai_input",
@@ -468,6 +469,7 @@ async def call_llm_and_track_usage_async(
                     distinct_id=posthog_distinct_id or posthog_trace_id,
                     event="$ai_generation",
                     properties={
+                        **get_tags(),
                         **(posthog_properties or {}),
                         **(error_params or {}),
                     },

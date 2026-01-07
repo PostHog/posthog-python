@@ -2491,7 +2491,8 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
 
     # Find the span event (should have $ai_is_error=True)
     span_calls = [
-        call for call in mock_client.capture.call_args_list
+        call
+        for call in mock_client.capture.call_args_list
         if call[1].get("properties", {}).get("$ai_is_error") is True
     ]
     assert len(span_calls) >= 1
@@ -2523,7 +2524,8 @@ def test_exception_autocapture_disabled_does_not_capture():
 
     # But the span event should still have error info
     span_calls = [
-        call for call in mock_client.capture.call_args_list
+        call
+        for call in mock_client.capture.call_args_list
         if call[1].get("properties", {}).get("$ai_is_error") is True
     ]
     assert len(span_calls) >= 1
@@ -2560,7 +2562,8 @@ def test_exception_autocapture_on_llm_generation_error(mock_client):
 
     # Verify the generation event has $exception_event_id
     generation_calls = [
-        call for call in mock_client.capture.call_args_list
+        call
+        for call in mock_client.capture.call_args_list
         if call[1].get("event") == "$ai_generation"
     ]
     assert len(generation_calls) == 1
@@ -2613,7 +2616,9 @@ def test_exception_autocapture_none_return_no_exception_id():
     mock_client = MagicMock()
     mock_client.privacy_mode = False
     mock_client.enable_exception_autocapture = True
-    mock_client.capture_exception.return_value = None  # e.g., exception already captured
+    mock_client.capture_exception.return_value = (
+        None  # e.g., exception already captured
+    )
 
     def failing_span(_):
         raise ValueError("test error")
@@ -2631,7 +2636,8 @@ def test_exception_autocapture_none_return_no_exception_id():
 
     # Span event should NOT have $exception_event_id
     span_calls = [
-        call for call in mock_client.capture.call_args_list
+        call
+        for call in mock_client.capture.call_args_list
         if call[1].get("properties", {}).get("$ai_is_error") is True
     ]
     assert len(span_calls) >= 1
