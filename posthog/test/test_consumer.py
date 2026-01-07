@@ -1,6 +1,7 @@
 import json
 import time
 import unittest
+from typing import Any
 
 import mock
 from parameterized import parameterized
@@ -15,19 +16,19 @@ from posthog.request import APIError
 from posthog.test.test_utils import TEST_API_KEY
 
 
-def _track_event(event_name="python event"):
+def _track_event(event_name: str = "python event") -> dict[str, str]:
     return {"type": "track", "event": event_name, "distinct_id": "distinct_id"}
 
 
 class TestConsumer(unittest.TestCase):
-    def test_next(self):
+    def test_next(self) -> None:
         q = Queue()
         consumer = Consumer(q, "")
         q.put(1)
         next = consumer.next()
         self.assertEqual(next, [1])
 
-    def test_next_limit(self):
+    def test_next_limit(self) -> None:
         q = Queue()
         flush_at = 50
         consumer = Consumer(q, "", flush_at)
@@ -36,7 +37,7 @@ class TestConsumer(unittest.TestCase):
         next = consumer.next()
         self.assertEqual(next, list(range(flush_at)))
 
-    def test_dropping_oversize_msg(self):
+    def test_dropping_oversize_msg(self) -> None:
         q = Queue()
         consumer = Consumer(q, "")
         oversize_msg = {"m": "x" * MAX_MSG_SIZE}
@@ -45,14 +46,14 @@ class TestConsumer(unittest.TestCase):
         self.assertEqual(next, [])
         self.assertTrue(q.empty())
 
-    def test_upload(self):
+    def test_upload(self) -> None:
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY)
         q.put(_track_event())
         success = consumer.upload()
         self.assertTrue(success)
 
-    def test_flush_interval(self):
+    def test_flush_interval(self) -> None:
         # Put _n_ items in the queue, pausing a little bit more than
         # _flush_interval_ after each one.
         # The consumer should upload _n_ times.
@@ -66,7 +67,7 @@ class TestConsumer(unittest.TestCase):
                 time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 3)
 
-    def test_multiple_uploads_per_interval(self):
+    def test_multiple_uploads_per_interval(self) -> None:
         # Put _flush_at*2_ items in the queue at once, then pause for
         # _flush_interval_. The consumer should upload 2 times.
         q = Queue()
@@ -82,14 +83,16 @@ class TestConsumer(unittest.TestCase):
             time.sleep(flush_interval * 1.1)
             self.assertEqual(mock_post.call_count, 2)
 
-    def test_request(self):
+    def test_request(self) -> None:
         consumer = Consumer(None, TEST_API_KEY)
         consumer.request([_track_event()])
 
-    def _run_retry_test(self, exception, exception_count, retries=10):
+    def _run_retry_test(
+        self, exception: Exception, exception_count: int, retries: int = 10
+    ) -> None:
         call_count = [0]
 
-        def mock_post(*args, **kwargs):
+        def mock_post(*args: Any, **kwargs: Any) -> None:
             call_count[0] += 1
             if call_count[0] <= exception_count:
                 raise exception
@@ -112,23 +115,23 @@ class TestConsumer(unittest.TestCase):
         ]
     )
     def test_request_retries_on_retriable_errors(
-        self, _name, exception, exception_count
-    ):
+        self, _name: str, exception: Exception, exception_count: int
+    ) -> None:
         self._run_retry_test(exception, exception_count)
 
-    def test_request_does_not_retry_client_errors(self):
+    def test_request_does_not_retry_client_errors(self) -> None:
         with self.assertRaises(APIError):
             self._run_retry_test(APIError(400, "Client Errors"), 1)
 
-    def test_request_fails_when_exceptions_exceed_retries(self):
+    def test_request_fails_when_exceptions_exceed_retries(self) -> None:
         self._run_retry_test(APIError(500, "Internal Server Error"), 4, retries=3)
 
-    def test_pause(self):
+    def test_pause(self) -> None:
         consumer = Consumer(None, TEST_API_KEY)
         consumer.pause()
         self.assertFalse(consumer.running)
 
-    def test_max_batch_size(self):
+    def test_max_batch_size(self) -> None:
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY, flush_at=100000, flush_interval=3)
         properties = {}
@@ -144,7 +147,7 @@ class TestConsumer(unittest.TestCase):
         # Let's capture 8MB of data to trigger two batches
         n_msgs = int(8_000_000 / msg_size)
 
-        def mock_post_fn(_, data, **kwargs):
+        def mock_post_fn(_: str, data: str, **kwargs: Any) -> mock.Mock:
             res = mock.Mock()
             res.status_code = 200
             request_size = len(data.encode())
@@ -171,11 +174,11 @@ class TestConsumer(unittest.TestCase):
         ]
     )
     def test_upload_exception_calls_on_error_and_does_not_raise(
-        self, _name, on_error_raises
-    ):
-        on_error_called = []
+        self, _name: str, on_error_raises: bool
+    ) -> None:
+        on_error_called: list[tuple[Exception, list[dict[str, str]]]] = []
 
-        def on_error(e, batch):
+        def on_error(e: Exception, batch: list[dict[str, str]]) -> None:
             on_error_called.append((e, batch))
             if on_error_raises:
                 raise Exception("on_error failed")
