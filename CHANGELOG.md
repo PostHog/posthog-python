@@ -1,6 +1,6 @@
 # 7.5.1 - 2026-01-07
 
-fix: avoid return from finally block to fix Python 3.14 SyntaxWarning (#361)[https://github.com/PostHog/posthog-python/pull/361] - thanks @jodal
+fix: avoid return from finally block to fix Python 3.14 SyntaxWarning https://github.com/PostHog/posthog-python/pull/361 - thanks @jodal
 
 # 7.5.0 - 2026-01-06
 
