@@ -76,6 +76,29 @@ jobs:
               run: |
                   pytest --verbose --timeout=30
 
+    import-check:
+        name: Python ${{ matrix.python-version }} import check
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python ${{ matrix.python-version }}
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: ${{ matrix.python-version }}
+
+            - name: Install posthog
+              run: pip install .
+
+            - name: Check import produces no warnings
+              run: python -W error -c "import posthog"
+
     django5-integration:
         name: Django 5 integration tests
         runs-on: ubuntu-latest
