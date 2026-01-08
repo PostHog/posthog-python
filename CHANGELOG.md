@@ -1,3 +1,7 @@
+# 7.5.1 - 2026-01-08
+
+fix: Fix incorrect syntax with `return` inside `finally` block
+
 # 7.5.0 - 2026-01-06
 
 feat: Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
