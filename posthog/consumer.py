@@ -84,12 +84,16 @@ class Consumer(Thread):
             self.log.error("error uploading: %s", e)
             success = False
             if self.on_error:
-                self.on_error(e, batch)
+                try:
+                    self.on_error(e, batch)
+                except Exception as e:
+                    self.log.error("on_error handler failed: %s", e)
         finally:
             # mark items as acknowledged from queue
             for item in batch:
                 self.queue.task_done()
-            return success
+
+        return success
 
     def next(self):
         """Return the next batch of items to upload."""
