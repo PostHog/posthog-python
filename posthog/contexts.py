@@ -21,6 +21,7 @@ class ContextScope:
         self.capture_exceptions = capture_exceptions
         self.session_id: Optional[str] = None
         self.distinct_id: Optional[str] = None
+        self.device_id: Optional[str] = None
         self.tags: Dict[str, Any] = {}
         self.capture_exception_code_variables: Optional[bool] = None
         self.code_variables_mask_patterns: Optional[list] = None
@@ -31,6 +32,9 @@ class ContextScope:
 
     def set_distinct_id(self, distinct_id: str):
         self.distinct_id = distinct_id
+
+    def set_device_id(self, device_id: str):
+        self.device_id = device_id
 
     def add_tag(self, key: str, value: Any):
         self.tags[key] = value
@@ -59,6 +63,13 @@ class ContextScope:
             return self.distinct_id
         if self.parent is not None and not self.fresh:
             return self.parent.get_distinct_id()
+        return None
+
+    def get_device_id(self) -> Optional[str]:
+        if self.device_id is not None:
+            return self.device_id
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_device_id()
         return None
 
     def collect_tags(self) -> Dict[str, Any]:
@@ -272,6 +283,39 @@ def get_context_distinct_id() -> Optional[str]:
     current_context = _get_current_context()
     if current_context:
         return current_context.get_distinct_id()
+    return None
+
+
+def set_context_device_id(device_id: str) -> None:
+    """
+    Set the device ID for the current context, associating all feature flag requests in this or
+    child contexts with the given device ID (unless set_context_device_id is called again).
+    Entering a fresh context will clear the context-level device ID.
+
+    Args:
+        device_id: The device ID to associate with the current context and its children.
+
+    Category:
+        Contexts
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_device_id(device_id)
+
+
+def get_context_device_id() -> Optional[str]:
+    """
+    Get the device ID for the current context.
+
+    Returns:
+        The device ID if set, None otherwise
+
+    Category:
+        Contexts
+    """
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_device_id()
     return None
 
 
