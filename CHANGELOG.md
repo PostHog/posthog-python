@@ -1,3 +1,9 @@
+# 7.6.0 - 2026-01-12
+
+feat: add device_id to flags request payload
+
+Add device_id parameter to all feature flag methods, allowing the server to track device identifiers for flag evaluation. The device_id can be passed explicitly or set via context using `set_context_device_id()`.
+
 # 7.5.1 - 2026-01-07
 
 fix: avoid return from finally block to fix Python 3.14 SyntaxWarning (#361) - thanks @jodal

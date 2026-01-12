@@ -648,6 +648,7 @@ class TestClient(unittest.TestCase):
                 person_properties={},
                 group_properties={},
                 geoip_disable=True,
+                device_id=None,
             )
 
     @mock.patch("posthog.client.flags")
@@ -712,6 +713,7 @@ class TestClient(unittest.TestCase):
                 person_properties={},
                 group_properties={},
                 geoip_disable=False,
+                device_id=None,
             )
 
     @mock.patch("posthog.client.flags")
@@ -1911,6 +1913,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "some_id"},
             group_properties={},
             geoip_disable=True,
+            device_id=None,
             flag_keys_to_evaluate=["random_key"],
         )
         patch_flags.reset_mock()
@@ -1926,6 +1929,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "feature_enabled_distinct_id"},
             group_properties={},
             geoip_disable=True,
+            device_id=None,
             flag_keys_to_evaluate=["random_key"],
         )
         patch_flags.reset_mock()
@@ -1939,6 +1943,7 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "all_flags_payloads_id"},
             group_properties={},
             geoip_disable=False,
+            device_id=None,
         )
 
     @mock.patch("posthog.client.Poller")
@@ -1987,6 +1992,7 @@ class TestClient(unittest.TestCase):
                 "instance": {"$group_key": "app.posthog.com"},
             },
             geoip_disable=False,
+            device_id=None,
             flag_keys_to_evaluate=["random_key"],
         )
 
@@ -2014,6 +2020,7 @@ class TestClient(unittest.TestCase):
                 "instance": {"$group_key": "app.posthog.com"},
             },
             geoip_disable=False,
+            device_id=None,
             flag_keys_to_evaluate=["random_key"],
         )
 
@@ -2031,7 +2038,134 @@ class TestClient(unittest.TestCase):
             person_properties={"distinct_id": "some_id"},
             group_properties={},
             geoip_disable=False,
+            device_id=None,
         )
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_is_passed_to_flags_request(self, patch_flags):
+        """Test that device_id is properly passed to the flags request when provided."""
+        patch_flags.return_value = {
+            "featureFlags": {
+                "beta-feature": "random-variant",
+            }
+        }
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+        )
+
+        # Test with device_id provided
+        client.get_feature_flag("random_key", "some_id", device_id="test-device-123")
+        patch_flags.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            geoip_disable=True,
+            device_id="test-device-123",
+            flag_keys_to_evaluate=["random_key"],
+        )
+
+        # Test feature_enabled with device_id
+        patch_flags.reset_mock()
+        client.feature_enabled("random_key", "some_id", device_id="device-456")
+        patch_flags.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            geoip_disable=True,
+            device_id="device-456",
+            flag_keys_to_evaluate=["random_key"],
+        )
+
+        # Test get_all_flags_and_payloads with device_id
+        patch_flags.reset_mock()
+        client.get_all_flags_and_payloads("some_id", device_id="device-789")
+        patch_flags.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            geoip_disable=True,
+            device_id="device-789",
+        )
+
+        # Test get_flags_decision directly with device_id
+        patch_flags.reset_mock()
+        client.get_flags_decision("some_id", device_id="device-direct")
+        patch_flags.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={},
+            group_properties={},
+            geoip_disable=True,
+            device_id="device-direct",
+        )
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_from_context_is_used_in_flags_request(self, patch_flags):
+        """Test that device_id from context is used in flags request when not explicitly provided."""
+        from posthog.contexts import new_context, set_context_device_id
+
+        patch_flags.return_value = {
+            "featureFlags": {
+                "beta-feature": "random-variant",
+            }
+        }
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+        )
+
+        # Test that device_id from context is used
+        with new_context():
+            set_context_device_id("context-device-id")
+            client.get_feature_flag("random_key", "some_id")
+            patch_flags.assert_called_with(
+                "random_key",
+                "https://us.i.posthog.com",
+                timeout=3,
+                distinct_id="some_id",
+                groups={},
+                person_properties={"distinct_id": "some_id"},
+                group_properties={},
+                geoip_disable=True,
+                device_id="context-device-id",
+                flag_keys_to_evaluate=["random_key"],
+            )
+
+        # Test that explicit device_id overrides context
+        patch_flags.reset_mock()
+        with new_context():
+            set_context_device_id("context-device-id")
+            client.get_feature_flag(
+                "random_key", "some_id", device_id="explicit-device-id"
+            )
+            patch_flags.assert_called_with(
+                "random_key",
+                "https://us.i.posthog.com",
+                timeout=3,
+                distinct_id="some_id",
+                groups={},
+                person_properties={"distinct_id": "some_id"},
+                group_properties={},
+                geoip_disable=True,
+                device_id="explicit-device-id",
+                flag_keys_to_evaluate=["random_key"],
+            )
 
     @parameterized.expand(
         [
