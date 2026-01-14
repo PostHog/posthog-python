@@ -127,6 +127,12 @@ class PostHogTracingProcessor(TracingProcessor):
             return None
         return value
 
+    def _get_group_id(self, trace_id: str) -> Optional[str]:
+        """Get the group_id for a trace from stored metadata."""
+        if trace_id in self._trace_metadata:
+            return self._trace_metadata[trace_id].get("group_id")
+        return None
+
     def _capture_event(
         self,
         event: str,
@@ -162,24 +168,36 @@ class PostHogTracingProcessor(TracingProcessor):
         try:
             trace_id = trace.trace_id
             trace_name = trace.name
+            group_id = getattr(trace, "group_id", None)
+            metadata = getattr(trace, "metadata", None)
 
-            # Store trace metadata for later
+            # Store trace metadata for later (used by spans)
             self._trace_metadata[trace_id] = {
                 "name": trace_name,
-                "group_id": getattr(trace, "group_id", None),
-                "metadata": getattr(trace, "metadata", None),
+                "group_id": group_id,
+                "metadata": metadata,
             }
 
             distinct_id = self._get_distinct_id(trace)
 
+            properties = {
+                "$ai_trace_id": trace_id,
+                "$ai_trace_name": trace_name,
+                "$ai_provider": "openai_agents",
+            }
+
+            # Include group_id for linking related traces (e.g., conversation threads)
+            if group_id:
+                properties["$ai_group_id"] = group_id
+
+            # Include trace metadata if present
+            if metadata:
+                properties["$ai_trace_metadata"] = _safe_json(metadata)
+
             self._capture_event(
                 event="$ai_trace",
                 distinct_id=distinct_id,
-                properties={
-                    "$ai_trace_id": trace_id,
-                    "$ai_trace_name": trace_name,
-                    "$ai_provider": "openai_agents",
-                },
+                properties=properties,
             )
         except Exception as e:
             log.debug(f"Error in on_trace_start: {e}")
@@ -222,9 +240,9 @@ class PostHogTracingProcessor(TracingProcessor):
 
             # Get distinct ID from trace metadata or default
             distinct_id = self._get_distinct_id(None)
-            if trace_id in self._trace_metadata:
-                # Use trace's distinct ID resolver if available
-                distinct_id = self._get_distinct_id(None)
+
+            # Get group_id from trace metadata for linking
+            group_id = self._get_group_id(trace_id)
 
             # Get error info if present
             error_info = span.error
@@ -238,44 +256,44 @@ class PostHogTracingProcessor(TracingProcessor):
             # Dispatch based on span data type
             if isinstance(span_data, GenerationSpanData):
                 self._handle_generation_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, FunctionSpanData):
                 self._handle_function_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, AgentSpanData):
                 self._handle_agent_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, HandoffSpanData):
                 self._handle_handoff_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, GuardrailSpanData):
                 self._handle_guardrail_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, ResponseSpanData):
                 self._handle_response_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, CustomSpanData):
                 self._handle_custom_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, (TranscriptionSpanData, SpeechSpanData, SpeechGroupSpanData)):
                 self._handle_audio_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             elif isinstance(span_data, MCPListToolsSpanData):
                 self._handle_mcp_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
             else:
                 # Unknown span type - capture as generic span
                 self._handle_generic_span(
-                    span_data, trace_id, span_id, parent_id, latency, distinct_id, error_properties
+                    span_data, trace_id, span_id, parent_id, latency, distinct_id, group_id, error_properties
                 )
 
         except Exception as e:
@@ -289,6 +307,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle LLM generation spans - maps to $ai_generation event."""
@@ -319,6 +338,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         # Add optional token fields if present
         if usage.get("reasoning_tokens"):
             properties["$ai_reasoning_tokens"] = usage["reasoning_tokens"]
@@ -337,6 +360,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle function/tool call spans - maps to $ai_span event."""
@@ -353,6 +377,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         # Add MCP data if present
         if span_data.mcp_data:
             properties["$ai_mcp_data"] = _safe_json(span_data.mcp_data)
@@ -367,6 +395,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle agent execution spans - maps to $ai_span event."""
@@ -380,6 +409,10 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_latency": latency,
             **error_properties,
         }
+
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
 
         # Add agent-specific metadata
         if span_data.handoffs:
@@ -399,6 +432,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle agent handoff spans - maps to $ai_span event."""
@@ -415,6 +449,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         self._capture_event("$ai_span", properties, distinct_id)
 
     def _handle_guardrail_span(
@@ -425,6 +463,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle guardrail execution spans - maps to $ai_span event."""
@@ -440,6 +479,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         self._capture_event("$ai_span", properties, distinct_id)
 
     def _handle_response_span(
@@ -450,6 +493,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle OpenAI Response API spans - maps to $ai_generation event."""
@@ -481,6 +525,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         self._capture_event("$ai_generation", properties, distinct_id)
 
     def _handle_custom_span(
@@ -491,6 +539,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle custom user-defined spans - maps to $ai_span event."""
@@ -506,6 +555,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         self._capture_event("$ai_span", properties, distinct_id)
 
     def _handle_audio_span(
@@ -516,6 +569,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle audio-related spans (transcription, speech) - maps to $ai_span event."""
@@ -531,6 +585,10 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_latency": latency,
             **error_properties,
         }
+
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
 
         # Add model info if available
         if hasattr(span_data, "model") and span_data.model:
@@ -551,6 +609,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle MCP (Model Context Protocol) spans - maps to $ai_span event."""
@@ -567,6 +626,10 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
 
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
+
         self._capture_event("$ai_span", properties, distinct_id)
 
     def _handle_generic_span(
@@ -577,6 +640,7 @@ class PostHogTracingProcessor(TracingProcessor):
         parent_id: Optional[str],
         latency: float,
         distinct_id: str,
+        group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
         """Handle unknown span types - maps to $ai_span event."""
@@ -592,6 +656,10 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_latency": latency,
             **error_properties,
         }
+
+        # Include group_id for linking related traces
+        if group_id:
+            properties["$ai_group_id"] = group_id
 
         # Try to export span data
         if hasattr(span_data, "export"):
