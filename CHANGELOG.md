@@ -1,3 +1,9 @@
+# 7.6.0 - 2026-01-15
+
+feat(ai): Add OpenAI Agents SDK integration
+
+Automatic tracing for agent workflows, handoffs, tool calls, guardrails, and custom spans. Includes `$ai_total_tokens`, `$ai_error_type` categorization, and `$ai_framework` property.
+
 # 7.5.1 - 2026-01-07
 
 fix: avoid return from finally block to fix Python 3.14 SyntaxWarning (#361) - thanks @jodal
