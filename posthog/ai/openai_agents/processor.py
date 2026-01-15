@@ -248,9 +248,26 @@ class PostHogTracingProcessor(TracingProcessor):
             error_info = span.error
             error_properties = {}
             if error_info:
+                error_message = error_info.get("message", str(error_info))
+                error_type_raw = error_info.get("type", "")
+
+                # Categorize error type for cross-provider filtering/alerting
+                error_type = "unknown"
+                if "ModelBehaviorError" in error_type_raw or "ModelBehaviorError" in error_message:
+                    error_type = "model_behavior_error"
+                elif "UserError" in error_type_raw or "UserError" in error_message:
+                    error_type = "user_error"
+                elif "InputGuardrailTripwireTriggered" in error_message:
+                    error_type = "input_guardrail_triggered"
+                elif "OutputGuardrailTripwireTriggered" in error_message:
+                    error_type = "output_guardrail_triggered"
+                elif "MaxTurnsExceeded" in error_message:
+                    error_type = "max_turns_exceeded"
+
                 error_properties = {
                     "$ai_is_error": True,
-                    "$ai_error": error_info.get("message", str(error_info)),
+                    "$ai_error": error_message,
+                    "$ai_error_type": error_type,
                 }
 
             # Dispatch based on span data type
@@ -334,6 +351,7 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_output_choices": self._with_privacy_mode(_safe_json(span_data.output)),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
+            "$ai_total_tokens": input_tokens + output_tokens,
             "$ai_latency": latency,
             **error_properties,
         }
@@ -521,6 +539,7 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_input": self._with_privacy_mode(_safe_json(span_data.input)),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
+            "$ai_total_tokens": input_tokens + output_tokens,
             "$ai_latency": latency,
             **error_properties,
         }
@@ -528,6 +547,12 @@ class PostHogTracingProcessor(TracingProcessor):
         # Include group_id for linking related traces
         if group_id:
             properties["$ai_group_id"] = group_id
+
+        # Extract output content from response
+        if response:
+            output_items = getattr(response, "output", None)
+            if output_items:
+                properties["$ai_output_choices"] = self._with_privacy_mode(_safe_json(output_items))
 
         self._capture_event("$ai_generation", properties, distinct_id)
 
@@ -593,6 +618,24 @@ class PostHogTracingProcessor(TracingProcessor):
         # Add model info if available
         if hasattr(span_data, "model") and span_data.model:
             properties["$ai_model"] = span_data.model
+
+        # Add model config if available (pass-through property)
+        if hasattr(span_data, "model_config") and span_data.model_config:
+            properties["model_config"] = _safe_json(span_data.model_config)
+
+        # Add time to first audio byte for speech spans (pass-through property)
+        if hasattr(span_data, "first_content_at") and span_data.first_content_at:
+            properties["first_content_at"] = span_data.first_content_at
+
+        # Add audio format info (pass-through properties)
+        if hasattr(span_data, "input_format"):
+            properties["audio_input_format"] = span_data.input_format
+        if hasattr(span_data, "output_format"):
+            properties["audio_output_format"] = span_data.output_format
+
+        # Add text input for TTS
+        if hasattr(span_data, "input") and span_data.input and isinstance(span_data.input, str):
+            properties["$ai_input"] = self._with_privacy_mode(span_data.input)
 
         # Don't include audio data (base64) - just metadata
         if hasattr(span_data, "output") and isinstance(span_data.output, str):
