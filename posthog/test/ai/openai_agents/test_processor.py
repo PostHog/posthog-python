@@ -11,6 +11,9 @@ try:
         GenerationSpanData,
         GuardrailSpanData,
         HandoffSpanData,
+        ResponseSpanData,
+        SpeechSpanData,
+        TranscriptionSpanData,
     )
 
     from posthog.ai.openai_agents import PostHogTracingProcessor, instrument
@@ -317,6 +320,171 @@ class TestPostHogTracingProcessor:
 
         assert call_kwargs["properties"]["$ai_is_error"] is True
         assert call_kwargs["properties"]["$ai_error"] == "Rate limit exceeded"
+
+    def test_generation_span_includes_total_tokens(self, processor, mock_client, mock_span):
+        """Test that $ai_total_tokens is calculated and included."""
+        span_data = GenerationSpanData(
+            model="gpt-4o",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_total_tokens"] == 150
+
+    def test_error_type_categorization_model_behavior(self, processor, mock_client, mock_span):
+        """Test that ModelBehaviorError is categorized correctly."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "ModelBehaviorError: Invalid JSON output", "type": "ModelBehaviorError"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "model_behavior_error"
+
+    def test_error_type_categorization_user_error(self, processor, mock_client, mock_span):
+        """Test that UserError is categorized correctly."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "UserError: Tool failed", "type": "UserError"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "user_error"
+
+    def test_error_type_categorization_input_guardrail(self, processor, mock_client, mock_span):
+        """Test that InputGuardrailTripwireTriggered is categorized correctly."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "InputGuardrailTripwireTriggered: Content blocked"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "input_guardrail_triggered"
+
+    def test_error_type_categorization_output_guardrail(self, processor, mock_client, mock_span):
+        """Test that OutputGuardrailTripwireTriggered is categorized correctly."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "OutputGuardrailTripwireTriggered: Response blocked"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "output_guardrail_triggered"
+
+    def test_error_type_categorization_max_turns(self, processor, mock_client, mock_span):
+        """Test that MaxTurnsExceeded is categorized correctly."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "MaxTurnsExceeded: Agent exceeded maximum turns"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "max_turns_exceeded"
+
+    def test_error_type_categorization_unknown(self, processor, mock_client, mock_span):
+        """Test that unknown errors are categorized as unknown."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "Some random error occurred"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "unknown"
+
+    def test_response_span_with_output_and_total_tokens(self, processor, mock_client, mock_span):
+        """Test ResponseSpanData includes output choices and total tokens."""
+        # Create a mock response object
+        mock_response = MagicMock()
+        mock_response.id = "resp_123"
+        mock_response.model = "gpt-4o"
+        mock_response.output = [{"type": "message", "content": "Hello!"}]
+        mock_response.usage = MagicMock()
+        mock_response.usage.input_tokens = 25
+        mock_response.usage.output_tokens = 10
+
+        span_data = ResponseSpanData(
+            response=mock_response,
+            input="Hello, world!",
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+
+        assert call_kwargs["event"] == "$ai_generation"
+        assert call_kwargs["properties"]["$ai_total_tokens"] == 35
+        assert call_kwargs["properties"]["$ai_output_choices"] == [{"type": "message", "content": "Hello!"}]
+        assert call_kwargs["properties"]["$ai_response_id"] == "resp_123"
+
+    def test_speech_span_with_pass_through_properties(self, processor, mock_client, mock_span):
+        """Test SpeechSpanData includes pass-through properties."""
+        span_data = SpeechSpanData(
+            input="Hello, how can I help you?",
+            output="base64_audio_data",
+            output_format="pcm",
+            model="tts-1",
+            model_config={"voice": "alloy", "speed": 1.0},
+            first_content_at="2024-01-01T00:00:00.500Z",
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+
+        assert call_kwargs["event"] == "$ai_span"
+        assert call_kwargs["properties"]["$ai_span_type"] == "speech"
+        assert call_kwargs["properties"]["$ai_model"] == "tts-1"
+        # Pass-through properties (no $ai_ prefix)
+        assert call_kwargs["properties"]["first_content_at"] == "2024-01-01T00:00:00.500Z"
+        assert call_kwargs["properties"]["audio_output_format"] == "pcm"
+        assert call_kwargs["properties"]["model_config"] == {"voice": "alloy", "speed": 1.0}
+        # Text input should be captured
+        assert call_kwargs["properties"]["$ai_input"] == "Hello, how can I help you?"
+
+    def test_transcription_span_with_pass_through_properties(self, processor, mock_client, mock_span):
+        """Test TranscriptionSpanData includes pass-through properties."""
+        span_data = TranscriptionSpanData(
+            input="base64_audio_data",
+            input_format="pcm",
+            output="This is the transcribed text.",
+            model="whisper-1",
+            model_config={"language": "en"},
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+
+        assert call_kwargs["event"] == "$ai_span"
+        assert call_kwargs["properties"]["$ai_span_type"] == "transcription"
+        assert call_kwargs["properties"]["$ai_model"] == "whisper-1"
+        # Pass-through properties (no $ai_ prefix)
+        assert call_kwargs["properties"]["audio_input_format"] == "pcm"
+        assert call_kwargs["properties"]["model_config"] == {"language": "en"}
+        # Transcription output should be captured
+        assert call_kwargs["properties"]["$ai_output_state"] == "This is the transcribed text."
 
     def test_latency_calculation(self, processor, mock_client, mock_span):
         """Test that latency is calculated correctly."""
