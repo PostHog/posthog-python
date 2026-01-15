@@ -110,7 +110,8 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["distinct_id"] == "test-user"
         assert call_kwargs["properties"]["$ai_trace_id"] == "trace_123456789"
         assert call_kwargs["properties"]["$ai_trace_name"] == "Test Workflow"
-        assert call_kwargs["properties"]["$ai_provider"] == "openai_agents"
+        assert call_kwargs["properties"]["$ai_provider"] == "openai"
+        assert call_kwargs["properties"]["$ai_framework"] == "openai-agents"
 
     def test_on_trace_end_clears_metadata(self, processor, mock_trace):
         """Test that on_trace_end clears stored trace metadata."""
@@ -146,6 +147,7 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["properties"]["$ai_trace_id"] == "trace_123456789"
         assert call_kwargs["properties"]["$ai_span_id"] == "span_987654321"
         assert call_kwargs["properties"]["$ai_provider"] == "openai"
+        assert call_kwargs["properties"]["$ai_framework"] == "openai-agents"
         assert call_kwargs["properties"]["$ai_model"] == "gpt-4o"
         assert call_kwargs["properties"]["$ai_input_tokens"] == 10
         assert call_kwargs["properties"]["$ai_output_tokens"] == 20
