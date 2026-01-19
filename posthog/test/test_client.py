@@ -2044,16 +2044,36 @@ class TestClient(unittest.TestCase):
     @parameterized.expand(
         [
             # method, method_args, expected_person_props, expected_flag_keys
-            ("get_feature_flag", ["random_key", "some_id"], {"distinct_id": "some_id"}, ["random_key"]),
-            ("feature_enabled", ["random_key", "some_id"], {"distinct_id": "some_id"}, ["random_key"]),
-            ("get_all_flags_and_payloads", ["some_id"], {"distinct_id": "some_id"}, None),
+            (
+                "get_feature_flag",
+                ["random_key", "some_id"],
+                {"distinct_id": "some_id"},
+                ["random_key"],
+            ),
+            (
+                "feature_enabled",
+                ["random_key", "some_id"],
+                {"distinct_id": "some_id"},
+                ["random_key"],
+            ),
+            (
+                "get_all_flags_and_payloads",
+                ["some_id"],
+                {"distinct_id": "some_id"},
+                None,
+            ),
             ("get_all_flags", ["some_id"], {"distinct_id": "some_id"}, None),
             ("get_flags_decision", ["some_id"], {}, None),
         ]
     )
     @mock.patch("posthog.client.flags")
     def test_device_id_is_passed_to_flags_request(
-        self, method, method_args, expected_person_props, expected_flag_keys, patch_flags
+        self,
+        method,
+        method_args,
+        expected_person_props,
+        expected_flag_keys,
+        patch_flags,
     ):
         """Test that device_id is properly passed to the flags request when provided."""
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
