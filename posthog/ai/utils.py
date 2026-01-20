@@ -2,14 +2,15 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, cast
 
-from posthog.client import Client as PostHogClient
-from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
+from posthog import get_tags, identify_context, new_context, tag
 from posthog.ai.sanitization import (
-    sanitize_openai,
     sanitize_anthropic,
     sanitize_gemini,
     sanitize_langchain,
+    sanitize_openai,
 )
+from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
+from posthog.client import Client as PostHogClient
 
 
 def merge_usage_stats(
@@ -256,94 +257,108 @@ def call_llm_and_track_usage(
     usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
-    try:
-        response = call_method(**kwargs)
-    except Exception as exc:
-        error = exc
-        http_status = getattr(
-            exc, "status_code", 0
-        )  # default to 0 becuase its likely an SDK error
-        error_params = {
-            "$ai_is_error": True,
-            "$ai_error": exc.__str__(),
-        }
-    finally:
-        end_time = time.time()
-        latency = end_time - start_time
+    with new_context(client=ph_client, capture_exceptions=False):
+        if posthog_distinct_id:
+            identify_context(posthog_distinct_id)
 
-        if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+        try:
+            response = call_method(**kwargs)
+        except Exception as exc:
+            error = exc
+            http_status = getattr(
+                exc, "status_code", 0
+            )  # default to 0 becuase its likely an SDK error
+            error_params = {
+                "$ai_is_error": True,
+                "$ai_error": exc.__str__(),
+            }
+            # TODO: Add exception capture for OpenAI/Anthropic/Gemini wrappers when
+            # enable_exception_autocapture is True, similar to LangChain callbacks.
+            # See _capture_exception_and_update_properties in langchain/callbacks.py
+        finally:
+            end_time = time.time()
+            latency = end_time - start_time
 
-        if response and (
-            hasattr(response, "usage")
-            or (provider == "gemini" and hasattr(response, "usage_metadata"))
-        ):
-            usage = get_usage(response, provider)
+            if posthog_trace_id is None:
+                posthog_trace_id = str(uuid.uuid4())
 
-        messages = merge_system_prompt(kwargs, provider)
-        sanitized_messages = sanitize_messages(messages, provider)
+            if response and (
+                hasattr(response, "usage")
+                or (provider == "gemini" and hasattr(response, "usage_metadata"))
+            ):
+                usage = get_usage(response, provider)
 
-        event_properties = {
-            "$ai_provider": provider,
-            "$ai_model": kwargs.get("model") or getattr(response, "model", None),
-            "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(
-                ph_client, posthog_privacy_mode, sanitized_messages
-            ),
-            "$ai_output_choices": with_privacy_mode(
-                ph_client, posthog_privacy_mode, format_response(response, provider)
-            ),
-            "$ai_http_status": http_status,
-            "$ai_input_tokens": usage.get("input_tokens", 0),
-            "$ai_output_tokens": usage.get("output_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(base_url),
-            **(posthog_properties or {}),
-            **(error_params or {}),
-        }
+            messages = merge_system_prompt(kwargs, provider)
+            sanitized_messages = sanitize_messages(messages, provider)
 
-        available_tool_calls = extract_available_tool_calls(provider, kwargs)
-
-        if available_tool_calls:
-            event_properties["$ai_tools"] = available_tool_calls
-
-        cache_read = usage.get("cache_read_input_tokens")
-        if cache_read is not None and cache_read > 0:
-            event_properties["$ai_cache_read_input_tokens"] = cache_read
-
-        cache_creation = usage.get("cache_creation_input_tokens")
-        if cache_creation is not None and cache_creation > 0:
-            event_properties["$ai_cache_creation_input_tokens"] = cache_creation
-
-        reasoning = usage.get("reasoning_tokens")
-        if reasoning is not None and reasoning > 0:
-            event_properties["$ai_reasoning_tokens"] = reasoning
-
-        web_search_count = usage.get("web_search_count")
-        if web_search_count is not None and web_search_count > 0:
-            event_properties["$ai_web_search_count"] = web_search_count
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        # Process instructions for Responses API
-        if provider == "openai" and kwargs.get("instructions") is not None:
-            event_properties["$ai_instructions"] = with_privacy_mode(
-                ph_client, posthog_privacy_mode, kwargs.get("instructions")
+            tag("$ai_provider", provider)
+            tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
+            tag("$ai_model_parameters", get_model_params(kwargs))
+            tag(
+                "$ai_input",
+                with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
             )
-
-        # send the event to posthog
-        if hasattr(ph_client, "capture") and callable(ph_client.capture):
-            ph_client.capture(
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
-                properties=event_properties,
-                groups=posthog_groups,
+            tag(
+                "$ai_output_choices",
+                with_privacy_mode(
+                    ph_client, posthog_privacy_mode, format_response(response, provider)
+                ),
             )
+            tag("$ai_http_status", http_status)
+            tag("$ai_input_tokens", usage.get("input_tokens", 0))
+            tag("$ai_output_tokens", usage.get("output_tokens", 0))
+            tag("$ai_latency", latency)
+            tag("$ai_trace_id", posthog_trace_id)
+            tag("$ai_base_url", str(base_url))
 
-    if error:
-        raise error
+            available_tool_calls = extract_available_tool_calls(provider, kwargs)
+
+            if available_tool_calls:
+                tag("$ai_tools", available_tool_calls)
+
+            cache_read = usage.get("cache_read_input_tokens")
+            if cache_read is not None and cache_read > 0:
+                tag("$ai_cache_read_input_tokens", cache_read)
+
+            cache_creation = usage.get("cache_creation_input_tokens")
+            if cache_creation is not None and cache_creation > 0:
+                tag("$ai_cache_creation_input_tokens", cache_creation)
+
+            reasoning = usage.get("reasoning_tokens")
+            if reasoning is not None and reasoning > 0:
+                tag("$ai_reasoning_tokens", reasoning)
+
+            web_search_count = usage.get("web_search_count")
+            if web_search_count is not None and web_search_count > 0:
+                tag("$ai_web_search_count", web_search_count)
+
+            if posthog_distinct_id is None:
+                tag("$process_person_profile", False)
+
+            # Process instructions for Responses API
+            if provider == "openai" and kwargs.get("instructions") is not None:
+                tag(
+                    "$ai_instructions",
+                    with_privacy_mode(
+                        ph_client, posthog_privacy_mode, kwargs.get("instructions")
+                    ),
+                )
+
+            # send the event to posthog
+            if hasattr(ph_client, "capture") and callable(ph_client.capture):
+                ph_client.capture(
+                    distinct_id=posthog_distinct_id or posthog_trace_id,
+                    event="$ai_generation",
+                    properties={
+                        **get_tags(),
+                        **(posthog_properties or {}),
+                        **(error_params or {}),
+                    },
+                    groups=posthog_groups,
+                )
+
+        if error:
+            raise error
 
     return response
 
@@ -367,94 +382,108 @@ async def call_llm_and_track_usage_async(
     usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
-    try:
-        response = await call_async_method(**kwargs)
-    except Exception as exc:
-        error = exc
-        http_status = getattr(
-            exc, "status_code", 0
-        )  # default to 0 because its likely an SDK error
-        error_params = {
-            "$ai_is_error": True,
-            "$ai_error": exc.__str__(),
-        }
-    finally:
-        end_time = time.time()
-        latency = end_time - start_time
+    with new_context(client=ph_client, capture_exceptions=False):
+        if posthog_distinct_id:
+            identify_context(posthog_distinct_id)
 
-        if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+        try:
+            response = await call_async_method(**kwargs)
+        except Exception as exc:
+            error = exc
+            http_status = getattr(
+                exc, "status_code", 0
+            )  # default to 0 because its likely an SDK error
+            error_params = {
+                "$ai_is_error": True,
+                "$ai_error": exc.__str__(),
+            }
+            # TODO: Add exception capture for OpenAI/Anthropic/Gemini wrappers when
+            # enable_exception_autocapture is True, similar to LangChain callbacks.
+            # See _capture_exception_and_update_properties in langchain/callbacks.py
+        finally:
+            end_time = time.time()
+            latency = end_time - start_time
 
-        if response and (
-            hasattr(response, "usage")
-            or (provider == "gemini" and hasattr(response, "usage_metadata"))
-        ):
-            usage = get_usage(response, provider)
+            if posthog_trace_id is None:
+                posthog_trace_id = str(uuid.uuid4())
 
-        messages = merge_system_prompt(kwargs, provider)
-        sanitized_messages = sanitize_messages(messages, provider)
+            if response and (
+                hasattr(response, "usage")
+                or (provider == "gemini" and hasattr(response, "usage_metadata"))
+            ):
+                usage = get_usage(response, provider)
 
-        event_properties = {
-            "$ai_provider": provider,
-            "$ai_model": kwargs.get("model") or getattr(response, "model", None),
-            "$ai_model_parameters": get_model_params(kwargs),
-            "$ai_input": with_privacy_mode(
-                ph_client, posthog_privacy_mode, sanitized_messages
-            ),
-            "$ai_output_choices": with_privacy_mode(
-                ph_client, posthog_privacy_mode, format_response(response, provider)
-            ),
-            "$ai_http_status": http_status,
-            "$ai_input_tokens": usage.get("input_tokens", 0),
-            "$ai_output_tokens": usage.get("output_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(base_url),
-            **(posthog_properties or {}),
-            **(error_params or {}),
-        }
+            messages = merge_system_prompt(kwargs, provider)
+            sanitized_messages = sanitize_messages(messages, provider)
 
-        available_tool_calls = extract_available_tool_calls(provider, kwargs)
-
-        if available_tool_calls:
-            event_properties["$ai_tools"] = available_tool_calls
-
-        cache_read = usage.get("cache_read_input_tokens")
-        if cache_read is not None and cache_read > 0:
-            event_properties["$ai_cache_read_input_tokens"] = cache_read
-
-        cache_creation = usage.get("cache_creation_input_tokens")
-        if cache_creation is not None and cache_creation > 0:
-            event_properties["$ai_cache_creation_input_tokens"] = cache_creation
-
-        reasoning = usage.get("reasoning_tokens")
-        if reasoning is not None and reasoning > 0:
-            event_properties["$ai_reasoning_tokens"] = reasoning
-
-        web_search_count = usage.get("web_search_count")
-        if web_search_count is not None and web_search_count > 0:
-            event_properties["$ai_web_search_count"] = web_search_count
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        # Process instructions for Responses API
-        if provider == "openai" and kwargs.get("instructions") is not None:
-            event_properties["$ai_instructions"] = with_privacy_mode(
-                ph_client, posthog_privacy_mode, kwargs.get("instructions")
+            tag("$ai_provider", provider)
+            tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
+            tag("$ai_model_parameters", get_model_params(kwargs))
+            tag(
+                "$ai_input",
+                with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
             )
-
-        # send the event to posthog
-        if hasattr(ph_client, "capture") and callable(ph_client.capture):
-            ph_client.capture(
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
-                properties=event_properties,
-                groups=posthog_groups,
+            tag(
+                "$ai_output_choices",
+                with_privacy_mode(
+                    ph_client, posthog_privacy_mode, format_response(response, provider)
+                ),
             )
+            tag("$ai_http_status", http_status)
+            tag("$ai_input_tokens", usage.get("input_tokens", 0))
+            tag("$ai_output_tokens", usage.get("output_tokens", 0))
+            tag("$ai_latency", latency)
+            tag("$ai_trace_id", posthog_trace_id)
+            tag("$ai_base_url", str(base_url))
 
-    if error:
-        raise error
+            available_tool_calls = extract_available_tool_calls(provider, kwargs)
+
+            if available_tool_calls:
+                tag("$ai_tools", available_tool_calls)
+
+            cache_read = usage.get("cache_read_input_tokens")
+            if cache_read is not None and cache_read > 0:
+                tag("$ai_cache_read_input_tokens", cache_read)
+
+            cache_creation = usage.get("cache_creation_input_tokens")
+            if cache_creation is not None and cache_creation > 0:
+                tag("$ai_cache_creation_input_tokens", cache_creation)
+
+            reasoning = usage.get("reasoning_tokens")
+            if reasoning is not None and reasoning > 0:
+                tag("$ai_reasoning_tokens", reasoning)
+
+            web_search_count = usage.get("web_search_count")
+            if web_search_count is not None and web_search_count > 0:
+                tag("$ai_web_search_count", web_search_count)
+
+            if posthog_distinct_id is None:
+                tag("$process_person_profile", False)
+
+            # Process instructions for Responses API
+            if provider == "openai" and kwargs.get("instructions") is not None:
+                tag(
+                    "$ai_instructions",
+                    with_privacy_mode(
+                        ph_client, posthog_privacy_mode, kwargs.get("instructions")
+                    ),
+                )
+
+            # send the event to posthog
+            if hasattr(ph_client, "capture") and callable(ph_client.capture):
+                ph_client.capture(
+                    distinct_id=posthog_distinct_id or posthog_trace_id,
+                    event="$ai_generation",
+                    properties={
+                        **get_tags(),
+                        **(posthog_properties or {}),
+                        **(error_params or {}),
+                    },
+                    groups=posthog_groups,
+                )
+
+        if error:
+            raise error
 
     return response
 

@@ -1638,6 +1638,95 @@ def test_anthropic_provider_subtracts_cache_tokens(mock_client):
     assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
 
 
+def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
+    """Test that Anthropic provider correctly subtracts cache write tokens from input tokens."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+
+    # Set up with Anthropic provider
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-3-sonnet"},
+    )
+
+    # Response with cache creation: 1000 input (includes 800 being written to cache)
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": 1000,
+                            "output_tokens": 50,
+                            "cache_creation_input_tokens": 800,
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    generation_args = mock_client.capture.call_args_list[0][1]
+    assert generation_args["properties"]["$ai_input_tokens"] == 200  # 1000 - 800
+    assert generation_args["properties"]["$ai_cache_creation_input_tokens"] == 800
+
+
+def test_anthropic_provider_subtracts_both_cache_read_and_write_tokens(mock_client):
+    """Test that Anthropic provider correctly subtracts both cache read and write tokens."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+
+    # Set up with Anthropic provider
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-3-sonnet"},
+    )
+
+    # Response with both cache read and creation
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": 2000,
+                            "output_tokens": 50,
+                            "cache_read_input_tokens": 800,
+                            "cache_creation_input_tokens": 500,
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    generation_args = mock_client.capture.call_args_list[0][1]
+    # 2000 - 800 (read) - 500 (write) = 700
+    assert generation_args["properties"]["$ai_input_tokens"] == 700
+    assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
+    assert generation_args["properties"]["$ai_cache_creation_input_tokens"] == 500
+
+
 def test_openai_cache_read_tokens(mock_client):
     """Test that OpenAI cache read tokens are captured correctly."""
     prompt = ChatPromptTemplate.from_messages(
@@ -2092,10 +2181,12 @@ def test_zero_input_tokens_with_cache_read(mock_client):
     assert generation_props["$ai_cache_read_input_tokens"] == 50
 
 
-def test_cache_write_tokens_not_subtracted_from_input(mock_client):
-    """Test that cache_creation_input_tokens (cache write) do NOT affect input_tokens.
+def test_non_anthropic_cache_write_tokens_not_subtracted_from_input(mock_client):
+    """Test that cache_creation_input_tokens do NOT affect input_tokens for non-Anthropic providers.
 
-    Only cache_read_tokens should be subtracted from input_tokens, not cache_write_tokens.
+    When no provider metadata is set (or for non-Anthropic providers), cache tokens should
+    NOT be subtracted from input_tokens. This is because different providers report tokens
+    differently - only Anthropic's LangChain integration requires subtraction.
     """
     prompt = ChatPromptTemplate.from_messages([("user", "Create cache")])
 
@@ -2350,3 +2441,206 @@ def test_billable_with_real_chain(mock_client):
     assert props["$ai_billable"] is True
     assert props["$ai_model"] == "fake-model"
     assert props["$ai_provider"] == "fake"
+
+
+# Exception Capture Integration Tests
+
+
+def test_exception_autocapture_on_span_error():
+    """Test that capture_exception is called when a span errors and autocapture is enabled."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-123"
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # Verify capture_exception was called
+    assert mock_client.capture_exception.call_count == 1
+    exception_call = mock_client.capture_exception.call_args
+    assert isinstance(exception_call[0][0], ValueError)
+    assert str(exception_call[0][0]) == "test error"
+
+
+def test_exception_autocapture_adds_exception_id_to_span_event():
+    """Test that $exception_event_id is added to the span event properties."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-456"
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # Find the span event (should have $ai_is_error=True)
+    span_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("properties", {}).get("$ai_is_error") is True
+    ]
+    assert len(span_calls) >= 1
+
+    span_props = span_calls[0][1]["properties"]
+    assert span_props["$exception_event_id"] == "exception-uuid-456"
+    assert span_props["$ai_error"] == "ValueError: test error"
+
+
+def test_exception_autocapture_disabled_does_not_capture():
+    """Test that capture_exception is NOT called when autocapture is disabled."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = False
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # Verify capture_exception was NOT called
+    assert mock_client.capture_exception.call_count == 0
+
+    # But the span event should still have error info
+    span_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("properties", {}).get("$ai_is_error") is True
+    ]
+    assert len(span_calls) >= 1
+
+    span_props = span_calls[0][1]["properties"]
+    assert "$exception_event_id" not in span_props
+    assert span_props["$ai_error"] == "ValueError: test error"
+
+
+def test_exception_autocapture_on_llm_generation_error(mock_client):
+    """Test that capture_exception is called when an LLM generation fails."""
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-789"
+
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+
+    # Simulate LLM start
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+    )
+
+    # Simulate LLM error
+    error = Exception("API rate limit exceeded")
+    callbacks.on_llm_error(error, run_id=run_id)
+
+    # Verify capture_exception was called
+    assert mock_client.capture_exception.call_count == 1
+    exception_call = mock_client.capture_exception.call_args
+    assert exception_call[0][0] is error
+
+    # Verify the generation event has $exception_event_id
+    generation_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("event") == "$ai_generation"
+    ]
+    assert len(generation_calls) == 1
+
+    gen_props = generation_calls[0][1]["properties"]
+    assert gen_props["$exception_event_id"] == "exception-uuid-789"
+    assert gen_props["$ai_is_error"] is True
+
+
+def test_exception_autocapture_passes_ai_properties_to_exception():
+    """Test that AI properties are passed to the exception event."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-abc"
+
+    callbacks = CallbackHandler(
+        mock_client,
+        distinct_id="user-123",
+        properties={"custom_prop": "custom_value"},
+    )
+    run_id = uuid.uuid4()
+
+    # Simulate LLM start
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+    )
+
+    # Simulate LLM error
+    error = Exception("API error")
+    callbacks.on_llm_error(error, run_id=run_id)
+
+    # Verify capture_exception received the properties
+    exception_call = mock_client.capture_exception.call_args
+    props = exception_call[1]["properties"]
+
+    # Should have AI-related properties
+    assert "$ai_trace_id" in props
+    assert "$ai_is_error" in props
+    assert props["$ai_is_error"] is True
+
+    # Should have distinct_id passed through
+    assert exception_call[1]["distinct_id"] == "user-123"
+
+
+def test_exception_autocapture_none_return_no_exception_id():
+    """Test that when capture_exception returns None, no $exception_event_id is added."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = (
+        None  # e.g., exception already captured
+    )
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    chain = RunnableLambda(failing_span)
+
+    try:
+        chain.invoke({}, config={"callbacks": callbacks})
+    except ValueError:
+        pass
+
+    # capture_exception was called but returned None
+    assert mock_client.capture_exception.call_count == 1
+
+    # Span event should NOT have $exception_event_id
+    span_calls = [
+        call
+        for call in mock_client.capture.call_args_list
+        if call[1].get("properties", {}).get("$ai_is_error") is True
+    ]
+    assert len(span_calls) >= 1
+
+    span_props = span_calls[0][1]["properties"]
+    assert "$exception_event_id" not in span_props

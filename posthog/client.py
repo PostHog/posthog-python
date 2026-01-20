@@ -18,6 +18,7 @@ from posthog.contexts import (
     get_capture_exception_code_variables_context,
     get_code_variables_ignore_patterns_context,
     get_code_variables_mask_patterns_context,
+    get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
     new_context,
@@ -382,6 +383,7 @@ class Client(object):
         group_properties=None,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> dict[str, Union[bool, str]]:
         """
         Get feature flag variants for a user by calling decide.
@@ -394,6 +396,7 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            device_id: The device ID for this request.
 
         Category:
             Feature flags
@@ -405,6 +408,7 @@ class Client(object):
             group_properties,
             disable_geoip,
             flag_keys_to_evaluate,
+            device_id=device_id,
         )
         return to_values(resp_data) or {}
 
@@ -416,6 +420,7 @@ class Client(object):
         group_properties=None,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> dict[str, str]:
         """
         Get feature flag payloads for a user by calling decide.
@@ -428,6 +433,7 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -444,6 +450,7 @@ class Client(object):
             group_properties,
             disable_geoip,
             flag_keys_to_evaluate,
+            device_id=device_id,
         )
         return to_payloads(resp_data) or {}
 
@@ -455,6 +462,7 @@ class Client(object):
         group_properties=None,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> FlagsAndPayloads:
         """
         Get feature flags and payloads for a user by calling decide.
@@ -467,6 +475,7 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -483,6 +492,7 @@ class Client(object):
             group_properties,
             disable_geoip,
             flag_keys_to_evaluate,
+            device_id=device_id,
         )
         return to_flags_and_payloads(resp)
 
@@ -494,6 +504,7 @@ class Client(object):
         group_properties=None,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> FlagsResponse:
         """
         Get feature flags decision.
@@ -506,6 +517,7 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -522,6 +534,9 @@ class Client(object):
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
 
+        if device_id is None:
+            device_id = get_context_device_id()
+
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
 
@@ -534,6 +549,7 @@ class Client(object):
             "person_properties": person_properties,
             "group_properties": group_properties,
             "geoip_disable": disable_geoip,
+            "device_id": device_id,
         }
 
         if flag_keys_to_evaluate:
@@ -1464,6 +1480,7 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
+        device_id: Optional[str] = None,
     ):
         """
         Check if a feature flag is enabled for a user.
@@ -1477,6 +1494,7 @@ class Client(object):
             only_evaluate_locally: Whether to only evaluate locally.
             send_feature_flag_events: Whether to send feature flag events.
             disable_geoip: Whether to disable GeoIP for this request.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -1499,6 +1517,7 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
+            device_id=device_id,
         )
 
         if response is None:
@@ -1530,6 +1549,7 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
+        device_id: Optional[str] = None,
     ) -> Optional[FeatureFlagResult]:
         if self.disabled:
             return None
@@ -1584,6 +1604,7 @@ class Client(object):
                         person_properties,
                         group_properties,
                         disable_geoip,
+                        device_id=device_id,
                     )
                 )
                 errors = []
@@ -1656,6 +1677,7 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
+        device_id: Optional[str] = None,
     ) -> Optional[FeatureFlagResult]:
         """
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
@@ -1680,6 +1702,7 @@ class Client(object):
             only_evaluate_locally: Whether to only evaluate locally.
             send_feature_flag_events: Whether to send feature flag events.
             disable_geoip: Whether to disable GeoIP for this request.
+            device_id: The device ID for this request.
 
         Returns:
             Optional[FeatureFlagResult]: The feature flag result or None if disabled/not found.
@@ -1693,6 +1716,7 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
+            device_id=device_id,
         )
 
     def get_feature_flag(
@@ -1706,6 +1730,7 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=True,
         disable_geoip=None,
+        device_id: Optional[str] = None,
     ) -> Optional[FlagValue]:
         """
         Get multivariate feature flag value for a user.
@@ -1719,6 +1744,7 @@ class Client(object):
             only_evaluate_locally: Whether to only evaluate locally.
             send_feature_flag_events: Whether to send feature flag events.
             disable_geoip: Whether to disable GeoIP for this request.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -1741,6 +1767,7 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
+            device_id=device_id,
         )
         return feature_flag_result.get_value() if feature_flag_result else None
 
@@ -1794,6 +1821,7 @@ class Client(object):
         only_evaluate_locally=False,
         send_feature_flag_events=False,
         disable_geoip=None,
+        device_id: Optional[str] = None,
     ):
         """
         Get the payload for a feature flag.
@@ -1808,6 +1836,7 @@ class Client(object):
             only_evaluate_locally: Whether to only evaluate locally.
             send_feature_flag_events: Deprecated. Use get_feature_flag() instead if you need events.
             disable_geoip: Whether to disable GeoIP for this request.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -1840,6 +1869,7 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
+            device_id=device_id,
         )
         return feature_flag_result.payload if feature_flag_result else None
 
@@ -1851,6 +1881,7 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, str],
         disable_geoip: Optional[bool],
+        device_id: Optional[str] = None,
     ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
         """
         Calls /flags and returns the flag details, request id, evaluated at timestamp,
@@ -1863,6 +1894,7 @@ class Client(object):
             group_properties,
             disable_geoip,
             flag_keys_to_evaluate=[key],
+            device_id=device_id,
         )
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
@@ -1987,6 +2019,7 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> Optional[dict[str, Union[bool, str]]]:
         """
         Get all feature flags for a user.
@@ -2000,6 +2033,7 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -2017,6 +2051,7 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             disable_geoip=disable_geoip,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
+            device_id=device_id,
         )
 
         return response["featureFlags"]
@@ -2031,6 +2066,7 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> FlagsAndPayloads:
         """
         Get all feature flags and their payloads for a user.
@@ -2044,6 +2080,7 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            device_id: The device ID for this request.
 
         Examples:
             ```python
@@ -2079,6 +2116,7 @@ class Client(object):
                     group_properties=group_properties,
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
+                    device_id=device_id,
                 )
                 return to_flags_and_payloads(decide_response)
             except Exception as e:
