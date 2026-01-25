@@ -86,20 +86,57 @@ class AsyncClient:
         if self._ph_client is None:
             raise ValueError("posthog_client is required for PostHog tracking")
 
+        client_args: Dict[str, Any] = {}
+
+        if vertexai is not None:
+            client_args["vertexai"] = vertexai
+
+        if credentials is not None:
+            client_args["credentials"] = credentials
+
+        if project is not None:
+            client_args["project"] = project
+
+        if location is not None:
+            client_args["location"] = location
+
+        if debug_config is not None:
+            client_args["debug_config"] = debug_config
+
+        if http_options is not None:
+            client_args["http_options"] = http_options
+
+        if vertexai:
+            if api_key is not None:
+                client_args["api_key"] = api_key
+        else:
+            if api_key is None:
+                api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
+
+            if api_key is None:
+                raise ValueError(
+                    "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
+                )
+
+            client_args["api_key"] = api_key
+        self._client = genai.Client(**client_args)
+
         self.models = AsyncModels(
-            api_key=api_key,
-            vertexai=vertexai,
-            credentials=credentials,
-            project=project,
-            location=location,
-            debug_config=debug_config,
-            http_options=http_options,
+            client=self._client,
             posthog_client=self._ph_client,
             posthog_distinct_id=posthog_distinct_id,
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
             posthog_groups=posthog_groups,
-            **kwargs,
+        )
+
+        self.chats = AsyncChats(
+            client=self._client,
+            posthog_client=self._ph_client,
+            posthog_distinct_id=posthog_distinct_id,
+            posthog_properties=posthog_properties,
+            posthog_privacy_mode=posthog_privacy_mode,
+            posthog_groups=posthog_groups,
         )
 
 
@@ -112,6 +149,7 @@ class AsyncModels:
 
     def __init__(
         self,
+        client: Optional[Any] = None,
         api_key: Optional[str] = None,
         vertexai: Optional[bool] = None,
         credentials: Optional[Any] = None,
@@ -154,46 +192,45 @@ class AsyncModels:
         self._default_privacy_mode = posthog_privacy_mode
         self._default_groups = posthog_groups
 
-        # Build genai.Client arguments
-        client_args: Dict[str, Any] = {}
+        if client is None:
+            client_args: Dict[str, Any] = {}
 
-        # Add Vertex AI parameters if provided
-        if vertexai is not None:
-            client_args["vertexai"] = vertexai
+            if vertexai is not None:
+                client_args["vertexai"] = vertexai
 
-        if credentials is not None:
-            client_args["credentials"] = credentials
+            if credentials is not None:
+                client_args["credentials"] = credentials
 
-        if project is not None:
-            client_args["project"] = project
+            if project is not None:
+                client_args["project"] = project
 
-        if location is not None:
-            client_args["location"] = location
+            if location is not None:
+                client_args["location"] = location
 
-        if debug_config is not None:
-            client_args["debug_config"] = debug_config
+            if debug_config is not None:
+                client_args["debug_config"] = debug_config
 
-        if http_options is not None:
-            client_args["http_options"] = http_options
+            if http_options is not None:
+                client_args["http_options"] = http_options
 
-        # Handle API key authentication
-        if vertexai:
-            # For Vertex AI, api_key is optional
-            if api_key is not None:
+            if vertexai:
+                if api_key is not None:
+                    client_args["api_key"] = api_key
+            else:
+                if api_key is None:
+                    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get(
+                        "API_KEY"
+                    )
+
+                if api_key is None:
+                    raise ValueError(
+                        "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
+                    )
+
                 client_args["api_key"] = api_key
+            self._client = genai.Client(**client_args)
         else:
-            # For non-Vertex AI mode, api_key is required (backwards compatibility)
-            if api_key is None:
-                api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
-
-            if api_key is None:
-                raise ValueError(
-                    "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
-                )
-
-            client_args["api_key"] = api_key
-
-        self._client = genai.Client(**client_args)
+            self._client = client
         self._base_url = "https://generativelanguage.googleapis.com"
 
     def _merge_posthog_params(
@@ -421,3 +458,314 @@ class AsyncModels:
             groups,
             **kwargs,
         )
+
+
+class AsyncChats:
+    """
+    Async Chats interface that mimics genai.Client().aio.chats with PostHog tracking.
+    """
+
+    _ph_client: PostHogClient
+
+    def __init__(
+        self,
+        client: Optional[Any] = None,
+        api_key: Optional[str] = None,
+        vertexai: Optional[bool] = None,
+        credentials: Optional[Any] = None,
+        project: Optional[str] = None,
+        location: Optional[str] = None,
+        debug_config: Optional[Any] = None,
+        http_options: Optional[Any] = None,
+        posthog_client: Optional[PostHogClient] = None,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
+        self._ph_client = posthog_client or setup()
+
+        if self._ph_client is None:
+            raise ValueError("posthog_client is required for PostHog tracking")
+
+        # Store default PostHog settings
+        self._default_distinct_id = posthog_distinct_id
+        self._default_properties = posthog_properties or {}
+        self._default_privacy_mode = posthog_privacy_mode
+        self._default_groups = posthog_groups
+
+        if client is None:
+            client_args: Dict[str, Any] = {}
+
+            if vertexai is not None:
+                client_args["vertexai"] = vertexai
+
+            if credentials is not None:
+                client_args["credentials"] = credentials
+
+            if project is not None:
+                client_args["project"] = project
+
+            if location is not None:
+                client_args["location"] = location
+
+            if debug_config is not None:
+                client_args["debug_config"] = debug_config
+
+            if http_options is not None:
+                client_args["http_options"] = http_options
+
+            if vertexai:
+                if api_key is not None:
+                    client_args["api_key"] = api_key
+            else:
+                if api_key is None:
+                    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get(
+                        "API_KEY"
+                    )
+
+                if api_key is None:
+                    raise ValueError(
+                        "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
+                    )
+
+                client_args["api_key"] = api_key
+            self._client = genai.Client(**client_args)
+        else:
+            self._client = client
+        self._base_url = "https://generativelanguage.googleapis.com"
+
+    def _merge_posthog_params(
+        self,
+        call_distinct_id: Optional[str],
+        call_trace_id: Optional[str],
+        call_properties: Optional[Dict[str, Any]],
+        call_privacy_mode: Optional[bool],
+        call_groups: Optional[Dict[str, Any]],
+    ):
+        """Merge call-level PostHog parameters with client defaults."""
+        distinct_id = (
+            call_distinct_id
+            if call_distinct_id is not None
+            else self._default_distinct_id
+        )
+        privacy_mode = (
+            call_privacy_mode
+            if call_privacy_mode is not None
+            else self._default_privacy_mode
+        )
+        groups = call_groups if call_groups is not None else self._default_groups
+
+        properties = dict(self._default_properties)
+        if call_properties:
+            properties.update(call_properties)
+
+        if call_trace_id is None:
+            call_trace_id = str(uuid.uuid4())
+
+        return distinct_id, call_trace_id, properties, privacy_mode, groups
+
+    def create(
+        self,
+        model: str,
+        config: Optional[Any] = None,
+        history: Optional[Any] = None,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: Optional[bool] = None,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Create a chat session with PostHog tracking.
+        """
+        # Merge PostHog parameters
+        distinct_id, trace_id, properties, privacy_mode, groups = (
+            self._merge_posthog_params(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+            )
+        )
+
+        chat = self._client.aio.chats.create(
+            model=model, config=config, history=history, **kwargs
+        )
+
+        return AsyncChat(
+            chat=chat,
+            model=model,
+            base_url=self._base_url,
+            posthog_client=self._ph_client,
+            distinct_id=distinct_id,
+            trace_id=trace_id,
+            properties=properties,
+            privacy_mode=privacy_mode,
+            groups=groups,
+        )
+
+
+class AsyncChat:
+    """
+    Async Chat interface that mimics genai.chats.AsyncChat with PostHog tracking.
+    """
+
+    def __init__(
+        self,
+        chat: Any,
+        model: str,
+        base_url: str,
+        posthog_client: PostHogClient,
+        distinct_id: Optional[str],
+        trace_id: Optional[str],
+        properties: Optional[Dict[str, Any]],
+        privacy_mode: bool,
+        groups: Optional[Dict[str, Any]],
+    ):
+        self._chat = chat
+        self._model = model
+        self._base_url = base_url
+        self._ph_client = posthog_client
+        self._distinct_id = distinct_id
+        self._trace_id = trace_id
+        self._properties = properties
+        self._privacy_mode = privacy_mode
+        self._groups = groups
+
+    async def _send_message_adapter(self, contents=None, **kwargs):
+        return await self._chat.send_message(message=contents, **kwargs)
+
+    async def send_message(
+        self,
+        message: Any,
+        config: Optional[Any] = None,
+        **kwargs: Any,
+    ):
+        """
+        Send a message to the chat session while tracking usage in PostHog.
+        """
+        kwargs_with_contents = {
+            "model": self._model,
+            "contents": message,
+            "config": config,
+            **kwargs,
+        }
+
+        return await call_llm_and_track_usage_async(
+            self._distinct_id,
+            self._ph_client,
+            "gemini",
+            self._trace_id,
+            self._properties,
+            self._privacy_mode,
+            self._groups,
+            self._base_url,
+            self._send_message_adapter,
+            **kwargs_with_contents,
+        )
+
+    def _capture_streaming_event(
+        self,
+        model: str,
+        contents,
+        distinct_id: Optional[str],
+        trace_id: Optional[str],
+        properties: Optional[Dict[str, Any]],
+        privacy_mode: bool,
+        groups: Optional[Dict[str, Any]],
+        kwargs: Dict[str, Any],
+        usage_stats: TokenUsage,
+        latency: float,
+        output: Any,
+    ):
+        # Prepare standardized event data
+        input_kwargs = {"contents": contents, **kwargs}
+        formatted_input = merge_system_prompt(input_kwargs, "gemini")
+        sanitized_input = sanitize_gemini(formatted_input)
+
+        event_data = StreamingEventData(
+            provider="gemini",
+            model=model,
+            base_url=self._base_url,
+            kwargs=kwargs,
+            formatted_input=sanitized_input,
+            formatted_output=format_gemini_streaming_output(output),
+            usage_stats=usage_stats,
+            latency=latency,
+            distinct_id=distinct_id,
+            trace_id=trace_id,
+            properties=properties,
+            privacy_mode=privacy_mode,
+            groups=groups,
+        )
+
+        # Use the common capture function
+        capture_streaming_event(self._ph_client, event_data)
+
+    async def send_message_stream(
+        self,
+        message: Any,
+        config: Optional[Any] = None,
+        **kwargs: Any,
+    ):
+        """
+        Send a message to the chat session (streaming) while tracking usage in PostHog.
+        """
+        start_time = time.time()
+        usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
+        accumulated_content = []
+
+        # await the stream creation if needed, or just call if it returns async generator
+        # Google GenAI aio usually returns an async iterator directly or a coroutine that returns one.
+        # Based on `generate_content_stream` in `gemini_async.py`:
+        # response = await self._client.aio.models.generate_content_stream(...)
+        # So we await it.
+
+        response = await self._chat.send_message_stream(
+            message=message, config=config, **kwargs
+        )
+
+        async def async_generator():
+            nonlocal usage_stats
+            nonlocal accumulated_content
+
+            try:
+                async for chunk in response:
+                    # Extract usage stats from chunk
+                    chunk_usage = extract_gemini_usage_from_chunk(chunk)
+
+                    if chunk_usage:
+                        merge_usage_stats(usage_stats, chunk_usage, mode="cumulative")
+
+                    # Extract content from chunk
+                    content_block = extract_gemini_content_from_chunk(chunk)
+
+                    if content_block is not None:
+                        accumulated_content.append(content_block)
+
+                    yield chunk
+
+            finally:
+                end_time = time.time()
+                latency = end_time - start_time
+
+                kwargs_with_config = {"config": config, **kwargs}
+                self._capture_streaming_event(
+                    self._model,
+                    message,
+                    self._distinct_id,
+                    self._trace_id,
+                    self._properties,
+                    self._privacy_mode,
+                    self._groups,
+                    kwargs_with_config,
+                    usage_stats,
+                    latency,
+                    accumulated_content,
+                )
+
+        return async_generator()
