@@ -105,6 +105,10 @@ class PostHogTracingProcessor(TracingProcessor):
         # Track trace metadata for associating with spans
         self._trace_metadata: Dict[str, Dict[str, Any]] = {}
 
+        # Max entries to prevent unbounded growth if on_span_end/on_trace_end
+        # is never called (e.g., due to an exception in the Agents SDK).
+        self._max_tracked_entries = 10000
+
     def _get_distinct_id(self, trace: Optional[Trace]) -> str:
         """Resolve the distinct ID for a trace."""
         if callable(self._distinct_id):
@@ -126,6 +130,22 @@ class PostHogTracingProcessor(TracingProcessor):
         ):
             return None
         return value
+
+    def _evict_stale_entries(self) -> None:
+        """Evict oldest entries if dicts exceed max size to prevent unbounded growth."""
+        if len(self._span_start_times) > self._max_tracked_entries:
+            # Remove oldest entries by start time
+            sorted_spans = sorted(self._span_start_times.items(), key=lambda x: x[1])
+            for span_id, _ in sorted_spans[: len(sorted_spans) // 2]:
+                del self._span_start_times[span_id]
+            log.debug("Evicted stale span start times (exceeded %d entries)", self._max_tracked_entries)
+
+        if len(self._trace_metadata) > self._max_tracked_entries:
+            # Remove half the entries (oldest inserted via dict ordering in Python 3.7+)
+            keys = list(self._trace_metadata.keys())
+            for key in keys[: len(keys) // 2]:
+                del self._trace_metadata[key]
+            log.debug("Evicted stale trace metadata (exceeded %d entries)", self._max_tracked_entries)
 
     def _get_group_id(self, trace_id: str) -> Optional[str]:
         """Get the group_id for a trace from stored metadata."""
@@ -166,6 +186,7 @@ class PostHogTracingProcessor(TracingProcessor):
     def on_trace_start(self, trace: Trace) -> None:
         """Called when a new trace begins."""
         try:
+            self._evict_stale_entries()
             trace_id = trace.trace_id
             trace_name = trace.name
             group_id = getattr(trace, "group_id", None)
@@ -216,6 +237,7 @@ class PostHogTracingProcessor(TracingProcessor):
     def on_span_start(self, span: Span[Any]) -> None:
         """Called when a new span begins."""
         try:
+            self._evict_stale_entries()
             span_id = span.span_id
             self._span_start_times[span_id] = time.time()
         except Exception as e:
