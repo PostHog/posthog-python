@@ -113,9 +113,10 @@ def merge_usage_stats(
         # Note: raw_usage is already serialized by converters, so it's a dict
         source_raw_usage = source.get("raw_usage")
         if source_raw_usage is not None and isinstance(source_raw_usage, dict):
-            current_raw = target.get("raw_usage", {})
-            if not isinstance(current_raw, dict):
-                current_raw = {}
+            current_raw_value = target.get("raw_usage")
+            current_raw: Dict[str, Any] = (
+                current_raw_value if isinstance(current_raw_value, dict) else {}
+            )
             target["raw_usage"] = {**current_raw, **source_raw_usage}
 
     elif mode == "cumulative":
