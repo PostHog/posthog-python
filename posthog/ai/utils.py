@@ -13,6 +13,54 @@ from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
 
 
+def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
+    """
+    Convert raw provider usage objects to JSON-serializable dicts.
+
+    Handles Pydantic models (OpenAI/Anthropic) and protobuf-like objects (Gemini)
+    with a fallback chain to ensure we never pass unserializable objects to PostHog.
+
+    Args:
+        raw_usage: Raw usage object from provider SDK
+
+    Returns:
+        Plain dict or None if conversion fails
+    """
+    if raw_usage is None:
+        return None
+
+    # Already a dict
+    if isinstance(raw_usage, dict):
+        return raw_usage
+
+    # Try Pydantic model_dump() (OpenAI/Anthropic)
+    if hasattr(raw_usage, "model_dump") and callable(raw_usage.model_dump):
+        try:
+            return raw_usage.model_dump()
+        except Exception:
+            pass
+
+    # Try to_dict() (some protobuf objects)
+    if hasattr(raw_usage, "to_dict") and callable(raw_usage.to_dict):
+        try:
+            return raw_usage.to_dict()
+        except Exception:
+            pass
+
+    # Try __dict__ / vars() for simple objects
+    try:
+        return vars(raw_usage)
+    except Exception:
+        pass
+
+    # Last resort: convert to string representation
+    # This ensures we always return something rather than failing
+    try:
+        return {"_raw": str(raw_usage)}
+    except Exception:
+        return None
+
+
 def merge_usage_stats(
     target: TokenUsage, source: TokenUsage, mode: str = "incremental"
 ) -> None:
@@ -60,10 +108,16 @@ def merge_usage_stats(
             current = target.get("web_search_count") or 0
             target["web_search_count"] = max(current, source_web_search)
 
-        # Always replace raw_usage with latest (don't add or merge)
+        # Merge raw_usage to avoid losing data from earlier events
+        # For Anthropic streaming: message_start has input tokens, message_delta has output
         source_raw_usage = source.get("raw_usage")
         if source_raw_usage is not None:
-            target["raw_usage"] = source_raw_usage
+            serialized = serialize_raw_usage(source_raw_usage)
+            if serialized:
+                current_raw = target.get("raw_usage", {})
+                if not isinstance(current_raw, dict):
+                    current_raw = {}
+                target["raw_usage"] = {**current_raw, **serialized}
 
     elif mode == "cumulative":
         # Replace with latest values (already cumulative)
@@ -82,7 +136,9 @@ def merge_usage_stats(
         if source.get("web_search_count") is not None:
             target["web_search_count"] = source["web_search_count"]
         if source.get("raw_usage") is not None:
-            target["raw_usage"] = source["raw_usage"]
+            serialized = serialize_raw_usage(source["raw_usage"])
+            if serialized:
+                target["raw_usage"] = serialized
 
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
@@ -341,7 +397,9 @@ def call_llm_and_track_usage(
 
             raw_usage = usage.get("raw_usage")
             if raw_usage is not None:
-                tag("$ai_usage", raw_usage)
+                serialized = serialize_raw_usage(raw_usage)
+                if serialized:
+                    tag("$ai_usage", serialized)
 
             if posthog_distinct_id is None:
                 tag("$process_person_profile", False)
@@ -470,7 +528,9 @@ async def call_llm_and_track_usage_async(
 
             raw_usage = usage.get("raw_usage")
             if raw_usage is not None:
-                tag("$ai_usage", raw_usage)
+                serialized = serialize_raw_usage(raw_usage)
+                if serialized:
+                    tag("$ai_usage", serialized)
 
             if posthog_distinct_id is None:
                 tag("$process_person_profile", False)
@@ -612,7 +672,9 @@ def capture_streaming_event(
     # Add raw usage metadata if present (all providers)
     raw_usage = event_data["usage_stats"].get("raw_usage")
     if raw_usage is not None:
-        event_properties["$ai_usage"] = raw_usage
+        serialized = serialize_raw_usage(raw_usage)
+        if serialized:
+            event_properties["$ai_usage"] = serialized
 
     # Handle provider-specific fields
     if (

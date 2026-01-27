@@ -1,3 +1,4 @@
+import json
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -499,6 +500,12 @@ def test_basic_completion(mock_client, mock_openai_response):
         # Verify raw usage metadata is passed for backend processing
         assert "$ai_usage" in props
         assert props["$ai_usage"] is not None
+        # Verify it's JSON-serializable
+        json.dumps(props["$ai_usage"])
+        # Verify it has expected structure
+        assert isinstance(props["$ai_usage"], dict)
+        assert "prompt_tokens" in props["$ai_usage"]
+        assert "completion_tokens" in props["$ai_usage"]
 
 
 def test_embeddings(mock_client, mock_embedding_response):
@@ -924,6 +931,16 @@ def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
         # Check token usage
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 15
+
+        # Verify raw usage is captured in streaming mode
+        assert "$ai_usage" in props
+        assert props["$ai_usage"] is not None
+        # Verify it's JSON-serializable
+        json.dumps(props["$ai_usage"])
+        # Verify it has expected structure (merged from chunks)
+        assert isinstance(props["$ai_usage"], dict)
+        assert "prompt_tokens" in props["$ai_usage"]
+        assert "completion_tokens" in props["$ai_usage"]
 
 
 # test responses api
