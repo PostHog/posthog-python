@@ -545,6 +545,88 @@ class TestPostHogTracingProcessor:
         processor.force_flush()
         mock_client.flush.assert_called_once()
 
+    def test_generation_span_with_no_usage(self, processor, mock_client, mock_span):
+        """Test GenerationSpanData with no usage data defaults to zero tokens."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_input_tokens"] == 0
+        assert call_kwargs["properties"]["$ai_output_tokens"] == 0
+        assert call_kwargs["properties"]["$ai_total_tokens"] == 0
+
+    def test_generation_span_with_partial_usage(self, processor, mock_client, mock_span):
+        """Test GenerationSpanData with only input_tokens present."""
+        span_data = GenerationSpanData(
+            model="gpt-4o",
+            usage={"input_tokens": 42},
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_input_tokens"] == 42
+        assert call_kwargs["properties"]["$ai_output_tokens"] == 0
+        assert call_kwargs["properties"]["$ai_total_tokens"] == 42
+
+    def test_error_type_categorization_by_type_field_only(self, processor, mock_client, mock_span):
+        """Test error categorization works when only the type field matches."""
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+        mock_span.error = {"message": "Something went wrong", "type": "ModelBehaviorError"}
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_error_type"] == "model_behavior_error"
+
+    def test_distinct_id_resolved_from_trace_for_spans(self, mock_client, mock_trace, mock_span):
+        """Test that spans use the distinct_id resolved at trace start."""
+        resolver = lambda trace: f"user-{trace.name}"
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            distinct_id=resolver,
+        )
+
+        # Start trace - this resolves and stores distinct_id
+        processor.on_trace_start(mock_trace)
+        mock_client.capture.reset_mock()
+
+        # End a span - should use the stored distinct_id from trace
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["distinct_id"] == "user-Test Workflow"
+
+    def test_eviction_of_stale_entries(self, mock_client):
+        """Test that stale entries are evicted when max is exceeded."""
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            distinct_id="test-user",
+        )
+        processor._max_tracked_entries = 10
+
+        # Fill beyond max
+        for i in range(15):
+            processor._span_start_times[f"span_{i}"] = float(i)
+            processor._trace_metadata[f"trace_{i}"] = {"name": f"trace_{i}"}
+
+        processor._evict_stale_entries()
+
+        # Should have evicted half
+        assert len(processor._span_start_times) <= 10
+        assert len(processor._trace_metadata) <= 10
+
 
 class TestInstrumentHelper:
     """Tests for the instrument() convenience function."""
