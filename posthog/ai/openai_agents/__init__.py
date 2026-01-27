@@ -1,3 +1,5 @@
+from typing import Any, Callable, Dict, Optional, Union
+
 try:
     import agents  # noqa: F401
 except ImportError:
@@ -11,12 +13,12 @@ __all__ = ["PostHogTracingProcessor", "instrument"]
 
 
 def instrument(
-    client=None,
-    distinct_id=None,
+    client: Optional["Client"] = None,
+    distinct_id: Optional[Union[str, Callable[["Trace"], Optional[str]]]] = None,
     privacy_mode: bool = False,
-    groups=None,
-    properties=None,
-):
+    groups: Optional[Dict[str, Any]] = None,
+    properties: Optional[Dict[str, Any]] = None,
+) -> PostHogTracingProcessor:
     """
     One-liner to instrument OpenAI Agents SDK with PostHog tracing.
 
