@@ -26,8 +26,13 @@ from posthog.client import Client
 log = logging.getLogger("posthog")
 
 
-def _safe_json(obj: Any) -> Any:
-    """Safely convert object to JSON-serializable format."""
+def _ensure_serializable(obj: Any) -> Any:
+    """Ensure an object is JSON-serializable, converting to str as fallback.
+
+    Returns the original object if it's already serializable (dict, list, str,
+    int, etc.), or str(obj) for non-serializable types so that downstream
+    json.dumps() calls won't fail.
+    """
     if obj is None:
         return None
     try:
@@ -228,7 +233,7 @@ class PostHogTracingProcessor(TracingProcessor):
 
             # Include trace metadata if present
             if metadata:
-                properties["$ai_trace_metadata"] = _safe_json(metadata)
+                properties["$ai_trace_metadata"] = _ensure_serializable(metadata)
 
             if distinct_id is None:
                 properties["$process_person_profile"] = False
@@ -502,8 +507,8 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_model": span_data.model,
             "$ai_model_parameters": model_params if model_params else None,
-            "$ai_input": self._with_privacy_mode(_safe_json(span_data.input)),
-            "$ai_output_choices": self._with_privacy_mode(_safe_json(span_data.output)),
+            "$ai_input": self._with_privacy_mode(_ensure_serializable(span_data.input)),
+            "$ai_output_choices": self._with_privacy_mode(_ensure_serializable(span_data.output)),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0),
@@ -539,12 +544,12 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "tool",
-            "$ai_input_state": self._with_privacy_mode(_safe_json(span_data.input)),
-            "$ai_output_state": self._with_privacy_mode(_safe_json(span_data.output)),
+            "$ai_input_state": self._with_privacy_mode(_ensure_serializable(span_data.input)),
+            "$ai_output_state": self._with_privacy_mode(_ensure_serializable(span_data.output)),
         }
 
         if span_data.mcp_data:
-            properties["$ai_mcp_data"] = _safe_json(span_data.mcp_data)
+            properties["$ai_mcp_data"] = _ensure_serializable(span_data.mcp_data)
 
         self._capture_event("$ai_span", properties, distinct_id)
 
@@ -656,7 +661,7 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_model": model,
             "$ai_response_id": response_id,
-            "$ai_input": self._with_privacy_mode(_safe_json(span_data.input)),
+            "$ai_input": self._with_privacy_mode(_ensure_serializable(span_data.input)),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": input_tokens + output_tokens,
@@ -667,7 +672,7 @@ class PostHogTracingProcessor(TracingProcessor):
             output_items = getattr(response, "output", None)
             if output_items:
                 properties["$ai_output_choices"] = self._with_privacy_mode(
-                    _safe_json(output_items)
+                    _ensure_serializable(output_items)
                 )
 
         self._capture_event("$ai_generation", properties, distinct_id)
@@ -690,7 +695,7 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "custom",
-            "$ai_custom_data": self._with_privacy_mode(_safe_json(span_data.data)),
+            "$ai_custom_data": self._with_privacy_mode(_ensure_serializable(span_data.data)),
         }
 
         self._capture_event("$ai_span", properties, distinct_id)
@@ -723,7 +728,7 @@ class PostHogTracingProcessor(TracingProcessor):
 
         # Add model config if available (pass-through property)
         if hasattr(span_data, "model_config") and span_data.model_config:
-            properties["model_config"] = _safe_json(span_data.model_config)
+            properties["model_config"] = _ensure_serializable(span_data.model_config)
 
         # Add time to first audio byte for speech spans (pass-through property)
         if hasattr(span_data, "first_content_at") and span_data.first_content_at:
@@ -800,7 +805,7 @@ class PostHogTracingProcessor(TracingProcessor):
         if hasattr(span_data, "export"):
             try:
                 exported = span_data.export()
-                properties["$ai_span_data"] = _safe_json(exported)
+                properties["$ai_span_data"] = _ensure_serializable(exported)
             except Exception:
                 pass
 
