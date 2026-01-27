@@ -273,8 +273,12 @@ class PostHogTracingProcessor(TracingProcessor):
             error_info = span.error
             error_properties = {}
             if error_info:
-                error_message = error_info.get("message", str(error_info))
-                error_type_raw = error_info.get("type", "")
+                if isinstance(error_info, dict):
+                    error_message = error_info.get("message", str(error_info))
+                    error_type_raw = error_info.get("type", "")
+                else:
+                    error_message = str(error_info)
+                    error_type_raw = ""
 
                 # Categorize error type for cross-provider filtering/alerting
                 error_type = "unknown"
