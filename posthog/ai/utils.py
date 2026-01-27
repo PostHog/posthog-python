@@ -60,6 +60,11 @@ def merge_usage_stats(
             current = target.get("web_search_count") or 0
             target["web_search_count"] = max(current, source_web_search)
 
+        # Always replace raw_usage with latest (don't add or merge)
+        source_raw_usage = source.get("raw_usage")
+        if source_raw_usage is not None:
+            target["raw_usage"] = source_raw_usage
+
     elif mode == "cumulative":
         # Replace with latest values (already cumulative)
         if source.get("input_tokens") is not None:
@@ -76,6 +81,8 @@ def merge_usage_stats(
             target["reasoning_tokens"] = source["reasoning_tokens"]
         if source.get("web_search_count") is not None:
             target["web_search_count"] = source["web_search_count"]
+        if source.get("raw_usage") is not None:
+            target["raw_usage"] = source["raw_usage"]
 
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
@@ -332,6 +339,10 @@ def call_llm_and_track_usage(
             if web_search_count is not None and web_search_count > 0:
                 tag("$ai_web_search_count", web_search_count)
 
+            raw_usage = usage.get("raw_usage")
+            if raw_usage is not None:
+                tag("$ai_usage", raw_usage)
+
             if posthog_distinct_id is None:
                 tag("$process_person_profile", False)
 
@@ -456,6 +467,10 @@ async def call_llm_and_track_usage_async(
             web_search_count = usage.get("web_search_count")
             if web_search_count is not None and web_search_count > 0:
                 tag("$ai_web_search_count", web_search_count)
+
+            raw_usage = usage.get("raw_usage")
+            if raw_usage is not None:
+                tag("$ai_usage", raw_usage)
 
             if posthog_distinct_id is None:
                 tag("$process_person_profile", False)
@@ -593,6 +608,11 @@ def capture_streaming_event(
         and web_search_count > 0
     ):
         event_properties["$ai_web_search_count"] = web_search_count
+
+    # Add raw usage metadata if present (all providers)
+    raw_usage = event_data["usage_stats"].get("raw_usage")
+    if raw_usage is not None:
+        event_properties["$ai_usage"] = raw_usage
 
     # Handle provider-specific fields
     if (

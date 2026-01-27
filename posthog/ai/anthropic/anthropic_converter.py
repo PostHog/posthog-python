@@ -221,6 +221,9 @@ def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     if web_search_count > 0:
         result["web_search_count"] = web_search_count
 
+    # Capture raw usage metadata for backend processing
+    result["raw_usage"] = response.usage
+
     return result
 
 
@@ -247,6 +250,8 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
             usage["cache_read_input_tokens"] = getattr(
                 event.message.usage, "cache_read_input_tokens", 0
             )
+            # Capture raw usage metadata for backend processing
+            usage["raw_usage"] = event.message.usage
 
     # Handle usage stats from message_delta event
     if hasattr(event, "usage") and event.usage:
@@ -261,6 +266,9 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
                 )
                 if web_search_count > 0:
                     usage["web_search_count"] = web_search_count
+
+        # Capture raw usage metadata for backend processing
+        usage["raw_usage"] = event.usage
 
     return usage
 

@@ -174,6 +174,9 @@ def test_new_client_basic_generation(
     assert props["foo"] == "bar"
     assert "$ai_trace_id" in props
     assert props["$ai_latency"] > 0
+    # Verify raw usage metadata is passed for backend processing
+    assert "$ai_usage" in props
+    assert props["$ai_usage"] is not None
 
 
 def test_new_client_streaming_with_generate_content_stream(

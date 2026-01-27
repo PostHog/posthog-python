@@ -487,6 +487,9 @@ def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
         if reasoning_tokens and reasoning_tokens > 0:
             usage["reasoning_tokens"] = reasoning_tokens
 
+    # Capture raw usage metadata for backend processing
+    usage["raw_usage"] = metadata
+
     return usage
 
 

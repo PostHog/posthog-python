@@ -496,6 +496,9 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+        # Verify raw usage metadata is passed for backend processing
+        assert "$ai_usage" in props
+        assert props["$ai_usage"] is not None
 
 
 def test_embeddings(mock_client, mock_embedding_response):

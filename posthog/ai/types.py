@@ -64,6 +64,7 @@ class TokenUsage(TypedDict, total=False):
     cache_creation_input_tokens: Optional[int]
     reasoning_tokens: Optional[int]
     web_search_count: Optional[int]
+    raw_usage: Optional[Any]  # Raw provider usage metadata for backend processing
 
 
 class ProviderResponse(TypedDict, total=False):
