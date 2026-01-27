@@ -192,14 +192,15 @@ class PostHogTracingProcessor(TracingProcessor):
             group_id = getattr(trace, "group_id", None)
             metadata = getattr(trace, "metadata", None)
 
+            distinct_id = self._get_distinct_id(trace)
+
             # Store trace metadata for later (used by spans)
             self._trace_metadata[trace_id] = {
                 "name": trace_name,
                 "group_id": group_id,
                 "metadata": metadata,
+                "distinct_id": distinct_id,
             }
-
-            distinct_id = self._get_distinct_id(trace)
 
             properties = {
                 "$ai_trace_id": trace_id,
@@ -261,8 +262,9 @@ class PostHogTracingProcessor(TracingProcessor):
                 ended = _parse_iso_timestamp(span.ended_at)
                 latency = (ended - started) if (started and ended) else 0
 
-            # Get distinct ID from trace metadata or default
-            distinct_id = self._get_distinct_id(None)
+            # Get distinct ID from trace metadata (resolved at trace start) or default
+            trace_info = self._trace_metadata.get(trace_id, {})
+            distinct_id = trace_info.get("distinct_id") or self._get_distinct_id(None)
 
             # Get group_id from trace metadata for linking
             group_id = self._get_group_id(trace_id)
