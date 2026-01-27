@@ -324,11 +324,20 @@ class PostHogTracingProcessor(TracingProcessor):
                     error_type = "model_behavior_error"
                 elif "UserError" in error_type_raw or "UserError" in error_message:
                     error_type = "user_error"
-                elif "InputGuardrailTripwireTriggered" in error_type_raw or "InputGuardrailTripwireTriggered" in error_message:
+                elif (
+                    "InputGuardrailTripwireTriggered" in error_type_raw
+                    or "InputGuardrailTripwireTriggered" in error_message
+                ):
                     error_type = "input_guardrail_triggered"
-                elif "OutputGuardrailTripwireTriggered" in error_type_raw or "OutputGuardrailTripwireTriggered" in error_message:
+                elif (
+                    "OutputGuardrailTripwireTriggered" in error_type_raw
+                    or "OutputGuardrailTripwireTriggered" in error_message
+                ):
                     error_type = "output_guardrail_triggered"
-                elif "MaxTurnsExceeded" in error_type_raw or "MaxTurnsExceeded" in error_message:
+                elif (
+                    "MaxTurnsExceeded" in error_type_raw
+                    or "MaxTurnsExceeded" in error_message
+                ):
                     error_type = "max_turns_exceeded"
 
                 error_properties = {
@@ -498,7 +507,9 @@ class PostHogTracingProcessor(TracingProcessor):
         # Extract token usage
         usage = span_data.usage or {}
         input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
-        output_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+        output_tokens = (
+            usage.get("output_tokens") or usage.get("completion_tokens") or 0
+        )
 
         # Extract model config parameters
         model_config = span_data.model_config or {}
@@ -520,7 +531,9 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_model": span_data.model,
             "$ai_model_parameters": model_params if model_params else None,
             "$ai_input": self._with_privacy_mode(_ensure_serializable(span_data.input)),
-            "$ai_output_choices": self._with_privacy_mode(_ensure_serializable(span_data.output)),
+            "$ai_output_choices": self._with_privacy_mode(
+                _ensure_serializable(span_data.output)
+            ),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0),
@@ -556,8 +569,12 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "tool",
-            "$ai_input_state": self._with_privacy_mode(_ensure_serializable(span_data.input)),
-            "$ai_output_state": self._with_privacy_mode(_ensure_serializable(span_data.output)),
+            "$ai_input_state": self._with_privacy_mode(
+                _ensure_serializable(span_data.input)
+            ),
+            "$ai_output_state": self._with_privacy_mode(
+                _ensure_serializable(span_data.output)
+            ),
         }
 
         if span_data.mcp_data:
@@ -707,7 +724,9 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "custom",
-            "$ai_custom_data": self._with_privacy_mode(_ensure_serializable(span_data.data)),
+            "$ai_custom_data": self._with_privacy_mode(
+                _ensure_serializable(span_data.data)
+            ),
         }
 
         self._capture_event("$ai_span", properties, distinct_id)
