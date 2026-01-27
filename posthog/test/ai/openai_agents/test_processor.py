@@ -117,7 +117,7 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["properties"]["$ai_framework"] == "openai-agents"
 
     def test_personless_mode_when_no_distinct_id(self, mock_client, mock_trace):
-        """Test that events use personless mode when no distinct_id is provided."""
+        """Test that trace events use personless mode when no distinct_id is provided."""
         processor = PostHogTracingProcessor(
             client=mock_client,
         )
@@ -126,6 +126,55 @@ class TestPostHogTracingProcessor:
 
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$process_person_profile"] is False
+        # Should fallback to trace_id as the distinct_id
+        assert call_kwargs["distinct_id"] == mock_trace.trace_id
+
+    def test_personless_mode_for_spans_when_no_distinct_id(
+        self, mock_client, mock_trace, mock_span
+    ):
+        """Test that span events use personless mode when no distinct_id is provided."""
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+        )
+
+        processor.on_trace_start(mock_trace)
+        mock_client.capture.reset_mock()
+
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$process_person_profile"] is False
+        assert call_kwargs["distinct_id"] == mock_span.trace_id
+
+    def test_personless_mode_when_callable_returns_none(
+        self, mock_client, mock_trace, mock_span
+    ):
+        """Test personless mode when callable distinct_id returns None."""
+
+        def resolver(trace):
+            return None  # Simulate no user ID available
+
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            distinct_id=resolver,
+        )
+
+        processor.on_trace_start(mock_trace)
+        mock_client.capture.reset_mock()
+
+        span_data = GenerationSpanData(model="gpt-4o")
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$process_person_profile"] is False
+        assert call_kwargs["distinct_id"] == mock_span.trace_id
 
     def test_person_profile_when_distinct_id_provided(self, mock_client, mock_trace):
         """Test that events create person profiles when distinct_id is provided."""

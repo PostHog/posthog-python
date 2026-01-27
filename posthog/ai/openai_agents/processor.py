@@ -95,7 +95,6 @@ class PostHogTracingProcessor(TracingProcessor):
         """
         self._client = client or setup()
         self._distinct_id = distinct_id
-        self._has_user_distinct_id = distinct_id is not None
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
         self._properties = properties or {}
@@ -110,19 +109,22 @@ class PostHogTracingProcessor(TracingProcessor):
         # is never called (e.g., due to an exception in the Agents SDK).
         self._max_tracked_entries = 10000
 
-    def _get_distinct_id(self, trace: Optional[Trace]) -> str:
-        """Resolve the distinct ID for a trace."""
+    def _get_distinct_id(self, trace: Optional[Trace]) -> Optional[str]:
+        """Resolve the distinct ID for a trace.
+
+        Returns the user-provided distinct ID (string or callable result),
+        or None if no user-provided ID is available. Callers should treat
+        None as a signal to use a fallback ID in personless mode.
+        """
         if callable(self._distinct_id):
             if trace:
                 result = self._distinct_id(trace)
                 if result:
                     return str(result)
-            return trace.trace_id if trace else "unknown"
+            return None
         elif self._distinct_id:
             return str(self._distinct_id)
-        elif trace:
-            return trace.trace_id
-        return "unknown"
+        return None
 
     def _with_privacy_mode(self, value: Any) -> Any:
         """Apply privacy mode redaction if enabled."""
@@ -166,25 +168,27 @@ class PostHogTracingProcessor(TracingProcessor):
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
     ) -> None:
-        """Capture an event to PostHog with error handling."""
+        """Capture an event to PostHog with error handling.
+
+        Args:
+            distinct_id: The resolved distinct ID. When the user didn't provide
+                one, callers should pass ``user_distinct_id or fallback_id``
+                (matching the langchain/openai pattern) and separately set
+                ``$process_person_profile`` in properties.
+        """
         try:
             if not hasattr(self._client, "capture") or not callable(
                 self._client.capture
             ):
                 return
 
-            final_distinct_id = distinct_id or "unknown"
             final_properties = {
                 **properties,
                 **self._properties,
             }
 
-            # Don't create person profiles when using fallback IDs (trace_id, "unknown")
-            if not self._has_user_distinct_id:
-                final_properties["$process_person_profile"] = False
-
             self._client.capture(
-                distinct_id=final_distinct_id,
+                distinct_id=distinct_id or "unknown",
                 event=event,
                 properties=final_properties,
                 groups=self._groups,
@@ -226,9 +230,12 @@ class PostHogTracingProcessor(TracingProcessor):
             if metadata:
                 properties["$ai_trace_metadata"] = _safe_json(metadata)
 
+            if distinct_id is None:
+                properties["$process_person_profile"] = False
+
             self._capture_event(
                 event="$ai_trace",
-                distinct_id=distinct_id,
+                distinct_id=distinct_id or trace_id,
                 properties=properties,
             )
         except Exception as e:
@@ -271,7 +278,9 @@ class PostHogTracingProcessor(TracingProcessor):
                 ended = _parse_iso_timestamp(span.ended_at)
                 latency = (ended - started) if (started and ended) else 0
 
-            # Get distinct ID from trace metadata (resolved at trace start) or default
+            # Get user-provided distinct ID from trace metadata (resolved at trace start).
+            # None means no user-provided ID — use trace_id as fallback in personless mode,
+            # matching the langchain/openai pattern: `distinct_id or trace_id`.
             trace_info = self._trace_metadata.get(trace_id, {})
             distinct_id = trace_info.get("distinct_id") or self._get_distinct_id(None)
 
@@ -310,6 +319,11 @@ class PostHogTracingProcessor(TracingProcessor):
                     "$ai_error": error_message,
                     "$ai_error_type": error_type,
                 }
+
+            # Personless mode: no user-provided distinct_id, fallback to trace_id
+            if distinct_id is None:
+                error_properties["$process_person_profile"] = False
+                distinct_id = trace_id
 
             # Dispatch based on span data type
             if isinstance(span_data, GenerationSpanData):
