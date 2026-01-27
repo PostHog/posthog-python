@@ -480,8 +480,8 @@ class PostHogTracingProcessor(TracingProcessor):
         """Handle LLM generation spans - maps to $ai_generation event."""
         # Extract token usage
         usage = span_data.usage or {}
-        input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("output_tokens") or usage.get("completion_tokens", 0)
+        input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+        output_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
 
         # Extract model config parameters
         model_config = span_data.model_config or {}
@@ -506,7 +506,7 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_output_choices": self._with_privacy_mode(_safe_json(span_data.output)),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
-            "$ai_total_tokens": input_tokens + output_tokens,
+            "$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0),
         }
 
         # Add optional token fields if present
