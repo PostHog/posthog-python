@@ -184,7 +184,7 @@ class PostHogTracingProcessor(TracingProcessor):
                 "$ai_trace_id": trace_id,
                 "$ai_trace_name": trace_name,
                 "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
+                "$ai_framework": "openai-agents",
             }
 
             # Include group_id for linking related traces (e.g., conversation threads)
