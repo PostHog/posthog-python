@@ -95,6 +95,7 @@ class PostHogTracingProcessor(TracingProcessor):
         """
         self._client = client or setup()
         self._distinct_id = distinct_id
+        self._has_user_distinct_id = distinct_id is not None
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
         self._properties = properties or {}
@@ -178,8 +179,8 @@ class PostHogTracingProcessor(TracingProcessor):
                 **self._properties,
             }
 
-            # Don't process person profile if no distinct_id
-            if distinct_id is None:
+            # Don't create person profiles when using fallback IDs (trace_id, "unknown")
+            if not self._has_user_distinct_id:
                 final_properties["$process_person_profile"] = False
 
             self._client.capture(

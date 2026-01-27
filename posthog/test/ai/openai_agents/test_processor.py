@@ -116,6 +116,29 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["properties"]["$ai_provider"] == "openai"
         assert call_kwargs["properties"]["$ai_framework"] == "openai-agents"
 
+    def test_personless_mode_when_no_distinct_id(self, mock_client, mock_trace):
+        """Test that events use personless mode when no distinct_id is provided."""
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+        )
+
+        processor.on_trace_start(mock_trace)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$process_person_profile"] is False
+
+    def test_person_profile_when_distinct_id_provided(self, mock_client, mock_trace):
+        """Test that events create person profiles when distinct_id is provided."""
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            distinct_id="real-user",
+        )
+
+        processor.on_trace_start(mock_trace)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert "$process_person_profile" not in call_kwargs["properties"]
+
     def test_on_trace_end_clears_metadata(self, processor, mock_trace):
         """Test that on_trace_end clears stored trace metadata."""
         processor.on_trace_start(mock_trace)
