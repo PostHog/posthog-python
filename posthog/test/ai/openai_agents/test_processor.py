@@ -89,7 +89,10 @@ class TestPostHogTracingProcessor:
 
     def test_initialization_with_callable_distinct_id(self, mock_client, mock_trace):
         """Test processor with callable distinct_id resolver."""
-        resolver = lambda trace: trace.metadata.get("user_id", "default")
+
+        def resolver(trace):
+            return trace.metadata.get("user_id", "default")
+
         processor = PostHogTracingProcessor(
             client=mock_client,
             distinct_id=resolver,
@@ -640,7 +643,10 @@ class TestPostHogTracingProcessor:
         self, mock_client, mock_trace, mock_span
     ):
         """Test that spans use the distinct_id resolved at trace start."""
-        resolver = lambda trace: f"user-{trace.name}"
+
+        def resolver(trace):
+            return f"user-{trace.name}"
+
         processor = PostHogTracingProcessor(
             client=mock_client,
             distinct_id=resolver,
