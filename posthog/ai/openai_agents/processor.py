@@ -341,6 +341,29 @@ class PostHogTracingProcessor(TracingProcessor):
         except Exception as e:
             log.debug(f"Error in on_span_end: {e}")
 
+    def _base_properties(
+        self,
+        trace_id: str,
+        span_id: str,
+        parent_id: Optional[str],
+        latency: float,
+        group_id: Optional[str],
+        error_properties: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build the base properties dict shared by all span handlers."""
+        properties = {
+            "$ai_trace_id": trace_id,
+            "$ai_span_id": span_id,
+            "$ai_parent_id": parent_id,
+            "$ai_provider": "openai",
+            "$ai_framework": "openai-agents",
+            "$ai_latency": latency,
+            **error_properties,
+        }
+        if group_id:
+            properties["$ai_group_id"] = group_id
+        return properties
+
     def _handle_generation_span(
         self,
         span_data: GenerationSpanData,
@@ -366,11 +389,7 @@ class PostHogTracingProcessor(TracingProcessor):
                 model_params[param] = model_config[param]
 
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_model": span_data.model,
             "$ai_model_parameters": model_params if model_params else None,
             "$ai_input": self._with_privacy_mode(_safe_json(span_data.input)),
@@ -378,13 +397,7 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": input_tokens + output_tokens,
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         # Add optional token fields if present
         if usage.get("reasoning_tokens"):
@@ -409,24 +422,13 @@ class PostHogTracingProcessor(TracingProcessor):
     ) -> None:
         """Handle function/tool call spans - maps to $ai_span event."""
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "tool",
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
             "$ai_input_state": self._with_privacy_mode(_safe_json(span_data.input)),
             "$ai_output_state": self._with_privacy_mode(_safe_json(span_data.output)),
-            "$ai_latency": latency,
-            **error_properties,
         }
 
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
-
-        # Add MCP data if present
         if span_data.mcp_data:
             properties["$ai_mcp_data"] = _safe_json(span_data.mcp_data)
 
@@ -445,22 +447,11 @@ class PostHogTracingProcessor(TracingProcessor):
     ) -> None:
         """Handle agent execution spans - maps to $ai_span event."""
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "agent",
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
-            "$ai_latency": latency,
-            **error_properties,
         }
 
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
-
-        # Add agent-specific metadata
         if span_data.handoffs:
             properties["$ai_agent_handoffs"] = span_data.handoffs
         if span_data.tools:
@@ -483,22 +474,12 @@ class PostHogTracingProcessor(TracingProcessor):
     ) -> None:
         """Handle agent handoff spans - maps to $ai_span event."""
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": f"{span_data.from_agent} -> {span_data.to_agent}",
             "$ai_span_type": "handoff",
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
             "$ai_handoff_from_agent": span_data.from_agent,
             "$ai_handoff_to_agent": span_data.to_agent,
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         self._capture_event("$ai_span", properties, distinct_id)
 
@@ -515,21 +496,11 @@ class PostHogTracingProcessor(TracingProcessor):
     ) -> None:
         """Handle guardrail execution spans - maps to $ai_span event."""
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "guardrail",
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
             "$ai_guardrail_triggered": span_data.triggered,
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         self._capture_event("$ai_span", properties, distinct_id)
 
@@ -560,24 +531,14 @@ class PostHogTracingProcessor(TracingProcessor):
         model = getattr(response, "model", None) if response else None
 
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_model": model,
             "$ai_response_id": response_id,
             "$ai_input": self._with_privacy_mode(_safe_json(span_data.input)),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": input_tokens + output_tokens,
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         # Extract output content from response
         if response:
@@ -600,21 +561,11 @@ class PostHogTracingProcessor(TracingProcessor):
     ) -> None:
         """Handle custom user-defined spans - maps to $ai_span event."""
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": span_data.name,
             "$ai_span_type": "custom",
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
             "$ai_custom_data": self._with_privacy_mode(_safe_json(span_data.data)),
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         self._capture_event("$ai_span", properties, distinct_id)
 
@@ -633,20 +584,10 @@ class PostHogTracingProcessor(TracingProcessor):
         span_type = span_data.type  # "transcription", "speech", or "speech_group"
 
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": span_type,
             "$ai_span_type": span_type,
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         # Add model info if available
         if hasattr(span_data, "model") and span_data.model:
@@ -690,22 +631,12 @@ class PostHogTracingProcessor(TracingProcessor):
     ) -> None:
         """Handle MCP (Model Context Protocol) spans - maps to $ai_span event."""
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": f"mcp:{span_data.server}",
             "$ai_span_type": "mcp_tools",
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
             "$ai_mcp_server": span_data.server,
             "$ai_mcp_tools": span_data.result,
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         self._capture_event("$ai_span", properties, distinct_id)
 
@@ -724,20 +655,10 @@ class PostHogTracingProcessor(TracingProcessor):
         span_type = getattr(span_data, "type", "unknown")
 
         properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": span_id,
-            "$ai_parent_id": parent_id,
+            **self._base_properties(trace_id, span_id, parent_id, latency, group_id, error_properties),
             "$ai_span_name": span_type,
             "$ai_span_type": span_type,
-            "$ai_provider": "openai",
-            "$ai_framework": "openai-agents",
-            "$ai_latency": latency,
-            **error_properties,
         }
-
-        # Include group_id for linking related traces
-        if group_id:
-            properties["$ai_group_id"] = group_id
 
         # Try to export span data
         if hasattr(span_data, "export"):
