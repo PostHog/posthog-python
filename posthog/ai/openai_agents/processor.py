@@ -307,11 +307,11 @@ class PostHogTracingProcessor(TracingProcessor):
                     error_type = "model_behavior_error"
                 elif "UserError" in error_type_raw or "UserError" in error_message:
                     error_type = "user_error"
-                elif "InputGuardrailTripwireTriggered" in error_message:
+                elif "InputGuardrailTripwireTriggered" in error_type_raw or "InputGuardrailTripwireTriggered" in error_message:
                     error_type = "input_guardrail_triggered"
-                elif "OutputGuardrailTripwireTriggered" in error_message:
+                elif "OutputGuardrailTripwireTriggered" in error_type_raw or "OutputGuardrailTripwireTriggered" in error_message:
                     error_type = "output_guardrail_triggered"
-                elif "MaxTurnsExceeded" in error_message:
+                elif "MaxTurnsExceeded" in error_type_raw or "MaxTurnsExceeded" in error_message:
                     error_type = "max_turns_exceeded"
 
                 error_properties = {
