@@ -1,4 +1,11 @@
-from typing import Any, Callable, Dict, Optional, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from agents.tracing import Trace
+
+    from posthog.client import Client
 
 try:
     import agents  # noqa: F401
@@ -13,8 +20,8 @@ __all__ = ["PostHogTracingProcessor", "instrument"]
 
 
 def instrument(
-    client: Optional["Client"] = None,
-    distinct_id: Optional[Union[str, Callable[["Trace"], Optional[str]]]] = None,
+    client: Optional[Client] = None,
+    distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None,
     privacy_mode: bool = False,
     groups: Optional[Dict[str, Any]] = None,
     properties: Optional[Dict[str, Any]] = None,
