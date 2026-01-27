@@ -110,14 +110,13 @@ def merge_usage_stats(
 
         # Merge raw_usage to avoid losing data from earlier events
         # For Anthropic streaming: message_start has input tokens, message_delta has output
+        # Note: raw_usage is already serialized by converters, so it's a dict
         source_raw_usage = source.get("raw_usage")
-        if source_raw_usage is not None:
-            serialized = serialize_raw_usage(source_raw_usage)
-            if serialized:
-                current_raw = target.get("raw_usage", {})
-                if not isinstance(current_raw, dict):
-                    current_raw = {}
-                target["raw_usage"] = {**current_raw, **serialized}
+        if source_raw_usage is not None and isinstance(source_raw_usage, dict):
+            current_raw = target.get("raw_usage", {})
+            if not isinstance(current_raw, dict):
+                current_raw = {}
+            target["raw_usage"] = {**current_raw, **source_raw_usage}
 
     elif mode == "cumulative":
         # Replace with latest values (already cumulative)
@@ -135,10 +134,9 @@ def merge_usage_stats(
             target["reasoning_tokens"] = source["reasoning_tokens"]
         if source.get("web_search_count") is not None:
             target["web_search_count"] = source["web_search_count"]
+        # Note: raw_usage is already serialized by converters, so it's a dict
         if source.get("raw_usage") is not None:
-            serialized = serialize_raw_usage(source["raw_usage"])
-            if serialized:
-                target["raw_usage"] = serialized
+            target["raw_usage"] = source["raw_usage"]
 
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
@@ -397,9 +395,8 @@ def call_llm_and_track_usage(
 
             raw_usage = usage.get("raw_usage")
             if raw_usage is not None:
-                serialized = serialize_raw_usage(raw_usage)
-                if serialized:
-                    tag("$ai_usage", serialized)
+                # Already serialized by converters
+                tag("$ai_usage", raw_usage)
 
             if posthog_distinct_id is None:
                 tag("$process_person_profile", False)
@@ -528,9 +525,8 @@ async def call_llm_and_track_usage_async(
 
             raw_usage = usage.get("raw_usage")
             if raw_usage is not None:
-                serialized = serialize_raw_usage(raw_usage)
-                if serialized:
-                    tag("$ai_usage", serialized)
+                # Already serialized by converters
+                tag("$ai_usage", raw_usage)
 
             if posthog_distinct_id is None:
                 tag("$process_person_profile", False)
@@ -672,9 +668,8 @@ def capture_streaming_event(
     # Add raw usage metadata if present (all providers)
     raw_usage = event_data["usage_stats"].get("raw_usage")
     if raw_usage is not None:
-        serialized = serialize_raw_usage(raw_usage)
-        if serialized:
-            event_properties["$ai_usage"] = serialized
+        # Already serialized by converters
+        event_properties["$ai_usage"] = raw_usage
 
     # Handle provider-specific fields
     if (

@@ -17,6 +17,7 @@ from posthog.ai.types import (
     TokenUsage,
     ToolInProgress,
 )
+from posthog.ai.utils import serialize_raw_usage
 
 
 def format_anthropic_response(response: Any) -> List[FormattedMessage]:
@@ -222,7 +223,10 @@ def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
         result["web_search_count"] = web_search_count
 
     # Capture raw usage metadata for backend processing
-    result["raw_usage"] = response.usage
+    # Serialize to dict here in the converter (not in utils)
+    serialized = serialize_raw_usage(response.usage)
+    if serialized:
+        result["raw_usage"] = serialized
 
     return result
 
@@ -251,7 +255,10 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
                 event.message.usage, "cache_read_input_tokens", 0
             )
             # Capture raw usage metadata for backend processing
-            usage["raw_usage"] = event.message.usage
+            # Serialize to dict here in the converter (not in utils)
+            serialized = serialize_raw_usage(event.message.usage)
+            if serialized:
+                usage["raw_usage"] = serialized
 
     # Handle usage stats from message_delta event
     if hasattr(event, "usage") and event.usage:
@@ -268,7 +275,10 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
                     usage["web_search_count"] = web_search_count
 
         # Capture raw usage metadata for backend processing
-        usage["raw_usage"] = event.usage
+        # Serialize to dict here in the converter (not in utils)
+        serialized = serialize_raw_usage(event.usage)
+        if serialized:
+            usage["raw_usage"] = serialized
 
     return usage
 
