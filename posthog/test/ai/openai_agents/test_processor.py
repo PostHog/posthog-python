@@ -102,9 +102,17 @@ class TestPostHogTracingProcessor:
         distinct_id = processor._get_distinct_id(mock_trace)
         assert distinct_id == "resolved-user"
 
-    def test_on_trace_start(self, processor, mock_client, mock_trace):
-        """Test that on_trace_start captures $ai_trace event."""
+    def test_on_trace_start_stores_metadata(self, processor, mock_client, mock_trace):
+        """Test that on_trace_start stores metadata but does not capture an event."""
         processor.on_trace_start(mock_trace)
+
+        mock_client.capture.assert_not_called()
+        assert mock_trace.trace_id in processor._trace_metadata
+
+    def test_on_trace_end_captures_ai_trace(self, processor, mock_client, mock_trace):
+        """Test that on_trace_end captures $ai_trace event."""
+        processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
 
         mock_client.capture.assert_called_once()
         call_kwargs = mock_client.capture.call_args[1]
@@ -115,6 +123,7 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["properties"]["$ai_trace_name"] == "Test Workflow"
         assert call_kwargs["properties"]["$ai_provider"] == "openai"
         assert call_kwargs["properties"]["$ai_framework"] == "openai-agents"
+        assert "$ai_latency" in call_kwargs["properties"]
 
     def test_personless_mode_when_no_distinct_id(self, mock_client, mock_trace):
         """Test that trace events use personless mode when no distinct_id is provided."""
@@ -123,6 +132,7 @@ class TestPostHogTracingProcessor:
         )
 
         processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
 
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$process_person_profile"] is False
@@ -184,17 +194,20 @@ class TestPostHogTracingProcessor:
         )
 
         processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
 
         call_kwargs = mock_client.capture.call_args[1]
         assert "$process_person_profile" not in call_kwargs["properties"]
 
-    def test_on_trace_end_clears_metadata(self, processor, mock_trace):
+    def test_on_trace_end_clears_metadata(self, processor, mock_client, mock_trace):
         """Test that on_trace_end clears stored trace metadata."""
         processor.on_trace_start(mock_trace)
         assert mock_trace.trace_id in processor._trace_metadata
 
         processor.on_trace_end(mock_trace)
         assert mock_trace.trace_id not in processor._trace_metadata
+        # Also verify it captured the event
+        mock_client.capture.assert_called_once()
 
     def test_on_span_start_tracks_time(self, processor, mock_span):
         """Test that on_span_start records start time."""
@@ -630,6 +643,7 @@ class TestPostHogTracingProcessor:
         )
 
         processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
 
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["groups"] == {"company": "acme", "team": "engineering"}
@@ -643,6 +657,7 @@ class TestPostHogTracingProcessor:
         )
 
         processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
 
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["environment"] == "production"

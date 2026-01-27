@@ -202,7 +202,7 @@ class PostHogTracingProcessor(TracingProcessor):
             log.debug(f"Failed to capture PostHog event: {e}")
 
     def on_trace_start(self, trace: Trace) -> None:
-        """Called when a new trace begins."""
+        """Called when a new trace begins. Stores metadata for spans; the $ai_trace event is emitted in on_trace_end."""
         try:
             self._evict_stale_entries()
             trace_id = trace.trace_id
@@ -212,13 +212,32 @@ class PostHogTracingProcessor(TracingProcessor):
 
             distinct_id = self._get_distinct_id(trace)
 
-            # Store trace metadata for later (used by spans)
+            # Store trace metadata for later (used by spans and on_trace_end)
             self._trace_metadata[trace_id] = {
                 "name": trace_name,
                 "group_id": group_id,
                 "metadata": metadata,
                 "distinct_id": distinct_id,
+                "start_time": time.time(),
             }
+        except Exception as e:
+            log.debug(f"Error in on_trace_start: {e}")
+
+    def on_trace_end(self, trace: Trace) -> None:
+        """Called when a trace completes. Emits the $ai_trace event with full metadata."""
+        try:
+            trace_id = trace.trace_id
+
+            # Pop stored metadata (also cleans up)
+            trace_info = self._trace_metadata.pop(trace_id, {})
+            trace_name = trace_info.get("name") or trace.name
+            group_id = trace_info.get("group_id") or getattr(trace, "group_id", None)
+            metadata = trace_info.get("metadata") or getattr(trace, "metadata", None)
+            distinct_id = trace_info.get("distinct_id") or self._get_distinct_id(trace)
+
+            # Calculate trace-level latency
+            start_time = trace_info.get("start_time")
+            latency = (time.time() - start_time) if start_time else None
 
             properties = {
                 "$ai_trace_id": trace_id,
@@ -226,6 +245,9 @@ class PostHogTracingProcessor(TracingProcessor):
                 "$ai_provider": "openai",
                 "$ai_framework": "openai-agents",
             }
+
+            if latency is not None:
+                properties["$ai_latency"] = latency
 
             # Include group_id for linking related traces (e.g., conversation threads)
             if group_id:
@@ -243,16 +265,6 @@ class PostHogTracingProcessor(TracingProcessor):
                 distinct_id=distinct_id or trace_id,
                 properties=properties,
             )
-        except Exception as e:
-            log.debug(f"Error in on_trace_start: {e}")
-
-    def on_trace_end(self, trace: Trace) -> None:
-        """Called when a trace completes."""
-        try:
-            trace_id = trace.trace_id
-
-            # Clean up stored metadata
-            self._trace_metadata.pop(trace_id, None)
         except Exception as e:
             log.debug(f"Error in on_trace_end: {e}")
 
