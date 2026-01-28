@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 import pytest
@@ -306,6 +307,15 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+        # Verify raw usage metadata is passed for backend processing
+        assert "$ai_usage" in props
+        assert props["$ai_usage"] is not None
+        # Verify it's JSON-serializable
+        json.dumps(props["$ai_usage"])
+        # Verify it has expected structure
+        assert isinstance(props["$ai_usage"], dict)
+        assert "input_tokens" in props["$ai_usage"]
+        assert "output_tokens" in props["$ai_usage"]
 
 
 def test_groups(mock_client, mock_anthropic_response):
@@ -917,6 +927,16 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         assert props["$ai_output_tokens"] == 25
         assert props["$ai_cache_read_input_tokens"] == 5
         assert props["$ai_cache_creation_input_tokens"] == 0
+
+        # Verify raw usage is captured in streaming mode (merged from events)
+        assert "$ai_usage" in props
+        assert props["$ai_usage"] is not None
+        # Verify it's JSON-serializable
+        json.dumps(props["$ai_usage"])
+        # Verify it has expected structure (merged from message_start and message_delta)
+        assert isinstance(props["$ai_usage"], dict)
+        assert "input_tokens" in props["$ai_usage"]
+        assert "output_tokens" in props["$ai_usage"]
 
 
 def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools):
