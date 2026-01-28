@@ -1,3 +1,9 @@
+# 7.7.0 - 2026-01-15
+
+feat(ai): Add OpenAI Agents SDK integration
+
+Automatic tracing for agent workflows, handoffs, tool calls, guardrails, and custom spans. Includes `$ai_total_tokens`, `$ai_error_type` categorization, and `$ai_framework` property.
+
 # 7.6.0 - 2026-01-12
 
 feat: add device_id to flags request payload

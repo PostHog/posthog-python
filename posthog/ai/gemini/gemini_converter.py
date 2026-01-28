@@ -12,6 +12,7 @@ from posthog.ai.types import (
     FormattedMessage,
     TokenUsage,
 )
+from posthog.ai.utils import serialize_raw_usage
 
 
 class GeminiPart(TypedDict, total=False):
@@ -486,6 +487,12 @@ def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
         reasoning_tokens = metadata.thoughts_token_count
         if reasoning_tokens and reasoning_tokens > 0:
             usage["reasoning_tokens"] = reasoning_tokens
+
+    # Capture raw usage metadata for backend processing
+    # Serialize to dict here in the converter (not in utils)
+    serialized = serialize_raw_usage(metadata)
+    if serialized:
+        usage["raw_usage"] = serialized
 
     return usage
 

@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,6 +35,13 @@ def mock_gemini_response():
     # Ensure cache and reasoning tokens are not present (not MagicMock)
     mock_usage.cached_content_token_count = 0
     mock_usage.thoughts_token_count = 0
+    # Make model_dump() return a proper dict for serialization
+    mock_usage.model_dump.return_value = {
+        "prompt_token_count": 20,
+        "candidates_token_count": 10,
+        "cached_content_token_count": 0,
+        "thoughts_token_count": 0,
+    }
     mock_response.usage_metadata = mock_usage
 
     mock_candidate = MagicMock()
@@ -69,6 +77,13 @@ def mock_gemini_response_with_function_calls():
     mock_usage.candidates_token_count = 15
     mock_usage.cached_content_token_count = 0
     mock_usage.thoughts_token_count = 0
+    # Make model_dump() return a proper dict for serialization
+    mock_usage.model_dump.return_value = {
+        "prompt_token_count": 25,
+        "candidates_token_count": 15,
+        "cached_content_token_count": 0,
+        "thoughts_token_count": 0,
+    }
     mock_response.usage_metadata = mock_usage
 
     # Mock function call
@@ -117,6 +132,13 @@ def mock_gemini_response_function_calls_only():
     mock_usage.candidates_token_count = 12
     mock_usage.cached_content_token_count = 0
     mock_usage.thoughts_token_count = 0
+    # Make model_dump() return a proper dict for serialization
+    mock_usage.model_dump.return_value = {
+        "prompt_token_count": 30,
+        "candidates_token_count": 12,
+        "cached_content_token_count": 0,
+        "thoughts_token_count": 0,
+    }
     mock_response.usage_metadata = mock_usage
 
     # Mock function call
@@ -174,6 +196,15 @@ def test_new_client_basic_generation(
     assert props["foo"] == "bar"
     assert "$ai_trace_id" in props
     assert props["$ai_latency"] > 0
+    # Verify raw usage metadata is passed for backend processing
+    assert "$ai_usage" in props
+    assert props["$ai_usage"] is not None
+    # Verify it's JSON-serializable
+    json.dumps(props["$ai_usage"])
+    # Verify it has expected structure
+    assert isinstance(props["$ai_usage"], dict)
+    assert "prompt_token_count" in props["$ai_usage"]
+    assert "candidates_token_count" in props["$ai_usage"]
 
 
 def test_new_client_streaming_with_generate_content_stream(
@@ -810,6 +841,13 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     chunk1_usage.candidates_token_count = 5
     chunk1_usage.cached_content_token_count = 30  # Cache tokens
     chunk1_usage.thoughts_token_count = 0
+    # Make model_dump() return a proper dict for serialization
+    chunk1_usage.model_dump.return_value = {
+        "prompt_token_count": 100,
+        "candidates_token_count": 5,
+        "cached_content_token_count": 30,
+        "thoughts_token_count": 0,
+    }
     chunk1.usage_metadata = chunk1_usage
 
     chunk2 = MagicMock()
@@ -819,6 +857,13 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     chunk2_usage.candidates_token_count = 10
     chunk2_usage.cached_content_token_count = 30  # Same cache tokens
     chunk2_usage.thoughts_token_count = 5  # Reasoning tokens
+    # Make model_dump() return a proper dict for serialization
+    chunk2_usage.model_dump.return_value = {
+        "prompt_token_count": 100,
+        "candidates_token_count": 10,
+        "cached_content_token_count": 30,
+        "thoughts_token_count": 5,
+    }
     chunk2.usage_metadata = chunk2_usage
 
     mock_stream = iter([chunk1, chunk2])
@@ -847,6 +892,16 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_cache_read_input_tokens"] == 30
     assert props["$ai_reasoning_tokens"] == 5
+
+    # Verify raw usage is captured in streaming mode (merged from chunks)
+    assert "$ai_usage" in props
+    assert props["$ai_usage"] is not None
+    # Verify it's JSON-serializable
+    json.dumps(props["$ai_usage"])
+    # Verify it has expected structure
+    assert isinstance(props["$ai_usage"], dict)
+    assert "prompt_token_count" in props["$ai_usage"]
+    assert "candidates_token_count" in props["$ai_usage"]
 
 
 def test_web_search_grounding(mock_client, mock_google_genai_client):

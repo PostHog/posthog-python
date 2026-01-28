@@ -16,6 +16,7 @@ from posthog.ai.types import (
     FormattedTextContent,
     TokenUsage,
 )
+from posthog.ai.utils import serialize_raw_usage
 
 
 def format_openai_response(response: Any) -> List[FormattedMessage]:
@@ -429,6 +430,12 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     if web_search_count > 0:
         result["web_search_count"] = web_search_count
 
+    # Capture raw usage metadata for backend processing
+    # Serialize to dict here in the converter (not in utils)
+    serialized = serialize_raw_usage(response.usage)
+    if serialized:
+        result["raw_usage"] = serialized
+
     return result
 
 
@@ -482,6 +489,12 @@ def extract_openai_usage_from_chunk(
                 chunk.usage.completion_tokens_details.reasoning_tokens
             )
 
+        # Capture raw usage metadata for backend processing
+        # Serialize to dict here in the converter (not in utils)
+        serialized = serialize_raw_usage(chunk.usage)
+        if serialized:
+            usage["raw_usage"] = serialized
+
     elif provider_type == "responses":
         # For Responses API, usage is only in chunk.response.usage for completed events
         if hasattr(chunk, "type") and chunk.type == "response.completed":
@@ -515,6 +528,12 @@ def extract_openai_usage_from_chunk(
                     web_search_count = extract_openai_web_search_count(chunk.response)
                     if web_search_count > 0:
                         usage["web_search_count"] = web_search_count
+
+                # Capture raw usage metadata for backend processing
+                # Serialize to dict here in the converter (not in utils)
+                serialized = serialize_raw_usage(response_usage)
+                if serialized:
+                    usage["raw_usage"] = serialized
 
     return usage
 
