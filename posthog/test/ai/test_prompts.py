@@ -45,9 +45,10 @@ class TestPrompts(unittest.TestCase):
 class TestPromptsGet(TestPrompts):
     """Tests for the Prompts.get() method."""
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_successfully_fetch_a_prompt(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_successfully_fetch_a_prompt(self, mock_get_session):
         """Should successfully fetch a prompt."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         posthog = self.create_mock_posthog()
@@ -67,10 +68,11 @@ class TestPromptsGet(TestPrompts):
             call_args[1]["headers"]["Authorization"], "Bearer phx_test_key"
         )
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
-    def test_return_cached_prompt_when_fresh(self, mock_time, mock_get):
+    def test_return_cached_prompt_when_fresh(self, mock_time, mock_get_session):
         """Should return cached prompt when fresh (no API call)."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
         mock_time.return_value = 1000.0
 
@@ -90,10 +92,11 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual(result2, self.mock_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 1)  # No additional fetch
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
-    def test_refetch_when_cache_is_stale(self, mock_time, mock_get):
+    def test_refetch_when_cache_is_stale(self, mock_time, mock_get_session):
         """Should refetch when cache is stale."""
+        mock_get = mock_get_session.return_value.get
         updated_prompt_response = {
             **self.mock_prompt_response,
             "prompt": "Updated prompt: Hello, {{name}}!",
@@ -121,13 +124,14 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual(result2, updated_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 2)
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
     @patch("posthog.ai.prompts.log")
     def test_use_stale_cache_on_fetch_failure_with_warning(
-        self, mock_log, mock_time, mock_get
+        self, mock_log, mock_time, mock_get_session
     ):
         """Should use stale cache on fetch failure with warning."""
+        mock_get = mock_get_session.return_value.get
         mock_get.side_effect = [
             MockResponse(json_data=self.mock_prompt_response),
             Exception("Network error"),
@@ -153,12 +157,13 @@ class TestPromptsGet(TestPrompts):
         warning_call = mock_log.warning.call_args
         self.assertIn("using stale cache", warning_call[0][0])
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.log")
     def test_use_fallback_when_no_cache_and_fetch_fails_with_warning(
-        self, mock_log, mock_get
+        self, mock_log, mock_get_session
     ):
         """Should use fallback when no cache and fetch fails with warning."""
+        mock_get = mock_get_session.return_value.get
         mock_get.side_effect = Exception("Network error")
 
         posthog = self.create_mock_posthog()
@@ -174,9 +179,10 @@ class TestPromptsGet(TestPrompts):
         warning_call = mock_log.warning.call_args
         self.assertIn("using fallback", warning_call[0][0])
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_throw_when_no_cache_no_fallback_and_fetch_fails(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_throw_when_no_cache_no_fallback_and_fetch_fails(self, mock_get_session):
         """Should throw when no cache, no fallback, and fetch fails."""
+        mock_get = mock_get_session.return_value.get
         mock_get.side_effect = Exception("Network error")
 
         posthog = self.create_mock_posthog()
@@ -187,9 +193,10 @@ class TestPromptsGet(TestPrompts):
 
         self.assertIn("Network error", str(context.exception))
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_handle_404_response(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_handle_404_response(self, mock_get_session):
         """Should handle 404 response."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(status_code=404, ok=False)
 
         posthog = self.create_mock_posthog()
@@ -200,9 +207,10 @@ class TestPromptsGet(TestPrompts):
 
         self.assertIn('Prompt "nonexistent-prompt" not found', str(context.exception))
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_handle_403_response(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_handle_403_response(self, mock_get_session):
         """Should handle 403 response."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(status_code=403, ok=False)
 
         posthog = self.create_mock_posthog()
@@ -227,9 +235,10 @@ class TestPromptsGet(TestPrompts):
             "personal_api_key is required to fetch prompts", str(context.exception)
         )
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_throw_when_api_returns_invalid_response_format(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_throw_when_api_returns_invalid_response_format(self, mock_get_session):
         """Should throw when API returns invalid response format."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data={"invalid": "response"})
 
         posthog = self.create_mock_posthog()
@@ -240,9 +249,10 @@ class TestPromptsGet(TestPrompts):
 
         self.assertIn("Invalid response format", str(context.exception))
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_use_custom_host_from_posthog_options(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_use_custom_host_from_posthog_options(self, mock_get_session):
         """Should use custom host from PostHog options."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         posthog = self.create_mock_posthog(host="https://eu.i.posthog.com")
@@ -256,10 +266,11 @@ class TestPromptsGet(TestPrompts):
             f"Expected URL to start with 'https://eu.i.posthog.com/', got {call_args[0][0]}",
         )
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
-    def test_use_default_cache_ttl_5_minutes(self, mock_time, mock_get):
+    def test_use_default_cache_ttl_5_minutes(self, mock_time, mock_get_session):
         """Should use default cache TTL (5 minutes) when not specified."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
         mock_time.return_value = 1000.0
 
@@ -284,10 +295,13 @@ class TestPromptsGet(TestPrompts):
         prompts.get("test-prompt")
         self.assertEqual(mock_get.call_count, 2)
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
-    def test_use_custom_default_cache_ttl_from_constructor(self, mock_time, mock_get):
+    def test_use_custom_default_cache_ttl_from_constructor(
+        self, mock_time, mock_get_session
+    ):
         """Should use custom default cache TTL from constructor."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
         mock_time.return_value = 1000.0
 
@@ -305,9 +319,10 @@ class TestPromptsGet(TestPrompts):
         prompts.get("test-prompt")
         self.assertEqual(mock_get.call_count, 2)
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_url_encode_prompt_names_with_special_characters(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_url_encode_prompt_names_with_special_characters(self, mock_get_session):
         """Should URL-encode prompt names with special characters."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         posthog = self.create_mock_posthog()
@@ -321,9 +336,10 @@ class TestPromptsGet(TestPrompts):
             "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/prompt%20with%20spaces%2Fand%2Fslashes/",
         )
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_work_with_direct_options_no_posthog_client(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_work_with_direct_options_no_posthog_client(self, mock_get_session):
         """Should work with direct options (no PostHog client)."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         prompts = Prompts(personal_api_key="phx_direct_key")
@@ -340,9 +356,10 @@ class TestPromptsGet(TestPrompts):
             call_args[1]["headers"]["Authorization"], "Bearer phx_direct_key"
         )
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_use_custom_host_from_direct_options(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_use_custom_host_from_direct_options(self, mock_get_session):
         """Should use custom host from direct options."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         prompts = Prompts(
@@ -357,12 +374,13 @@ class TestPromptsGet(TestPrompts):
             "https://eu.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
         )
 
-    @patch("posthog.ai.prompts.requests.get")
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
     def test_use_custom_default_cache_ttl_from_direct_options(
-        self, mock_time, mock_get
+        self, mock_time, mock_get_session
     ):
         """Should use custom default cache TTL from direct options."""
+        mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
         mock_time.return_value = 1000.0
 
@@ -494,9 +512,10 @@ class TestPromptsCompile(TestPrompts):
 class TestPromptsClearCache(TestPrompts):
     """Tests for the Prompts.clear_cache() method."""
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_clear_a_specific_prompt_from_cache(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_clear_a_specific_prompt_from_cache(self, mock_get_session):
         """Should clear a specific prompt from cache."""
+        mock_get = mock_get_session.return_value.get
         other_prompt_response = {**self.mock_prompt_response, "name": "other-prompt"}
 
         mock_get.side_effect = [
@@ -524,9 +543,10 @@ class TestPromptsClearCache(TestPrompts):
         prompts.get("other-prompt")
         self.assertEqual(mock_get.call_count, 3)
 
-    @patch("posthog.ai.prompts.requests.get")
-    def test_clear_all_prompts_from_cache(self, mock_get):
+    @patch("posthog.ai.prompts._get_session")
+    def test_clear_all_prompts_from_cache(self, mock_get_session):
         """Should clear all prompts from cache when no name is provided."""
+        mock_get = mock_get_session.return_value.get
         other_prompt_response = {**self.mock_prompt_response, "name": "other-prompt"}
 
         mock_get.side_effect = [

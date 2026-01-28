@@ -10,9 +10,7 @@ import time
 import urllib.parse
 from typing import Any, Dict, Optional, Union
 
-import requests
-
-from posthog.request import DEFAULT_HOST, USER_AGENT
+from posthog.request import DEFAULT_HOST, USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
 
 log = logging.getLogger("posthog")
@@ -242,7 +240,7 @@ class Prompts:
             "User-Agent": USER_AGENT,
         }
 
-        response = requests.get(url, headers=headers, timeout=10)
+        response = _get_session().get(url, headers=headers, timeout=10)
 
         if not response.ok:
             if response.status_code == 404:
