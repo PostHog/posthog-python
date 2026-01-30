@@ -1,3 +1,9 @@
+# 7.8.0 - 2026-01-28
+
+feat(llma): add prompt management
+
+Adds the Prompt Management feature. At the time of release, this feature is in a closed alpha.
+
 # 7.7.0 - 2026-01-15
 
 feat(ai): Add OpenAI Agents SDK integration
