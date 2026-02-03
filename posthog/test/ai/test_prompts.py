@@ -363,7 +363,7 @@ class TestPromptsGet(TestPrompts):
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         prompts = Prompts(
-            personal_api_key="phx_direct_key", host="https://eu.i.posthog.com"
+            personal_api_key="phx_direct_key", host="https://eu.posthog.com"
         )
 
         prompts.get("test-prompt")
@@ -371,7 +371,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://eu.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
+            "https://eu.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/",
         )
 
     @patch("posthog.ai.prompts._get_session")
