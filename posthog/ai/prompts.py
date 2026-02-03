@@ -10,11 +10,12 @@ import time
 import urllib.parse
 from typing import Any, Dict, Optional, Union
 
-from posthog.request import DEFAULT_HOST, USER_AGENT, _get_session
+from posthog.request import USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
 
 log = logging.getLogger("posthog")
 
+APP_ENDPOINT = "https://app.posthog.com"
 DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
@@ -49,11 +50,11 @@ class Prompts:
         from posthog.ai.prompts import Prompts
 
         # With PostHog client
-        posthog = Posthog('phc_xxx', host='https://us.i.posthog.com', personal_api_key='phx_xxx')
+        posthog = Posthog('phc_xxx', host='https://app.posthog.com', personal_api_key='phx_xxx')
         prompts = Prompts(posthog)
 
         # Or with direct options (no PostHog client needed)
-        prompts = Prompts(personal_api_key='phx_xxx', host='https://us.i.posthog.com')
+        prompts = Prompts(personal_api_key='phx_xxx', host='https://app.posthog.com')
 
         # Fetch with caching and fallback
         template = prompts.get('support-system-prompt', fallback='You are a helpful assistant.')
@@ -80,7 +81,7 @@ class Prompts:
         Args:
             posthog: PostHog client instance (optional if personal_api_key provided)
             personal_api_key: Direct API key (optional if posthog provided)
-            host: PostHog host (defaults to US ingestion endpoint)
+            host: PostHog host (defaults to app endpoint)
             default_cache_ttl_seconds: Default cache TTL (defaults to 300)
         """
         self._default_cache_ttl_seconds = (
@@ -91,11 +92,11 @@ class Prompts:
         if posthog is not None:
             self._personal_api_key = getattr(posthog, "personal_api_key", None) or ""
             self._host = remove_trailing_slash(
-                getattr(posthog, "raw_host", None) or DEFAULT_HOST
+                getattr(posthog, "raw_host", None) or APP_ENDPOINT
             )
         else:
             self._personal_api_key = personal_api_key or ""
-            self._host = remove_trailing_slash(host or DEFAULT_HOST)
+            self._host = remove_trailing_slash(host or APP_ENDPOINT)
 
     def get(
         self,
@@ -214,7 +215,7 @@ class Prompts:
         """
         Fetch prompt from PostHog API.
 
-        Endpoint: {host}/api/projects/@current/llm_prompts/name/{encoded_name}/
+        Endpoint: {host}/api/environments/@current/llm_prompts/name/{encoded_name}/
         Auth: Bearer {personal_api_key}
 
         Args:
@@ -233,7 +234,7 @@ class Prompts:
             )
 
         encoded_name = urllib.parse.quote(name, safe="")
-        url = f"{self._host}/api/projects/@current/llm_prompts/name/{encoded_name}/"
+        url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/"
 
         headers = {
             "Authorization": f"Bearer {self._personal_api_key}",
