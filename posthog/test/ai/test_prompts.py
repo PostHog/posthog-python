@@ -33,7 +33,7 @@ class TestPrompts(unittest.TestCase):
     }
 
     def create_mock_posthog(
-        self, personal_api_key="phx_test_key", host="https://us.i.posthog.com"
+        self, personal_api_key="phx_test_key", host="https://app.posthog.com"
     ):
         """Create a mock PostHog client."""
         mock = MagicMock()
@@ -61,7 +61,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
+            "https://app.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/",
         )
         self.assertIn("Authorization", call_args[1]["headers"])
         self.assertEqual(
@@ -333,7 +333,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/prompt%20with%20spaces%2Fand%2Fslashes/",
+            "https://app.posthog.com/api/environments/@current/llm_prompts/name/prompt%20with%20spaces%2Fand%2Fslashes/",
         )
 
     @patch("posthog.ai.prompts._get_session")
@@ -350,7 +350,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
+            "https://app.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/",
         )
         self.assertEqual(
             call_args[1]["headers"]["Authorization"], "Bearer phx_direct_key"
