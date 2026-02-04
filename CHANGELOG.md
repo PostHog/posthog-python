@@ -1,3 +1,7 @@
+# 7.8.1 - 2026-02-03
+
+fix(llma): small fixes for prompt management
+
 # 7.8.0 - 2026-01-28
 
 feat(llma): add prompt management
