@@ -1335,6 +1335,7 @@ class Client(object):
                 self.log.error(
                     "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
                 )
+                self.feature_flags = []
                 if self.debug:
                     raise APIError(
                         status=401,
