@@ -1,3 +1,7 @@
+# 7.8.2 - 2026-02-04
+
+fix(llma): fix prompts default url
+
 # 7.8.1 - 2026-02-03
 
 fix(llma): small fixes for prompt management
