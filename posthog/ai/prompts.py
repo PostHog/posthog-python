@@ -15,7 +15,7 @@ from posthog.utils import remove_trailing_slash
 
 log = logging.getLogger("posthog")
 
-APP_ENDPOINT = "https://app.posthog.com"
+APP_ENDPOINT = "https://us.posthog.com"
 DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
@@ -50,11 +50,11 @@ class Prompts:
         from posthog.ai.prompts import Prompts
 
         # With PostHog client
-        posthog = Posthog('phc_xxx', host='https://app.posthog.com', personal_api_key='phx_xxx')
+        posthog = Posthog('phc_xxx', host='https://us.posthog.com', personal_api_key='phx_xxx')
         prompts = Prompts(posthog)
 
         # Or with direct options (no PostHog client needed)
-        prompts = Prompts(personal_api_key='phx_xxx', host='https://app.posthog.com')
+        prompts = Prompts(personal_api_key='phx_xxx', host='https://us.posthog.com')
 
         # Fetch with caching and fallback
         template = prompts.get('support-system-prompt', fallback='You are a helpful assistant.')
