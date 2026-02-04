@@ -1336,6 +1336,12 @@ class Client(object):
                     "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
                 )
                 self.feature_flags = []
+                self.group_type_mapping = {}
+                self.cohorts = {}
+
+                if self.flag_cache:
+                    self.flag_cache.clear()
+
                 if self.debug:
                     raise APIError(
                         status=401,
