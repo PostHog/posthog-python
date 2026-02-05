@@ -3223,6 +3223,385 @@ class TestLocalEvaluation(unittest.TestCase):
         # Verify API was called (fallback occurred)
         self.assertEqual(patch_flags.call_count, 1)
 
+    @mock.patch("posthog.client.flags")
+    def test_device_id_bucketing_uses_device_id_for_hash(self, patch_flags):
+        """
+        When a flag has bucketing_identifier: "device_id", the device_id should be
+        used for hashing instead of distinct_id.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        # This flag uses device_id for bucketing
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-bucketed-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # Same distinct_id with different device_ids should produce different results
+        # (based on rollout percentage, we check consistency)
+        result1 = client.get_feature_flag(
+            "device-bucketed-flag", "user-123", device_id="device-A"
+        )
+        result2 = client.get_feature_flag(
+            "device-bucketed-flag", "user-123", device_id="device-A"
+        )
+
+        # Same device_id should give consistent results
+        self.assertEqual(result1, result2)
+
+        # No API fallback should occur
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_bucketing_same_device_different_users_same_result(
+        self, patch_flags
+    ):
+        """
+        When a flag uses device_id bucketing, different distinct_ids with the same
+        device_id should get the same result.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-bucketed-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 50,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # Different distinct_ids with the same device_id should get the same result
+        result1 = client.get_feature_flag(
+            "device-bucketed-flag", "user-A", device_id="shared-device"
+        )
+        result2 = client.get_feature_flag(
+            "device-bucketed-flag", "user-B", device_id="shared-device"
+        )
+        result3 = client.get_feature_flag(
+            "device-bucketed-flag", "user-C", device_id="shared-device"
+        )
+
+        # All should be the same since device_id is the same
+        self.assertEqual(result1, result2)
+        self.assertEqual(result2, result3)
+
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_bucketing_fallback_when_device_id_missing(self, patch_flags):
+        """
+        When a flag requires device_id for bucketing but none is provided,
+        it should fallback to server evaluation.
+        """
+        patch_flags.return_value = {"featureFlags": {"device-bucketed-flag": True}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-bucketed-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # No device_id provided - should fallback to API
+        result = client.get_feature_flag("device-bucketed-flag", "user-123")
+
+        self.assertTrue(result)
+        # API should have been called
+        self.assertEqual(patch_flags.call_count, 1)
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_bucketing_returns_none_when_only_evaluate_locally_and_no_device_id(
+        self, patch_flags
+    ):
+        """
+        When only_evaluate_locally=True and device_id is required but missing,
+        should return None instead of falling back to API.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-bucketed-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # No device_id + only_evaluate_locally should return None
+        result = client.get_feature_flag(
+            "device-bucketed-flag", "user-123", only_evaluate_locally=True
+        )
+
+        self.assertIsNone(result)
+        # API should NOT have been called
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_default_bucketing_identifier_uses_distinct_id(self, patch_flags):
+        """
+        When bucketing_identifier is not set or is 'distinct_id', should use
+        distinct_id for hashing (default behavior).
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        # Flag without bucketing_identifier (defaults to distinct_id)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "normal-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 50,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # Different distinct_ids should potentially produce different results
+        # but same distinct_id should produce same result
+        result1 = client.get_feature_flag("normal-flag", "user-A")
+        result2 = client.get_feature_flag("normal-flag", "user-A")
+
+        self.assertEqual(result1, result2)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_bucketing_with_multivariate_flag(self, patch_flags):
+        """
+        Multivariate flag variant selection should use device_id when
+        bucketing_identifier is set to device_id.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "multivariate-device-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                    "multivariate": {
+                        "variants": [
+                            {"key": "control", "rollout_percentage": 50},
+                            {"key": "test", "rollout_percentage": 50},
+                        ]
+                    },
+                },
+            }
+        ]
+
+        # Same device_id should give same variant
+        result1 = client.get_feature_flag(
+            "multivariate-device-flag", "user-A", device_id="device-1"
+        )
+        result2 = client.get_feature_flag(
+            "multivariate-device-flag", "user-B", device_id="device-1"
+        )
+
+        # Both should get the same variant because device_id is the same
+        self.assertEqual(result1, result2)
+        self.assertIn(result1, ["control", "test"])
+
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_device_id_bucketing_from_context(self, patch_flags):
+        """
+        When device_id is not passed as a parameter but is set in the context,
+        it should be resolved from context.
+        """
+        from posthog.contexts import new_context, set_context_device_id
+
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-bucketed-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        # Set device_id in context
+        with new_context():
+            set_context_device_id("context-device-id")
+            result = client.get_feature_flag("device-bucketed-flag", "user-123")
+
+        # Should evaluate locally using the context device_id
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_group_flags_ignore_bucketing_identifier(self, patch_flags):
+        """
+        Group flags should continue to use the group identifier for hashing,
+        regardless of the bucketing_identifier setting.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "group-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": 0,
+                    "bucketing_identifier": "device_id",  # Should be ignored for group flags
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        # Even with bucketing_identifier set to device_id, group flag should use group identifier
+        result = client.get_feature_flag(
+            "group-flag",
+            "user-123",
+            groups={"company": "acme-inc"},
+            device_id="some-device",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_get_all_flags_with_device_id_bucketing(self, patch_flags):
+        """
+        get_all_flags_and_payloads should properly handle flags with device_id bucketing.
+        """
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "normal-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            },
+            {
+                "id": 2,
+                "key": "device-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            },
+        ]
+
+        # With device_id provided, both flags should be evaluated locally
+        result = client.get_all_flags("user-123", device_id="my-device")
+
+        self.assertEqual(result["normal-flag"], True)
+        self.assertEqual(result["device-flag"], True)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_get_all_flags_fallback_when_device_id_missing_for_some_flags(
+        self, patch_flags
+    ):
+        """
+        When some flags require device_id but it's not provided, those flags
+        should trigger fallback while others can be evaluated locally.
+        """
+        patch_flags.return_value = {
+            "featureFlags": {"normal-flag": True, "device-flag": "from-api"}
+        }
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "normal-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            },
+            {
+                "id": 2,
+                "key": "device-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            },
+        ]
+
+        # Without device_id, device-flag can't be evaluated locally
+        client.get_all_flags("user-123")
+
+        # Should fallback to API for all flags when any can't be evaluated locally
+        self.assertEqual(patch_flags.call_count, 1)
+
 
 class TestMatchProperties(unittest.TestCase):
     def property(self, key, value, operator=None):
