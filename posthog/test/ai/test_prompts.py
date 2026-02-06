@@ -509,6 +509,121 @@ class TestPromptsCompile(TestPrompts):
         self.assertEqual(result, "Company: Acme")
 
 
+class TestPromptsCaptureErrors(TestPrompts):
+    """Tests for the capture_errors option."""
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_capture_exception_called_on_fetch_failure_with_fallback(
+        self, mock_get_session
+    ):
+        """Should call capture_exception on fetch failure when capture_errors=True."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, capture_errors=True)
+
+        result = prompts.get("test-prompt", fallback="fallback prompt")
+
+        self.assertEqual(result, "fallback prompt")
+        posthog.capture_exception.assert_called_once()
+        captured_exc = posthog.capture_exception.call_args[0][0]
+        self.assertIn("Network error", str(captured_exc))
+
+    @patch("posthog.ai.prompts._get_session")
+    @patch("posthog.ai.prompts.time.time")
+    def test_capture_exception_called_on_fetch_failure_with_stale_cache(
+        self, mock_time, mock_get_session
+    ):
+        """Should call capture_exception when falling back to stale cache."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = [
+            MockResponse(json_data=self.mock_prompt_response),
+            Exception("Network error"),
+        ]
+        mock_time.return_value = 1000.0
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, capture_errors=True)
+
+        # First call populates cache
+        prompts.get("test-prompt", cache_ttl_seconds=60)
+
+        # Expire cache
+        mock_time.return_value = 1061.0
+
+        # Second call falls back to stale cache
+        result = prompts.get("test-prompt", cache_ttl_seconds=60)
+        self.assertEqual(result, self.mock_prompt_response["prompt"])
+        posthog.capture_exception.assert_called_once()
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_capture_exception_called_when_error_is_raised(self, mock_get_session):
+        """Should call capture_exception even when the error is re-raised (no fallback, no cache)."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, capture_errors=True)
+
+        with self.assertRaises(Exception):
+            prompts.get("test-prompt")
+
+        posthog.capture_exception.assert_called_once()
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_no_capture_exception_when_capture_errors_is_false(self, mock_get_session):
+        """Should NOT call capture_exception when capture_errors=False (default)."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        prompts.get("test-prompt", fallback="fallback prompt")
+
+        posthog.capture_exception.assert_not_called()
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_no_capture_exception_without_client(self, mock_get_session):
+        """Should not error when capture_errors=True but no client provided."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        prompts = Prompts(personal_api_key="phx_test_key", capture_errors=True)
+
+        result = prompts.get("test-prompt", fallback="fallback prompt")
+
+        self.assertEqual(result, "fallback prompt")
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_no_capture_exception_on_successful_fetch(self, mock_get_session):
+        """Should NOT call capture_exception on successful fetch."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, capture_errors=True)
+
+        prompts.get("test-prompt")
+
+        posthog.capture_exception.assert_not_called()
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_capture_exception_failure_does_not_affect_fallback(self, mock_get_session):
+        """If capture_exception itself throws, the fallback should still be returned."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        posthog = self.create_mock_posthog()
+        posthog.capture_exception.side_effect = Exception("capture failed")
+        prompts = Prompts(posthog, capture_errors=True)
+
+        result = prompts.get("test-prompt", fallback="fallback prompt")
+
+        self.assertEqual(result, "fallback prompt")
+
+
 class TestPromptsClearCache(TestPrompts):
     """Tests for the Prompts.clear_cache() method."""
 
