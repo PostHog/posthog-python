@@ -235,12 +235,20 @@ def _process_response(
             )
             raise QuotaLimitError(res.status_code, "Feature flags quota limited")
         return response
+    retry_after = None
+    retry_after_header = res.headers.get("Retry-After")
+    if retry_after_header:
+        try:
+            retry_after = float(retry_after_header)
+        except (ValueError, TypeError):
+            pass
+
     try:
         payload = res.json()
         log.debug("received response: %s", payload)
-        raise APIError(res.status_code, payload["detail"])
+        raise APIError(res.status_code, payload["detail"], retry_after=retry_after)
     except (KeyError, ValueError):
-        raise APIError(res.status_code, res.text)
+        raise APIError(res.status_code, res.text, retry_after=retry_after)
 
 
 def decide(
@@ -348,9 +356,10 @@ def get(
 
 
 class APIError(Exception):
-    def __init__(self, status: Union[int, str], message: str):
+    def __init__(self, status: Union[int, str], message: str, retry_after: Optional[float] = None):
         self.message = message
         self.status = status
+        self.retry_after = retry_after
 
     def __str__(self):
         msg = "[PostHog] {0} ({1})"
