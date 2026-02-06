@@ -241,7 +241,19 @@ def _process_response(
         try:
             retry_after = float(retry_after_header)
         except (ValueError, TypeError):
-            pass
+            try:
+                from datetime import datetime, timezone
+                from email.utils import parsedate_to_datetime
+
+                retry_after = max(
+                    0.0,
+                    (
+                        parsedate_to_datetime(retry_after_header)
+                        - datetime.now(timezone.utc)
+                    ).total_seconds(),
+                )
+            except (ValueError, TypeError):
+                pass
 
     try:
         payload = res.json()
