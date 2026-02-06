@@ -610,9 +610,7 @@ class TestPromptsCaptureErrors(TestPrompts):
         posthog.capture_exception.assert_not_called()
 
     @patch("posthog.ai.prompts._get_session")
-    def test_capture_exception_failure_does_not_affect_fallback(
-        self, mock_get_session
-    ):
+    def test_capture_exception_failure_does_not_affect_fallback(self, mock_get_session):
         """If capture_exception itself throws, the fallback should still be returned."""
         mock_get = mock_get_session.return_value.get
         mock_get.side_effect = Exception("Network error")

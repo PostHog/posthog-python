@@ -228,9 +228,7 @@ class Prompts:
         try:
             self._client.capture_exception(error)
         except Exception:
-            log.debug(
-                "[PostHog Prompts] Failed to capture exception to error tracking"
-            )
+            log.debug("[PostHog Prompts] Failed to capture exception to error tracking")
 
     def _fetch_prompt_from_api(self, name: str) -> str:
         """
