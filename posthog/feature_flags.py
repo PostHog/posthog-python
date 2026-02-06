@@ -34,12 +34,12 @@ class RequiresServerEvaluation(Exception):
     pass
 
 
-# This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
-# Given the same distinct_id and key, it'll always return the same float. These floats are
+# This function takes an identifier and a feature flag key and returns a float between 0 and 1.
+# Given the same identifier and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
-# we can do _hash(key, distinct_id) < 0.2
-def _hash(key: str, distinct_id: str, salt: str = "") -> float:
-    hash_key = f"{key}.{distinct_id}{salt}"
+# we can do _hash(key, identifier) < 0.2
+def _hash(key: str, identifier: str, salt: str = "") -> float:
+    hash_key = f"{key}.{identifier}{salt}"
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
 
@@ -231,7 +231,7 @@ def match_feature_flag_properties(
     flags_by_key=None,
     evaluation_cache=None,
     device_id=None,
-    skip_bucketing_identifier=False,
+    hashing_identifier=None,
 ) -> FlagValue:
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
@@ -241,11 +241,10 @@ def match_feature_flag_properties(
     flag_variants = (flag_filters.get("multivariate") or {}).get("variants") or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
 
-    # Determine the hashing identifier based on bucketing_identifier setting
-    # For group flags, skip_bucketing_identifier is True and we always use the passed identifier
-    if skip_bucketing_identifier:
-        hashing_identifier = distinct_id
-    else:
+    # Determine the hashing identifier:
+    # - If caller provided one explicitly (e.g. group key for group flags), use it directly
+    # - Otherwise resolve from the flag's bucketing_identifier setting
+    if hashing_identifier is None:
         bucketing_identifier = flag_filters.get("bucketing_identifier")
         if bucketing_identifier == "device_id":
             if not device_id:
@@ -303,13 +302,10 @@ def is_condition_match(
     cohort_properties,
     flags_by_key=None,
     evaluation_cache=None,
-    hashing_identifier=None,
+    *,
+    hashing_identifier,
     device_id=None,
 ) -> bool:
-    # Use hashing_identifier if provided, otherwise fall back to distinct_id
-    if hashing_identifier is None:
-        hashing_identifier = distinct_id
-
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
         for prop in condition.get("properties"):

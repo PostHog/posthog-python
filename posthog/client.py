@@ -1460,14 +1460,13 @@ class Client(object):
                 return False
 
             focused_group_properties = group_properties[group_name]
-            # Group flags use group identifier for hashing, ignore bucketing_identifier
             return match_feature_flag_properties(
                 feature_flag,
                 groups[group_name],
                 focused_group_properties,
                 self.feature_flags_by_key,
                 evaluation_cache,
-                skip_bucketing_identifier=True,
+                hashing_identifier=groups[group_name],
             )
         else:
             return match_feature_flag_properties(
