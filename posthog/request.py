@@ -356,7 +356,9 @@ def get(
 
 
 class APIError(Exception):
-    def __init__(self, status: Union[int, str], message: str, retry_after: Optional[float] = None):
+    def __init__(
+        self, status: Union[int, str], message: str, retry_after: Optional[float] = None
+    ):
         self.message = message
         self.status = status
         self.retry_after = retry_after
