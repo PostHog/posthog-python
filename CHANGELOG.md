@@ -1,3 +1,7 @@
+# 7.8.3 - 2026-02-06
+
+fix: openAI input image sanitization
+
 # 7.8.2 - 2026-02-04
 
 fix(llma): fix prompts default url
