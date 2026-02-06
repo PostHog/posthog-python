@@ -132,7 +132,7 @@ class Consumer(Thread):
                 # with 408 (request timeout) or 429 (rate limited),
                 # don't retry on other client errors
                 if exc.status == "N/A":
-                    return True
+                    return False
                 return not ((400 <= exc.status < 500) and exc.status not in (408, 429))
             else:
                 # retry on all other errors (eg. network)
