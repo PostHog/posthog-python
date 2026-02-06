@@ -3,8 +3,6 @@ import logging
 import time
 from threading import Thread
 
-import backoff
-
 from posthog.request import APIError, DatetimeSerializer, batch_post
 
 try:
@@ -128,29 +126,41 @@ class Consumer(Thread):
     def request(self, batch):
         """Attempt to upload the batch and retry before raising an error"""
 
-        def fatal_exception(exc):
+        def is_retryable(exc):
             if isinstance(exc, APIError):
                 # retry on server errors and client errors
-                # with 429 status code (rate limited),
+                # with 408 (request timeout) or 429 (rate limited),
                 # don't retry on other client errors
                 if exc.status == "N/A":
                     return False
-                return (400 <= exc.status < 500) and exc.status != 429
+                return not ((400 <= exc.status < 500) and exc.status not in (408, 429))
             else:
                 # retry on all other errors (eg. network)
-                return False
+                return True
 
-        @backoff.on_exception(
-            backoff.expo, Exception, max_tries=self.retries + 1, giveup=fatal_exception
-        )
-        def send_request():
-            batch_post(
-                self.api_key,
-                self.host,
-                gzip=self.gzip,
-                timeout=self.timeout,
-                batch=batch,
-                historical_migration=self.historical_migration,
-            )
+        last_exc = None
+        for attempt in range(self.retries + 1):
+            try:
+                batch_post(
+                    self.api_key,
+                    self.host,
+                    gzip=self.gzip,
+                    timeout=self.timeout,
+                    batch=batch,
+                    historical_migration=self.historical_migration,
+                )
+                return
+            except Exception as e:
+                last_exc = e
+                if not is_retryable(e):
+                    raise
+                if attempt < self.retries:
+                    # Respect Retry-After header if present, otherwise use exponential backoff
+                    retry_after = getattr(e, "retry_after", None)
+                    if retry_after and retry_after > 0:
+                        time.sleep(retry_after)
+                    else:
+                        time.sleep(min(2**attempt, 30))
 
-        send_request()
+        if last_exc:
+            raise last_exc
