@@ -1,3 +1,68 @@
+# 7.8.2 - 2026-02-04
+
+fix(llma): fix prompts default url
+
+# 7.8.1 - 2026-02-03
+
+fix(llma): small fixes for prompt management
+
+# 7.8.0 - 2026-01-28
+
+feat(llma): add prompt management
+
+Adds the Prompt Management feature. At the time of release, this feature is in a closed alpha.
+
+# 7.7.0 - 2026-01-15
+
+feat(ai): Add OpenAI Agents SDK integration
+
+Automatic tracing for agent workflows, handoffs, tool calls, guardrails, and custom spans. Includes `$ai_total_tokens`, `$ai_error_type` categorization, and `$ai_framework` property.
+
+# 7.6.0 - 2026-01-12
+
+feat: add device_id to flags request payload
+
+Add device_id parameter to all feature flag methods, allowing the server to track device identifiers for flag evaluation. The device_id can be passed explicitly or set via context using `set_context_device_id()`.
+
+# 7.5.1 - 2026-01-07
+
+fix: avoid return from finally block to fix Python 3.14 SyntaxWarning (#361) - thanks @jodal
+
+# 7.5.0 - 2026-01-06
+
+feat: Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
+feat: Add reference to exception in LLMA trace and span events
+
+# 7.4.3 - 2026-01-02
+
+Fixes cache creation cost for Langchain with Anthropic
+
+# 7.4.2 - 2025-12-22
+
+feat: add `in_app_modules` option to control code variables capturing
+
+# 7.4.1 - 2025-12-19
+
+fix: extract model from response for OpenAI stored prompts
+
+When using OpenAI stored prompts, the model is defined in the OpenAI dashboard rather than passed in the API request. This fix adds a fallback to extract the model from the response object when not provided in kwargs, ensuring generations show up with the correct model and enabling cost calculations.
+
+# 7.4.0 - 2025-12-16
+
+feat: Add automatic retries for feature flag requests
+
+Feature flag API requests now automatically retry on transient failures:
+
+- Network errors (connection refused, DNS failures, timeouts)
+- Server errors (500, 502, 503, 504)
+- Up to 2 retries with exponential backoff (0.5s, 1s delays)
+
+Rate limit (429) and quota (402) errors are not retried.
+
+# 7.3.1 - 2025-12-06
+
+fix: remove unused $exception_message and $exception_type
+
 # 7.3.0 - 2025-12-05
 
 feat: improve code variables capture masking

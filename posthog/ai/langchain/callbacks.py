@@ -22,8 +22,8 @@ from uuid import UUID
 
 try:
     # LangChain 1.0+ and modern 0.x with langchain-core
-    from langchain_core.callbacks.base import BaseCallbackHandler
     from langchain_core.agents import AgentAction, AgentFinish
+    from langchain_core.callbacks.base import BaseCallbackHandler
 except (ImportError, ModuleNotFoundError):
     # Fallback for older LangChain versions
     from langchain.callbacks.base import BaseCallbackHandler
@@ -35,15 +35,15 @@ from langchain_core.messages import (
     FunctionMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
     ToolCall,
+    ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
 from posthog import setup
-from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.ai.sanitization import sanitize_langchain
+from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -506,6 +506,14 @@ class CallbackHandler(BaseCallbackHandler):
         if isinstance(outputs, BaseException):
             event_properties["$ai_error"] = _stringify_exception(outputs)
             event_properties["$ai_is_error"] = True
+            event_properties = _capture_exception_and_update_properties(
+                self._ph_client,
+                outputs,
+                self._distinct_id,
+                self._groups,
+                event_properties,
+            )
+
         elif outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(
                 self._ph_client, self._privacy_mode, outputs
@@ -576,10 +584,24 @@ class CallbackHandler(BaseCallbackHandler):
         if run.tools:
             event_properties["$ai_tools"] = run.tools
 
+        if self._properties:
+            event_properties.update(self._properties)
+
+        if self._distinct_id is None:
+            event_properties["$process_person_profile"] = False
+
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
             event_properties["$ai_error"] = _stringify_exception(output)
             event_properties["$ai_is_error"] = True
+
+            event_properties = _capture_exception_and_update_properties(
+                self._ph_client,
+                output,
+                self._distinct_id,
+                self._groups,
+                event_properties,
+            )
         else:
             # Add usage
             usage = _parse_usage(output, run.provider, run.model)
@@ -606,12 +628,6 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_output_choices"] = with_privacy_mode(
                 self._ph_client, self._privacy_mode, completions
             )
-
-        if self._properties:
-            event_properties.update(self._properties)
-
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
 
         self._ph_client.capture(
             distinct_id=self._distinct_id or trace_id,
@@ -773,9 +789,11 @@ def _parse_usage_model(
             for mapped_key, dataclass_key in field_mapping.items()
         },
     )
-    # For Anthropic providers, LangChain reports input_tokens as the sum of input and cache read tokens.
+    # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
     # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.
-    # For other providers (OpenAI, etc.), input_tokens already includes cache tokens as expected.
+    # Both cache_read and cache_write tokens should be subtracted since Anthropic's raw API
+    # reports input_tokens as tokens NOT read from or used to create a cache.
+    # For other providers (OpenAI, etc.), input_tokens already excludes cache tokens as expected.
     # Match logic consistent with plugin-server: exact match on provider OR substring match on model
     is_anthropic = False
     if provider and provider.lower() == "anthropic":
@@ -783,14 +801,14 @@ def _parse_usage_model(
     elif model and "anthropic" in model.lower():
         is_anthropic = True
 
-    if (
-        is_anthropic
-        and normalized_usage.input_tokens
-        and normalized_usage.cache_read_tokens
-    ):
-        normalized_usage.input_tokens = max(
-            normalized_usage.input_tokens - normalized_usage.cache_read_tokens, 0
+    if is_anthropic and normalized_usage.input_tokens:
+        cache_tokens = (normalized_usage.cache_read_tokens or 0) + (
+            normalized_usage.cache_write_tokens or 0
         )
+        if cache_tokens > 0:
+            normalized_usage.input_tokens = max(
+                normalized_usage.input_tokens - cache_tokens, 0
+            )
     return normalized_usage
 
 
@@ -859,6 +877,27 @@ def _parse_usage(
                     break
 
     return llm_usage
+
+
+def _capture_exception_and_update_properties(
+    client: Client,
+    exception: BaseException,
+    distinct_id: Optional[Union[str, int, UUID]],
+    groups: Optional[Dict[str, Any]],
+    event_properties: Dict[str, Any],
+):
+    if client.enable_exception_autocapture:
+        exception_id = client.capture_exception(
+            exception,
+            distinct_id=distinct_id,
+            groups=groups,
+            properties=event_properties,
+        )
+
+        if exception_id:
+            event_properties["$exception_event_id"] = exception_id
+
+    return event_properties
 
 
 def _get_http_status(error: BaseException) -> int:

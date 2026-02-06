@@ -1,18 +1,39 @@
 import datetime  # noqa: F401
-from typing import Callable, Dict, Optional, Any  # noqa: F401
+from typing import Any, Callable, Dict, Optional  # noqa: F401
+
 from typing_extensions import Unpack
 
-from posthog.args import OptionalCaptureArgs, OptionalSetArgs, ExceptionArg
+from posthog.args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.client import Client
 from posthog.contexts import (
-    new_context as inner_new_context,
-    scoped as inner_scoped,
-    tag as inner_tag,
-    set_context_session as inner_set_context_session,
     identify_context as inner_identify_context,
+)
+from posthog.contexts import (
+    new_context as inner_new_context,
+)
+from posthog.contexts import (
+    scoped as inner_scoped,
+)
+from posthog.contexts import (
     set_capture_exception_code_variables_context as inner_set_capture_exception_code_variables_context,
-    set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
+)
+from posthog.contexts import (
     set_code_variables_ignore_patterns_context as inner_set_code_variables_ignore_patterns_context,
+)
+from posthog.contexts import (
+    set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
+)
+from posthog.contexts import (
+    set_context_device_id as inner_set_context_device_id,
+)
+from posthog.contexts import (
+    set_context_session as inner_set_context_session,
+)
+from posthog.contexts import (
+    tag as inner_tag,
+)
+from posthog.contexts import (
+    get_tags as inner_get_tags,
 )
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
@@ -20,11 +41,25 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flags import (
     InconclusiveMatchError as InconclusiveMatchError,
+)
+from posthog.feature_flags import (
     RequiresServerEvaluation as RequiresServerEvaluation,
+)
+from posthog.flag_definition_cache import (
+    FlagDefinitionCacheData as FlagDefinitionCacheData,
+    FlagDefinitionCacheProvider as FlagDefinitionCacheProvider,
+)
+from posthog.request import (
+    disable_connection_reuse as disable_connection_reuse,
+    enable_keep_alive as enable_keep_alive,
+    set_socket_options as set_socket_options,
+    SocketOptions as SocketOptions,
 )
 from posthog.types import (
     FeatureFlag,
     FlagsAndPayloads,
+)
+from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
 )
 from posthog.version import VERSION
@@ -101,6 +136,26 @@ def set_context_session(session_id: str):
     return inner_set_context_session(session_id)
 
 
+def set_context_device_id(device_id: str):
+    """
+    Set the device ID for the current context, associating all feature flag requests
+    in this or child contexts with the given device ID.
+
+    Args:
+        device_id: The device ID to associate with the current context and its children
+
+    Examples:
+        ```python
+        from posthog import set_context_device_id
+        set_context_device_id("device_123")
+        ```
+
+    Category:
+        Contexts
+    """
+    return inner_set_context_device_id(device_id)
+
+
 def identify_context(distinct_id: str):
     """
     Identify the current context with a distinct ID.
@@ -161,6 +216,19 @@ def tag(name: str, value: Any):
     return inner_tag(name, value)
 
 
+def get_tags() -> Dict[str, Any]:
+    """
+    Get all tags from the current context.
+
+    Returns:
+        Dict of all tags in the current context
+
+    Category:
+        Contexts
+    """
+    return inner_get_tags()
+
+
 """Settings."""
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
@@ -191,6 +259,7 @@ default_client = None  # type: Optional[Client]
 capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+in_app_modules = None  # type: Optional[list[str]]
 
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
@@ -437,6 +506,7 @@ def feature_enabled(
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
 ):
     # type: (...) -> bool
     """
@@ -476,6 +546,7 @@ def feature_enabled(
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
@@ -488,6 +559,7 @@ def get_feature_flag(
     only_evaluate_locally=False,  # type: bool
     send_feature_flag_events=True,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
 ) -> Optional[FeatureFlag]:
     """
     Get feature flag variant for users. Used with experiments.
@@ -526,6 +598,7 @@ def get_feature_flag(
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
@@ -536,6 +609,7 @@ def get_all_flags(
     group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
 ) -> Optional[dict[str, FeatureFlag]]:
     """
     Get all flags for a given user.
@@ -568,6 +642,7 @@ def get_all_flags(
         group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
@@ -580,6 +655,7 @@ def get_feature_flag_result(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
 ):
     # type: (...) -> Optional[FeatureFlagResult]
     """
@@ -611,6 +687,7 @@ def get_feature_flag_result(
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
@@ -624,6 +701,7 @@ def get_feature_flag_payload(
     only_evaluate_locally=False,
     send_feature_flag_events=True,
     disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
 ) -> Optional[str]:
     return _proxy(
         "get_feature_flag_payload",
@@ -636,6 +714,7 @@ def get_feature_flag_payload(
         only_evaluate_locally=only_evaluate_locally,
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
@@ -666,6 +745,7 @@ def get_all_flags_and_payloads(
     group_properties=None,  # type: Optional[dict]
     only_evaluate_locally=False,
     disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
 ) -> FlagsAndPayloads:
     return _proxy(
         "get_all_flags_and_payloads",
@@ -675,6 +755,7 @@ def get_all_flags_and_payloads(
         group_properties=group_properties or {},
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
@@ -789,6 +870,7 @@ def setup() -> Client:
             capture_exception_code_variables=capture_exception_code_variables,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
+            in_app_modules=in_app_modules,
         )
 
     # always set incase user changes it

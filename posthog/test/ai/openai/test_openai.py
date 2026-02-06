@@ -1,3 +1,4 @@
+import json
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -496,6 +497,15 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+        # Verify raw usage metadata is passed for backend processing
+        assert "$ai_usage" in props
+        assert props["$ai_usage"] is not None
+        # Verify it's JSON-serializable
+        json.dumps(props["$ai_usage"])
+        # Verify it has expected structure
+        assert isinstance(props["$ai_usage"], dict)
+        assert "prompt_tokens" in props["$ai_usage"]
+        assert "completion_tokens" in props["$ai_usage"]
 
 
 def test_embeddings(mock_client, mock_embedding_response):
@@ -921,6 +931,16 @@ def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
         # Check token usage
         assert props["$ai_input_tokens"] == 20
         assert props["$ai_output_tokens"] == 15
+
+        # Verify raw usage is captured in streaming mode
+        assert "$ai_usage" in props
+        assert props["$ai_usage"] is not None
+        # Verify it's JSON-serializable
+        json.dumps(props["$ai_usage"])
+        # Verify it has expected structure (merged from chunks)
+        assert isinstance(props["$ai_usage"], dict)
+        assert "prompt_tokens" in props["$ai_usage"]
+        assert "completion_tokens" in props["$ai_usage"]
 
 
 # test responses api
@@ -1676,3 +1696,459 @@ async def test_async_chat_streaming_with_web_search(
     assert props["$ai_web_search_count"] == 1
     assert props["$ai_input_tokens"] == 20
     assert props["$ai_output_tokens"] == 15
+
+
+# Tests for model extraction fallback (stored prompts support)
+
+
+def test_streaming_chat_extracts_model_from_chunk_when_not_in_kwargs(mock_client):
+    """Test that model is extracted from streaming chunks when not provided in kwargs (stored prompts)."""
+
+    # Create streaming chunks with model field but we won't pass model in kwargs
+    chunks = [
+        ChatCompletionChunk(
+            id="chunk1",
+            model="gpt-4o-stored-prompt",  # Model comes from response, not request
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(role="assistant", content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ChatCompletionChunk(
+            id="chunk2",
+            model="gpt-4o-stored-prompt",
+            object="chat.completion.chunk",
+            created=1234567891,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(content=" world"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=CompletionUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+            ),
+        ),
+    ]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = chunks
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model in kwargs - simulates stored prompt usage
+        response_generator = client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        # Consume the generator
+        list(response_generator)
+
+        assert mock_client.capture.call_count == 1
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Model should be extracted from chunk, not kwargs
+        assert props["$ai_model"] == "gpt-4o-stored-prompt"
+
+
+def test_streaming_chat_prefers_kwargs_model_over_chunk_model(mock_client):
+    """Test that model from kwargs takes precedence over model from chunk."""
+    chunks = [
+        ChatCompletionChunk(
+            id="chunk1",
+            model="gpt-4o-from-response",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(role="assistant", content="Hello"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=CompletionUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+            ),
+        ),
+    ]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = chunks
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_generator = client.chat.completions.create(
+            model="gpt-4o-from-kwargs",  # Explicitly passed model
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        list(response_generator)
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # kwargs model should take precedence
+        assert props["$ai_model"] == "gpt-4o-from-kwargs"
+
+
+def test_streaming_responses_api_extracts_model_from_response_object(mock_client):
+    """Test that Responses API streaming extracts model from chunk.response.model (stored prompts)."""
+    from unittest.mock import MagicMock
+    from openai.types.responses import ResponseUsage
+
+    chunks = []
+
+    # Content chunk
+    chunk1 = MagicMock()
+    chunk1.type = "response.text.delta"
+    chunk1.text = "Test response"
+    # No response attribute on content chunks
+    del chunk1.response
+    chunks.append(chunk1)
+
+    # Final chunk with response object containing model
+    chunk2 = MagicMock()
+    chunk2.type = "response.completed"
+    chunk2.response = MagicMock()
+    chunk2.response.model = "gpt-4o-mini-stored"  # Model from stored prompt
+    chunk2.response.usage = ResponseUsage(
+        input_tokens=20,
+        output_tokens=10,
+        total_tokens=30,
+        input_tokens_details={"prompt_tokens": 20, "cached_tokens": 0},
+        output_tokens_details={"reasoning_tokens": 0},
+    )
+    chunk2.response.output = ["Test response"]
+    chunks.append(chunk2)
+
+    with patch("openai.resources.responses.Responses.create") as mock_create:
+        mock_create.return_value = iter(chunks)
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model - simulates stored prompt
+        response_generator = client.responses.create(
+            input=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        list(response_generator)
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Model should be extracted from chunk.response.model
+        assert props["$ai_model"] == "gpt-4o-mini-stored"
+
+
+def test_non_streaming_extracts_model_from_response(mock_client):
+    """Test that non-streaming calls extract model from response when not in kwargs."""
+    # Create a response with model but we won't pass model in kwargs
+    mock_response = ChatCompletion(
+        id="test",
+        model="gpt-4o-stored-prompt",
+        object="chat.completion",
+        created=int(time.time()),
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=CompletionUsage(
+            completion_tokens=10,
+            prompt_tokens=20,
+            total_tokens=30,
+        ),
+    )
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model in kwargs
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_response
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Model should be extracted from response.model
+        assert props["$ai_model"] == "gpt-4o-stored-prompt"
+
+
+def test_non_streaming_responses_api_extracts_model_from_response(mock_client):
+    """Test that non-streaming Responses API extracts model from response when not in kwargs."""
+    mock_response = Response(
+        id="test",
+        model="gpt-4o-mini-stored",
+        object="response",
+        created_at=1741476542,
+        status="completed",
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        max_output_tokens=None,
+        tools=[],
+        tool_choice="auto",
+        output=[
+            ResponseOutputMessage(
+                id="msg_123",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    ResponseOutputText(
+                        type="output_text",
+                        text="Test response",
+                        annotations=[],
+                    )
+                ],
+            )
+        ],
+        parallel_tool_calls=True,
+        previous_response_id=None,
+        usage=ResponseUsage(
+            input_tokens=10,
+            output_tokens=10,
+            input_tokens_details={"prompt_tokens": 10, "cached_tokens": 0},
+            output_tokens_details={"reasoning_tokens": 0},
+            total_tokens=20,
+        ),
+        user=None,
+        metadata={},
+    )
+
+    with patch(
+        "openai.resources.responses.Responses.create",
+        return_value=mock_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model in kwargs
+        response = client.responses.create(
+            input="Hello",
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_response
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Model should be extracted from response.model
+        assert props["$ai_model"] == "gpt-4o-mini-stored"
+
+
+def test_non_streaming_returns_none_when_no_model(mock_client):
+    """Test that non-streaming returns None (not 'unknown') when model is not available anywhere."""
+    # Create a response without model attribute using real OpenAI types
+    mock_response = ChatCompletion(
+        id="test",
+        model="",  # Will be removed below
+        object="chat.completion",
+        created=int(time.time()),
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=CompletionUsage(
+            completion_tokens=5,
+            prompt_tokens=10,
+            total_tokens=15,
+        ),
+    )
+    # Remove model attribute to simulate missing model
+    object.__delattr__(mock_response, "model")
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model in kwargs and response has no model
+        client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Should be None, NOT "unknown" (to avoid incorrect cost matching)
+        assert props["$ai_model"] is None
+
+
+def test_streaming_falls_back_to_unknown_when_no_model(mock_client):
+    """Test that streaming falls back to 'unknown' when model is not available anywhere."""
+    from unittest.mock import MagicMock
+
+    # Create a chunk without model attribute
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta = MagicMock()
+    chunk.choices[0].delta.content = "Hello"
+    chunk.choices[0].delta.role = "assistant"
+    chunk.choices[0].delta.tool_calls = None
+    chunk.usage = CompletionUsage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+    )
+    # Explicitly remove model attribute
+    del chunk.model
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = [chunk]
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_generator = client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        list(response_generator)
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        # Should fall back to "unknown"
+        assert props["$ai_model"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_chat_extracts_model_from_chunk(mock_client):
+    """Test async streaming extracts model from chunk when not in kwargs."""
+    chunks = [
+        ChatCompletionChunk(
+            id="chunk1",
+            model="gpt-4o-async-stored",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(role="assistant", content="Hello"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=CompletionUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+            ),
+        ),
+    ]
+
+    async def mock_create(self, **kwargs):
+        async def chunk_iterable():
+            for chunk in chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        # Note: NOT passing model
+        response_stream = await client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        async for _ in response_stream:
+            pass
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert props["$ai_model"] == "gpt-4o-async-stored"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_responses_extracts_model_from_response(mock_client):
+    """Test async Responses API streaming extracts model from chunk.response.model."""
+    from unittest.mock import MagicMock
+    from openai.types.responses import ResponseUsage
+
+    chunks = []
+
+    chunk1 = MagicMock()
+    chunk1.type = "response.text.delta"
+    chunk1.text = "Test"
+    del chunk1.response
+    chunks.append(chunk1)
+
+    chunk2 = MagicMock()
+    chunk2.type = "response.completed"
+    chunk2.response = MagicMock()
+    chunk2.response.model = "gpt-4o-mini-async-stored"
+    chunk2.response.usage = ResponseUsage(
+        input_tokens=20,
+        output_tokens=10,
+        total_tokens=30,
+        input_tokens_details={"prompt_tokens": 20, "cached_tokens": 0},
+        output_tokens_details={"reasoning_tokens": 0},
+    )
+    chunk2.response.output = ["Test"]
+    chunks.append(chunk2)
+
+    async def mock_create(self, **kwargs):
+        async def chunk_iterable():
+            for chunk in chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch("openai.resources.responses.AsyncResponses.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_stream = await client.responses.create(
+            input=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        async for _ in response_stream:
+            pass
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert props["$ai_model"] == "gpt-4o-mini-async-stored"

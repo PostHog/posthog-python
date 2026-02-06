@@ -3062,6 +3062,7 @@ class TestLocalEvaluation(unittest.TestCase):
                 "some-distinct-id",
                 match_value=True,
                 person_properties={"region": "USA"},
+                send_feature_flag_events=True,
             ),
             300,
         )
@@ -4051,7 +4052,9 @@ class TestCaptureCalls(unittest.TestCase):
 
         self.assertEqual(
             client.get_feature_flag_payload(
-                "decide-flag-with-payload", "some-distinct-id"
+                "decide-flag-with-payload",
+                "some-distinct-id",
+                send_feature_flag_events=True,
             ),
             {"foo": "bar"},
         )
@@ -4127,9 +4130,10 @@ class TestCaptureCalls(unittest.TestCase):
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
-    def test_capture_is_called_in_get_feature_flag_payload(
+    def test_get_feature_flag_payload_does_not_send_feature_flag_called_events(
         self, patch_flags, patch_capture
     ):
+        """Test that get_feature_flag_payload does NOT send $feature_flag_called events"""
         patch_flags.return_value = {
             "featureFlags": {"person-flag": True},
             "featureFlagPayloads": {"person-flag": 300},
@@ -4151,68 +4155,18 @@ class TestCaptureCalls(unittest.TestCase):
                             "rollout_percentage": 100,
                         }
                     ],
+                    "payloads": {"true": '"payload"'},
                 },
             }
         ]
 
-        # Call get_feature_flag_payload with match_value=None to trigger get_feature_flag
-        client.get_feature_flag_payload(
+        payload = client.get_feature_flag_payload(
             key="person-flag",
             distinct_id="some-distinct-id",
             person_properties={"region": "USA", "name": "Aloha"},
         )
-
-        # Assert that capture was called once, with the correct parameters
-        self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with(
-            "$feature_flag_called",
-            distinct_id="some-distinct-id",
-            properties={
-                "$feature_flag": "person-flag",
-                "$feature_flag_response": True,
-                "locally_evaluated": True,
-                "$feature/person-flag": True,
-            },
-            groups={},
-            disable_geoip=None,
-        )
-
-        # Reset mocks for further tests
-        patch_capture.reset_mock()
-        patch_flags.reset_mock()
-
-        # Call get_feature_flag_payload again for the same user; capture should not be called again because we've already reported an event for this distinct_id + flag
-        client.get_feature_flag_payload(
-            key="person-flag",
-            distinct_id="some-distinct-id",
-            person_properties={"region": "USA", "name": "Aloha"},
-        )
-
+        self.assertIsNotNone(payload)
         self.assertEqual(patch_capture.call_count, 0)
-        patch_capture.reset_mock()
-
-        # Call get_feature_flag_payload for a different user; capture should be called
-        client.get_feature_flag_payload(
-            key="person-flag",
-            distinct_id="some-distinct-id2",
-            person_properties={"region": "USA", "name": "Aloha"},
-        )
-
-        self.assertEqual(patch_capture.call_count, 1)
-        patch_capture.assert_called_with(
-            "$feature_flag_called",
-            distinct_id="some-distinct-id2",
-            properties={
-                "$feature_flag": "person-flag",
-                "$feature_flag_response": True,
-                "locally_evaluated": True,
-                "$feature/person-flag": True,
-            },
-            groups={},
-            disable_geoip=None,
-        )
-
-        patch_capture.reset_mock()
 
     @mock.patch("posthog.client.flags")
     def test_fallback_to_api_in_get_feature_flag_payload_when_flag_has_static_cohort(

@@ -1,18 +1,48 @@
 import json
 import logging
 import re
+import socket
 from dataclasses import dataclass
 from datetime import date, datetime
 from gzip import GzipFile
 from io import BytesIO
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import requests
 from dateutil.tz import tzutc
+from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
+from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
+
+SocketOptions = List[Tuple[int, int, Union[int, bytes]]]
+
+KEEPALIVE_IDLE_SECONDS = 60
+KEEPALIVE_INTERVAL_SECONDS = 60
+KEEPALIVE_PROBE_COUNT = 3
+
+# TCP keepalive probes idle connections to prevent them from being dropped.
+# SO_KEEPALIVE is cross-platform, but timing options vary:
+# - Linux: TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT
+# - macOS: only SO_KEEPALIVE (uses system defaults)
+# - Windows: TCP_KEEPIDLE, TCP_KEEPINTVL (since Windows 10 1709)
+KEEP_ALIVE_SOCKET_OPTIONS: SocketOptions = list(
+    HTTPConnection.default_socket_options
+) + [
+    (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+]
+for attr, value in [
+    ("TCP_KEEPIDLE", KEEPALIVE_IDLE_SECONDS),
+    ("TCP_KEEPINTVL", KEEPALIVE_INTERVAL_SECONDS),
+    ("TCP_KEEPCNT", KEEPALIVE_PROBE_COUNT),
+]:
+    if hasattr(socket, attr):
+        KEEP_ALIVE_SOCKET_OPTIONS.append((socket.SOL_TCP, getattr(socket, attr), value))
+
+# Status codes that indicate transient server errors worth retrying
+RETRY_STATUS_FORCELIST = [408, 500, 502, 503, 504]
 
 
 def _mask_tokens_in_url(url: str) -> str:
@@ -29,17 +59,105 @@ class GetResponse:
     not_modified: bool = False
 
 
-# Retry on both connect and read errors
-# by default read errors will only retry idempotent HTTP methods (so not POST)
-adapter = requests.adapters.HTTPAdapter(
-    max_retries=Retry(
-        total=2,
-        connect=2,
-        read=2,
+class HTTPAdapterWithSocketOptions(HTTPAdapter):
+    """HTTPAdapter with configurable socket options."""
+
+    def __init__(self, *args, socket_options: Optional[SocketOptions] = None, **kwargs):
+        self.socket_options = socket_options
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        if self.socket_options is not None:
+            kwargs["socket_options"] = self.socket_options
+        super().init_poolmanager(*args, **kwargs)
+
+
+def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.Session:
+    """Build a session for general requests (batch, decide, etc.)."""
+    adapter = HTTPAdapterWithSocketOptions(
+        max_retries=Retry(
+            total=2,
+            connect=2,
+            read=2,
+        ),
+        socket_options=socket_options,
     )
-)
-_session = requests.sessions.Session()
-_session.mount("https://", adapter)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    return session
+
+
+def _build_flags_session(
+    socket_options: Optional[SocketOptions] = None,
+) -> requests.Session:
+    """
+    Build a session for feature flag requests with POST retries.
+
+    Feature flag requests are idempotent (read-only), so retrying POST
+    requests is safe. This session retries on transient server errors
+    (408, 5xx) and network failures with exponential backoff
+    (0.5s, 1s delays between retries).
+    """
+    adapter = HTTPAdapterWithSocketOptions(
+        max_retries=Retry(
+            total=2,
+            connect=2,
+            read=2,
+            backoff_factor=0.5,
+            status_forcelist=RETRY_STATUS_FORCELIST,
+            allowed_methods=["POST"],
+        ),
+        socket_options=socket_options,
+    )
+    session = requests.Session()
+    session.mount("https://", adapter)
+    return session
+
+
+_session = _build_session()
+_flags_session = _build_flags_session()
+_socket_options: Optional[SocketOptions] = None
+_pooling_enabled = True
+
+
+def _get_session() -> requests.Session:
+    if _pooling_enabled:
+        return _session
+    return _build_session(_socket_options)
+
+
+def _get_flags_session() -> requests.Session:
+    if _pooling_enabled:
+        return _flags_session
+    return _build_flags_session(_socket_options)
+
+
+def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
+    """
+    Configure socket options for all HTTP connections.
+
+    Example:
+        from posthog import set_socket_options
+        set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
+    """
+    global _session, _flags_session, _socket_options
+    if socket_options == _socket_options:
+        return
+    _socket_options = socket_options
+    _session = _build_session(socket_options)
+    _flags_session = _build_flags_session(socket_options)
+
+
+def enable_keep_alive() -> None:
+    """Enable TCP keepalive to prevent idle connections from being dropped."""
+    set_socket_options(KEEP_ALIVE_SOCKET_OPTIONS)
+
+
+def disable_connection_reuse() -> None:
+    """Disable connection reuse, creating a fresh connection for each request."""
+    global _pooling_enabled
+    _pooling_enabled = False
+
 
 US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
 EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
@@ -65,6 +183,7 @@ def post(
     path=None,
     gzip: bool = False,
     timeout: int = 15,
+    session: Optional[requests.Session] = None,
     **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the API"""
@@ -85,7 +204,9 @@ def post(
             gz.write(data.encode("utf-8"))
         data = buf.getvalue()
 
-    res = _session.post(url, data=data, headers=headers, timeout=timeout)
+    res = (session or _get_session()).post(
+        url, data=data, headers=headers, timeout=timeout
+    )
 
     if res.status_code == 200:
         log.debug("data uploaded successfully")
@@ -141,8 +262,16 @@ def flags(
     timeout: int = 15,
     **kwargs,
 ) -> Any:
-    """Post the `kwargs to the flags API endpoint"""
-    res = post(api_key, host, "/flags/?v=2", gzip, timeout, **kwargs)
+    """Post the kwargs to the flags API endpoint with automatic retries."""
+    res = post(
+        api_key,
+        host,
+        "/flags/?v=2",
+        gzip,
+        timeout,
+        session=_get_flags_session(),
+        **kwargs,
+    )
     return _process_response(
         res, success_message="Feature flags evaluated successfully"
     )
@@ -200,7 +329,7 @@ def get(
     if etag:
         headers["If-None-Match"] = etag
 
-    res = _session.get(full_url, headers=headers, timeout=timeout)
+    res = _get_session().get(full_url, headers=headers, timeout=timeout)
 
     masked_url = _mask_tokens_in_url(full_url)
 
@@ -230,6 +359,12 @@ class APIError(Exception):
 
 class QuotaLimitError(APIError):
     pass
+
+
+# Re-export requests exceptions for use in client.py
+# This keeps all requests library imports centralized in this module
+RequestsTimeout = requests.exceptions.Timeout
+RequestsConnectionError = requests.exceptions.ConnectionError
 
 
 class DatetimeSerializer(json.JSONEncoder):

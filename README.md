@@ -12,6 +12,14 @@
 
 Please see the [Python integration docs](https://posthog.com/docs/integrations/python-integration) for details.
 
+## Python Version Support
+
+| SDK Version | Python Versions Supported | Notes |
+|-------------|---------------------------|-------|
+| 7.3.1+      | 3.10, 3.11, 3.12, 3.13, 3.14 | Added Python 3.14 support |
+| 7.0.0 - 7.0.1 | 3.10, 3.11, 3.12, 3.13  | Dropped Python 3.9 support |
+| 4.0.1 - 6.x | 3.9, 3.10, 3.11, 3.12, 3.13 | Python 3.9+ required |
+
 ## Development
 
 ### Testing Locally
