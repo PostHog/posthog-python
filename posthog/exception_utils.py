@@ -948,9 +948,17 @@ def _pattern_matches(name, patterns):
     return False
 
 
-def _mask_sensitive_data(value, compiled_mask):
+def _mask_sensitive_data(value, compiled_mask, _seen=None):
     if not compiled_mask:
         return value
+
+    if isinstance(value, (dict, list, tuple)):
+        if _seen is None:
+            _seen = set()
+        obj_id = id(value)
+        if obj_id in _seen:
+            return "<circular ref>"
+        _seen.add(obj_id)
 
     if isinstance(value, dict):
         result = {}
@@ -961,10 +969,10 @@ def _mask_sensitive_data(value, compiled_mask):
             elif _pattern_matches(key_str, compiled_mask):
                 result[k] = CODE_VARIABLES_REDACTED_VALUE
             else:
-                result[k] = _mask_sensitive_data(v, compiled_mask)
+                result[k] = _mask_sensitive_data(v, compiled_mask, _seen)
         return result
     elif isinstance(value, (list, tuple)):
-        masked_items = [_mask_sensitive_data(item, compiled_mask) for item in value]
+        masked_items = [_mask_sensitive_data(item, compiled_mask, _seen) for item in value]
         return type(value)(masked_items)
     elif isinstance(value, str):
         if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:

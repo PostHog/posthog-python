@@ -567,3 +567,25 @@ def test_mask_sensitive_data_too_long_dict_key():
     assert result["short"] == "visible"
     assert result["k" * 20000] == CODE_VARIABLES_TOO_LONG_VALUE
     assert result["password"] == "$$_posthog_redacted_based_on_masking_rules_$$"
+
+
+def test_mask_sensitive_data_circular_ref():
+    from posthog.exception_utils import _compile_patterns, _mask_sensitive_data
+
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    # Circular dict
+    circular_dict = {"key": "value"}
+    circular_dict["self"] = circular_dict
+
+    result = _mask_sensitive_data(circular_dict, compiled_mask)
+    assert result["key"] == "value"
+    assert result["self"] == "<circular ref>"
+
+    # Circular list
+    circular_list = ["item"]
+    circular_list.append(circular_list)
+
+    result = _mask_sensitive_data(circular_list, compiled_mask)
+    assert result[0] == "item"
+    assert result[1] == "<circular ref>"
