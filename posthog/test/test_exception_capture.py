@@ -489,14 +489,10 @@ def test_code_variables_too_long_string_value_replaced(tmpdir):
     assert "ZeroDivisionError" in output
     assert "code_variables" in output
 
-    # Short string should appear as-is
     assert "'short_value': 'I am short'" in output
 
-    # Long strings should be replaced with the too-long constant
     assert "$$_posthog_value_too_long_$$" in output
 
-    # Long string whose content contains "password" still gets the too-long constant
-    # (length check fires before pattern matching)
     assert "'long_blob': '$$_posthog_value_too_long_$$'" in output
 
 
@@ -542,11 +538,9 @@ def test_code_variables_too_long_string_in_nested_dict(tmpdir):
     assert "ZeroDivisionError" in output
     assert "code_variables" in output
 
-    # Short values survive
     assert "short_val" in output
     assert "ok" in output
 
-    # Long values inside dicts get replaced
     assert "$$_posthog_value_too_long_$$" in output
     assert "y" * 1000 not in output
     assert "z" * 1000 not in output
