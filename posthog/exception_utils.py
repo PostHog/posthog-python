@@ -43,26 +43,29 @@ except ImportError:
 DEFAULT_MAX_VALUE_LENGTH = 1024
 
 DEFAULT_CODE_VARIABLES_MASK_PATTERNS = [
-    r"(?i).*password.*",
-    r"(?i).*secret.*",
-    r"(?i).*passwd.*",
-    r"(?i).*pwd.*",
-    r"(?i).*api_key.*",
-    r"(?i).*apikey.*",
-    r"(?i).*auth.*",
-    r"(?i).*credentials.*",
-    r"(?i).*privatekey.*",
-    r"(?i).*private_key.*",
-    r"(?i).*token.*",
-    r"(?i).*aws_access_key_id.*",
-    r"(?i).*_pass",
-    r"(?i)sk_.*",
-    r"(?i).*jwt.*",
+    r"(?i)password",
+    r"(?i)secret",
+    r"(?i)passwd",
+    r"(?i)pwd",
+    r"(?i)api_key",
+    r"(?i)apikey",
+    r"(?i)auth",
+    r"(?i)credentials",
+    r"(?i)privatekey",
+    r"(?i)private_key",
+    r"(?i)token",
+    r"(?i)aws_access_key_id",
+    r"(?i)_pass",
+    r"(?i)sk_",
+    r"(?i)jwt",
 ]
 
 DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
 
 CODE_VARIABLES_REDACTED_VALUE = "$$_posthog_redacted_based_on_masking_rules_$$"
+CODE_VARIABLES_TOO_LONG_VALUE = "$$_posthog_value_too_long_$$"
+
+_MAX_VALUE_LENGTH_FOR_PATTERN_MATCH = 500
 
 DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 20 * 1024
 
@@ -962,6 +965,8 @@ def _mask_sensitive_data(value, compiled_mask):
         masked_items = [_mask_sensitive_data(item, compiled_mask) for item in value]
         return type(value)(masked_items)
     elif isinstance(value, str):
+        if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
+            return CODE_VARIABLES_TOO_LONG_VALUE
         if _pattern_matches(value, compiled_mask):
             return CODE_VARIABLES_REDACTED_VALUE
         return value
@@ -982,7 +987,9 @@ def _serialize_variable_value(value, limiter, max_length=1024, compiled_mask=Non
             limiter.add(result_size)
             return value
         elif isinstance(value, str):
-            if compiled_mask and _pattern_matches(value, compiled_mask):
+            if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
+                result = CODE_VARIABLES_TOO_LONG_VALUE
+            elif compiled_mask and _pattern_matches(value, compiled_mask):
                 result = CODE_VARIABLES_REDACTED_VALUE
             else:
                 result = value
