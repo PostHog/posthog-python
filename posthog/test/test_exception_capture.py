@@ -590,3 +590,50 @@ def test_mask_sensitive_data_circular_ref():
     result = _mask_sensitive_data(circular_list, compiled_mask)
     assert result[0] == "item"
     assert result[1] == "<circular ref>"
+
+
+def test_compile_patterns_fast_path_and_regex_fallback():
+    from posthog.exception_utils import _compile_patterns, _pattern_matches
+
+    # Simple case-insensitive patterns should become substrings
+    simple_only = _compile_patterns([r"(?i)password", r"(?i)token", r"(?i)jwt"])
+    substrings, regexes = simple_only
+    assert substrings == ["password", "token", "jwt"]
+    assert regexes == []
+
+    assert _pattern_matches("my_password_var", simple_only) is True
+    assert _pattern_matches("MY_TOKEN", simple_only) is True
+    assert _pattern_matches("safe_variable", simple_only) is False
+
+    # Complex regex patterns should stay as compiled regexes
+    complex_only = _compile_patterns([r"^__.*", r"\d{3,}", r"^sk_live_"])
+    substrings, regexes = complex_only
+    assert substrings == []
+    assert len(regexes) == 3
+
+    assert _pattern_matches("__dunder", complex_only) is True
+    assert _pattern_matches("has_999_numbers", complex_only) is True
+    assert _pattern_matches("sk_live_abc123", complex_only) is True
+    assert _pattern_matches("normal_var", complex_only) is False
+
+    # Mixed: simple substrings + complex regexes together
+    mixed = _compile_patterns([
+        r"(?i)secret",       # simple
+        r"(?i)api_key",      # simple
+        r"^__.*",            # regex
+        r"\btoken_\w+",     # regex
+    ])
+    substrings, regexes = mixed
+    assert substrings == ["secret", "api_key"]
+    assert len(regexes) == 2
+
+    # Substring matches
+    assert _pattern_matches("my_secret", mixed) is True
+    assert _pattern_matches("API_KEY_VALUE", mixed) is True
+
+    # Regex matches
+    assert _pattern_matches("__private", mixed) is True
+    assert _pattern_matches("token_abc", mixed) is True
+
+    # No match
+    assert _pattern_matches("safe_var", mixed) is False

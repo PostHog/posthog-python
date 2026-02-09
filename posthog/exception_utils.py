@@ -66,6 +66,7 @@ CODE_VARIABLES_REDACTED_VALUE = "$$_posthog_redacted_based_on_masking_rules_$$"
 CODE_VARIABLES_TOO_LONG_VALUE = "$$_posthog_value_too_long_$$"
 
 _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH = 5_000
+_REGEX_METACHARACTERS = frozenset(r"\.^$*+?{}[]|()")
 
 DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 20 * 1024
 
@@ -931,18 +932,47 @@ def strip_string(value, max_length=None):
     )
 
 
+def _extract_plain_substring(pattern):
+    # Matches inline flag groups like (?i), (?ai), (?ims), etc. that include the 'i' flag.
+    # Python regex flags: a=ASCII, i=IGNORECASE, L=LOCALE, m=MULTILINE, s=DOTALL, u=UNICODE, x=VERBOSE
+    inline_flags = re.match(r"^\(\?[aiLmsux]*i[aiLmsux]*\)", pattern)
+    if not inline_flags:
+        return None
+    remainder = pattern[inline_flags.end():]
+    if not remainder or any(c in _REGEX_METACHARACTERS for c in remainder):
+        return None
+    return remainder.lower()
+
+
 def _compile_patterns(patterns):
-    compiled = []
+    if not patterns:
+        return None
+    substrings = []
+    regexes = []
     for pattern in patterns:
-        try:
-            compiled.append(re.compile(pattern))
-        except Exception:
-            pass
-    return compiled
+        simple = _extract_plain_substring(pattern)
+        if simple is not None:
+            substrings.append(simple)
+        else:
+            try:
+                regexes.append(re.compile(pattern))
+            except Exception:
+                pass
+    if not substrings and not regexes:
+        return None
+    return (substrings, regexes)
 
 
 def _pattern_matches(name, patterns):
-    for pattern in patterns:
+    if patterns is None:
+        return False
+    substrings, regexes = patterns
+    if substrings:
+        name_lower = name.lower()
+        for s in substrings:
+            if s in name_lower:
+                return True
+    for pattern in regexes:
         if pattern.search(name):
             return True
     return False
