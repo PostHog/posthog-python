@@ -546,46 +546,24 @@ def test_code_variables_too_long_string_in_nested_dict(tmpdir):
     assert "z" * 1000 not in output
 
 
-def test_code_variables_too_long_dict_key(tmpdir):
-    app = tmpdir.join("app.py")
-    app.write(
-        dedent(
-            """
-    import os
-    from posthog import Posthog
-
-    posthog = Posthog(
-        'phc_x',
-        host='https://eu.i.posthog.com',
-        debug=True,
-        enable_exception_autocapture=True,
-        capture_exception_code_variables=True,
-        project_root=os.path.dirname(os.path.abspath(__file__))
+def test_mask_sensitive_data_too_long_dict_key():
+    from posthog.exception_utils import (
+        CODE_VARIABLES_TOO_LONG_VALUE,
+        _compile_patterns,
+        _mask_sensitive_data,
     )
 
-    def trigger_error():
-        my_data = {
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    result = _mask_sensitive_data(
+        {
             "short": "visible",
-            "k" * 20000: "should_be_replaced",
-        }
-
-        1/0
-
-    trigger_error()
-    """
-        )
+            "k" * 20000: "hidden_val",
+            "password": "secret",
+        },
+        compiled_mask,
     )
 
-    with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
-
-    output = excinfo.value.output.decode("utf-8")
-
-    assert "ZeroDivisionError" in output
-    assert "code_variables" in output
-
-    assert "short" in output
-    assert "visible" in output
-
-    assert "$$_posthog_value_too_long_$$" in output
-    assert "should_be_replaced" not in output
+    assert result["short"] == "visible"
+    assert result["k" * 20000] == CODE_VARIABLES_TOO_LONG_VALUE
+    assert result["password"] == "$$_posthog_redacted_based_on_masking_rules_$$"
