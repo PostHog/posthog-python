@@ -972,7 +972,9 @@ def _mask_sensitive_data(value, compiled_mask, _seen=None):
                 result[k] = _mask_sensitive_data(v, compiled_mask, _seen)
         return result
     elif isinstance(value, (list, tuple)):
-        masked_items = [_mask_sensitive_data(item, compiled_mask, _seen) for item in value]
+        masked_items = [
+            _mask_sensitive_data(item, compiled_mask, _seen) for item in value
+        ]
         return type(value)(masked_items)
     elif isinstance(value, str):
         if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
