@@ -3,7 +3,7 @@ import logging
 import re
 import socket
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from gzip import GzipFile
 from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union
@@ -242,7 +242,6 @@ def _process_response(
             retry_after = float(retry_after_header)
         except (ValueError, TypeError):
             try:
-                from datetime import datetime, timezone
                 from email.utils import parsedate_to_datetime
 
                 retry_after = max(
