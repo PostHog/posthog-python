@@ -450,3 +450,143 @@ def test_code_variables_repr_fallback(tmpdir):
     assert "<CustomReprClass: custom representation>" in output
     assert "<lambda>" in output
     assert "<function trigger_error at" in output
+
+
+def test_code_variables_too_long_string_value_replaced(tmpdir):
+    app = tmpdir.join("app.py")
+    app.write(
+        dedent(
+            """
+    import os
+    from posthog import Posthog
+
+    posthog = Posthog(
+        'phc_x',
+        host='https://eu.i.posthog.com',
+        debug=True,
+        enable_exception_autocapture=True,
+        capture_exception_code_variables=True,
+        project_root=os.path.dirname(os.path.abspath(__file__))
+    )
+
+    def trigger_error():
+        short_value = "I am short"
+        long_value = "x" * 20000
+        long_blob = "password_" + "a" * 20000
+
+        1/0
+
+    trigger_error()
+    """
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
+
+    output = excinfo.value.output.decode("utf-8")
+
+    assert "ZeroDivisionError" in output
+    assert "code_variables" in output
+
+    assert "'short_value': 'I am short'" in output
+
+    assert "$$_posthog_value_too_long_$$" in output
+
+    assert "'long_blob': '$$_posthog_value_too_long_$$'" in output
+
+
+def test_code_variables_too_long_string_in_nested_dict(tmpdir):
+    app = tmpdir.join("app.py")
+    app.write(
+        dedent(
+            """
+    import os
+    from posthog import Posthog
+
+    posthog = Posthog(
+        'phc_x',
+        host='https://eu.i.posthog.com',
+        debug=True,
+        enable_exception_autocapture=True,
+        capture_exception_code_variables=True,
+        project_root=os.path.dirname(os.path.abspath(__file__))
+    )
+
+    def trigger_error():
+        my_data = {
+            "short_key": "short_val",
+            "long_key": "y" * 20000,
+            "nested": {
+                "deep_long": "z" * 20000,
+                "deep_short": "ok",
+            },
+        }
+
+        1/0
+
+    trigger_error()
+    """
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
+
+    output = excinfo.value.output.decode("utf-8")
+
+    assert "ZeroDivisionError" in output
+    assert "code_variables" in output
+
+    assert "short_val" in output
+    assert "ok" in output
+
+    assert "$$_posthog_value_too_long_$$" in output
+    assert "y" * 1000 not in output
+    assert "z" * 1000 not in output
+
+
+def test_mask_sensitive_data_too_long_dict_key():
+    from posthog.exception_utils import (
+        CODE_VARIABLES_TOO_LONG_VALUE,
+        _compile_patterns,
+        _mask_sensitive_data,
+    )
+
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    result = _mask_sensitive_data(
+        {
+            "short": "visible",
+            "k" * 20000: "hidden_val",
+            "password": "secret",
+        },
+        compiled_mask,
+    )
+
+    assert result["short"] == "visible"
+    # This then gets shortened by the JSON truncation at 1024 chars anyways so no worries
+    assert result["k" * 20000] == CODE_VARIABLES_TOO_LONG_VALUE
+    assert result["password"] == "$$_posthog_redacted_based_on_masking_rules_$$"
+
+
+def test_mask_sensitive_data_circular_ref():
+    from posthog.exception_utils import _compile_patterns, _mask_sensitive_data
+
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    # Circular dict
+    circular_dict = {"key": "value"}
+    circular_dict["self"] = circular_dict
+
+    result = _mask_sensitive_data(circular_dict, compiled_mask)
+    assert result["key"] == "value"
+    assert result["self"] == "<circular ref>"
+
+    # Circular list
+    circular_list = ["item"]
+    circular_list.append(circular_list)
+
+    result = _mask_sensitive_data(circular_list, compiled_mask)
+    assert result[0] == "item"
+    assert result[1] == "<circular ref>"
