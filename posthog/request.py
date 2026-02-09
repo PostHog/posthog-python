@@ -3,7 +3,7 @@ import logging
 import re
 import socket
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from gzip import GzipFile
 from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union
@@ -235,12 +235,31 @@ def _process_response(
             )
             raise QuotaLimitError(res.status_code, "Feature flags quota limited")
         return response
+    retry_after = None
+    retry_after_header = res.headers.get("Retry-After")
+    if retry_after_header:
+        try:
+            retry_after = float(retry_after_header)
+        except (ValueError, TypeError):
+            try:
+                from email.utils import parsedate_to_datetime
+
+                retry_after = max(
+                    0.0,
+                    (
+                        parsedate_to_datetime(retry_after_header)
+                        - datetime.now(timezone.utc)
+                    ).total_seconds(),
+                )
+            except (ValueError, TypeError):
+                pass
+
     try:
         payload = res.json()
         log.debug("received response: %s", payload)
-        raise APIError(res.status_code, payload["detail"])
+        raise APIError(res.status_code, payload["detail"], retry_after=retry_after)
     except (KeyError, ValueError):
-        raise APIError(res.status_code, res.text)
+        raise APIError(res.status_code, res.text, retry_after=retry_after)
 
 
 def decide(
@@ -348,9 +367,12 @@ def get(
 
 
 class APIError(Exception):
-    def __init__(self, status: Union[int, str], message: str):
+    def __init__(
+        self, status: Union[int, str], message: str, retry_after: Optional[float] = None
+    ):
         self.message = message
         self.status = status
+        self.retry_after = retry_after
 
     def __str__(self):
         msg = "[PostHog] {0} ({1})"
