@@ -1466,7 +1466,7 @@ class Client(object):
                 focused_group_properties,
                 self.feature_flags_by_key,
                 evaluation_cache,
-                hashing_identifier=groups[group_name],
+                bucketing_value=groups[group_name],
             )
         else:
             return match_feature_flag_properties(

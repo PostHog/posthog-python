@@ -34,18 +34,18 @@ class RequiresServerEvaluation(Exception):
     pass
 
 
-# This function takes an identifier and a feature flag key and returns a float between 0 and 1.
-# Given the same identifier and key, it'll always return the same float. These floats are
+# This function takes a bucketing value and a feature flag key and returns a float between 0 and 1.
+# Given the same bucketing value and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
-# we can do _hash(key, identifier) < 0.2
-def _hash(key: str, identifier: str, salt: str = "") -> float:
-    hash_key = f"{key}.{identifier}{salt}"
+# we can do _hash(key, bucketing_value) < 0.2
+def _hash(key: str, bucketing_value: str, salt: str = "") -> float:
+    hash_key = f"{key}.{bucketing_value}{salt}"
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
 
 
-def get_matching_variant(flag, hashing_identifier):
-    hash_value = _hash(flag["key"], hashing_identifier, salt="variant")
+def get_matching_variant(flag, bucketing_value):
+    hash_value = _hash(flag["key"], bucketing_value, salt="variant")
     for variant in variant_lookup_table(flag):
         if hash_value >= variant["value_min"] and hash_value < variant["value_max"]:
             return variant["key"]
@@ -231,7 +231,7 @@ def match_feature_flag_properties(
     flags_by_key=None,
     evaluation_cache=None,
     device_id=None,
-    hashing_identifier=None,
+    bucketing_value=None,
 ) -> FlagValue:
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
@@ -241,19 +241,19 @@ def match_feature_flag_properties(
     flag_variants = (flag_filters.get("multivariate") or {}).get("variants") or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
 
-    # Determine the hashing identifier:
+    # Determine the bucketing value:
     # - If caller provided one explicitly (e.g. group key for group flags), use it directly
     # - Otherwise resolve from the flag's bucketing_identifier setting
-    if hashing_identifier is None:
+    if bucketing_value is None:
         bucketing_identifier = flag_filters.get("bucketing_identifier")
         if bucketing_identifier == "device_id":
             if not device_id:
                 raise InconclusiveMatchError(
                     "Flag requires device_id for bucketing but none was provided"
                 )
-            hashing_identifier = device_id
+            bucketing_value = device_id
         else:
-            hashing_identifier = distinct_id
+            bucketing_value = distinct_id
 
     for condition in flag_conditions:
         try:
@@ -267,14 +267,14 @@ def match_feature_flag_properties(
                 cohort_properties,
                 flags_by_key,
                 evaluation_cache,
-                hashing_identifier=hashing_identifier,
+                bucketing_value=bucketing_value,
                 device_id=device_id,
             ):
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
                     variant = variant_override
                 else:
-                    variant = get_matching_variant(flag, hashing_identifier)
+                    variant = get_matching_variant(flag, bucketing_value)
                 return variant or True
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
@@ -303,7 +303,7 @@ def is_condition_match(
     flags_by_key=None,
     evaluation_cache=None,
     *,
-    hashing_identifier,
+    bucketing_value,
     device_id=None,
 ) -> bool:
     rollout_percentage = condition.get("rollout_percentage")
@@ -339,7 +339,7 @@ def is_condition_match(
             return True
 
     if rollout_percentage is not None and _hash(
-        feature_flag["key"], hashing_identifier
+        feature_flag["key"], bucketing_value
     ) > (rollout_percentage / 100):
         return False
 
