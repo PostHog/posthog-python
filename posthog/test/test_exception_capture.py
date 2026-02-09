@@ -617,12 +617,14 @@ def test_compile_patterns_fast_path_and_regex_fallback():
     assert _pattern_matches("normal_var", complex_only) is False
 
     # Mixed: simple substrings + complex regexes together
-    mixed = _compile_patterns([
-        r"(?i)secret",       # simple
-        r"(?i)api_key",      # simple
-        r"^__.*",            # regex
-        r"\btoken_\w+",     # regex
-    ])
+    mixed = _compile_patterns(
+        [
+            r"(?i)secret",  # simple
+            r"(?i)api_key",  # simple
+            r"^__.*",  # regex
+            r"\btoken_\w+",  # regex
+        ]
+    )
     substrings, regexes = mixed
     assert substrings == ["secret", "api_key"]
     assert len(regexes) == 2

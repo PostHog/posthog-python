@@ -1,4 +1,8 @@
-# 7.8.3 - 2026-02-09
+# 7.8.5 - 2026-02-09
+
+fix: further optimize code variables pattern matching
+
+# 7.8.4 - 2026-02-09
 
 fix: do not pattern match long values in code variables
 

@@ -938,7 +938,7 @@ def _extract_plain_substring(pattern):
     inline_flags = re.match(r"^\(\?[aiLmsux]*i[aiLmsux]*\)", pattern)
     if not inline_flags:
         return None
-    remainder = pattern[inline_flags.end():]
+    remainder = pattern[inline_flags.end() :]
     if not remainder or any(c in _REGEX_METACHARACTERS for c in remainder):
         return None
     return remainder.lower()
