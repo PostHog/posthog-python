@@ -450,3 +450,103 @@ def test_code_variables_repr_fallback(tmpdir):
     assert "<CustomReprClass: custom representation>" in output
     assert "<lambda>" in output
     assert "<function trigger_error at" in output
+
+
+def test_code_variables_too_long_string_value_replaced(tmpdir):
+    app = tmpdir.join("app.py")
+    app.write(
+        dedent(
+            """
+    import os
+    from posthog import Posthog
+
+    posthog = Posthog(
+        'phc_x',
+        host='https://eu.i.posthog.com',
+        debug=True,
+        enable_exception_autocapture=True,
+        capture_exception_code_variables=True,
+        project_root=os.path.dirname(os.path.abspath(__file__))
+    )
+
+    def trigger_error():
+        short_value = "I am short"
+        long_value = "x" * 20000
+        long_blob = "password_" + "a" * 20000
+
+        1/0
+
+    trigger_error()
+    """
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
+
+    output = excinfo.value.output.decode("utf-8")
+
+    assert "ZeroDivisionError" in output
+    assert "code_variables" in output
+
+    # Short string should appear as-is
+    assert "'short_value': 'I am short'" in output
+
+    # Long strings should be replaced with the too-long constant
+    assert "$$_posthog_value_too_long_$$" in output
+
+    # Long string whose content contains "password" still gets the too-long constant
+    # (length check fires before pattern matching)
+    assert "'long_blob': '$$_posthog_value_too_long_$$'" in output
+
+
+def test_code_variables_too_long_string_in_nested_dict(tmpdir):
+    app = tmpdir.join("app.py")
+    app.write(
+        dedent(
+            """
+    import os
+    from posthog import Posthog
+
+    posthog = Posthog(
+        'phc_x',
+        host='https://eu.i.posthog.com',
+        debug=True,
+        enable_exception_autocapture=True,
+        capture_exception_code_variables=True,
+        project_root=os.path.dirname(os.path.abspath(__file__))
+    )
+
+    def trigger_error():
+        my_data = {
+            "short_key": "short_val",
+            "long_key": "y" * 20000,
+            "nested": {
+                "deep_long": "z" * 20000,
+                "deep_short": "ok",
+            },
+        }
+
+        1/0
+
+    trigger_error()
+    """
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
+
+    output = excinfo.value.output.decode("utf-8")
+
+    assert "ZeroDivisionError" in output
+    assert "code_variables" in output
+
+    # Short values survive
+    assert "short_val" in output
+    assert "ok" in output
+
+    # Long values inside dicts get replaced
+    assert "$$_posthog_value_too_long_$$" in output
+    assert "y" * 1000 not in output
+    assert "z" * 1000 not in output
