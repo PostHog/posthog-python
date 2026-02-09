@@ -1,3 +1,7 @@
+# 7.8.3 - 2026-02-09
+
+fix: do not pattern match long values in code variables
+
 # 7.8.3 - 2026-02-06
 
 fix: openAI input image sanitization
