@@ -956,7 +956,9 @@ def _mask_sensitive_data(value, compiled_mask):
         result = {}
         for k, v in value.items():
             key_str = str(k) if not isinstance(k, str) else k
-            if _pattern_matches(key_str, compiled_mask):
+            if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
+                result[k] = CODE_VARIABLES_TOO_LONG_VALUE
+            elif _pattern_matches(key_str, compiled_mask):
                 result[k] = CODE_VARIABLES_REDACTED_VALUE
             else:
                 result[k] = _mask_sensitive_data(v, compiled_mask)
