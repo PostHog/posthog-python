@@ -565,6 +565,7 @@ def test_mask_sensitive_data_too_long_dict_key():
     )
 
     assert result["short"] == "visible"
+    # This then gets shortened by the JSON truncation at 1024 chars anyways so no worries
     assert result["k" * 20000] == CODE_VARIABLES_TOO_LONG_VALUE
     assert result["password"] == "$$_posthog_redacted_based_on_masking_rules_$$"
 
