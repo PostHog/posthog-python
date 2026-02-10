@@ -131,6 +131,7 @@ def evaluate_flag_dependency(
                 else:
                     # Recursively evaluate the dependency
                     try:
+                        dep_bucketing_value = resolve_bucketing_value(dep_flag, distinct_id, device_id)
                         dep_result = match_feature_flag_properties(
                             dep_flag,
                             distinct_id,
@@ -139,6 +140,7 @@ def evaluate_flag_dependency(
                             flags_by_key=flags_by_key,
                             evaluation_cache=evaluation_cache,
                             device_id=device_id,
+                            bucketing_value=dep_bucketing_value,
                         )
                         evaluation_cache[dep_flag_key] = dep_result
                     except InconclusiveMatchError as e:
@@ -223,6 +225,26 @@ def matches_dependency_value(expected_value, actual_value):
     return False
 
 
+def resolve_bucketing_value(flag, distinct_id, device_id=None):
+    """Resolve the bucketing value for a flag based on its bucketing_identifier setting.
+
+    Returns:
+        The appropriate identifier string to use for hashing/bucketing.
+
+    Raises:
+        InconclusiveMatchError: If the flag requires device_id but none was provided.
+    """
+    flag_filters = flag.get("filters") or {}
+    bucketing_identifier = flag_filters.get("bucketing_identifier")
+    if bucketing_identifier == "device_id":
+        if not device_id:
+            raise InconclusiveMatchError(
+                "Flag requires device_id for bucketing but none was provided"
+            )
+        return device_id
+    return distinct_id
+
+
 def match_feature_flag_properties(
     flag,
     distinct_id,
@@ -232,7 +254,7 @@ def match_feature_flag_properties(
     flags_by_key=None,
     evaluation_cache=None,
     device_id=None,
-    bucketing_value=None,
+    bucketing_value,
 ) -> FlagValue:
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
@@ -241,20 +263,6 @@ def match_feature_flag_properties(
     # Some filters can be explicitly set to null, which require accessing variants like so
     flag_variants = (flag_filters.get("multivariate") or {}).get("variants") or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
-
-    # Determine the bucketing value:
-    # - If caller provided one explicitly (e.g. group key for group flags), use it directly
-    # - Otherwise resolve from the flag's bucketing_identifier setting
-    if bucketing_value is None:
-        bucketing_identifier = flag_filters.get("bucketing_identifier")
-        if bucketing_identifier == "device_id":
-            if not device_id:
-                raise InconclusiveMatchError(
-                    "Flag requires device_id for bucketing but none was provided"
-                )
-            bucketing_value = device_id
-        else:
-            bucketing_value = distinct_id
 
     for condition in flag_conditions:
         try:

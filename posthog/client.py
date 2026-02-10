@@ -38,6 +38,7 @@ from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
     match_feature_flag_properties,
+    resolve_bucketing_value,
 )
 from posthog.flag_definition_cache import (
     FlagDefinitionCacheData,
@@ -1471,6 +1472,7 @@ class Client(object):
                 bucketing_value=group_key,
             )
         else:
+            bucketing_value = resolve_bucketing_value(feature_flag, distinct_id, device_id)
             return match_feature_flag_properties(
                 feature_flag,
                 distinct_id,
@@ -1479,6 +1481,7 @@ class Client(object):
                 flags_by_key=self.feature_flags_by_key,
                 evaluation_cache=evaluation_cache,
                 device_id=device_id,
+                bucketing_value=bucketing_value,
             )
 
     def feature_enabled(
