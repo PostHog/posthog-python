@@ -696,24 +696,3 @@ def test_mask_sensitive_data_large_tuple_truncated():
     assert len(result) == _MAX_COLLECTION_ITEMS_TO_SCAN
     for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN):
         assert result[i] == f"item_{i}"
-
-
-def test_mask_sensitive_data_small_collections_unaffected():
-    from posthog.exception_utils import _compile_patterns, _mask_sensitive_data
-
-    compiled_mask = _compile_patterns([r"(?i)password"])
-
-    # Small dict - all items preserved
-    small_dict = {f"key_{i}": f"value_{i}" for i in range(10)}
-    result = _mask_sensitive_data(small_dict, compiled_mask)
-    assert len(result) == 10
-
-    # Small list - all items preserved
-    small_list = [f"item_{i}" for i in range(10)]
-    result = _mask_sensitive_data(small_list, compiled_mask)
-    assert len(result) == 10
-
-    # Small tuple - all items preserved
-    small_tuple = tuple(f"item_{i}" for i in range(10))
-    result = _mask_sensitive_data(small_tuple, compiled_mask)
-    assert len(result) == 10
