@@ -1464,9 +1464,9 @@ class Client(object):
                 feature_flag,
                 groups[group_name],
                 focused_group_properties,
-                self.feature_flags_by_key,
-                evaluation_cache,
-                bucketing_value=groups[group_name],
+                cohort_properties=self.cohorts,
+                flags_by_key=self.feature_flags_by_key,
+                evaluation_cache=evaluation_cache,
             )
         else:
             return match_feature_flag_properties(
