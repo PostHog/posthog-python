@@ -135,9 +135,9 @@ def evaluate_flag_dependency(
                             dep_flag,
                             distinct_id,
                             properties,
-                            cohort_properties,
-                            flags_by_key,
-                            evaluation_cache,
+                            cohort_properties=cohort_properties,
+                            flags_by_key=flags_by_key,
+                            evaluation_cache=evaluation_cache,
                             device_id=device_id,
                         )
                         evaluation_cache[dep_flag_key] = dep_result

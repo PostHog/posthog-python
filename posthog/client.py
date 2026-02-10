@@ -1473,9 +1473,9 @@ class Client(object):
                 feature_flag,
                 distinct_id,
                 person_properties,
-                self.cohorts,
-                self.feature_flags_by_key,
-                evaluation_cache,
+                cohort_properties=self.cohorts,
+                flags_by_key=self.feature_flags_by_key,
+                evaluation_cache=evaluation_cache,
                 device_id=device_id,
             )
 
