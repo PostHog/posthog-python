@@ -227,6 +227,7 @@ def match_feature_flag_properties(
     flag,
     distinct_id,
     properties,
+    *,
     cohort_properties=None,
     flags_by_key=None,
     evaluation_cache=None,
