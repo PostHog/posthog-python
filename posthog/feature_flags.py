@@ -131,7 +131,9 @@ def evaluate_flag_dependency(
                 else:
                     # Recursively evaluate the dependency
                     try:
-                        dep_bucketing_value = resolve_bucketing_value(dep_flag, distinct_id, device_id)
+                        dep_bucketing_value = resolve_bucketing_value(
+                            dep_flag, distinct_id, device_id
+                        )
                         dep_result = match_feature_flag_properties(
                             dep_flag,
                             distinct_id,

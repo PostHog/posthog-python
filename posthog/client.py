@@ -1472,7 +1472,9 @@ class Client(object):
                 bucketing_value=group_key,
             )
         else:
-            bucketing_value = resolve_bucketing_value(feature_flag, distinct_id, device_id)
+            bucketing_value = resolve_bucketing_value(
+                feature_flag, distinct_id, device_id
+            )
             return match_feature_flag_properties(
                 feature_flag,
                 distinct_id,
