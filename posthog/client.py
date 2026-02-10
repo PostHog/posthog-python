@@ -1459,14 +1459,16 @@ class Client(object):
                     )
                 return False
 
-            focused_group_properties = group_properties[group_name]
+            focused_group_properties = group_properties.get(group_name, {})
+            group_key = groups[group_name]
             return match_feature_flag_properties(
                 feature_flag,
-                groups[group_name],
+                group_key,
                 focused_group_properties,
                 cohort_properties=self.cohorts,
                 flags_by_key=self.feature_flags_by_key,
                 evaluation_cache=evaluation_cache,
+                bucketing_value=group_key,
             )
         else:
             return match_feature_flag_properties(
