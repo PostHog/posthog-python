@@ -131,9 +131,18 @@ def evaluate_flag_dependency(
                 else:
                     # Recursively evaluate the dependency
                     try:
-                        dep_bucketing_value = resolve_bucketing_value(
-                            dep_flag, distinct_id, device_id
+                        dep_flag_filters = dep_flag.get("filters") or {}
+                        dep_aggregation_group_type_index = dep_flag_filters.get(
+                            "aggregation_group_type_index"
                         )
+                        if dep_aggregation_group_type_index is not None:
+                            # Group flags should continue bucketing by the group key
+                            # from the current evaluation context.
+                            dep_bucketing_value = distinct_id
+                        else:
+                            dep_bucketing_value = resolve_bucketing_value(
+                                dep_flag, distinct_id, device_id
+                            )
                         dep_result = match_feature_flag_properties(
                             dep_flag,
                             distinct_id,

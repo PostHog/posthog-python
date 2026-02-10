@@ -3530,6 +3530,126 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
+    def test_group_flag_dependency_receives_device_id(self, patch_flags):
+        """
+        Group flag dependency evaluation should receive device_id so dependent
+        device_id-bucketed flags can be evaluated locally.
+        """
+        patch_flags.return_value = {"featureFlags": {"group-parent-flag": "from-api"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-dependent-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "key": "group-parent-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": 0,
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "device-dependent-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["device-dependent-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        result = client.get_feature_flag(
+            "group-parent-flag",
+            "user-123",
+            groups={"company": "acme-inc"},
+            device_id="device-123",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_group_flag_dependency_ignores_device_id_bucketing_identifier(
+        self, patch_flags
+    ):
+        """
+        Group flag dependencies should keep bucketing by group key, even when
+        the dependent group flag has bucketing_identifier set to device_id.
+        """
+        patch_flags.return_value = {"featureFlags": {"parent-group-flag": "from-api"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "child-group-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": 0,
+                    "bucketing_identifier": "device_id",
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "key": "parent-group-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": 0,
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "child-group-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["child-group-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        result = client.get_feature_flag(
+            "parent-group-flag",
+            "user-123",
+            groups={"company": "acme-inc"},
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
     def test_get_all_flags_with_device_id_bucketing(self, patch_flags):
         """
         get_all_flags_and_payloads should properly handle flags with device_id bucketing.
