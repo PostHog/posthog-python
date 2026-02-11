@@ -992,10 +992,10 @@ def _mask_sensitive_data(value, compiled_mask, _seen=None):
         _seen.add(obj_id)
 
     if isinstance(value, dict):
+        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
         result = {}
-        for i, (k, v) in enumerate(value.items()):
-            if i >= _MAX_COLLECTION_ITEMS_TO_SCAN:
-                break
+        for k, v in value.items():
             key_str = str(k) if not isinstance(k, str) else k
             if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
                 result[k] = CODE_VARIABLES_TOO_LONG_VALUE
@@ -1005,9 +1005,10 @@ def _mask_sensitive_data(value, compiled_mask, _seen=None):
                 result[k] = _mask_sensitive_data(v, compiled_mask, _seen)
         return result
     elif isinstance(value, (list, tuple)):
-        items_to_scan = value[:_MAX_COLLECTION_ITEMS_TO_SCAN]
+        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
         masked_items = [
-            _mask_sensitive_data(item, compiled_mask, _seen) for item in items_to_scan
+            _mask_sensitive_data(item, compiled_mask, _seen) for item in value
         ]
         return type(value)(masked_items)
     elif isinstance(value, str):

@@ -641,9 +641,9 @@ def test_compile_patterns_fast_path_and_regex_fallback():
     assert _pattern_matches("safe_var", mixed) is False
 
 
-def test_mask_sensitive_data_large_dict_truncated():
+def test_mask_sensitive_data_large_dict_replaced():
     from posthog.exception_utils import (
-        _MAX_COLLECTION_ITEMS_TO_SCAN,
+        CODE_VARIABLES_TOO_LONG_VALUE,
         _compile_patterns,
         _mask_sensitive_data,
     )
@@ -654,15 +654,12 @@ def test_mask_sensitive_data_large_dict_truncated():
 
     result = _mask_sensitive_data(large_dict, compiled_mask)
 
-    assert len(result) == _MAX_COLLECTION_ITEMS_TO_SCAN
-
-    for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN):
-        assert result[f"key_{i}"] == f"value_{i}"
+    assert result == CODE_VARIABLES_TOO_LONG_VALUE
 
 
-def test_mask_sensitive_data_large_list_truncated():
+def test_mask_sensitive_data_large_list_replaced():
     from posthog.exception_utils import (
-        _MAX_COLLECTION_ITEMS_TO_SCAN,
+        CODE_VARIABLES_TOO_LONG_VALUE,
         _compile_patterns,
         _mask_sensitive_data,
     )
@@ -673,15 +670,12 @@ def test_mask_sensitive_data_large_list_truncated():
 
     result = _mask_sensitive_data(large_list, compiled_mask)
 
-    assert len(result) == _MAX_COLLECTION_ITEMS_TO_SCAN
-
-    for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN):
-        assert result[i] == f"item_{i}"
+    assert result == CODE_VARIABLES_TOO_LONG_VALUE
 
 
-def test_mask_sensitive_data_large_tuple_truncated():
+def test_mask_sensitive_data_large_tuple_replaced():
     from posthog.exception_utils import (
-        _MAX_COLLECTION_ITEMS_TO_SCAN,
+        CODE_VARIABLES_TOO_LONG_VALUE,
         _compile_patterns,
         _mask_sensitive_data,
     )
@@ -692,7 +686,4 @@ def test_mask_sensitive_data_large_tuple_truncated():
 
     result = _mask_sensitive_data(large_tuple, compiled_mask)
 
-    assert isinstance(result, tuple)
-    assert len(result) == _MAX_COLLECTION_ITEMS_TO_SCAN
-    for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN):
-        assert result[i] == f"item_{i}"
+    assert result == CODE_VARIABLES_TOO_LONG_VALUE
