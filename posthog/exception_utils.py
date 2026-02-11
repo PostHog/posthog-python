@@ -66,6 +66,7 @@ CODE_VARIABLES_REDACTED_VALUE = "$$_posthog_redacted_based_on_masking_rules_$$"
 CODE_VARIABLES_TOO_LONG_VALUE = "$$_posthog_value_too_long_$$"
 
 _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH = 5_000
+_MAX_COLLECTION_ITEMS_TO_SCAN = 100
 _REGEX_METACHARACTERS = frozenset(r"\.^$*+?{}[]|()")
 
 DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 20 * 1024
@@ -991,6 +992,8 @@ def _mask_sensitive_data(value, compiled_mask, _seen=None):
         _seen.add(obj_id)
 
     if isinstance(value, dict):
+        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
         result = {}
         for k, v in value.items():
             key_str = str(k) if not isinstance(k, str) else k
@@ -1002,6 +1005,8 @@ def _mask_sensitive_data(value, compiled_mask, _seen=None):
                 result[k] = _mask_sensitive_data(v, compiled_mask, _seen)
         return result
     elif isinstance(value, (list, tuple)):
+        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
         masked_items = [
             _mask_sensitive_data(item, compiled_mask, _seen) for item in value
         ]

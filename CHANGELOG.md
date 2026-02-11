@@ -1,3 +1,7 @@
+# 7.8.6 - 2026-02-09
+
+fix: limit collections scanning in code variables
+
 # 7.8.5 - 2026-02-09
 
 fix: further optimize code variables pattern matching

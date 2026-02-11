@@ -639,3 +639,51 @@ def test_compile_patterns_fast_path_and_regex_fallback():
 
     # No match
     assert _pattern_matches("safe_var", mixed) is False
+
+
+def test_mask_sensitive_data_large_dict_replaced():
+    from posthog.exception_utils import (
+        CODE_VARIABLES_TOO_LONG_VALUE,
+        _compile_patterns,
+        _mask_sensitive_data,
+    )
+
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    large_dict = {f"key_{i}": f"value_{i}" for i in range(300)}
+
+    result = _mask_sensitive_data(large_dict, compiled_mask)
+
+    assert result == CODE_VARIABLES_TOO_LONG_VALUE
+
+
+def test_mask_sensitive_data_large_list_replaced():
+    from posthog.exception_utils import (
+        CODE_VARIABLES_TOO_LONG_VALUE,
+        _compile_patterns,
+        _mask_sensitive_data,
+    )
+
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    large_list = [f"item_{i}" for i in range(300)]
+
+    result = _mask_sensitive_data(large_list, compiled_mask)
+
+    assert result == CODE_VARIABLES_TOO_LONG_VALUE
+
+
+def test_mask_sensitive_data_large_tuple_replaced():
+    from posthog.exception_utils import (
+        CODE_VARIABLES_TOO_LONG_VALUE,
+        _compile_patterns,
+        _mask_sensitive_data,
+    )
+
+    compiled_mask = _compile_patterns([r"(?i)password"])
+
+    large_tuple = tuple(f"item_{i}" for i in range(300))
+
+    result = _mask_sensitive_data(large_tuple, compiled_mask)
+
+    assert result == CODE_VARIABLES_TOO_LONG_VALUE
