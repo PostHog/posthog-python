@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import logging
 import re
+import warnings
 from typing import Optional
 
 from dateutil import parser
@@ -265,8 +266,17 @@ def match_feature_flag_properties(
     flags_by_key=None,
     evaluation_cache=None,
     device_id=None,
-    bucketing_value,
+    bucketing_value=None,
 ) -> FlagValue:
+    if bucketing_value is None:
+        warnings.warn(
+            "Calling match_feature_flag_properties() without bucketing_value is deprecated. "
+            "Pass bucketing_value explicitly. This fallback will be removed in a future major release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        bucketing_value = resolve_bucketing_value(flag, distinct_id, device_id)
+
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
     is_inconclusive = False

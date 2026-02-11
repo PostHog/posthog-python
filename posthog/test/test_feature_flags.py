@@ -3264,6 +3264,42 @@ class TestLocalEvaluation(unittest.TestCase):
         # No API fallback should occur
         self.assertEqual(patch_flags.call_count, 0)
 
+    def test_match_feature_flag_properties_without_bucketing_value_is_deprecated(
+        self,
+    ):
+        """
+        match_feature_flag_properties should preserve backward compatibility when
+        bucketing_value is omitted, while warning about deprecation.
+        """
+        from posthog.feature_flags import match_feature_flag_properties
+
+        flag = {
+            "id": 1,
+            "key": "device-bucketed-flag",
+            "active": True,
+            "filters": {
+                "bucketing_identifier": "device_id",
+                "groups": [
+                    {
+                        "properties": [],
+                        "rollout_percentage": 100,
+                    }
+                ],
+            },
+        }
+
+        with self.assertWarnsRegex(
+            DeprecationWarning, "without bucketing_value is deprecated"
+        ):
+            result = match_feature_flag_properties(
+                flag,
+                "user-123",
+                {},
+                device_id="device-123",
+            )
+
+        self.assertTrue(result)
+
     @mock.patch("posthog.client.flags")
     def test_device_id_bucketing_same_device_different_users_same_result(
         self, patch_flags
