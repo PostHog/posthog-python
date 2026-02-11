@@ -247,7 +247,7 @@ def resolve_bucketing_value(flag, distinct_id, device_id=None):
         InconclusiveMatchError: If the flag requires device_id but none was provided.
     """
     flag_filters = flag.get("filters") or {}
-    bucketing_identifier = flag_filters.get("bucketing_identifier")
+    bucketing_identifier = flag.get("bucketing_identifier") or flag_filters.get("bucketing_identifier")
     if bucketing_identifier == "device_id":
         if not device_id:
             raise InconclusiveMatchError(
