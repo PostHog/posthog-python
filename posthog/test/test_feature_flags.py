@@ -2513,7 +2513,10 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertIsNone(client._flags_etag)
         self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
 
-    def test_load_feature_flags_wrong_key(self):
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_wrong_key(self, patch_get, _patch_poll):
+        patch_get.side_effect = APIError(401, "Unauthorized")
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
 
         with self.assertLogs("posthog", level="ERROR") as logs:
@@ -4266,13 +4269,15 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=False,
         )
 
-    @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_capture_multiple_users_doesnt_out_of_memory(
         self, patch_flags, patch_capture
     ):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        # Set on the instance to avoid relying on module-constant patching behavior
+        # across Python/runtime implementations.
+        client.distinct_ids_feature_flags_reported.max_size = 100
         client.feature_flags = [
             {
                 "id": 1,
