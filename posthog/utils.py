@@ -158,6 +158,16 @@ class SizeLimitedDict(defaultdict):
 
         super().__setitem__(key, value)
 
+    def __missing__(self, key):
+        if self.default_factory is None:
+            raise KeyError(key)
+
+        value = self.default_factory()
+        # Route through __setitem__ so size limits are enforced consistently
+        # even when defaultdict populates missing keys.
+        self[key] = value
+        return value
+
 
 class FlagCacheEntry:
     def __init__(self, flag_result, flag_definition_version, timestamp=None):
