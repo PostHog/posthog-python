@@ -1460,7 +1460,11 @@ class Client(object):
                     )
                 return False
 
-            focused_group_properties = group_properties.get(group_name, {})
+            if group_name not in group_properties:
+                raise InconclusiveMatchError(
+                    f"Flag has no group properties for group '{group_name}'"
+                )
+            focused_group_properties = group_properties[group_name]
             group_key = groups[group_name]
             return match_feature_flag_properties(
                 feature_flag,

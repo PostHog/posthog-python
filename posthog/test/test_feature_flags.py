@@ -233,6 +233,27 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(patch_flags.call_count, 1)
 
+    def test_group_flag_is_inconclusive_when_group_properties_missing(self):
+        feature_flag = {
+            "id": 1,
+            "name": "Group Flag Without Property Filters",
+            "key": "group-flag-no-props",
+            "active": True,
+            "filters": {
+                "aggregation_group_type_index": 0,
+                "groups": [{"properties": [], "rollout_percentage": 100}],
+            },
+        }
+        self.client.group_type_mapping = {"0": "company"}
+
+        with self.assertRaises(InconclusiveMatchError):
+            self.client._compute_flag_locally(
+                feature_flag,
+                "some-distinct-id",
+                groups={"company": "acme"},
+                group_properties={},
+            )
+
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
     def test_flag_with_complex_definition(self, patch_get, patch_flags):
