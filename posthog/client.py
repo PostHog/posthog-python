@@ -1928,10 +1928,12 @@ class Client(object):
             f"{key}_{'::null::' if response is None else str(response)}"
         )
 
-        if (
-            feature_flag_reported_key
-            not in self.distinct_ids_feature_flags_reported[distinct_id]
-        ):
+        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
+
+        if feature_flag_reported_key not in reported_flags:
             properties: dict[str, Any] = {
                 "$feature_flag": key,
                 "$feature_flag_response": response,
@@ -1967,9 +1969,7 @@ class Client(object):
                 groups=groups,
                 disable_geoip=disable_geoip,
             )
-            self.distinct_ids_feature_flags_reported[distinct_id].add(
-                feature_flag_reported_key
-            )
+            reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         if self.disabled:
