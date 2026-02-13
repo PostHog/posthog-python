@@ -4269,13 +4269,14 @@ class TestCaptureCalls(unittest.TestCase):
             disable_geoip=False,
         )
 
-    @mock.patch("posthog.client.MAX_DICT_SIZE", 100)
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_capture_multiple_users_doesnt_out_of_memory(
         self, patch_flags, patch_capture
     ):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.distinct_ids_feature_flags_reported.max_size = 100
+        self.assertEqual(client.distinct_ids_feature_flags_reported.max_size, 100)
         client.feature_flags = [
             {
                 "id": 1,
