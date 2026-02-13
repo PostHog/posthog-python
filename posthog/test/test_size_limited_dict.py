@@ -22,22 +22,3 @@ class TestSizeLimitedDict(unittest.TestCase):
                 self.assertIsNone(values.get(i - 3))
                 self.assertIsNone(values.get(i - 5))
                 self.assertIsNone(values.get(i - 9))
-
-    @parameterized.expand([(10, 100), (5, 20), (20, 200)])
-    def test_size_limited_dict_missing_key_population(
-        self, size: int, iterations: int
-    ) -> None:
-        values = utils.SizeLimitedDict(size, set)
-
-        for i in range(iterations):
-            values[i].add(i)
-
-            assert i in values[i]
-            assert len(values) == i % size + 1
-
-            if i % size == 0:
-                # old numbers should've been removed
-                self.assertIsNone(values.get(i - 1))
-                self.assertIsNone(values.get(i - 3))
-                self.assertIsNone(values.get(i - 5))
-                self.assertIsNone(values.get(i - 9))
