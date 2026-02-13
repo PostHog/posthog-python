@@ -4275,8 +4275,9 @@ class TestCaptureCalls(unittest.TestCase):
         self, patch_flags, patch_capture
     ):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        # Set on the instance to avoid relying on module-constant patching behavior
+        # across Python/runtime implementations.
         client.distinct_ids_feature_flags_reported.max_size = 100
-        self.assertEqual(client.distinct_ids_feature_flags_reported.max_size, 100)
         client.feature_flags = [
             {
                 "id": 1,
