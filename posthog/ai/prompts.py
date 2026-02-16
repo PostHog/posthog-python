@@ -54,7 +54,11 @@ class Prompts:
         prompts = Prompts(posthog)
 
         # Or with direct options (no PostHog client needed)
-        prompts = Prompts(personal_api_key='phx_xxx', host='https://us.posthog.com')
+        prompts = Prompts(
+            personal_api_key='phx_xxx',
+            project_api_key='phc_xxx',
+            host='https://us.posthog.com',
+        )
 
         # Fetch with caching and fallback
         template = prompts.get('support-system-prompt', fallback='You are a helpful assistant.')
@@ -72,6 +76,7 @@ class Prompts:
         posthog: Optional[Any] = None,
         *,
         personal_api_key: Optional[str] = None,
+        project_api_key: Optional[str] = None,
         host: Optional[str] = None,
         default_cache_ttl_seconds: Optional[int] = None,
     ):
@@ -80,7 +85,8 @@ class Prompts:
 
         Args:
             posthog: PostHog client instance (optional if personal_api_key provided)
-            personal_api_key: Direct API key (optional if posthog provided)
+            personal_api_key: Direct personal API key (optional if posthog provided)
+            project_api_key: Direct project API key (optional if posthog provided)
             host: PostHog host (defaults to app endpoint)
             default_cache_ttl_seconds: Default cache TTL (defaults to 300)
         """
@@ -91,11 +97,13 @@ class Prompts:
 
         if posthog is not None:
             self._personal_api_key = getattr(posthog, "personal_api_key", None) or ""
+            self._project_api_key = getattr(posthog, "api_key", None) or ""
             self._host = remove_trailing_slash(
                 getattr(posthog, "raw_host", None) or APP_ENDPOINT
             )
         else:
             self._personal_api_key = personal_api_key or ""
+            self._project_api_key = project_api_key or ""
             self._host = remove_trailing_slash(host or APP_ENDPOINT)
 
     def get(
@@ -215,7 +223,7 @@ class Prompts:
         """
         Fetch prompt from PostHog API.
 
-        Endpoint: {host}/api/environments/@current/llm_prompts/name/{encoded_name}/
+        Endpoint: {host}/api/environments/@current/llm_prompts/name/{encoded_name}/?token={encoded_project_api_key}
         Auth: Bearer {personal_api_key}
 
         Args:
@@ -232,9 +240,15 @@ class Prompts:
                 "[PostHog Prompts] personal_api_key is required to fetch prompts. "
                 "Please provide it when initializing the Prompts instance."
             )
+        if not self._project_api_key:
+            raise Exception(
+                "[PostHog Prompts] project_api_key is required to fetch prompts. "
+                "Please provide it when initializing the Prompts instance."
+            )
 
         encoded_name = urllib.parse.quote(name, safe="")
-        url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/"
+        encoded_project_api_key = urllib.parse.quote(self._project_api_key, safe="")
+        url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/?token={encoded_project_api_key}"
 
         headers = {
             "Authorization": f"Bearer {self._personal_api_key}",
