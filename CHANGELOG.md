@@ -1,3 +1,7 @@
+# 7.8.7 - 2026-02-16
+
+fix(llma): make prompt fetches deterministic by requiring project_api_key and sending it as token query param
+
 # 7.8.6 - 2026-02-09
 
 fix: limit collections scanning in code variables
