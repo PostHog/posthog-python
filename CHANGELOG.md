@@ -1,3 +1,7 @@
+# 7.9.1 - 2026-02-17
+
+fix(llma): make prompt fetches deterministic by requiring project_api_key and sending it as token query param
+
 # 7.9.0 - 2026-02-17
 
 feat: Support device_id as bucketing identifier for local evaluation
