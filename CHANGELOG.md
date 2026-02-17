@@ -1,3 +1,7 @@
+# 7.9.0 - 2026-02-17
+
+feat: Support device_id as bucketing identifier for local evaluation
+
 # 7.8.6 - 2026-02-09
 
 fix: limit collections scanning in code variables
