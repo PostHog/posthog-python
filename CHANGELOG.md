@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.2 — 2026-02-18
+
+### Patch changes
+
+- [f1dc4d7](https://github.com/posthog/posthog-python/commit/f1dc4d73914712983a7f715ee4fe1b70e66e770a) Add sampo to the project — Thanks @rafaeelaudibert!
+
 ## 7.9.1 - 2026-02-17
 
 fix(llma): make prompt fetches deterministic by requiring project_api_key and sending it as token query param
