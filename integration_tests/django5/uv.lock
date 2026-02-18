@@ -26,15 +26,6 @@ wheels = [
 ]
 
 [[package]]
-name = "backoff"
-version = "2.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
-]
-
-[[package]]
 name = "certifi"
 version = "2025.10.5"
 source = { registry = "https://pypi.org/simple" }
@@ -248,9 +239,9 @@ wheels = [
 
 [[package]]
 name = "posthog"
-source = { editable = "../" }
+version = "7.9.3"
+source = { editable = "../../" }
 dependencies = [
-    { name = "backoff" },
     { name = "distro" },
     { name = "python-dateutil" },
     { name = "requests" },
@@ -260,8 +251,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", marker = "extra == 'test'" },
-    { name = "backoff", specifier = ">=1.10.0" },
+    { name = "anthropic", marker = "extra == 'test'", specifier = ">=0.72" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "distro", specifier = ">=1.5.0" },
     { name = "django", marker = "extra == 'test'" },
@@ -269,16 +259,16 @@ requires-dist = [
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
     { name = "google-genai", marker = "extra == 'test'" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
-    { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=0.3.15" },
-    { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.3.25" },
-    { name = "langchain-core", marker = "extra == 'test'", specifier = ">=0.3.65" },
-    { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=0.3.22" },
-    { name = "langgraph", marker = "extra == 'test'", specifier = ">=0.4.8" },
+    { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
+    { name = "langchain-core", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "lxml", marker = "extra == 'dev'" },
     { name = "mock", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
-    { name = "openai", marker = "extra == 'test'" },
+    { name = "openai", marker = "extra == 'test'", specifier = ">=2.0" },
     { name = "packaging", marker = "extra == 'dev'" },
     { name = "parameterized", marker = "extra == 'test'", specifier = ">=0.8.1" },
     { name = "pre-commit", marker = "extra == 'dev'" },
@@ -482,7 +472,7 @@ dependencies = [
 requires-dist = [
     { name = "django", specifier = "~=5.2.7" },
     { name = "httpx", specifier = "~=0.28.1" },
-    { name = "posthog", editable = "../" },
+    { name = "posthog", editable = "../../" },
     { name = "pytest", specifier = "~=8.4.2" },
     { name = "pytest-asyncio", specifier = "~=1.2.0" },
     { name = "pytest-django", specifier = "~=4.11.1" },
