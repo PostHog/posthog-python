@@ -23,6 +23,7 @@ with open("pyproject.toml", "rb") as f:
 
 # Override specific values
 config["project"]["name"] = "posthoganalytics"
+config["project"]["readme"] = "README_ANALYTICS.md"
 config["tool"]["setuptools"]["dynamic"]["version"] = {
     "attr": "posthoganalytics.version.VERSION"
 }
