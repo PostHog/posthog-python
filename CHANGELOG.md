@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.3 — 2026-02-18
+
+### Patch changes
+
+- [9f9553a](https://github.com/posthog/posthog-python/commit/9f9553a420d22e5e6435b775993f61a059280c2a) Fix posthoganalytics release, previously broken — Thanks @rafaeelaudibert!
+
 ## 7.9.2 — 2026-02-18
 
 ### Patch changes
