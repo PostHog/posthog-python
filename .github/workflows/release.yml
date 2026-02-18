@@ -137,8 +137,12 @@ jobs:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
         run: |
           sampo release
-          new_version=$(python3 posthog/version.py)
+          new_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+
+      - name: Sync version to posthog/version.py
+        run: |
+          echo 'VERSION = "${{ steps.sampo-release.outputs.new_version }}"' > posthog/version.py
 
       - name: Commit release changes
         id: commit-release
