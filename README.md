@@ -14,11 +14,11 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 
 ## Python Version Support
 
-| SDK Version | Python Versions Supported | Notes |
-|-------------|---------------------------|-------|
-| 7.3.1+      | 3.10, 3.11, 3.12, 3.13, 3.14 | Added Python 3.14 support |
-| 7.0.0 - 7.0.1 | 3.10, 3.11, 3.12, 3.13  | Dropped Python 3.9 support |
-| 4.0.1 - 6.x | 3.9, 3.10, 3.11, 3.12, 3.13 | Python 3.9+ required |
+| SDK Version   | Python Versions Supported    | Notes                      |
+| ------------- | ---------------------------- | -------------------------- |
+| 7.3.1+        | 3.10, 3.11, 3.12, 3.13, 3.14 | Added Python 3.14 support  |
+| 7.0.0 - 7.0.1 | 3.10, 3.11, 3.12, 3.13       | Dropped Python 3.9 support |
+| 4.0.1 - 6.x   | 3.9, 3.10, 3.11, 3.12, 3.13  | Python 3.9+ required       |
 
 ## Development
 
@@ -27,13 +27,13 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
 
 1. Run `uv venv env` (creates virtual environment called "env")
-    * or `python3 -m venv env`
+   - or `python3 -m venv env`
 2. Run `source env/bin/activate` (activates the virtual environment)
 3. Run `uv sync --extra dev --extra test` (installs the package in develop mode, along with test dependencies)
-    * or `pip install -e ".[dev,test]"`
+   - or `pip install -e ".[dev,test]"`
 4. you have to run `pre-commit install` to have auto linting pre commit
 5. Run `make test`
-  1. To run a specific test do `pytest -k test_no_api_key`
+6. To run a specific test do `pytest -k test_no_api_key`
 
 ## PostHog recommends `uv` so...
 
@@ -51,16 +51,10 @@ make test
 
 Assuming you have a [local version of PostHog](https://posthog.com/docs/developing-locally) running, you can run `python3 example.py` to see the library in action.
 
-### Releasing Versions
-
-Updates are released automatically using GitHub Actions when `version.py` is updated on `master`. After bumping `version.py` in `master` and adding to `CHANGELOG.md`, the [release workflow](https://github.com/PostHog/posthog-python/blob/master/.github/workflows/release.yaml) will automatically trigger and deploy the new version.
-
-If you need to check the latest runs or manually trigger a release, you can go to [our release workflow's page](https://github.com/PostHog/posthog-python/actions/workflows/release.yaml) and dispatch it manually, using workflow from `master`.
-
-
 ### Testing changes locally with the PostHog app
 
 You can run `make prep_local`, and it'll create a new folder alongside the SDK repo one called `posthog-python-local`, which you can then import into the posthog project by changing pyproject.toml to look like this:
+
 ```toml
 dependencies = [
     ...
@@ -71,4 +65,16 @@ dependencies = [
 [tools.uv.sources]
 posthoganalytics = { path = "../posthog-python-local" }
 ```
+
 This'll let you build and test SDK changes fully locally, incorporating them into your local posthog app stack. It mainly takes care of the `posthog -> posthoganalytics` module renaming. You'll need to re-run `make prep_local` each time you make a change, and re-run `uv sync --active` in the posthog app project.
+
+## Releasing
+
+This repository uses [Sampo](https://github.com/bruits/sampo) for versioning, changelogs, and publishing to crates.io.
+
+1. When making changes, include a changeset: `sampo add`
+2. Create a PR with your changes and the changeset file
+3. Add the `release` label and merge to `main`
+4. Approve the release in Slack when prompted — this triggers version bump, crates.io publish, git tag, and GitHub Release
+
+You can also trigger a release manually via the workflow's `workflow_dispatch` trigger (still requires pending changesets).
