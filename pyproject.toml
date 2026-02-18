@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-dynamic = ["version"]
+version = "7.9.1"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "hey@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
@@ -92,9 +92,6 @@ packages = [
     "posthog.test.ai.openai_agents",
     "posthog.integrations",
 ]
-
-[tool.setuptools.dynamic]
-version = { attr = "posthog.version.VERSION" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
