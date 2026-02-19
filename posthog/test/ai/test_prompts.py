@@ -33,11 +33,15 @@ class TestPrompts(unittest.TestCase):
     }
 
     def create_mock_posthog(
-        self, personal_api_key="phx_test_key", host="https://us.i.posthog.com"
+        self,
+        personal_api_key="phx_test_key",
+        project_api_key="phc_test_key",
+        host="https://us.posthog.com",
     ):
         """Create a mock PostHog client."""
         mock = MagicMock()
         mock.personal_api_key = personal_api_key
+        mock.api_key = project_api_key
         mock.raw_host = host
         return mock
 
@@ -61,7 +65,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
+            "https://us.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/?token=phc_test_key",
         )
         self.assertIn("Authorization", call_args[1]["headers"])
         self.assertEqual(
@@ -235,6 +239,18 @@ class TestPromptsGet(TestPrompts):
             "personal_api_key is required to fetch prompts", str(context.exception)
         )
 
+    def test_throw_when_no_project_api_key_configured(self):
+        """Should throw when no project_api_key is configured."""
+        posthog = self.create_mock_posthog(project_api_key=None)
+        prompts = Prompts(posthog)
+
+        with self.assertRaises(Exception) as context:
+            prompts.get("test-prompt")
+
+        self.assertIn(
+            "project_api_key is required to fetch prompts", str(context.exception)
+        )
+
     @patch("posthog.ai.prompts._get_session")
     def test_throw_when_api_returns_invalid_response_format(self, mock_get_session):
         """Should throw when API returns invalid response format."""
@@ -255,15 +271,17 @@ class TestPromptsGet(TestPrompts):
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
-        posthog = self.create_mock_posthog(host="https://eu.i.posthog.com")
+        posthog = self.create_mock_posthog(host="https://eu.posthog.com")
         prompts = Prompts(posthog)
 
         prompts.get("test-prompt")
 
         call_args = mock_get.call_args
         self.assertTrue(
-            call_args[0][0].startswith("https://eu.i.posthog.com/"),
-            f"Expected URL to start with 'https://eu.i.posthog.com/', got {call_args[0][0]}",
+            call_args[0][0].startswith(
+                "https://eu.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/?token=phc_test_key"
+            ),
+            f"Expected URL to start with 'https://eu.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/?token=phc_test_key', got {call_args[0][0]}",
         )
 
     @patch("posthog.ai.prompts._get_session")
@@ -333,7 +351,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/prompt%20with%20spaces%2Fand%2Fslashes/",
+            "https://us.posthog.com/api/environments/@current/llm_prompts/name/prompt%20with%20spaces%2Fand%2Fslashes/?token=phc_test_key",
         )
 
     @patch("posthog.ai.prompts._get_session")
@@ -342,7 +360,9 @@ class TestPromptsGet(TestPrompts):
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
-        prompts = Prompts(personal_api_key="phx_direct_key")
+        prompts = Prompts(
+            personal_api_key="phx_direct_key", project_api_key="phc_direct_key"
+        )
 
         result = prompts.get("test-prompt")
 
@@ -350,7 +370,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://us.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
+            "https://us.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/?token=phc_direct_key",
         )
         self.assertEqual(
             call_args[1]["headers"]["Authorization"], "Bearer phx_direct_key"
@@ -363,7 +383,9 @@ class TestPromptsGet(TestPrompts):
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
 
         prompts = Prompts(
-            personal_api_key="phx_direct_key", host="https://eu.i.posthog.com"
+            personal_api_key="phx_direct_key",
+            project_api_key="phc_direct_key",
+            host="https://eu.posthog.com",
         )
 
         prompts.get("test-prompt")
@@ -371,7 +393,7 @@ class TestPromptsGet(TestPrompts):
         call_args = mock_get.call_args
         self.assertEqual(
             call_args[0][0],
-            "https://eu.i.posthog.com/api/projects/@current/llm_prompts/name/test-prompt/",
+            "https://eu.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/?token=phc_direct_key",
         )
 
     @patch("posthog.ai.prompts._get_session")
@@ -385,7 +407,9 @@ class TestPromptsGet(TestPrompts):
         mock_time.return_value = 1000.0
 
         prompts = Prompts(
-            personal_api_key="phx_direct_key", default_cache_ttl_seconds=60
+            personal_api_key="phx_direct_key",
+            project_api_key="phc_direct_key",
+            default_cache_ttl_seconds=60,
         )
 
         # First call
@@ -486,7 +510,9 @@ class TestPromptsCompile(TestPrompts):
 
     def test_work_with_direct_options_initialization(self):
         """Should work with direct options initialization."""
-        prompts = Prompts(personal_api_key="phx_test_key")
+        prompts = Prompts(
+            personal_api_key="phx_test_key", project_api_key="phc_test_key"
+        )
 
         result = prompts.compile("Hello, {{name}}!", {"name": "World"})
 
@@ -494,7 +520,9 @@ class TestPromptsCompile(TestPrompts):
 
     def test_handle_variables_with_hyphens(self):
         """Should handle variables with hyphens."""
-        prompts = Prompts(personal_api_key="phx_test_key")
+        prompts = Prompts(
+            personal_api_key="phx_test_key", project_api_key="phc_test_key"
+        )
 
         result = prompts.compile("User ID: {{user-id}}", {"user-id": "12345"})
 
@@ -502,7 +530,9 @@ class TestPromptsCompile(TestPrompts):
 
     def test_handle_variables_with_dots(self):
         """Should handle variables with dots."""
-        prompts = Prompts(personal_api_key="phx_test_key")
+        prompts = Prompts(
+            personal_api_key="phx_test_key", project_api_key="phc_test_key"
+        )
 
         result = prompts.compile("Company: {{company.name}}", {"company.name": "Acme"})
 

@@ -167,6 +167,63 @@ class TestConsumer(unittest.TestCase):
             q.join()
             self.assertEqual(mock_post.call_count, 2)
 
+    def test_request_sleeps_with_retry_after(self) -> None:
+        error = APIError(429, "Too Many Requests", retry_after=5.0)
+        call_count = [0]
+
+        def mock_post(*args: Any, **kwargs: Any) -> None:
+            call_count[0] += 1
+            if call_count[0] <= 1:
+                raise error
+
+        consumer = Consumer(None, TEST_API_KEY, retries=3)
+        with (
+            mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
+            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
+        ):
+            consumer.request([_track_event()])
+            mock_sleep.assert_called_once_with(5.0)
+
+    def test_request_uses_exponential_backoff_without_retry_after(self) -> None:
+        error = APIError(503, "Service Unavailable")
+        call_count = [0]
+
+        def mock_post(*args: Any, **kwargs: Any) -> None:
+            call_count[0] += 1
+            if call_count[0] <= 3:
+                raise error
+
+        consumer = Consumer(None, TEST_API_KEY, retries=3)
+        with (
+            mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
+            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
+        ):
+            consumer.request([_track_event()])
+            self.assertEqual(
+                mock_sleep.call_args_list,
+                [
+                    mock.call(1),  # 2^0
+                    mock.call(2),  # 2^1
+                    mock.call(4),  # 2^2
+                ],
+            )
+
+    def test_request_retries_on_408(self) -> None:
+        call_count = [0]
+
+        def mock_post(*args: Any, **kwargs: Any) -> None:
+            call_count[0] += 1
+            if call_count[0] <= 1:
+                raise APIError(408, "Request Timeout")
+
+        consumer = Consumer(None, TEST_API_KEY, retries=3)
+        with (
+            mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
+            mock.patch("posthog.consumer.time.sleep"),
+        ):
+            consumer.request([_track_event()])
+            self.assertEqual(call_count[0], 2)
+
     @parameterized.expand(
         [
             ("on_error_succeeds", False),

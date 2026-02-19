@@ -5,12 +5,26 @@ test:
 	coverage run -m pytest
 	coverage report
 
-release:
+build_release:
 	rm -rf dist/*
 	python setup.py sdist bdist_wheel
-	twine upload dist/*
 
-release_analytics:
+# Builds the `posthoganalytics` PyPI package, which is a mirror of `posthog`
+# published under a different name for internal use by posthog/posthog.
+#
+# The process works in three phases:
+#   1. posthog -> posthoganalytics: Copy the source, rewrite all imports,
+#      remove the original posthog/ dir, and build the dist.
+#   2. posthoganalytics -> posthog: Reverse the import rewrites, copy
+#      everything back into posthog/, and clean up.
+#   3. Restore pyproject.toml from backup (setup_analytics.py modifies it).
+#
+# This ensures the working tree is left in the same state it started in.
+#
+# NOTE: This target clears dist/ before building. In the release workflow,
+# `build_release` (posthog) must be published BEFORE running this target,
+# otherwise the posthog dist artifacts will be lost.
+build_release_analytics:
 	rm -rf dist
 	rm -rf build
 	rm -rf posthoganalytics
@@ -21,7 +35,6 @@ release_analytics:
 	find ./posthoganalytics -name "*.bak" -delete
 	rm -rf posthog
 	python setup_analytics.py sdist bdist_wheel
-	twine upload dist/*
 	mkdir posthog
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics /from posthog /g' {} \;
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics\./from posthog\./g' {} \;
@@ -54,4 +67,4 @@ prep_local:
 	@echo "Local copy created at ../posthog-python-local"
 	@echo "Install with: pip install -e ../posthog-python-local"
 
-.PHONY: test lint release e2e_test prep_local
+.PHONY: test lint build_release build_release_analytics e2e_test prep_local

@@ -1,45 +1,91 @@
-# 7.8.0 - 2026-01-28
+# posthog
+
+## 7.9.3 — 2026-02-18
+
+### Patch changes
+
+- [9f9553a](https://github.com/posthog/posthog-python/commit/9f9553a420d22e5e6435b775993f61a059280c2a) Fix posthoganalytics release, previously broken — Thanks @rafaeelaudibert!
+
+## 7.9.2 — 2026-02-18
+
+### Patch changes
+
+- [f1dc4d7](https://github.com/posthog/posthog-python/commit/f1dc4d73914712983a7f715ee4fe1b70e66e770a) Add sampo to the project — Thanks @rafaeelaudibert!
+
+## 7.9.1 - 2026-02-17
+
+fix(llma): make prompt fetches deterministic by requiring project_api_key and sending it as token query param
+
+## 7.9.0 - 2026-02-17
+
+feat: Support device_id as bucketing identifier for local evaluation
+
+## 7.8.6 - 2026-02-09
+
+fix: limit collections scanning in code variables
+
+## 7.8.5 - 2026-02-09
+
+fix: further optimize code variables pattern matching
+
+## 7.8.4 - 2026-02-09
+
+fix: do not pattern match long values in code variables
+
+## 7.8.3 - 2026-02-06
+
+fix: openAI input image sanitization
+
+## 7.8.2 - 2026-02-04
+
+fix(llma): fix prompts default url
+
+## 7.8.1 - 2026-02-03
+
+fix(llma): small fixes for prompt management
+
+## 7.8.0 - 2026-01-28
 
 feat(llma): add prompt management
 
 Adds the Prompt Management feature. At the time of release, this feature is in a closed alpha.
 
-# 7.7.0 - 2026-01-15
+## 7.7.0 - 2026-01-15
 
 feat(ai): Add OpenAI Agents SDK integration
 
 Automatic tracing for agent workflows, handoffs, tool calls, guardrails, and custom spans. Includes `$ai_total_tokens`, `$ai_error_type` categorization, and `$ai_framework` property.
 
-# 7.6.0 - 2026-01-12
+## 7.6.0 - 2026-01-12
 
 feat: add device_id to flags request payload
 
 Add device_id parameter to all feature flag methods, allowing the server to track device identifiers for flag evaluation. The device_id can be passed explicitly or set via context using `set_context_device_id()`.
 
-# 7.5.1 - 2026-01-07
+## 7.5.1 - 2026-01-07
 
 fix: avoid return from finally block to fix Python 3.14 SyntaxWarning (#361) - thanks @jodal
 
-# 7.5.0 - 2026-01-06
+## 7.5.0 - 2026-01-06
 
 feat: Capture Langchain, OpenAI and Anthropic errors as exceptions (if exception autocapture is enabled)
 feat: Add reference to exception in LLMA trace and span events
 
-# 7.4.3 - 2026-01-02
+## 7.4.3 - 2026-01-02
 
 Fixes cache creation cost for Langchain with Anthropic
 
-# 7.4.2 - 2025-12-22
+## 7.4.2 - 2025-12-22
 
 feat: add `in_app_modules` option to control code variables capturing
 
-# 7.4.1 - 2025-12-19
+## 7.4.1 - 2025-12-19
 
 fix: extract model from response for OpenAI stored prompts
 
 When using OpenAI stored prompts, the model is defined in the OpenAI dashboard rather than passed in the API request. This fix adds a fallback to extract the model from the response object when not provided in kwargs, ensuring generations show up with the correct model and enabling cost calculations.
 
-# 7.4.0 - 2025-12-16
+## 7.4.0 - 2025-12-16
 
 feat: Add automatic retries for feature flag requests
 
@@ -51,32 +97,32 @@ Feature flag API requests now automatically retry on transient failures:
 
 Rate limit (429) and quota (402) errors are not retried.
 
-# 7.3.1 - 2025-12-06
+## 7.3.1 - 2025-12-06
 
 fix: remove unused $exception_message and $exception_type
 
-# 7.3.0 - 2025-12-05
+## 7.3.0 - 2025-12-05
 
 feat: improve code variables capture masking
 
-# 7.2.0 - 2025-12-01
+## 7.2.0 - 2025-12-01
 
 feat: add $feature_flag_evaluated_at properties to $feature_flag_called events
 
-# 7.1.0 - 2025-11-26
+## 7.1.0 - 2025-11-26
 
 Add support for the async version of Gemini.
 
-# 7.0.2 - 2025-11-18
+## 7.0.2 - 2025-11-18
 
 Add support for Python 3.14.
 Projects upgrading to Python 3.14 should ensure any Pydantic models passed into the SDK use Pydantic v2, as Pydantic v1 is not compatible with Python 3.14.
 
-# 7.0.1 - 2025-11-15
+## 7.0.1 - 2025-11-15
 
 Try to use repr() when formatting code variables
 
-# 7.0.0 - 2025-11-11
+## 7.0.0 - 2025-11-11
 
 NB Python 3.9 is no longer supported
 
@@ -90,155 +136,155 @@ NB Python 3.9 is no longer supported
   - langchain-community: 0.3.29 → 0.4.1
   - langgraph: 0.6.6 → 1.0.2
 
-# 6.9.3 - 2025-11-10
+## 6.9.3 - 2025-11-10
 
 - feat(ph-ai): PostHog properties dict in GenerationMetadata
 
-# 6.9.2 - 2025-11-10
+## 6.9.2 - 2025-11-10
 
 - fix(llma): fix cache token double subtraction in Langchain for non-Anthropic providers causing negative costs
 
-# 6.9.1 - 2025-11-07
+## 6.9.1 - 2025-11-07
 
 - fix(error-tracking): pass code variables config from init to client
 
-# 6.9.0 - 2025-11-06
+## 6.9.0 - 2025-11-06
 
 - feat(error-tracking): add local variables capture
 
-# 6.8.0 - 2025-11-03
+## 6.8.0 - 2025-11-03
 
 - feat(llma): send web search calls to be used for LLM cost calculations
 
-# 6.7.14 - 2025-11-03
+## 6.7.14 - 2025-11-03
 
 - fix(django): Handle request.user access in async middleware context to prevent SynchronousOnlyOperation errors in Django 5+ (fixes #355)
 - test(django): Add Django 5 integration test suite with real ASGI application testing async middleware behavior
 
-# 6.7.13 - 2025-11-02
+## 6.7.13 - 2025-11-02
 
 - fix(llma): cache cost calculation in the LangChain callback
 
-# 6.7.12 - 2025-11-02
+## 6.7.12 - 2025-11-02
 
 - fix(django): Restore process_exception method to capture view and downstream middleware exceptions (fixes #329)
 - fix(ai/langchain): Add LangChain 1.0+ compatibility for CallbackHandler imports (fixes #362)
 
-# 6.7.11 - 2025-10-28
+## 6.7.11 - 2025-10-28
 
 - feat(ai): Add `$ai_framework` property for framework integrations (e.g. LangChain)
 
-# 6.7.10 - 2025-10-24
+## 6.7.10 - 2025-10-24
 
 - fix(django): Make middleware truly hybrid - compatible with both sync (WSGI) and async (ASGI) Django stacks without breaking sync-only deployments
 
-# 6.7.9 - 2025-10-22
+## 6.7.9 - 2025-10-22
 
 - fix(flags): multi-condition flags with static cohorts returning wrong variants
 
-# 6.7.8 - 2025-10-16
+## 6.7.8 - 2025-10-16
 
 - fix(llma): missing async for OpenAI's streaming implementation
 
-# 6.7.7 - 2025-10-14
+## 6.7.7 - 2025-10-14
 
 - fix: remove deprecated attribute $exception_personURL from exception events
 
-# 6.7.6 - 2025-09-16
+## 6.7.6 - 2025-09-16
 
 - fix: don't sort condition sets with variant overrides to the top
 - fix: Prevent core Client methods from raising exceptions
 
-# 6.7.5 - 2025-09-16
+## 6.7.5 - 2025-09-16
 
 - feat: Django middleware now supports async request handling.
 
-# 6.7.4 - 2025-09-05
+## 6.7.4 - 2025-09-05
 
 - fix: Missing system prompts for some providers
 
-# 6.7.3 - 2025-09-04
+## 6.7.3 - 2025-09-04
 
 - fix: missing usage tokens in Gemini
 
-# 6.7.2 - 2025-09-03
+## 6.7.2 - 2025-09-03
 
 - fix: tool call results in streaming providers
 
-# 6.7.1 - 2025-09-01
+## 6.7.1 - 2025-09-01
 
 - fix: Add base64 inline image sanitization
 
-# 6.7.0 - 2025-08-26
+## 6.7.0 - 2025-08-26
 
 - feat: Add support for feature flag dependencies
 
-# 6.6.1 - 2025-08-21
+## 6.6.1 - 2025-08-21
 
 - fix: Prevent `NoneType` error when `group_properties` is `None`
 
-# 6.6.0 - 2025-08-15
+## 6.6.0 - 2025-08-15
 
 - feat: Add `flag_keys_to_evaluate` parameter to optimize feature flag evaluation performance by only evaluating specified flags
 - feat: Add `flag_keys_filter` option to `send_feature_flags` for selective flag evaluation in capture events
 
-# 6.5.0 - 2025-08-08
+## 6.5.0 - 2025-08-08
 
 - feat: Add `$context_tags` to an event to know which properties were included as tags
 
-# 6.4.1 - 2025-08-06
+## 6.4.1 - 2025-08-06
 
 - fix: Always pass project API key in `remote_config` requests for deterministic project routing
 
-# 6.4.0 - 2025-08-05
+## 6.4.0 - 2025-08-05
 
 - feat: support Vertex AI for Gemini
 
-# 6.3.4 - 2025-08-04
+## 6.3.4 - 2025-08-04
 
 - fix: set `$ai_tools` for all providers and `$ai_output_choices` for all non-streaming provider flows properly
 
-# 6.3.3 - 2025-08-01
+## 6.3.3 - 2025-08-01
 
 - fix: `get_feature_flag_result` now correctly returns FeatureFlagResult when payload is empty string instead of None
 
-# 6.3.2 - 2025-07-31
+## 6.3.2 - 2025-07-31
 
 - fix: Anthropic's tool calls are now handled properly
 
-# 6.3.0 - 2025-07-22
+## 6.3.0 - 2025-07-22
 
 - feat: Enhanced `send_feature_flags` parameter to accept `SendFeatureFlagsOptions` object for declarative control over local/remote evaluation and custom properties
 
-# 6.2.1 - 2025-07-21
+## 6.2.1 - 2025-07-21
 
 - feat: make `posthog_client` an optional argument in PostHog AI providers wrappers (`posthog.ai.*`), intuitively using the default client as the default
 
-# 6.1.1 - 2025-07-16
+## 6.1.1 - 2025-07-16
 
 - fix: correctly capture exceptions processed by Django from views or middleware
 
-# 6.1.0 - 2025-07-10
+## 6.1.0 - 2025-07-10
 
 - feat: decouple feature flag local evaluation from personal API keys; support decrypting remote config payloads without relying on the feature flags poller
 
-# 6.0.4 - 2025-07-09
+## 6.0.4 - 2025-07-09
 
 - fix: add POSTHOG_MW_CLIENT setting to django middleware, to support custom clients for exception capture.
 
-# 6.0.3 - 2025-07-07
+## 6.0.3 - 2025-07-07
 
 - feat: add a feature flag evaluation cache (local storage or redis) to support returning flag evaluations when the service is down
 
-# 6.0.2 - 2025-07-02
+## 6.0.2 - 2025-07-02
 
 - fix: send_feature_flags changed to default to false in `Client::capture_exception`
 
-# 6.0.1
+## 6.0.1
 
 - fix: response `$process_person_profile` property when passed to capture
 
-# 6.0.0
+## 6.0.0
 
 This release contains a number of major breaking changes:
 
@@ -265,15 +311,15 @@ with posthog.new_context():
 
 Generally, arguments are now appropriately typed, and docstrings have been updated. If something is unclear, please open an issue, or submit a PR!
 
-# 5.4.0 - 2025-06-20
+## 5.4.0 - 2025-06-20
 
 - feat: add support to session_id context on page method
 
-# 5.3.0 - 2025-06-19
+## 5.3.0 - 2025-06-19
 
 - fix: safely handle exception values
 
-# 5.2.0 - 2025-06-19
+## 5.2.0 - 2025-06-19
 
 - feat: construct artificial stack traces if no traceback is available on a captured exception
 

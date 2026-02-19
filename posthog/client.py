@@ -38,6 +38,7 @@ from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
     match_feature_flag_properties,
+    resolve_bucketing_value,
 )
 from posthog.flag_definition_cache import (
     FlagDefinitionCacheData,
@@ -1335,6 +1336,13 @@ class Client(object):
                 self.log.error(
                     "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
                 )
+                self.feature_flags = []
+                self.group_type_mapping = {}
+                self.cohorts = {}
+
+                if self.flag_cache:
+                    self.flag_cache.clear()
+
                 if self.debug:
                     raise APIError(
                         status=401,
@@ -1411,6 +1419,7 @@ class Client(object):
         person_properties=None,
         group_properties=None,
         warn_on_unknown_groups=True,
+        device_id=None,
     ) -> FlagValue:
         groups = groups or {}
         person_properties = person_properties or {}
@@ -1451,22 +1460,35 @@ class Client(object):
                     )
                 return False
 
+            if group_name not in group_properties:
+                raise InconclusiveMatchError(
+                    f"Flag has no group properties for group '{group_name}'"
+                )
             focused_group_properties = group_properties[group_name]
+            group_key = groups[group_name]
             return match_feature_flag_properties(
                 feature_flag,
-                groups[group_name],
+                group_key,
                 focused_group_properties,
-                self.feature_flags_by_key,
-                evaluation_cache,
+                cohort_properties=self.cohorts,
+                flags_by_key=self.feature_flags_by_key,
+                evaluation_cache=evaluation_cache,
+                device_id=device_id,
+                bucketing_value=group_key,
             )
         else:
+            bucketing_value = resolve_bucketing_value(
+                feature_flag, distinct_id, device_id
+            )
             return match_feature_flag_properties(
                 feature_flag,
                 distinct_id,
                 person_properties,
-                self.cohorts,
-                self.feature_flags_by_key,
-                evaluation_cache,
+                cohort_properties=self.cohorts,
+                flags_by_key=self.feature_flags_by_key,
+                evaluation_cache=evaluation_cache,
+                device_id=device_id,
+                bucketing_value=bucketing_value,
             )
 
     def feature_enabled(
@@ -1573,8 +1595,12 @@ class Client(object):
         evaluated_at = None
         feature_flag_error: Optional[str] = None
 
+        # Resolve device_id from context if not provided
+        if device_id is None:
+            device_id = get_context_device_id()
+
         flag_value = self._locally_evaluate_flag(
-            key, distinct_id, groups, person_properties, group_properties
+            key, distinct_id, groups, person_properties, group_properties, device_id
         )
         flag_was_locally_evaluated = flag_value is not None
 
@@ -1778,6 +1804,7 @@ class Client(object):
         groups: dict[str, str],
         person_properties: dict[str, str],
         group_properties: dict[str, str],
+        device_id: Optional[str] = None,
     ) -> Optional[FlagValue]:
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
@@ -1797,6 +1824,7 @@ class Client(object):
                         groups=groups,
                         person_properties=person_properties,
                         group_properties=group_properties,
+                        device_id=device_id,
                     )
                     self.log.debug(
                         f"Successfully computed flag locally: {key} -> {response}"
@@ -1921,10 +1949,12 @@ class Client(object):
             f"{key}_{'::null::' if response is None else str(response)}"
         )
 
-        if (
-            feature_flag_reported_key
-            not in self.distinct_ids_feature_flags_reported[distinct_id]
-        ):
+        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
+
+        if feature_flag_reported_key not in reported_flags:
             properties: dict[str, Any] = {
                 "$feature_flag": key,
                 "$feature_flag_response": response,
@@ -1960,9 +1990,7 @@ class Client(object):
                 groups=groups,
                 disable_geoip=disable_geoip,
             )
-            self.distinct_ids_feature_flags_reported[distinct_id].add(
-                feature_flag_reported_key
-            )
+            reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         if self.disabled:
@@ -2099,12 +2127,17 @@ class Client(object):
             )
         )
 
+        # Resolve device_id from context if not provided
+        if device_id is None:
+            device_id = get_context_device_id()
+
         response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
             person_properties=person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
+            device_id=device_id,
         )
 
         if fallback_to_flags and not only_evaluate_locally:
@@ -2135,6 +2168,7 @@ class Client(object):
         group_properties=None,
         warn_on_unknown_groups=False,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
     ) -> tuple[FlagsAndPayloads, bool]:
         person_properties = person_properties or {}
         group_properties = group_properties or {}
@@ -2164,6 +2198,7 @@ class Client(object):
                         person_properties=person_properties,
                         group_properties=group_properties,
                         warn_on_unknown_groups=warn_on_unknown_groups,
+                        device_id=device_id,
                     )
                     matched_payload = self._compute_payload_locally(
                         flag["key"], flags[flag["key"]]
