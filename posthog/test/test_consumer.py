@@ -3,7 +3,7 @@ import time
 import unittest
 from typing import Any
 
-import mock
+from unittest import mock
 from parameterized import parameterized
 
 try:

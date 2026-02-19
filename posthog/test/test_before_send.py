@@ -1,6 +1,5 @@
 import unittest
-
-import mock
+from unittest import mock
 
 from posthog.client import Client
 from posthog.test.test_utils import FAKE_TEST_API_KEY
