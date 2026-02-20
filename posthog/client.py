@@ -1879,6 +1879,12 @@ class Client(object):
         Category:
             Feature flags
         """
+        warnings.warn(
+            "get_feature_flag_payload is deprecated and will be removed in a future version. "
+            "Please use get_feature_flag_result instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if send_feature_flag_events:
             warnings.warn(
                 "send_feature_flag_events is deprecated in get_feature_flag_payload() and will be removed "
