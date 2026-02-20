@@ -1161,3 +1161,42 @@ def test_empty_array_grounding_metadata_no_web_search(
     assert "$ai_web_search_count" not in props
     assert props["$ai_input_tokens"] == 15
     assert props["$ai_output_tokens"] == 12
+
+
+def test_none_candidates_no_web_search(mock_client, mock_google_genai_client):
+    """Test that response with candidates=None does not crash web search extraction."""
+
+    mock_response = MagicMock()
+
+    # Mock usage metadata
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 5
+    mock_usage.candidates_token_count = 8
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_response.usage_metadata = mock_usage
+
+    # candidates attribute exists but is None
+    mock_response.candidates = None
+    mock_response.text = "Hello!"
+
+    mock_google_genai_client.models.generate_content.return_value = mock_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents="Hi",
+        posthog_distinct_id="test-id",
+    )
+
+    assert response == mock_response
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Should not crash and web search count should not be present
+    assert "$ai_web_search_count" not in props
+    assert props["$ai_input_tokens"] == 5
+    assert props["$ai_output_tokens"] == 8

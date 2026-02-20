@@ -420,7 +420,7 @@ def extract_gemini_web_search_count(response: Any) -> int:
     """
 
     # Check for grounding_metadata in candidates
-    if hasattr(response, "candidates"):
+    if hasattr(response, "candidates") and response.candidates:
         for candidate in response.candidates:
             if (
                 hasattr(candidate, "grounding_metadata")
