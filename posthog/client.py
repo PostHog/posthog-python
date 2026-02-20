@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional, Union
 from uuid import uuid4
 
 from dateutil.tz import tzutc
-from six import string_types
 from typing_extensions import Unpack
 
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
@@ -2339,6 +2338,6 @@ class Client(object):
 def stringify_id(val):
     if val is None:
         return None
-    if isinstance(val, string_types):
+    if isinstance(val, str):
         return val
     return str(val)
