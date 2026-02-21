@@ -27,7 +27,6 @@ dependencies = [
     "requests>=2.7,<3.0",
     "six>=1.5",
     "python-dateutil>=2.2",
-    "backoff>=1.10.0",
     "distro>=1.5.0",
     "typing-extensions>=4.2.0",
 ]
