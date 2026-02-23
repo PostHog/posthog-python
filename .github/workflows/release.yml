@@ -1,56 +1,249 @@
 name: "Release"
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - "posthog/version.py"
+  pull_request:
+    types: [closed]
+    branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Concurrency control: only one release process can run at a time
+# This prevents race conditions if multiple PRs with 'release' label merge simultaneously
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Publish release
+  check-release-label:
+    name: Check for release label
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
+    # Run when PR with 'release' label is merged to master
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.merged == true &&
+        contains(github.event.pull_request.labels.*.name, 'release'))
+    outputs:
+      should-release: ${{ steps.check.outputs.should-release }}
     steps:
-      - name: Checkout the repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 0
 
+      - name: Check release conditions
+        id: check
+        run: |
+          changeset_count=$(find .sampo/changesets -name '*.md' 2>/dev/null | wc -l)
+          if [ "$changeset_count" -gt 0 ]; then
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+            echo "Found $changeset_count changeset(s), ready to release"
+          else
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+            echo "No changesets to release"
+          fi
+
+  notify-approval-needed:
+    name: Notify Slack - Approval Needed
+    needs: check-release-label
+    if: needs.check-release-label.outputs.should-release == 'true'
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@main
+    with:
+      slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+      slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
+    secrets:
+      slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+      posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
+
+  release:
+    name: Release and publish
+    needs: [check-release-label, notify-approval-needed]
+    runs-on: ubuntu-latest
+    # Use `always()` to ensure the job runs even if notify-approval-needed is skipped,
+    # but still depend on it to access `needs.notify-approval-needed.outputs.slack_ts`
+    if: always() && needs.check-release-label.outputs.should-release == 'true'
+    environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
+    steps:
+      - name: Notify Slack - Approved
+        if: needs.notify-approval-needed.outputs.slack_ts != ''
+        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "✅ Release approved! Version bump in progress..."
+          emoji_reaction: "white_check_mark"
+
+      - name: Get GitHub App token
+        id: releaser
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_APP_ID }}
+          private-key: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ steps.releaser.outputs.token }}
+
       - name: Set up Python
-        uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11.11
 
       - name: Install uv
-        uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        uses: astral-sh/setup-uv@v5
         with:
-            enable-cache: true
-            pyproject-file: 'pyproject.toml'
-            
-      - name: Detect version
-        run: echo "REPO_VERSION=$(python3 posthog/version.py)" >> $GITHUB_ENV
+          enable-cache: true
+          pyproject-file: "pyproject.toml"
 
-      - name: Prepare for building release
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e
+        with:
+          toolchain: 1.91.1
+          components: cargo
+
+      - name: Cache Sampo CLI
+        id: cache-sampo
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/sampo
+          key: sampo-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Sampo CLI
+        if: steps.cache-sampo.outputs.cache-hit != 'true'
+        run: cargo install sampo
+
+      - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Push releases to PyPI
-        env:
-          TWINE_USERNAME: __token__
-        run: uv run make release && uv run make release_analytics
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Create GitHub release
-        uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1
-        with:
-          tag_name: v${{ env.REPO_VERSION }}
-          release_name: ${{ env.REPO_VERSION }}
-      
-      - name: Dispatch generate-references for posthog-python
+      - name: Prepare release with Sampo
+        id: sampo-release
+        env:
+          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+        run: |
+          sampo release
+          new_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+
+      - name: Sync version to posthog/version.py
+        run: |
+          echo 'VERSION = "${{ steps.sampo-release.outputs.new_version }}"' > posthog/version.py
+
+      - name: Commit release changes
+        id: commit-release
+        env:
+          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore: Release v${{ steps.sampo-release.outputs.new_version }}"
+            git push origin master
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Publishing is done manually (not via `sampo publish`) because we need to
+      # publish both `posthog` and `posthoganalytics` packages to PyPI.
+      # Sampo only knows about the `posthog` package, so we handle both here.
+      # Both packages use PyPI OIDC trusted publishing (no API tokens needed).
+      - name: Build posthog
+        if: steps.commit-release.outputs.committed == 'true'
+        run: uv run make build_release
+
+      - name: Publish posthog to PyPI
+        if: steps.commit-release.outputs.committed == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # The `posthoganalytics` package is a mirror of `posthog` published under
+      # a different name for backwards compatibility. The make target handles
+      # copying, renaming imports, and building the dist automatically.
+      - name: Build posthoganalytics
+        if: steps.commit-release.outputs.committed == 'true'
+        run: uv run make build_release_analytics
+
+      - name: Publish posthoganalytics to PyPI
+        if: steps.commit-release.outputs.committed == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # We skip `sampo publish` (which normally creates the tag) because we
+      # need to publish both posthog and posthoganalytics manually, so we
+      # create the tag ourselves.
+      - name: Tag release
+        if: steps.commit-release.outputs.committed == 'true'
+        run: git tag "v${{ steps.sampo-release.outputs.new_version }}"
+
+      - name: Push tags
+        if: steps.commit-release.outputs.committed == 'true'
+        run: git push origin --tags
+
+      - name: Create GitHub Release
+        if: steps.commit-release.outputs.committed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "v${{ steps.sampo-release.outputs.new_version }}" --generate-notes
+
+      - name: Dispatch generate-references
+        if: steps.commit-release.outputs.committed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run generate-references.yml --ref master
+        run: gh workflow run generate-references.yml --ref master
+
+      # Notify in case of a failure
+      - name: Send failure event to PostHog
+        if: ${{ failure() }}
+        uses: PostHog/posthog-github-action@v0.1
+        with:
+          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
+          event: "posthog-python-github-release-workflow-failure"
+          properties: >-
+            {
+              "commitSha": "${{ github.sha }}",
+              "jobStatus": "${{ job.status }}",
+              "ref": "${{ github.ref }}",
+              "version": "v${{ steps.sampo-release.outputs.new_version }}"
+            }
+
+      - name: Notify Slack - Failed
+        if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
+        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "❌ Failed to release `posthog-python@v${{ steps.sampo-release.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          emoji_reaction: "x"
+
+  notify-released:
+    name: Notify Slack - Released
+    needs: [check-release-label, notify-approval-needed, release]
+    runs-on: ubuntu-latest
+    if: always() && needs.release.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Notify Slack - Released
+        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "🚀 posthog-python released successfully!"
+          emoji_reaction: "rocket"

@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import logging
 import re
+import warnings
 from typing import Optional
 
 from dateutil import parser
@@ -34,18 +35,18 @@ class RequiresServerEvaluation(Exception):
     pass
 
 
-# This function takes a distinct_id and a feature flag key and returns a float between 0 and 1.
-# Given the same distinct_id and key, it'll always return the same float. These floats are
+# This function takes a bucketing value and a feature flag key and returns a float between 0 and 1.
+# Given the same bucketing value and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
-# we can do _hash(key, distinct_id) < 0.2
-def _hash(key: str, distinct_id: str, salt: str = "") -> float:
-    hash_key = f"{key}.{distinct_id}{salt}"
+# we can do _hash(key, bucketing_value) < 0.2
+def _hash(key: str, bucketing_value: str, salt: str = "") -> float:
+    hash_key = f"{key}.{bucketing_value}{salt}"
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
 
 
-def get_matching_variant(flag, distinct_id):
-    hash_value = _hash(flag["key"], distinct_id, salt="variant")
+def get_matching_variant(flag, bucketing_value):
+    hash_value = _hash(flag["key"], bucketing_value, salt="variant")
     for variant in variant_lookup_table(flag):
         if hash_value >= variant["value_min"] and hash_value < variant["value_max"]:
             return variant["key"]
@@ -68,7 +69,13 @@ def variant_lookup_table(feature_flag):
 
 
 def evaluate_flag_dependency(
-    property, flags_by_key, evaluation_cache, distinct_id, properties, cohort_properties
+    property,
+    flags_by_key,
+    evaluation_cache,
+    distinct_id,
+    properties,
+    cohort_properties,
+    device_id=None,
 ):
     """
     Evaluate a flag dependency property according to the dependency chain algorithm.
@@ -80,6 +87,7 @@ def evaluate_flag_dependency(
         distinct_id: The distinct ID being evaluated
         properties: Person properties for evaluation
         cohort_properties: Cohort properties for evaluation
+        device_id: The device ID for bucketing (optional)
 
     Returns:
         bool: True if all dependencies in the chain evaluate to True, False otherwise
@@ -124,13 +132,27 @@ def evaluate_flag_dependency(
                 else:
                     # Recursively evaluate the dependency
                     try:
+                        dep_flag_filters = dep_flag.get("filters") or {}
+                        dep_aggregation_group_type_index = dep_flag_filters.get(
+                            "aggregation_group_type_index"
+                        )
+                        if dep_aggregation_group_type_index is not None:
+                            # Group flags should continue bucketing by the group key
+                            # from the current evaluation context.
+                            dep_bucketing_value = distinct_id
+                        else:
+                            dep_bucketing_value = resolve_bucketing_value(
+                                dep_flag, distinct_id, device_id
+                            )
                         dep_result = match_feature_flag_properties(
                             dep_flag,
                             distinct_id,
                             properties,
-                            cohort_properties,
-                            flags_by_key,
-                            evaluation_cache,
+                            cohort_properties=cohort_properties,
+                            flags_by_key=flags_by_key,
+                            evaluation_cache=evaluation_cache,
+                            device_id=device_id,
+                            bucketing_value=dep_bucketing_value,
                         )
                         evaluation_cache[dep_flag_key] = dep_result
                     except InconclusiveMatchError as e:
@@ -215,21 +237,54 @@ def matches_dependency_value(expected_value, actual_value):
     return False
 
 
+def resolve_bucketing_value(flag, distinct_id, device_id=None):
+    """Resolve the bucketing value for a flag based on its bucketing_identifier setting.
+
+    Returns:
+        The appropriate identifier string to use for hashing/bucketing.
+
+    Raises:
+        InconclusiveMatchError: If the flag requires device_id but none was provided.
+    """
+    flag_filters = flag.get("filters") or {}
+    bucketing_identifier = flag.get("bucketing_identifier") or flag_filters.get(
+        "bucketing_identifier"
+    )
+    if bucketing_identifier == "device_id":
+        if not device_id:
+            raise InconclusiveMatchError(
+                "Flag requires device_id for bucketing but none was provided"
+            )
+        return device_id
+    return distinct_id
+
+
 def match_feature_flag_properties(
     flag,
     distinct_id,
     properties,
+    *,
     cohort_properties=None,
     flags_by_key=None,
     evaluation_cache=None,
+    device_id=None,
+    bucketing_value=None,
 ) -> FlagValue:
-    flag_conditions = (flag.get("filters") or {}).get("groups") or []
+    if bucketing_value is None:
+        warnings.warn(
+            "Calling match_feature_flag_properties() without bucketing_value is deprecated. "
+            "Pass bucketing_value explicitly. This fallback will be removed in a future major release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        bucketing_value = resolve_bucketing_value(flag, distinct_id, device_id)
+
+    flag_filters = flag.get("filters") or {}
+    flag_conditions = flag_filters.get("groups") or []
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
     # Some filters can be explicitly set to null, which require accessing variants like so
-    flag_variants = ((flag.get("filters") or {}).get("multivariate") or {}).get(
-        "variants"
-    ) or []
+    flag_variants = (flag_filters.get("multivariate") or {}).get("variants") or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
 
     for condition in flag_conditions:
@@ -244,12 +299,14 @@ def match_feature_flag_properties(
                 cohort_properties,
                 flags_by_key,
                 evaluation_cache,
+                bucketing_value=bucketing_value,
+                device_id=device_id,
             ):
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
                     variant = variant_override
                 else:
-                    variant = get_matching_variant(flag, distinct_id)
+                    variant = get_matching_variant(flag, bucketing_value)
                 return variant or True
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
@@ -277,6 +334,9 @@ def is_condition_match(
     cohort_properties,
     flags_by_key=None,
     evaluation_cache=None,
+    *,
+    bucketing_value,
+    device_id=None,
 ) -> bool:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
@@ -290,6 +350,7 @@ def is_condition_match(
                     flags_by_key,
                     evaluation_cache,
                     distinct_id,
+                    device_id=device_id,
                 )
             elif property_type == "flag":
                 matches = evaluate_flag_dependency(
@@ -299,6 +360,7 @@ def is_condition_match(
                     distinct_id,
                     properties,
                     cohort_properties,
+                    device_id=device_id,
                 )
             else:
                 matches = match_property(prop, properties)
@@ -308,9 +370,9 @@ def is_condition_match(
         if rollout_percentage is None:
             return True
 
-    if rollout_percentage is not None and _hash(feature_flag["key"], distinct_id) > (
-        rollout_percentage / 100
-    ):
+    if rollout_percentage is not None and _hash(
+        feature_flag["key"], bucketing_value
+    ) > (rollout_percentage / 100):
         return False
 
     return True
@@ -454,6 +516,7 @@ def match_cohort(
     flags_by_key=None,
     evaluation_cache=None,
     distinct_id=None,
+    device_id=None,
 ) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
@@ -478,6 +541,7 @@ def match_cohort(
         flags_by_key,
         evaluation_cache,
         distinct_id,
+        device_id=device_id,
     )
 
 
@@ -488,6 +552,7 @@ def match_property_group(
     flags_by_key=None,
     evaluation_cache=None,
     distinct_id=None,
+    device_id=None,
 ) -> bool:
     if not property_group:
         return True
@@ -512,6 +577,7 @@ def match_property_group(
                     flags_by_key,
                     evaluation_cache,
                     distinct_id,
+                    device_id=device_id,
                 )
                 if property_group_type == "AND":
                     if not matches:
@@ -545,6 +611,7 @@ def match_property_group(
                         flags_by_key,
                         evaluation_cache,
                         distinct_id,
+                        device_id=device_id,
                     )
                 elif prop.get("type") == "flag":
                     matches = evaluate_flag_dependency(
@@ -554,6 +621,7 @@ def match_property_group(
                         distinct_id,
                         property_values,
                         cohort_properties,
+                        device_id=device_id,
                     )
                 else:
                     matches = match_property(prop, property_values)

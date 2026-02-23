@@ -23,9 +23,7 @@ with open("pyproject.toml", "rb") as f:
 
 # Override specific values
 config["project"]["name"] = "posthoganalytics"
-config["tool"]["setuptools"]["dynamic"]["version"] = {
-    "attr": "posthoganalytics.version.VERSION"
-}
+config["project"]["readme"] = "README_ANALYTICS.md"
 
 # Rename packages from posthog.* to posthoganalytics.*
 if "packages" in config["tool"]["setuptools"]:
