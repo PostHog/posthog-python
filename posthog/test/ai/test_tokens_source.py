@@ -1,4 +1,3 @@
-import pytest
 from parameterized import parameterized
 
 from posthog.ai.utils import _get_tokens_source
