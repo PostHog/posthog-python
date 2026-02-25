@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.4 — 2026-02-25
+
+### Patch changes
+
+- [a68a6a6](https://github.com/posthog/posthog-python/commit/a68a6a6d045072c88eeee7acac441536919b5954) feat(llma): add `$ai_tokens_source` property ("sdk" or "passthrough") to all `$ai_generation` events to detect when token values are externally overridden via `posthog_properties` — Thanks @carlos-marchal-ph!
+
 ## 7.9.3 — 2026-02-18
 
 ### Patch changes
