@@ -13,6 +13,28 @@ from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
 
 
+_TOKEN_PROPERTY_KEYS = frozenset(
+    {
+        "$ai_input_tokens",
+        "$ai_output_tokens",
+        "$ai_cache_read_input_tokens",
+        "$ai_cache_creation_input_tokens",
+        "$ai_total_tokens",
+        "$ai_reasoning_tokens",
+    }
+)
+
+
+def _get_tokens_source(
+    sdk_tags: Dict[str, Any], posthog_properties: Optional[Dict[str, Any]]
+) -> str:
+    if posthog_properties and any(
+        key in posthog_properties for key in _TOKEN_PROPERTY_KEYS
+    ):
+        return "passthrough"
+    return "sdk"
+
+
 def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
     """
     Convert raw provider usage objects to JSON-serializable dicts.
@@ -413,14 +435,19 @@ def call_llm_and_track_usage(
 
             # send the event to posthog
             if hasattr(ph_client, "capture") and callable(ph_client.capture):
+                sdk_tags = get_tags()
+                merged_properties = {
+                    **sdk_tags,
+                    **(posthog_properties or {}),
+                    **(error_params or {}),
+                }
+                merged_properties["$ai_tokens_source"] = _get_tokens_source(
+                    sdk_tags, posthog_properties
+                )
                 ph_client.capture(
                     distinct_id=posthog_distinct_id or posthog_trace_id,
                     event="$ai_generation",
-                    properties={
-                        **get_tags(),
-                        **(posthog_properties or {}),
-                        **(error_params or {}),
-                    },
+                    properties=merged_properties,
                     groups=posthog_groups,
                 )
 
@@ -543,14 +570,19 @@ async def call_llm_and_track_usage_async(
 
             # send the event to posthog
             if hasattr(ph_client, "capture") and callable(ph_client.capture):
+                sdk_tags = get_tags()
+                merged_properties = {
+                    **sdk_tags,
+                    **(posthog_properties or {}),
+                    **(error_params or {}),
+                }
+                merged_properties["$ai_tokens_source"] = _get_tokens_source(
+                    sdk_tags, posthog_properties
+                )
                 ph_client.capture(
                     distinct_id=posthog_distinct_id or posthog_trace_id,
                     event="$ai_generation",
-                    properties={
-                        **get_tags(),
-                        **(posthog_properties or {}),
-                        **(error_params or {}),
-                    },
+                    properties=merged_properties,
                     groups=posthog_groups,
                 )
 
@@ -626,6 +658,15 @@ def capture_streaming_event(
         "$ai_base_url": str(event_data["base_url"]),
         **(event_data.get("properties") or {}),
     }
+
+    # Determine token source: SDK-computed vs externally overridden
+    sdk_token_tags = {
+        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
+        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
+    }
+    event_properties["$ai_tokens_source"] = _get_tokens_source(
+        sdk_token_tags, event_data.get("properties")
+    )
 
     # Extract and add tools based on provider
     available_tools = extract_available_tool_calls(

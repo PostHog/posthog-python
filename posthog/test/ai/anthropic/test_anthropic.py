@@ -306,6 +306,7 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_tokens_source"] == "sdk"
         assert isinstance(props["$ai_latency"], float)
         # Verify raw usage metadata is passed for backend processing
         assert "$ai_usage" in props
@@ -316,6 +317,23 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert isinstance(props["$ai_usage"], dict)
         assert "input_tokens" in props["$ai_usage"]
         assert "output_tokens" in props["$ai_usage"]
+
+
+def test_tokens_source_passthrough(mock_client, mock_anthropic_response):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"$ai_input_tokens": 99999},
+        )
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_tokens_source"] == "passthrough"
+        assert props["$ai_input_tokens"] == 99999
 
 
 def test_groups(mock_client, mock_anthropic_response):
@@ -927,6 +945,7 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         assert props["$ai_output_tokens"] == 25
         assert props["$ai_cache_read_input_tokens"] == 5
         assert props["$ai_cache_creation_input_tokens"] == 0
+        assert props["$ai_tokens_source"] == "sdk"
 
         # Verify raw usage is captured in streaming mode (merged from events)
         assert "$ai_usage" in props
