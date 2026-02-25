@@ -1,9 +1,5 @@
 # posthog
 
-## 7.9.4 — 2026-02-25
-
-feat(llma): add `$ai_tokens_source` property ("sdk" or "passthrough") to all `$ai_generation` events to detect when token values are externally overridden via `posthog_properties`
-
 ## 7.9.3 — 2026-02-18
 
 ### Patch changes

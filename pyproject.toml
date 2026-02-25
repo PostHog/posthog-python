@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.9.4"
+version = "7.9.3"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "hey@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
