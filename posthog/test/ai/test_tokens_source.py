@@ -8,7 +8,12 @@ from posthog.ai.utils import _get_tokens_source
     [
         ("no_posthog_properties", {"$ai_input_tokens": 100}, None, "sdk"),
         ("empty_posthog_properties", {"$ai_input_tokens": 100}, {}, "sdk"),
-        ("unrelated_posthog_properties", {"$ai_input_tokens": 100}, {"foo": "bar"}, "sdk"),
+        (
+            "unrelated_posthog_properties",
+            {"$ai_input_tokens": 100},
+            {"foo": "bar"},
+            "sdk",
+        ),
         (
             "override_input_tokens",
             {"$ai_input_tokens": 100},
