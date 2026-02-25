@@ -38,6 +38,8 @@ Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
 langchain = ["langchain>=0.2.0"]
+pydantic-ai = ["pydantic-ai>=0.2.0", "opentelemetry-sdk>=1.20.0"]
+otel = ["opentelemetry-sdk>=1.20.0"]
 dev = [
     "django-stubs",
     "lxml",
@@ -75,6 +77,8 @@ test = [
     "langchain-anthropic>=1.0",
     "google-genai",
     "pydantic",
+    "pydantic-ai>=0.2.0",
+    "opentelemetry-sdk>=1.20.0",
     "parameterized>=0.8.1",
 ]
 
@@ -87,6 +91,8 @@ packages = [
     "posthog.ai.openai_agents",
     "posthog.ai.anthropic",
     "posthog.ai.gemini",
+    "posthog.ai.otel",
+    "posthog.ai.pydantic_ai",
     "posthog.test",
     "posthog.test.ai",
     "posthog.test.ai.openai_agents",
