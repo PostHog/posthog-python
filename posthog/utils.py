@@ -13,7 +13,6 @@ import sys
 import platform
 import distro  # For Linux OS detection
 
-import six
 from dateutil.tz import tzlocal, tzutc
 
 log = logging.getLogger("posthog")
@@ -58,9 +57,7 @@ def clean(item):
         return float(item)
     if isinstance(item, UUID):
         return str(item)
-    if isinstance(
-        item, (six.string_types, bool, numbers.Number, datetime, date, type(None))
-    ):
+    if isinstance(item, (str, bool, numbers.Number, datetime, date, type(None))):
         return item
     if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
@@ -88,7 +85,7 @@ def _clean_list(list_):
 
 def _clean_dict(dict_):
     data = {}
-    for k, v in six.iteritems(dict_):
+    for k, v in dict_.items():
         try:
             data[k] = clean(v)
         except TypeError:
