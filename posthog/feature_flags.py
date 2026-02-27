@@ -18,6 +18,38 @@ log = logging.getLogger("posthog")
 
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
 
+# All operators supported by match_property, grouped by category.
+PROPERTY_OPERATORS = (
+    # Equality
+    "exact",
+    "is_not",
+    "is_set",
+    "is_not_set",
+    # String matching
+    "icontains",
+    "not_icontains",
+    "regex",
+    "not_regex",
+    # Numeric / string comparison
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    # Date comparison
+    "is_date_before",
+    "is_date_after",
+    # Semver comparison
+    "semver_eq",
+    "semver_neq",
+    "semver_gt",
+    "semver_gte",
+    "semver_lt",
+    "semver_lte",
+    "semver_tilde",
+    "semver_caret",
+    "semver_wildcard",
+)
+
 
 class InconclusiveMatchError(Exception):
     pass
@@ -385,6 +417,9 @@ def match_property(property, property_values) -> bool:
     operator = property.get("operator") or "exact"
     value = property.get("value")
 
+    if operator not in PROPERTY_OPERATORS:
+        raise InconclusiveMatchError(f"Unknown operator {operator}")
+
     if key not in property_values:
         raise InconclusiveMatchError(
             "can't match properties without a given property value"
@@ -577,9 +612,6 @@ def match_property(property, property_values) -> bool:
                     f"Flag semver value '{value}' is not valid for wildcard operator"
                 )
             return lower <= override_parsed < upper
-
-    # if we get here, we don't know how to handle the operator
-    raise InconclusiveMatchError(f"Unknown operator {operator}")
 
 
 def match_cohort(
