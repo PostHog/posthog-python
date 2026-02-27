@@ -775,7 +775,10 @@ def parse_semver(value: str) -> tuple:
     - Defaults missing components to 0 (e.g., 1.2 -> 1.2.0)
     Raises ValueError if parsing fails.
     """
-    match = SEMVER_EXTRACT_RE.search(str(value))
+    text = str(value)
+    if len(text) > 200:
+        raise ValueError("Version string too long")
+    match = SEMVER_EXTRACT_RE.search(text)
     if not match:
         raise ValueError("Invalid semver format")
 
