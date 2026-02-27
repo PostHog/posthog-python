@@ -4362,8 +4362,9 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             match_property(prop, {"version": ""})
 
-        # Leading dot: ".1.2.3" -> regex extracts "1.2.3"
-        self.assertTrue(match_property(prop, {"version": ".1.2.3"}))
+        # Leading dot: ".1.2.3" -> invalid, empty first component
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"version": ".1.2.3"})
 
         # Caret with v-prefix in flag value
         prop_caret_v = self.property(

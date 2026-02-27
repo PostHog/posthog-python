@@ -763,30 +763,25 @@ def relative_date_parse_for_feature_flag_matching(
         return None
 
 
-SEMVER_EXTRACT_RE = re.compile(r"(\d+(?:\.\d+)+)")
-
-
 def parse_semver(value: str) -> tuple:
     """Parse a semver string into a comparable (major, minor, patch) integer tuple.
 
     Matches the behavior of the sortableSemver HogQL function:
-    - Uses regex to extract version numbers from strings like "v1.2.3-alpha"
     - Handles v-prefix, whitespace, pre-release suffixes
     - Defaults missing components to 0 (e.g., 1.2 -> 1.2.0)
     Raises ValueError if parsing fails.
     """
-    text = str(value)
-    if len(text) > 200:
-        raise ValueError("Version string too long")
-    match = SEMVER_EXTRACT_RE.search(text)
-    if not match:
+    text = str(value).strip().lstrip("vV")
+    # Strip pre-release/build metadata suffix
+    text = text.split("-")[0].split("+")[0]
+    parts = text.split(".")
+
+    if not parts or not parts[0]:
         raise ValueError("Invalid semver format")
 
-    parts = match.group(1).split(".")
-
     major = int(parts[0])
-    minor = int(parts[1]) if len(parts) > 1 else 0
-    patch = int(parts[2]) if len(parts) > 2 else 0
+    minor = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+    patch = int(parts[2]) if len(parts) > 2 and parts[2] else 0
 
     return (major, minor, patch)
 
@@ -821,21 +816,13 @@ def _wildcard_bounds(value: str) -> tuple:
     1.* means >=1.0.0 <2.0.0
     1.2.* means >=1.2.0 <1.3.0
     """
-    # Strip wildcards and trailing dots, then extract version digits
-    cleaned = str(value).replace("*", "").rstrip(".")
+    cleaned = str(value).strip().lstrip("vV").replace("*", "").rstrip(".")
     if not cleaned:
         raise ValueError("Invalid wildcard pattern")
 
-    match = SEMVER_EXTRACT_RE.search(cleaned)
-    if match:
-        parts = match.group(1).split(".")
-    else:
-        # Try single number (e.g., "1" from "1.*")
-        cleaned = cleaned.strip()
-        if cleaned.isdigit():
-            parts = [cleaned]
-        else:
-            raise ValueError("Invalid wildcard pattern")
+    parts = [p for p in cleaned.split(".") if p]
+    if not parts:
+        raise ValueError("Invalid wildcard pattern")
 
     if len(parts) == 1:
         major = int(parts[0])
