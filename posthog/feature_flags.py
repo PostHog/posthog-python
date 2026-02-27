@@ -588,6 +588,10 @@ def match_property(property, property_values) -> bool:
                 )
             return lower <= override_parsed < upper
 
+    # Unreachable: all operators in PROPERTY_OPERATORS are handled above,
+    # and unknown operators are rejected at the top of this function.
+    raise InconclusiveMatchError(f"Unknown operator {operator}")
+
 
 def match_cohort(
     property,
