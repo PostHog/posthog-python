@@ -19,35 +19,27 @@ log = logging.getLogger("posthog")
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
 
 # All operators supported by match_property, grouped by category.
-PROPERTY_OPERATORS = (
-    # Equality
-    "exact",
-    "is_not",
-    "is_set",
-    "is_not_set",
-    # String matching
-    "icontains",
-    "not_icontains",
-    "regex",
-    "not_regex",
-    # Numeric / string comparison
-    "gt",
-    "gte",
-    "lt",
-    "lte",
-    # Date comparison
-    "is_date_before",
-    "is_date_after",
-    # Semver comparison
+EQUALITY_OPERATORS = ("exact", "is_not", "is_set", "is_not_set")
+STRING_OPERATORS = ("icontains", "not_icontains", "regex", "not_regex")
+NUMERIC_OPERATORS = ("gt", "gte", "lt", "lte")
+DATE_OPERATORS = ("is_date_before", "is_date_after")
+SEMVER_COMPARISON_OPERATORS = (
     "semver_eq",
     "semver_neq",
     "semver_gt",
     "semver_gte",
     "semver_lt",
     "semver_lte",
-    "semver_tilde",
-    "semver_caret",
-    "semver_wildcard",
+)
+SEMVER_RANGE_OPERATORS = ("semver_tilde", "semver_caret", "semver_wildcard")
+SEMVER_OPERATORS = SEMVER_COMPARISON_OPERATORS + SEMVER_RANGE_OPERATORS
+
+PROPERTY_OPERATORS = (
+    EQUALITY_OPERATORS
+    + STRING_OPERATORS
+    + NUMERIC_OPERATORS
+    + DATE_OPERATORS
+    + SEMVER_OPERATORS
 )
 
 
@@ -540,17 +532,7 @@ def match_property(property, property_values) -> bool:
                 "The date provided must be a string or date object"
             )
 
-    if operator in (
-        "semver_eq",
-        "semver_neq",
-        "semver_gt",
-        "semver_gte",
-        "semver_lt",
-        "semver_lte",
-        "semver_tilde",
-        "semver_caret",
-        "semver_wildcard",
-    ):
+    if operator in SEMVER_OPERATORS:
         try:
             override_parsed = parse_semver(override_value)
         except (ValueError, TypeError):
@@ -558,14 +540,7 @@ def match_property(property, property_values) -> bool:
                 f"Person property value '{override_value}' is not a valid semver"
             )
 
-        if operator in (
-            "semver_eq",
-            "semver_neq",
-            "semver_gt",
-            "semver_gte",
-            "semver_lt",
-            "semver_lte",
-        ):
+        if operator in SEMVER_COMPARISON_OPERATORS:
             try:
                 flag_parsed = parse_semver(value)
             except (ValueError, TypeError):
