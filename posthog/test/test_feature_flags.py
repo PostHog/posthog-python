@@ -4198,6 +4198,206 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             self.assertFalse(match_property(property_k, {"key": "random"}))
 
+    def test_match_properties_semver_eq(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_eq")
+        self.assertTrue(match_property(prop, {"version": "1.2.3"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.4"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.2"}))
+        self.assertFalse(match_property(prop, {"version": "2.0.0"}))
+
+        # Pre-release suffix is stripped for comparison
+        self.assertTrue(match_property(prop, {"version": "1.2.3-alpha.1"}))
+
+        # Partial versions default missing parts to 0
+        prop_partial = self.property(key="version", value="1.2", operator="semver_eq")
+        self.assertTrue(match_property(prop_partial, {"version": "1.2.0"}))
+        self.assertFalse(match_property(prop_partial, {"version": "1.2.1"}))
+
+    def test_match_properties_semver_neq(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_neq")
+        self.assertFalse(match_property(prop, {"version": "1.2.3"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.4"}))
+        self.assertTrue(match_property(prop, {"version": "2.0.0"}))
+
+    def test_match_properties_semver_gt(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_gt")
+        self.assertTrue(match_property(prop, {"version": "1.2.4"}))
+        self.assertTrue(match_property(prop, {"version": "1.3.0"}))
+        self.assertTrue(match_property(prop, {"version": "2.0.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.3"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.2"}))
+        self.assertFalse(match_property(prop, {"version": "0.9.0"}))
+
+    def test_match_properties_semver_gte(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_gte")
+        self.assertTrue(match_property(prop, {"version": "1.2.3"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.4"}))
+        self.assertTrue(match_property(prop, {"version": "2.0.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.2"}))
+        self.assertFalse(match_property(prop, {"version": "0.9.0"}))
+
+    def test_match_properties_semver_lt(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_lt")
+        self.assertTrue(match_property(prop, {"version": "1.2.2"}))
+        self.assertTrue(match_property(prop, {"version": "1.1.0"}))
+        self.assertTrue(match_property(prop, {"version": "0.9.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.3"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.4"}))
+        self.assertFalse(match_property(prop, {"version": "2.0.0"}))
+
+    def test_match_properties_semver_lte(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_lte")
+        self.assertTrue(match_property(prop, {"version": "1.2.3"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.2"}))
+        self.assertTrue(match_property(prop, {"version": "0.9.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.4"}))
+        self.assertFalse(match_property(prop, {"version": "2.0.0"}))
+
+    def test_match_properties_semver_tilde(self):
+        # ~1.2.3 means >=1.2.3 <1.3.0
+        prop = self.property(key="version", value="1.2.3", operator="semver_tilde")
+        self.assertTrue(match_property(prop, {"version": "1.2.3"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.5"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.99"}))
+        self.assertFalse(match_property(prop, {"version": "1.3.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.2"}))
+        self.assertFalse(match_property(prop, {"version": "2.0.0"}))
+
+    def test_match_properties_semver_caret(self):
+        # ^1.2.3 means >=1.2.3 <2.0.0
+        prop = self.property(key="version", value="1.2.3", operator="semver_caret")
+        self.assertTrue(match_property(prop, {"version": "1.2.3"}))
+        self.assertTrue(match_property(prop, {"version": "1.9.0"}))
+        self.assertTrue(match_property(prop, {"version": "1.99.99"}))
+        self.assertFalse(match_property(prop, {"version": "2.0.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.2"}))
+        self.assertFalse(match_property(prop, {"version": "0.9.0"}))
+
+        # ^0.2.3 means >=0.2.3 <0.3.0 (leftmost non-zero is minor)
+        prop_zero_major = self.property(
+            key="version", value="0.2.3", operator="semver_caret"
+        )
+        self.assertTrue(match_property(prop_zero_major, {"version": "0.2.3"}))
+        self.assertTrue(match_property(prop_zero_major, {"version": "0.2.9"}))
+        self.assertFalse(match_property(prop_zero_major, {"version": "0.3.0"}))
+        self.assertFalse(match_property(prop_zero_major, {"version": "1.0.0"}))
+
+        # ^0.0.3 means >=0.0.3 <0.0.4 (leftmost non-zero is patch)
+        prop_zero_minor = self.property(
+            key="version", value="0.0.3", operator="semver_caret"
+        )
+        self.assertTrue(match_property(prop_zero_minor, {"version": "0.0.3"}))
+        self.assertFalse(match_property(prop_zero_minor, {"version": "0.0.4"}))
+        self.assertFalse(match_property(prop_zero_minor, {"version": "0.1.0"}))
+
+    def test_match_properties_semver_wildcard(self):
+        # 1.2.* means >=1.2.0 <1.3.0
+        prop = self.property(key="version", value="1.2.*", operator="semver_wildcard")
+        self.assertTrue(match_property(prop, {"version": "1.2.0"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.5"}))
+        self.assertTrue(match_property(prop, {"version": "1.2.99"}))
+        self.assertFalse(match_property(prop, {"version": "1.3.0"}))
+        self.assertFalse(match_property(prop, {"version": "1.1.9"}))
+        self.assertFalse(match_property(prop, {"version": "2.0.0"}))
+
+        # 1.* means >=1.0.0 <2.0.0
+        prop_major = self.property(
+            key="version", value="1.*", operator="semver_wildcard"
+        )
+        self.assertTrue(match_property(prop_major, {"version": "1.0.0"}))
+        self.assertTrue(match_property(prop_major, {"version": "1.99.99"}))
+        self.assertFalse(match_property(prop_major, {"version": "2.0.0"}))
+        self.assertFalse(match_property(prop_major, {"version": "0.9.0"}))
+
+    def test_match_properties_semver_with_prerelease(self):
+        # Pre-release suffixes are stripped before comparison
+        prop = self.property(key="version", value="1.2.3", operator="semver_gt")
+        self.assertTrue(match_property(prop, {"version": "1.3.0-beta.1"}))
+        self.assertFalse(match_property(prop, {"version": "1.2.2-rc.1"}))
+
+        # Flag value can also have pre-release suffix
+        prop_pre = self.property(
+            key="version", value="1.2.3-alpha", operator="semver_gte"
+        )
+        self.assertTrue(match_property(prop_pre, {"version": "1.2.3"}))
+        self.assertTrue(match_property(prop_pre, {"version": "2.0.0"}))
+        self.assertFalse(match_property(prop_pre, {"version": "1.2.2"}))
+
+    def test_match_properties_semver_edge_cases(self):
+        """Test semver parsing handles v-prefix, whitespace, leading zeros, and other common formats."""
+        prop = self.property(key="version", value="1.2.3", operator="semver_eq")
+
+        # v-prefix: "v1.2.3" -> extracts "1.2.3"
+        self.assertTrue(match_property(prop, {"version": "v1.2.3"}))
+
+        # Leading space: " 1.2.3" -> extracts "1.2.3"
+        self.assertTrue(match_property(prop, {"version": " 1.2.3"}))
+
+        # Trailing space: "1.2.3 " -> extracts "1.2.3"
+        self.assertTrue(match_property(prop, {"version": "1.2.3 "}))
+
+        # Leading zeros: "01.02.03" -> int("01")=1, int("02")=2, int("03")=3
+        self.assertTrue(match_property(prop, {"version": "01.02.03"}))
+
+        # Flag value with v-prefix
+        prop_v = self.property(key="version", value="v1.2.3", operator="semver_eq")
+        self.assertTrue(match_property(prop_v, {"version": "1.2.3"}))
+
+        # 0.0.0 minimal version
+        prop_min = self.property(key="version", value="0.0.0", operator="semver_eq")
+        self.assertTrue(match_property(prop_min, {"version": "0.0.0"}))
+
+        prop_gt_min = self.property(key="version", value="0.0.0", operator="semver_gt")
+        self.assertTrue(match_property(prop_gt_min, {"version": "0.0.1"}))
+        self.assertFalse(match_property(prop_gt_min, {"version": "0.0.0"}))
+
+        # 4-part version: regex extracts "1.2.3.4" -> takes first 3 parts
+        prop_four = self.property(key="version", value="1.2.3", operator="semver_eq")
+        self.assertTrue(match_property(prop_four, {"version": "1.2.3.4"}))
+
+        # Truly invalid values raise InconclusiveMatchError
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"version": "abc"})
+
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"version": ""})
+
+        # Leading dot: ".1.2.3" -> regex extracts "1.2.3"
+        self.assertTrue(match_property(prop, {"version": ".1.2.3"}))
+
+        # Caret with v-prefix in flag value
+        prop_caret_v = self.property(
+            key="version", value="v1.2.3", operator="semver_caret"
+        )
+        self.assertTrue(match_property(prop_caret_v, {"version": "1.5.0"}))
+        self.assertFalse(match_property(prop_caret_v, {"version": "2.0.0"}))
+
+        # Wildcard with v-prefix in property value
+        prop_wild = self.property(
+            key="version", value="1.2.*", operator="semver_wildcard"
+        )
+        self.assertTrue(match_property(prop_wild, {"version": "v1.2.5"}))
+        self.assertFalse(match_property(prop_wild, {"version": "v1.3.0"}))
+
+    def test_match_properties_semver_invalid_values(self):
+        prop = self.property(key="version", value="1.2.3", operator="semver_eq")
+
+        # Invalid person property value
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"version": "not-a-version"})
+
+        # Missing key
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"other_key": "1.2.3"})
+
+        # None override value returns False (handled before semver logic)
+        self.assertFalse(match_property(prop, {"version": None}))
+
+        # Invalid flag value
+        prop_bad = self.property(key="version", value="not-valid", operator="semver_gt")
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop_bad, {"version": "1.2.3"})
+
     def test_unknown_operator(self):
         property_a = self.property(key="key", value="2022-05-01", operator="is_unknown")
         with self.assertRaises(InconclusiveMatchError) as exception_context:
