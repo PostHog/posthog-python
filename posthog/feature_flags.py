@@ -14,18 +14,6 @@ from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
-SEMVER_OPERATORS = (
-    "semver_eq",
-    "semver_neq",
-    "semver_gt",
-    "semver_gte",
-    "semver_lt",
-    "semver_lte",
-    "semver_tilde",
-    "semver_caret",
-    "semver_wildcard",
-)
-
 log = logging.getLogger("posthog")
 
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
@@ -517,7 +505,17 @@ def match_property(property, property_values) -> bool:
                 "The date provided must be a string or date object"
             )
 
-    if operator in SEMVER_OPERATORS:
+    if operator in (
+        "semver_eq",
+        "semver_neq",
+        "semver_gt",
+        "semver_gte",
+        "semver_lt",
+        "semver_lte",
+        "semver_tilde",
+        "semver_caret",
+        "semver_wildcard",
+    ):
         try:
             override_parsed = parse_semver(override_value)
         except (ValueError, TypeError):
