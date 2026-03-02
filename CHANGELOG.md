@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.5 — 2026-03-02
+
+### Patch changes
+
+- [830244b](https://github.com/posthog/posthog-python/commit/830244bd409b1992ae2e49610f8f87d2cdfc8096) add semver targeting support to local evaluation — Thanks @dmarticus!
+
 ## 7.9.4 — 2026-02-25
 
 ### Patch changes
