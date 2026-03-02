@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.6 — 2026-03-02
+
+### Patch changes
+
+- [8d83315](https://github.com/posthog/posthog-python/commit/8d83315b67c21eb9e7d6c17bae27ada98ca2643d) add PROPERTY_OPERATORS constant for match_property — Thanks @dmarticus!
+
 ## 7.9.5 — 2026-03-02
 
 ### Patch changes
