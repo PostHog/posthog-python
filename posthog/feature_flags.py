@@ -505,6 +505,79 @@ def match_property(property, property_values) -> bool:
                 "The date provided must be a string or date object"
             )
 
+    if operator in (
+        "semver_eq",
+        "semver_neq",
+        "semver_gt",
+        "semver_gte",
+        "semver_lt",
+        "semver_lte",
+        "semver_tilde",
+        "semver_caret",
+        "semver_wildcard",
+    ):
+        try:
+            override_parsed = parse_semver(override_value)
+        except (ValueError, TypeError):
+            raise InconclusiveMatchError(
+                f"Person property value '{override_value}' is not a valid semver"
+            )
+
+        if operator in (
+            "semver_eq",
+            "semver_neq",
+            "semver_gt",
+            "semver_gte",
+            "semver_lt",
+            "semver_lte",
+        ):
+            try:
+                flag_parsed = parse_semver(value)
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not a valid semver"
+                )
+
+            if operator == "semver_eq":
+                return override_parsed == flag_parsed
+            elif operator == "semver_neq":
+                return override_parsed != flag_parsed
+            elif operator == "semver_gt":
+                return override_parsed > flag_parsed
+            elif operator == "semver_gte":
+                return override_parsed >= flag_parsed
+            elif operator == "semver_lt":
+                return override_parsed < flag_parsed
+            elif operator == "semver_lte":
+                return override_parsed <= flag_parsed
+
+        elif operator == "semver_tilde":
+            try:
+                lower, upper = _tilde_bounds(str(value))
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not valid for tilde operator"
+                )
+            return lower <= override_parsed < upper
+
+        elif operator == "semver_caret":
+            try:
+                lower, upper = _caret_bounds(str(value))
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not valid for caret operator"
+                )
+            return lower <= override_parsed < upper
+
+        elif operator == "semver_wildcard":
+            try:
+                lower, upper = _wildcard_bounds(str(value))
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not valid for wildcard operator"
+                )
+            return lower <= override_parsed < upper
+
     # if we get here, we don't know how to handle the operator
     raise InconclusiveMatchError(f"Unknown operator {operator}")
 
@@ -686,3 +759,75 @@ def relative_date_parse_for_feature_flag_matching(
         return parsed_dt
     else:
         return None
+
+
+def parse_semver(value: str) -> tuple:
+    """Parse a semver string into a comparable (major, minor, patch) integer tuple.
+
+    Matches the behavior of the sortableSemver HogQL function:
+    - Handles v-prefix, whitespace, pre-release suffixes
+    - Defaults missing components to 0 (e.g., 1.2 -> 1.2.0)
+    Raises ValueError if parsing fails.
+    """
+    text = str(value).strip().lstrip("vV")
+    # Strip pre-release/build metadata suffix
+    text = text.split("-")[0].split("+")[0]
+    parts = text.split(".")
+
+    if not parts or not parts[0]:
+        raise ValueError("Invalid semver format")
+
+    major = int(parts[0])
+    minor = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+    patch = int(parts[2]) if len(parts) > 2 and parts[2] else 0
+
+    return (major, minor, patch)
+
+
+def _tilde_bounds(value: str) -> tuple:
+    """~1.2.3 means >=1.2.3 <1.3.0 (allows patch-level changes)."""
+    major, minor, patch = parse_semver(value)
+    return (major, minor, patch), (major, minor + 1, 0)
+
+
+def _caret_bounds(value: str) -> tuple:
+    """Caret follows semver spec:
+    ^1.2.3 means >=1.2.3 <2.0.0
+    ^0.2.3 means >=0.2.3 <0.3.0
+    ^0.0.3 means >=0.0.3 <0.0.4
+    """
+    major, minor, patch = parse_semver(value)
+    lower = (major, minor, patch)
+
+    if major > 0:
+        upper = (major + 1, 0, 0)
+    elif minor > 0:
+        upper = (0, minor + 1, 0)
+    else:
+        upper = (0, 0, patch + 1)
+
+    return lower, upper
+
+
+def _wildcard_bounds(value: str) -> tuple:
+    """Wildcard matching:
+    1.* means >=1.0.0 <2.0.0
+    1.2.* means >=1.2.0 <1.3.0
+    """
+    cleaned = str(value).strip().lstrip("vV").replace("*", "").rstrip(".")
+    if not cleaned:
+        raise ValueError("Invalid wildcard pattern")
+
+    parts = [p for p in cleaned.split(".") if p]
+    if not parts:
+        raise ValueError("Invalid wildcard pattern")
+
+    if len(parts) == 1:
+        major = int(parts[0])
+        return (major, 0, 0), (major + 1, 0, 0)
+    elif len(parts) == 2:
+        major, minor = int(parts[0]), int(parts[1])
+        return (major, minor, 0), (major, minor + 1, 0)
+    else:
+        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+        return (major, minor, patch), (major, minor, patch + 1)
