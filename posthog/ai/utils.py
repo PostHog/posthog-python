@@ -449,6 +449,7 @@ def call_llm_and_track_usage(
                     sdk_tags, posthog_properties
                 )
                 ph_client.capture(
+                    distinct_id=contexts.get_context_distinct_id(),
                     event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
@@ -587,6 +588,7 @@ async def call_llm_and_track_usage_async(
                     sdk_tags, posthog_properties
                 )
                 ph_client.capture(
+                    distinct_id=contexts.get_context_distinct_id(),
                     event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
