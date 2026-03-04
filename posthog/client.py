@@ -1810,6 +1810,12 @@ class Client(object):
             self.load_feature_flags()
         response = None
 
+        if not self.feature_flags:
+            self.log.warning(
+                "[FEATURE FLAGS] Local evaluation called but feature flag definitions are not loaded yet. "
+                "Returning None. You can call load_feature_flags() to load flags explicitly."
+            )
+
         if self.feature_flags:
             assert self.feature_flags_by_key is not None, (
                 "feature_flags_by_key should be initialized when feature_flags is set"
