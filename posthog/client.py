@@ -1621,7 +1621,7 @@ class Client(object):
                     distinct_id, key, flag_result, self.flag_definition_version
                 )
         elif only_evaluate_locally:
-            if not self.feature_flags:
+            if self.feature_flags is None:
                 self.log.warning(
                     "[FEATURE FLAGS] Local evaluation called but feature flag definitions are not loaded yet. "
                     "Returning None. You can call load_feature_flags() to load flags explicitly."
