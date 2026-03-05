@@ -1620,7 +1620,13 @@ class Client(object):
                 self.flag_cache.set_cached_flag(
                     distinct_id, key, flag_result, self.flag_definition_version
                 )
-        elif not only_evaluate_locally:
+        elif only_evaluate_locally:
+            if not self.feature_flags:
+                self.log.warning(
+                    "[FEATURE FLAGS] Local evaluation called but feature flag definitions are not loaded yet. "
+                    "Returning None. You can call load_feature_flags() to load flags explicitly."
+                )
+        else:
             try:
                 flag_details, request_id, evaluated_at, errors_while_computing = (
                     self._get_feature_flag_details_from_server(
@@ -1809,12 +1815,6 @@ class Client(object):
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
-
-        if not self.feature_flags:
-            self.log.warning(
-                "[FEATURE FLAGS] Local evaluation called but feature flag definitions are not loaded yet. "
-                "Returning None. You can call load_feature_flags() to load flags explicitly."
-            )
 
         if self.feature_flags:
             assert self.feature_flags_by_key is not None, (
