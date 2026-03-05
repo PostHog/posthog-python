@@ -2,7 +2,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, cast
 
-from posthog import get_tags, identify_context, new_context, tag
+from posthog import get_tags, identify_context, new_context, tag, contexts
 from posthog.ai.sanitization import (
     sanitize_anthropic,
     sanitize_gemini,
@@ -366,6 +366,16 @@ def call_llm_and_track_usage(
             if posthog_trace_id is None:
                 posthog_trace_id = str(uuid.uuid4())
 
+            # Check if we have a real user distinct_id (from param or outer context)
+            has_person_distinct_id = (
+                posthog_distinct_id is not None
+                or contexts.get_context_distinct_id() is not None
+            )
+
+            if not has_person_distinct_id:
+                # Fall back to trace_id as distinct_id when no real user id is available.
+                identify_context(posthog_trace_id)
+
             if response and (
                 hasattr(response, "usage")
                 or (provider == "gemini" and hasattr(response, "usage_metadata"))
@@ -421,7 +431,7 @@ def call_llm_and_track_usage(
                 # Already serialized by converters
                 tag("$ai_usage", raw_usage)
 
-            if posthog_distinct_id is None:
+            if not has_person_distinct_id:
                 tag("$process_person_profile", False)
 
             # Process instructions for Responses API
@@ -445,7 +455,7 @@ def call_llm_and_track_usage(
                     sdk_tags, posthog_properties
                 )
                 ph_client.capture(
-                    distinct_id=posthog_distinct_id or posthog_trace_id,
+                    distinct_id=contexts.get_context_distinct_id(),
                     event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
@@ -501,6 +511,16 @@ async def call_llm_and_track_usage_async(
             if posthog_trace_id is None:
                 posthog_trace_id = str(uuid.uuid4())
 
+            # Check if we have a real user distinct_id (from param or outer context)
+            has_person_distinct_id = (
+                posthog_distinct_id is not None
+                or contexts.get_context_distinct_id() is not None
+            )
+
+            if not has_person_distinct_id:
+                # Fall back to trace_id as distinct_id when no real user id is available.
+                identify_context(posthog_trace_id)
+
             if response and (
                 hasattr(response, "usage")
                 or (provider == "gemini" and hasattr(response, "usage_metadata"))
@@ -556,7 +576,7 @@ async def call_llm_and_track_usage_async(
                 # Already serialized by converters
                 tag("$ai_usage", raw_usage)
 
-            if posthog_distinct_id is None:
+            if not has_person_distinct_id:
                 tag("$process_person_profile", False)
 
             # Process instructions for Responses API
@@ -580,7 +600,7 @@ async def call_llm_and_track_usage_async(
                     sdk_tags, posthog_properties
                 )
                 ph_client.capture(
-                    distinct_id=posthog_distinct_id or posthog_trace_id,
+                    distinct_id=contexts.get_context_distinct_id(),
                     event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
