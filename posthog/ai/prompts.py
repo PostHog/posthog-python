@@ -239,6 +239,9 @@ class Prompts:
             name: Specific prompt name to clear. If None, clears all cached prompts.
             version: Specific prompt version to clear. Requires name.
         """
+        if version is not None and name is None:
+            raise ValueError("'version' requires 'name' to be provided")
+
         if name is None:
             self._cache.clear()
             return

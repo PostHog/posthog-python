@@ -618,6 +618,16 @@ class TestPromptsCompile(TestPrompts):
 class TestPromptsClearCache(TestPrompts):
     """Tests for the Prompts.clear_cache() method."""
 
+    def test_clear_cache_with_version_and_no_name_raises_value_error(self):
+        """Should enforce that versioned cache clearing requires a prompt name."""
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        with self.assertRaises(ValueError) as context:
+            prompts.clear_cache(version=1)
+
+        self.assertIn("requires 'name'", str(context.exception))
+
     @patch("posthog.ai.prompts._get_session")
     def test_clear_a_specific_prompt_from_cache(self, mock_get_session):
         """Should clear a specific prompt from cache."""
