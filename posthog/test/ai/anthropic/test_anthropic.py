@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
+from posthog import identify_context, new_context
+
 try:
     from anthropic.types import Message, Usage
 
@@ -1302,3 +1304,87 @@ def test_async_streaming_with_web_search(
         assert props["$ai_web_search_count"] == 2
         assert props["$ai_input_tokens"] == 50
         assert props["$ai_output_tokens"] == 25
+
+
+# =======================
+# Distinct ID Context Tests
+# =======================
+
+
+def test_no_distinct_id_uses_trace_id_and_personless(mock_client, mock_anthropic_response):
+    """When no distinct_id is provided and no outer context, trace_id is used and event is personless."""
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_trace_id="trace-123",
+        )
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "trace-123"
+        assert props["$process_person_profile"] is False
+
+
+def test_explicit_distinct_id_creates_person_profile(mock_client, mock_anthropic_response):
+    """When posthog_distinct_id is explicitly passed, it is used and event is not personless."""
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="user-123",
+            posthog_trace_id="trace-123",
+        )
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "user-123"
+        assert "$process_person_profile" not in props or props["$process_person_profile"] is not False
+
+
+def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response):
+    """When an outer context has a distinct_id, it should be used instead of trace_id."""
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        with new_context():
+            identify_context("outer-user-456")
+            client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "Hello"}],
+                posthog_trace_id="trace-123",
+            )
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "outer-user-456"
+        assert "$process_person_profile" not in props or props["$process_person_profile"] is not False
+
+
+def test_explicit_distinct_id_overrides_outer_context(mock_client, mock_anthropic_response):
+    """When both outer context and explicit posthog_distinct_id are set, explicit wins."""
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        with new_context():
+            identify_context("outer-user-456")
+            client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "Hello"}],
+                posthog_distinct_id="explicit-user-789",
+                posthog_trace_id="trace-123",
+            )
+
+        call_args = mock_client.capture.call_args[1]
+        assert call_args["distinct_id"] == "explicit-user-789"

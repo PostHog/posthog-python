@@ -366,8 +366,11 @@ def call_llm_and_track_usage(
             if posthog_trace_id is None:
                 posthog_trace_id = str(uuid.uuid4())
 
-            if not contexts.get_context_distinct_id():
-                # Use trace_id as district_id if it's not defined.
+            # Check if we have a real user distinct_id (from param or outer context)
+            has_person_distinct_id = posthog_distinct_id is not None or contexts.get_context_distinct_id() is not None
+
+            if not has_person_distinct_id:
+                # Fall back to trace_id as distinct_id when no real user id is available.
                 identify_context(posthog_trace_id)
 
             if response and (
@@ -425,7 +428,7 @@ def call_llm_and_track_usage(
                 # Already serialized by converters
                 tag("$ai_usage", raw_usage)
 
-            if posthog_distinct_id is None:
+            if not has_person_distinct_id:
                 tag("$process_person_profile", False)
 
             # Process instructions for Responses API
@@ -505,8 +508,11 @@ async def call_llm_and_track_usage_async(
             if posthog_trace_id is None:
                 posthog_trace_id = str(uuid.uuid4())
 
-            if not contexts.get_context_distinct_id():
-                # Use trace_id as district_id if it's not defined.
+            # Check if we have a real user distinct_id (from param or outer context)
+            has_person_distinct_id = posthog_distinct_id is not None or contexts.get_context_distinct_id() is not None
+
+            if not has_person_distinct_id:
+                # Fall back to trace_id as distinct_id when no real user id is available.
                 identify_context(posthog_trace_id)
 
             if response and (
@@ -564,7 +570,7 @@ async def call_llm_and_track_usage_async(
                 # Already serialized by converters
                 tag("$ai_usage", raw_usage)
 
-            if posthog_distinct_id is None:
+            if not has_person_distinct_id:
                 tag("$process_person_profile", False)
 
             # Process instructions for Responses API
