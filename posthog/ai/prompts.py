@@ -19,6 +19,7 @@ APP_ENDPOINT = "https://us.posthog.com"
 DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
+PromptCacheKey = tuple[str, Optional[int]]
 
 
 class CachedPrompt:
@@ -27,6 +28,19 @@ class CachedPrompt:
     def __init__(self, prompt: str, fetched_at: float):
         self.prompt = prompt
         self.fetched_at = fetched_at
+
+
+def _cache_key(name: str, version: Optional[int]) -> PromptCacheKey:
+    """Build a cache key for latest or versioned prompt fetches."""
+    return (name, version)
+
+
+def _prompt_reference(name: str, version: Optional[int]) -> str:
+    """Format a prompt reference for logs and errors."""
+    label = f'prompt "{name}"'
+    if version is not None:
+        return f"{label} version {version}"
+    return label
 
 
 def _is_prompt_api_response(data: Any) -> bool:
@@ -63,6 +77,9 @@ class Prompts:
         # Fetch with caching and fallback
         template = prompts.get('support-system-prompt', fallback='You are a helpful assistant.')
 
+        # Fetch a specific published version
+        prompt_v1 = prompts.get('support-system-prompt', version=1)
+
         # Compile with variables
         system_prompt = prompts.compile(template, {
             'company': 'Acme Corp',
@@ -93,7 +110,7 @@ class Prompts:
         self._default_cache_ttl_seconds = (
             default_cache_ttl_seconds or DEFAULT_CACHE_TTL_SECONDS
         )
-        self._cache: Dict[str, CachedPrompt] = {}
+        self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
 
         if posthog is not None:
             self._personal_api_key = getattr(posthog, "personal_api_key", None) or ""
@@ -112,6 +129,7 @@ class Prompts:
         *,
         cache_ttl_seconds: Optional[int] = None,
         fallback: Optional[str] = None,
+        version: Optional[int] = None,
     ) -> str:
         """
         Fetch a prompt by name from the PostHog API.
@@ -126,6 +144,8 @@ class Prompts:
             name: The name of the prompt to fetch
             cache_ttl_seconds: Cache TTL in seconds (defaults to instance default)
             fallback: Fallback prompt to use if fetch fails and no cache available
+            version: Specific prompt version to fetch. If None, fetches the latest
+                version
 
         Returns:
             The prompt string
@@ -138,9 +158,10 @@ class Prompts:
             if cache_ttl_seconds is not None
             else self._default_cache_ttl_seconds
         )
+        cache_key = _cache_key(name, version)
 
         # Check cache first
-        cached = self._cache.get(name)
+        cached = self._cache.get(cache_key)
         now = time.time()
 
         if cached is not None:
@@ -151,21 +172,22 @@ class Prompts:
 
         # Try to fetch from API
         try:
-            prompt = self._fetch_prompt_from_api(name)
+            prompt = self._fetch_prompt_from_api(name, version)
             fetched_at = time.time()
 
             # Update cache
-            self._cache[name] = CachedPrompt(prompt=prompt, fetched_at=fetched_at)
+            self._cache[cache_key] = CachedPrompt(prompt=prompt, fetched_at=fetched_at)
 
             return prompt
 
         except Exception as error:
+            prompt_reference = _prompt_reference(name, version)
             # Fallback order:
             # 1. Return stale cache (with warning)
             if cached is not None:
                 log.warning(
-                    '[PostHog Prompts] Failed to fetch prompt "%s", using stale cache: %s',
-                    name,
+                    "[PostHog Prompts] Failed to fetch %s, using stale cache: %s",
+                    prompt_reference,
                     error,
                 )
                 return cached.prompt
@@ -173,8 +195,8 @@ class Prompts:
             # 2. Return fallback (with warning)
             if fallback is not None:
                 log.warning(
-                    '[PostHog Prompts] Failed to fetch prompt "%s", using fallback: %s',
-                    name,
+                    "[PostHog Prompts] Failed to fetch %s, using fallback: %s",
+                    prompt_reference,
                     error,
                 )
                 return fallback
@@ -207,27 +229,40 @@ class Prompts:
 
         return re.sub(r"\{\{([\w.-]+)\}\}", replace_variable, prompt)
 
-    def clear_cache(self, name: Optional[str] = None) -> None:
+    def clear_cache(
+        self, name: Optional[str] = None, *, version: Optional[int] = None
+    ) -> None:
         """
         Clear cached prompts.
 
         Args:
-            name: Specific prompt to clear. If None, clears all cached prompts.
+            name: Specific prompt name to clear. If None, clears all cached prompts.
+            version: Specific prompt version to clear. Requires name.
         """
-        if name is not None:
-            self._cache.pop(name, None)
-        else:
+        if name is None:
             self._cache.clear()
+            return
 
-    def _fetch_prompt_from_api(self, name: str) -> str:
+        if version is not None:
+            self._cache.pop(_cache_key(name, version), None)
+            return
+
+        keys_to_clear = [key for key in self._cache if key[0] == name]
+        for key in keys_to_clear:
+            self._cache.pop(key, None)
+
+    def _fetch_prompt_from_api(self, name: str, version: Optional[int] = None) -> str:
         """
         Fetch prompt from PostHog API.
 
-        Endpoint: {host}/api/environments/@current/llm_prompts/name/{encoded_name}/?token={encoded_project_api_key}
+        Endpoint:
+            {host}/api/environments/@current/llm_prompts/name/{encoded_name}/
+            ?token={encoded_project_api_key}[&version={version}]
         Auth: Bearer {personal_api_key}
 
         Args:
             name: The name of the prompt to fetch
+            version: Specific prompt version to fetch. If None, fetches the latest
 
         Returns:
             The prompt string
@@ -247,8 +282,13 @@ class Prompts:
             )
 
         encoded_name = urllib.parse.quote(name, safe="")
-        encoded_project_api_key = urllib.parse.quote(self._project_api_key, safe="")
-        url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/?token={encoded_project_api_key}"
+        query_params: Dict[str, Union[str, int]] = {"token": self._project_api_key}
+        if version is not None:
+            query_params["version"] = version
+        encoded_query = urllib.parse.urlencode(query_params)
+        url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/?{encoded_query}"
+        prompt_reference = _prompt_reference(name, version)
+        prompt_label = prompt_reference[:1].upper() + prompt_reference[1:]
 
         headers = {
             "Authorization": f"Bearer {self._personal_api_key}",
@@ -259,28 +299,28 @@ class Prompts:
 
         if not response.ok:
             if response.status_code == 404:
-                raise Exception(f'[PostHog Prompts] Prompt "{name}" not found')
+                raise Exception(f"[PostHog Prompts] {prompt_label} not found")
 
             if response.status_code == 403:
                 raise Exception(
-                    f'[PostHog Prompts] Access denied for prompt "{name}". '
+                    f"[PostHog Prompts] Access denied for {prompt_reference}. "
                     "Check that your personal_api_key has the correct permissions and the LLM prompts feature is enabled."
                 )
 
             raise Exception(
-                f'[PostHog Prompts] Failed to fetch prompt "{name}": HTTP {response.status_code}'
+                f"[PostHog Prompts] Failed to fetch {prompt_label}: HTTP {response.status_code}"
             )
 
         try:
             data = response.json()
         except Exception:
             raise Exception(
-                f'[PostHog Prompts] Invalid response format for prompt "{name}"'
+                f"[PostHog Prompts] Invalid response format for {prompt_label}"
             )
 
         if not _is_prompt_api_response(data):
             raise Exception(
-                f'[PostHog Prompts] Invalid response format for prompt "{name}"'
+                f"[PostHog Prompts] Invalid response format for {prompt_label}"
             )
 
         return data["prompt"]
