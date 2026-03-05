@@ -367,7 +367,10 @@ def call_llm_and_track_usage(
                 posthog_trace_id = str(uuid.uuid4())
 
             # Check if we have a real user distinct_id (from param or outer context)
-            has_person_distinct_id = posthog_distinct_id is not None or contexts.get_context_distinct_id() is not None
+            has_person_distinct_id = (
+                posthog_distinct_id is not None
+                or contexts.get_context_distinct_id() is not None
+            )
 
             if not has_person_distinct_id:
                 # Fall back to trace_id as distinct_id when no real user id is available.
@@ -509,7 +512,10 @@ async def call_llm_and_track_usage_async(
                 posthog_trace_id = str(uuid.uuid4())
 
             # Check if we have a real user distinct_id (from param or outer context)
-            has_person_distinct_id = posthog_distinct_id is not None or contexts.get_context_distinct_id() is not None
+            has_person_distinct_id = (
+                posthog_distinct_id is not None
+                or contexts.get_context_distinct_id() is not None
+            )
 
             if not has_person_distinct_id:
                 # Fall back to trace_id as distinct_id when no real user id is available.

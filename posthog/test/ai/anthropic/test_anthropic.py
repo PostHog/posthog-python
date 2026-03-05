@@ -1311,7 +1311,9 @@ def test_async_streaming_with_web_search(
 # =======================
 
 
-def test_no_distinct_id_uses_trace_id_and_personless(mock_client, mock_anthropic_response):
+def test_no_distinct_id_uses_trace_id_and_personless(
+    mock_client, mock_anthropic_response
+):
     """When no distinct_id is provided and no outer context, trace_id is used and event is personless."""
     with patch(
         "anthropic.resources.Messages.create", return_value=mock_anthropic_response
@@ -1330,7 +1332,9 @@ def test_no_distinct_id_uses_trace_id_and_personless(mock_client, mock_anthropic
         assert props["$process_person_profile"] is False
 
 
-def test_explicit_distinct_id_creates_person_profile(mock_client, mock_anthropic_response):
+def test_explicit_distinct_id_creates_person_profile(
+    mock_client, mock_anthropic_response
+):
     """When posthog_distinct_id is explicitly passed, it is used and event is not personless."""
     with patch(
         "anthropic.resources.Messages.create", return_value=mock_anthropic_response
@@ -1347,7 +1351,10 @@ def test_explicit_distinct_id_creates_person_profile(mock_client, mock_anthropic
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "user-123"
-        assert "$process_person_profile" not in props or props["$process_person_profile"] is not False
+        assert (
+            "$process_person_profile" not in props
+            or props["$process_person_profile"] is not False
+        )
 
 
 def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response):
@@ -1368,10 +1375,15 @@ def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response)
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "outer-user-456"
-        assert "$process_person_profile" not in props or props["$process_person_profile"] is not False
+        assert (
+            "$process_person_profile" not in props
+            or props["$process_person_profile"] is not False
+        )
 
 
-def test_explicit_distinct_id_overrides_outer_context(mock_client, mock_anthropic_response):
+def test_explicit_distinct_id_overrides_outer_context(
+    mock_client, mock_anthropic_response
+):
     """When both outer context and explicit posthog_distinct_id are set, explicit wins."""
     with patch(
         "anthropic.resources.Messages.create", return_value=mock_anthropic_response
