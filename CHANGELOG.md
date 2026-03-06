@@ -1,5 +1,12 @@
 # posthog
 
+## 7.9.7 — 2026-03-05
+
+### Patch changes
+
+- [b206669](https://github.com/posthog/posthog-python/commit/b206669bf62c923346ad28881dc4694d933ca424) fix(llma): use distinct_id from outer context if not provided, fix $process_person_profile for context-based identity — Thanks @ethanporcaro for your first contribution 🎉!
+- [a99c7d7](https://github.com/posthog/posthog-python/commit/a99c7d73b1e0ef1f35d856c82ace21237ee253a3) Add warning log for local flag evaluation cold start — Thanks @dmarticus!
+
 ## 7.9.6 — 2026-03-02
 
 ### Patch changes
