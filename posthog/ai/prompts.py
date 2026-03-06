@@ -35,9 +35,12 @@ def _cache_key(name: str, version: Optional[int]) -> PromptCacheKey:
     return (name, version)
 
 
-def _prompt_reference(name: str, version: Optional[int]) -> str:
+def _prompt_reference(
+    name: str, version: Optional[int], *, capitalize: bool = False
+) -> str:
     """Format a prompt reference for logs and errors."""
-    label = f'prompt "{name}"'
+    prefix = "Prompt" if capitalize else "prompt"
+    label = f'{prefix} "{name}"'
     if version is not None:
         return f"{label} version {version}"
     return label
@@ -291,7 +294,7 @@ class Prompts:
         encoded_query = urllib.parse.urlencode(query_params)
         url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/?{encoded_query}"
         prompt_reference = _prompt_reference(name, version)
-        prompt_label = prompt_reference[:1].upper() + prompt_reference[1:]
+        prompt_label = _prompt_reference(name, version, capitalize=True)
 
         headers = {
             "Authorization": f"Bearer {self._personal_api_key}",
