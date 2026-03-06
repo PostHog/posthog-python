@@ -1,5 +1,30 @@
 # posthog
 
+## 7.9.7 — 2026-03-05
+
+### Patch changes
+
+- [b206669](https://github.com/posthog/posthog-python/commit/b206669bf62c923346ad28881dc4694d933ca424) fix(llma): use distinct_id from outer context if not provided, fix $process_person_profile for context-based identity — Thanks @ethanporcaro for your first contribution 🎉!
+- [a99c7d7](https://github.com/posthog/posthog-python/commit/a99c7d73b1e0ef1f35d856c82ace21237ee253a3) Add warning log for local flag evaluation cold start — Thanks @dmarticus!
+
+## 7.9.6 — 2026-03-02
+
+### Patch changes
+
+- [8d83315](https://github.com/posthog/posthog-python/commit/8d83315b67c21eb9e7d6c17bae27ada98ca2643d) add PROPERTY_OPERATORS constant for match_property — Thanks @dmarticus!
+
+## 7.9.5 — 2026-03-02
+
+### Patch changes
+
+- [830244b](https://github.com/posthog/posthog-python/commit/830244bd409b1992ae2e49610f8f87d2cdfc8096) add semver targeting support to local evaluation — Thanks @dmarticus!
+
+## 7.9.4 — 2026-02-25
+
+### Patch changes
+
+- [a68a6a6](https://github.com/posthog/posthog-python/commit/a68a6a6d045072c88eeee7acac441536919b5954) feat(llma): add `$ai_tokens_source` property ("sdk" or "passthrough") to all `$ai_generation` events to detect when token values are externally overridden via `posthog_properties` — Thanks @carlos-marchal-ph!
+
 ## 7.9.3 — 2026-02-18
 
 ### Patch changes

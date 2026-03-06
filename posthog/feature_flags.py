@@ -18,6 +18,30 @@ log = logging.getLogger("posthog")
 
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
 
+# All operators supported by match_property, grouped by category.
+EQUALITY_OPERATORS = ("exact", "is_not", "is_set", "is_not_set")
+STRING_OPERATORS = ("icontains", "not_icontains", "regex", "not_regex")
+NUMERIC_OPERATORS = ("gt", "gte", "lt", "lte")
+DATE_OPERATORS = ("is_date_before", "is_date_after")
+SEMVER_COMPARISON_OPERATORS = (
+    "semver_eq",
+    "semver_neq",
+    "semver_gt",
+    "semver_gte",
+    "semver_lt",
+    "semver_lte",
+)
+SEMVER_RANGE_OPERATORS = ("semver_tilde", "semver_caret", "semver_wildcard")
+SEMVER_OPERATORS = SEMVER_COMPARISON_OPERATORS + SEMVER_RANGE_OPERATORS
+
+PROPERTY_OPERATORS = (
+    EQUALITY_OPERATORS
+    + STRING_OPERATORS
+    + NUMERIC_OPERATORS
+    + DATE_OPERATORS
+    + SEMVER_OPERATORS
+)
+
 
 class InconclusiveMatchError(Exception):
     pass
@@ -385,6 +409,9 @@ def match_property(property, property_values) -> bool:
     operator = property.get("operator") or "exact"
     value = property.get("value")
 
+    if operator not in PROPERTY_OPERATORS:
+        raise InconclusiveMatchError(f"Unknown operator {operator}")
+
     if key not in property_values:
         raise InconclusiveMatchError(
             "can't match properties without a given property value"
@@ -505,7 +532,64 @@ def match_property(property, property_values) -> bool:
                 "The date provided must be a string or date object"
             )
 
-    # if we get here, we don't know how to handle the operator
+    if operator in SEMVER_OPERATORS:
+        try:
+            override_parsed = parse_semver(override_value)
+        except (ValueError, TypeError):
+            raise InconclusiveMatchError(
+                f"Person property value '{override_value}' is not a valid semver"
+            )
+
+        if operator in SEMVER_COMPARISON_OPERATORS:
+            try:
+                flag_parsed = parse_semver(value)
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not a valid semver"
+                )
+
+            if operator == "semver_eq":
+                return override_parsed == flag_parsed
+            elif operator == "semver_neq":
+                return override_parsed != flag_parsed
+            elif operator == "semver_gt":
+                return override_parsed > flag_parsed
+            elif operator == "semver_gte":
+                return override_parsed >= flag_parsed
+            elif operator == "semver_lt":
+                return override_parsed < flag_parsed
+            elif operator == "semver_lte":
+                return override_parsed <= flag_parsed
+
+        elif operator == "semver_tilde":
+            try:
+                lower, upper = _tilde_bounds(str(value))
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not valid for tilde operator"
+                )
+            return lower <= override_parsed < upper
+
+        elif operator == "semver_caret":
+            try:
+                lower, upper = _caret_bounds(str(value))
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not valid for caret operator"
+                )
+            return lower <= override_parsed < upper
+
+        elif operator == "semver_wildcard":
+            try:
+                lower, upper = _wildcard_bounds(str(value))
+            except (ValueError, TypeError):
+                raise InconclusiveMatchError(
+                    f"Flag semver value '{value}' is not valid for wildcard operator"
+                )
+            return lower <= override_parsed < upper
+
+    # Unreachable: all operators in PROPERTY_OPERATORS are handled above,
+    # and unknown operators are rejected at the top of this function.
     raise InconclusiveMatchError(f"Unknown operator {operator}")
 
 
@@ -686,3 +770,75 @@ def relative_date_parse_for_feature_flag_matching(
         return parsed_dt
     else:
         return None
+
+
+def parse_semver(value: str) -> tuple:
+    """Parse a semver string into a comparable (major, minor, patch) integer tuple.
+
+    Matches the behavior of the sortableSemver HogQL function:
+    - Handles v-prefix, whitespace, pre-release suffixes
+    - Defaults missing components to 0 (e.g., 1.2 -> 1.2.0)
+    Raises ValueError if parsing fails.
+    """
+    text = str(value).strip().lstrip("vV")
+    # Strip pre-release/build metadata suffix
+    text = text.split("-")[0].split("+")[0]
+    parts = text.split(".")
+
+    if not parts or not parts[0]:
+        raise ValueError("Invalid semver format")
+
+    major = int(parts[0])
+    minor = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+    patch = int(parts[2]) if len(parts) > 2 and parts[2] else 0
+
+    return (major, minor, patch)
+
+
+def _tilde_bounds(value: str) -> tuple:
+    """~1.2.3 means >=1.2.3 <1.3.0 (allows patch-level changes)."""
+    major, minor, patch = parse_semver(value)
+    return (major, minor, patch), (major, minor + 1, 0)
+
+
+def _caret_bounds(value: str) -> tuple:
+    """Caret follows semver spec:
+    ^1.2.3 means >=1.2.3 <2.0.0
+    ^0.2.3 means >=0.2.3 <0.3.0
+    ^0.0.3 means >=0.0.3 <0.0.4
+    """
+    major, minor, patch = parse_semver(value)
+    lower = (major, minor, patch)
+
+    if major > 0:
+        upper = (major + 1, 0, 0)
+    elif minor > 0:
+        upper = (0, minor + 1, 0)
+    else:
+        upper = (0, 0, patch + 1)
+
+    return lower, upper
+
+
+def _wildcard_bounds(value: str) -> tuple:
+    """Wildcard matching:
+    1.* means >=1.0.0 <2.0.0
+    1.2.* means >=1.2.0 <1.3.0
+    """
+    cleaned = str(value).strip().lstrip("vV").replace("*", "").rstrip(".")
+    if not cleaned:
+        raise ValueError("Invalid wildcard pattern")
+
+    parts = [p for p in cleaned.split(".") if p]
+    if not parts:
+        raise ValueError("Invalid wildcard pattern")
+
+    if len(parts) == 1:
+        major = int(parts[0])
+        return (major, 0, 0), (major + 1, 0, 0)
+    elif len(parts) == 2:
+        major, minor = int(parts[0]), int(parts[1])
+        return (major, minor, 0), (major, minor + 1, 0)
+    else:
+        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+        return (major, minor, patch), (major, minor, patch + 1)
