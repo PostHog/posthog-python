@@ -159,7 +159,7 @@ jobs:
 
       - name: Publish posthog to PyPI
         if: steps.commit-release.outputs.commit-hash != ''
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
       # The `posthoganalytics` package is a mirror of `posthog` published under
       # a different name for backwards compatibility. The make target handles
@@ -170,7 +170,7 @@ jobs:
 
       - name: Publish posthoganalytics to PyPI
         if: steps.commit-release.outputs.commit-hash != ''
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
       # We skip `sampo publish` (which normally creates the tag) because we
       # need to publish both posthog and posthoganalytics manually, so we
