@@ -1,5 +1,12 @@
 # posthog
 
+## 7.9.8 — 2026-03-09
+
+### Patch changes
+
+- [11466c6](https://github.com/posthog/posthog-python/commit/11466c625e74864dcb75c951b8efbf87f5ec4c8b) feat(llma): support fetching versioned prompts from the prompts sdk — Thanks @Radu-Raicea!
+- [535e9c5](https://github.com/posthog/posthog-python/commit/535e9c530336930d27ec5dfd6072c55369d36a8e) chore(llma): clean up prompt SDK review follow-ups — Thanks @Radu-Raicea!
+
 ## 7.9.7 — 2026-03-05
 
 ### Patch changes
