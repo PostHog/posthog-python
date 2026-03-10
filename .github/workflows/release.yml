@@ -184,9 +184,15 @@ jobs:
           NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
           COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
         run: |
+          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/tags" \
+            -f "tag=v${NEW_VERSION}" \
+            -f "message=Release v${NEW_VERSION}" \
+            -f "object=${COMMIT_HASH}" \
+            -f "type=commit" \
+            -q '.sha')
           gh api "repos/${{ github.repository }}/git/refs" \
-            -f "ref=refs/tags/v$NEW_VERSION" \
-            -f "sha=$COMMIT_HASH"
+            -f "ref=refs/tags/v${NEW_VERSION}" \
+            -f "sha=${TAG_SHA}"
 
       - name: Create GitHub Release
         if: steps.commit-release.outputs.commit-hash != ''
