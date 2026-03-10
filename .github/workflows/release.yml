@@ -136,8 +136,10 @@ jobs:
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
 
       - name: Sync version to posthog/version.py
+        env:
+          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
         run: |
-          echo 'VERSION = "${{ steps.sampo-release.outputs.new_version }}"' > posthog/version.py
+          echo "VERSION = \"$NEW_VERSION\"" > posthog/version.py
 
       - name: Commit release changes
         id: commit-release
@@ -179,16 +181,19 @@ jobs:
         if: steps.commit-release.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
+          COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
         run: |
           gh api "repos/${{ github.repository }}/git/refs" \
-            -f "ref=refs/tags/v${{ steps.sampo-release.outputs.new_version }}" \
-            -f "sha=${{ steps.commit-release.outputs.commit-hash }}"
+            -f "ref=refs/tags/v$NEW_VERSION" \
+            -f "sha=$COMMIT_HASH"
 
       - name: Create GitHub Release
         if: steps.commit-release.outputs.commit-hash != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "v${{ steps.sampo-release.outputs.new_version }}" --generate-notes
+          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
+        run: gh release create "v$NEW_VERSION" --generate-notes
 
       - name: Dispatch generate-references
         if: steps.commit-release.outputs.commit-hash != ''
