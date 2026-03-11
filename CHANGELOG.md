@@ -1,5 +1,17 @@
 # posthog
 
+## 7.9.10 — 2026-03-10
+
+### Patch changes
+
+- [b48a7ac](https://github.com/posthog/posthog-python/commit/b48a7ac16112a3ae338b95194404710ca57bd75b) chore(ci): attribute release tag to GitHub App — Thanks @Piccirello!
+
+## 7.9.9 — 2026-03-10
+
+### Patch changes
+
+- [591d3e0](https://github.com/posthog/posthog-python/commit/591d3e0ffe88aa7d8913bec9709dc0647b3a09bb) chore(ci): use signed commits when publishing release — Thanks @Piccirello!
+
 ## 7.9.8 — 2026-03-09
 
 ### Patch changes
