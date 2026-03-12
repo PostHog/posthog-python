@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.11 — 2026-03-11
+
+### Patch changes
+
+- [4547810](https://github.com/posthog/posthog-python/commit/4547810669d3c01fa1e1ab7595c00bfc1357ebe1) chore(ci): fix release attribution — Thanks @Piccirello!
+
 ## 7.9.10 — 2026-03-10
 
 ### Patch changes
