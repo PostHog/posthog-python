@@ -253,6 +253,7 @@ privacy_mode = False  # type: bool
 # Whether to enable feature flag polling for local evaluation by default. Defaults to True.
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
+flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvider]
 
 default_client = None  # type: Optional[Client]
 
@@ -867,6 +868,7 @@ def setup() -> Client:
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
             enable_local_evaluation=enable_local_evaluation,
+            flag_definition_cache_provider=flag_definition_cache_provider,
             capture_exception_code_variables=capture_exception_code_variables,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
