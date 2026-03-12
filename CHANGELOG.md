@@ -1,5 +1,11 @@
 # posthog
 
+## 7.9.12 — 2026-03-12
+
+### Patch changes
+
+- [1729be4](https://github.com/posthog/posthog-python/commit/1729be4b5ea87ebd361cc95ce44733b0db596e63) chore(flags): expose flag_definition_cache_provider — Thanks @matheus-vb for your first contribution 🎉!
+
 ## 7.9.11 — 2026-03-11
 
 ### Patch changes
