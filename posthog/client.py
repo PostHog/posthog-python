@@ -219,6 +219,7 @@ class Client(object):
         Category:
             Initialization
         """
+        self._max_queue_size = max_queue_size
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
@@ -331,6 +332,9 @@ class Client(object):
                 # if we've disabled sending, just don't start the consumer
                 if send:
                     consumer.start()
+
+        if hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child=self._reinit_after_fork)
 
     def new_context(self, fresh=False, capture_exceptions=True):
         """
@@ -1079,6 +1083,44 @@ class Client(object):
             return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
+
+    def _reinit_after_fork(self):
+        """Reinitialize queue and consumer threads in a forked child process.
+
+        Registered via os.register_at_fork(after_in_child=...) so it runs
+        exactly once in each child, before any user code, covering all code
+        paths (capture, flush, join, etc.).
+
+        Python threads do not survive fork() and queue.Queue internal locks
+        may be in an inconsistent state, so both are replaced.
+        Inherited queue items are intentionally discarded as they'll be
+        handled by the parent process's consumers.
+        """
+        if self.consumers is None:
+            return
+
+        self.queue = queue.Queue(self._max_queue_size)
+
+        new_consumers = []
+        for old in self.consumers:
+            consumer = Consumer(
+                self.queue,
+                old.api_key,
+                flush_at=old.flush_at,
+                host=old.host,
+                on_error=old.on_error,
+                flush_interval=old.flush_interval,
+                gzip=old.gzip,
+                retries=old.retries,
+                timeout=old.timeout,
+                historical_migration=old.historical_migration,
+            )
+            new_consumers.append(consumer)
+
+            if self.send:
+                consumer.start()
+
+        self.consumers = new_consumers
 
     def _enqueue(self, msg, disable_geoip):
         # type: (...) -> Optional[str]
