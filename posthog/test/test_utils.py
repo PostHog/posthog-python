@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-import six
 from dateutil.tz import tzutc
 from parameterized import parameterized
 from pydantic import BaseModel
@@ -48,7 +47,7 @@ class TestUtils(unittest.TestCase):
     def test_clean(self):
         simple = {
             "decimal": Decimal("0.142857"),
-            "unicode": six.u("woo"),
+            "unicode": "woo",
             "date": datetime.now(),
             "long": 200000000,
             "integer": 1,
