@@ -2735,8 +2735,17 @@ class TestClient(unittest.TestCase):
 
         mock_register_at_fork.assert_called_once()
         after_in_child = mock_register_at_fork.call_args.kwargs["after_in_child"]
-        self.assertEqual(after_in_child.__self__, client)
-        self.assertEqual(after_in_child.__name__, "_reinit_after_fork")
+
+        with mock.patch.object(client, "_reinit_after_fork") as mock_reinit:
+            after_in_child()
+            mock_reinit.assert_called_once()
+
+    @mock.patch("posthog.client.os.register_at_fork")
+    def test_register_at_fork_noop_after_client_gc(self, mock_register_at_fork):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        after_in_child = mock_register_at_fork.call_args.kwargs["after_in_child"]
+        del client
+        after_in_child()
 
     @parameterized.expand([(True, 1), (False, 0)])
     def test_reinit_after_fork_replaces_queue_and_consumers(self, send, expected_starts):
