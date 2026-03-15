@@ -463,6 +463,26 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
 
         self.assertEqual(headers, {CONTEXT_DISTINCT_ID_HEADER: "user-1"})
 
+    def test_prerun_exits_context_on_failure_after_entry(self):
+        mock_client = Mock()
+        integration = PosthogCeleryIntegration(client=mock_client)
+
+        request = SimpleNamespace(
+            headers={},
+            delivery_info={},
+            hostname="worker-1",
+            retries=0,
+        )
+        task = SimpleNamespace(name="app.tasks.boom", request=request)
+
+        ctx_before = contexts._get_current_context()
+
+        with patch.object(integration, "_apply_propagated_identity", side_effect=RuntimeError("boom")):
+            integration._on_task_prerun(sender=task, task_id="task-leak")
+
+        ctx_after = contexts._get_current_context()
+        self.assertIs(ctx_after, ctx_before)
+
     def test_extract_propagated_tags_invalid_json_returns_empty_dict(self):
         integration = PosthogCeleryIntegration()
         request = SimpleNamespace(headers={CONTEXT_TAGS_HEADER: "{bad json"})
