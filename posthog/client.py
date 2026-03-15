@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import warnings
+import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
@@ -340,7 +341,8 @@ class Client(object):
                     consumer.start()
 
         if hasattr(os, "register_at_fork"):
-            os.register_at_fork(after_in_child=self._reinit_after_fork)
+            weak_self = weakref.ref(self)
+            os.register_at_fork(after_in_child=lambda: Client._reinit_after_fork_weak(weak_self))
 
     def _set_before_send(self, before_send):
         if before_send is not None:
@@ -1128,6 +1130,17 @@ class Client(object):
             return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
+
+    @staticmethod
+    def _reinit_after_fork_weak(weak_self):
+        """
+        Reinitialize the client after a fork.
+        Garbage collected if the client is deleted.
+        """
+        self = weak_self()
+        if self is None:
+            return
+        self._reinit_after_fork()
 
     def _reinit_after_fork(self):
         """Reinitialize queue and consumer threads in a forked child process.

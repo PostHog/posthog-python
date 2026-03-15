@@ -207,6 +207,7 @@ class PosthogCeleryIntegration:
             logger.exception("Failed to capture Celery after_task_publish lifecycle event")
 
     def _on_task_prerun(self, *args, **kwargs):
+        context_manager = None
         try:
             task_id = kwargs.get("task_id")
             if not task_id:
@@ -222,17 +223,16 @@ class PosthogCeleryIntegration:
             )
             task_name = task_properties.get("celery_task_name")
 
-            context_manager = contexts.new_context(
-                fresh=True,  # to prevent context bleed across tasks
-                capture_exceptions=False,  # Celery catches task exceptions internally and
-                                           # delivers them via task_failure signal, so they
-                                           # never propagate through the context manager.
-                                           # We capture them in _on_task_failure.
-                client=self.client,
-            )
-            context_manager.__enter__()
-
             if request is not None:
+                context_manager = contexts.new_context(
+                    fresh=True,  # to prevent context bleed across tasks
+                    capture_exceptions=False,  # Celery catches task exceptions internally and
+                                               # delivers them via task_failure signal, so they
+                                               # never propagate through the context manager.
+                                               # We capture them in _on_task_failure.
+                    client=self.client,
+                )
+                context_manager.__enter__()
                 request._posthog_ctx = context_manager
                 request._posthog_start = time.monotonic()
 
@@ -246,6 +246,11 @@ class PosthogCeleryIntegration:
                 self._capture_event("celery task started", properties=task_properties)
         except Exception:
             logger.exception("Failed to process Celery task_prerun")
+            if context_manager is not None:
+                try:
+                    context_manager.__exit__(None, None, None)
+                except Exception:
+                    pass
 
     def _on_task_success(self, *args, **kwargs):
         self._handle_task_end("success", **kwargs)
