@@ -101,7 +101,7 @@ jobs:
           python-version: 3.11.11
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
           pyproject-file: "pyproject.toml"
@@ -126,11 +126,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Prepare release with Sampo
         id: sampo-release
         env:
@@ -141,66 +136,67 @@ jobs:
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
 
       - name: Sync version to posthog/version.py
+        env:
+          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
         run: |
-          echo 'VERSION = "${{ steps.sampo-release.outputs.new_version }}"' > posthog/version.py
+          echo "VERSION = \"$NEW_VERSION\"" > posthog/version.py
 
       - name: Commit release changes
         id: commit-release
+        uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
+        with:
+          commit_message: "chore: Release v${{ steps.sampo-release.outputs.new_version }}"
+          repo: ${{ github.repository }}
+          branch: master
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
-        run: |
-          git add -A
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-            echo "committed=false" >> "$GITHUB_OUTPUT"
-          else
-            git commit -m "chore: Release v${{ steps.sampo-release.outputs.new_version }}"
-            git push origin master
-            echo "committed=true" >> "$GITHUB_OUTPUT"
-          fi
 
       # Publishing is done manually (not via `sampo publish`) because we need to
       # publish both `posthog` and `posthoganalytics` packages to PyPI.
       # Sampo only knows about the `posthog` package, so we handle both here.
       # Both packages use PyPI OIDC trusted publishing (no API tokens needed).
       - name: Build posthog
-        if: steps.commit-release.outputs.committed == 'true'
+        if: steps.commit-release.outputs.commit-hash != ''
         run: uv run make build_release
 
       - name: Publish posthog to PyPI
-        if: steps.commit-release.outputs.committed == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.commit-release.outputs.commit-hash != ''
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
       # The `posthoganalytics` package is a mirror of `posthog` published under
       # a different name for backwards compatibility. The make target handles
       # copying, renaming imports, and building the dist automatically.
       - name: Build posthoganalytics
-        if: steps.commit-release.outputs.committed == 'true'
+        if: steps.commit-release.outputs.commit-hash != ''
         run: uv run make build_release_analytics
 
       - name: Publish posthoganalytics to PyPI
-        if: steps.commit-release.outputs.committed == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.commit-release.outputs.commit-hash != ''
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
       # We skip `sampo publish` (which normally creates the tag) because we
       # need to publish both posthog and posthoganalytics manually, so we
       # create the tag ourselves.
       - name: Tag release
-        if: steps.commit-release.outputs.committed == 'true'
-        run: git tag "v${{ steps.sampo-release.outputs.new_version }}"
-
-      - name: Push tags
-        if: steps.commit-release.outputs.committed == 'true'
-        run: git push origin --tags
+        if: steps.commit-release.outputs.commit-hash != ''
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
+          COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
+        run: |
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f "ref=refs/tags/v${NEW_VERSION}" \
+            -f "sha=${COMMIT_HASH}"
 
       - name: Create GitHub Release
-        if: steps.commit-release.outputs.committed == 'true'
+        if: steps.commit-release.outputs.commit-hash != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "v${{ steps.sampo-release.outputs.new_version }}" --generate-notes
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
+        run: gh release create "v$NEW_VERSION" --generate-notes
 
       - name: Dispatch generate-references
-        if: steps.commit-release.outputs.committed == 'true'
+        if: steps.commit-release.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run generate-references.yml --ref master

@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from parameterized import parameterized
+
 from posthog.ai.prompts import Prompts
 
 
@@ -73,6 +75,30 @@ class TestPromptsGet(TestPrompts):
         )
 
     @patch("posthog.ai.prompts._get_session")
+    def test_successfully_fetch_a_specific_prompt_version(self, mock_get_session):
+        """Should successfully fetch a specific prompt version."""
+        mock_get = mock_get_session.return_value.get
+        versioned_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Prompt version 1",
+            "version": 1,
+        }
+        mock_get.return_value = MockResponse(json_data=versioned_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        result = prompts.get("test-prompt", version=1)
+
+        self.assertEqual(result, versioned_prompt_response["prompt"])
+        mock_get.assert_called_once()
+        call_args = mock_get.call_args
+        self.assertEqual(
+            call_args[0][0],
+            "https://us.posthog.com/api/environments/@current/llm_prompts/name/test-prompt/?token=phc_test_key&version=1",
+        )
+
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
     def test_return_cached_prompt_when_fresh(self, mock_time, mock_get_session):
         """Should return cached prompt when fresh (no API call)."""
@@ -95,6 +121,41 @@ class TestPromptsGet(TestPrompts):
         result2 = prompts.get("test-prompt", cache_ttl_seconds=300)
         self.assertEqual(result2, self.mock_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 1)  # No additional fetch
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_cache_latest_and_versioned_prompts_separately(self, mock_get_session):
+        """Should cache latest and historical prompt versions separately."""
+        mock_get = mock_get_session.return_value.get
+        latest_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Latest prompt",
+            "version": 2,
+        }
+        versioned_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Prompt version 1",
+            "version": 1,
+        }
+
+        mock_get.side_effect = [
+            MockResponse(json_data=latest_prompt_response),
+            MockResponse(json_data=versioned_prompt_response),
+        ]
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
+        self.assertEqual(
+            prompts.get("test-prompt", version=1),
+            versioned_prompt_response["prompt"],
+        )
+        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
+        self.assertEqual(
+            prompts.get("test-prompt", version=1),
+            versioned_prompt_response["prompt"],
+        )
+        self.assertEqual(mock_get.call_count, 2)
 
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
@@ -197,9 +258,21 @@ class TestPromptsGet(TestPrompts):
 
         self.assertIn("Network error", str(context.exception))
 
+    @parameterized.expand(
+        [
+            ("latest", {}, 'Prompt "nonexistent-prompt" not found'),
+            (
+                "versioned",
+                {"version": 3},
+                'Prompt "nonexistent-prompt" version 3 not found',
+            ),
+        ]
+    )
     @patch("posthog.ai.prompts._get_session")
-    def test_handle_404_response(self, mock_get_session):
-        """Should handle 404 response."""
+    def test_handle_404_response(
+        self, _scenario, get_kwargs, expected_message, mock_get_session
+    ):
+        """Should handle 404 responses for latest and versioned prompts."""
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(status_code=404, ok=False)
 
@@ -207,9 +280,9 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("nonexistent-prompt")
+            prompts.get("nonexistent-prompt", **get_kwargs)
 
-        self.assertIn('Prompt "nonexistent-prompt" not found', str(context.exception))
+        self.assertIn(expected_message, str(context.exception))
 
     @patch("posthog.ai.prompts._get_session")
     def test_handle_403_response(self, mock_get_session):
@@ -542,6 +615,38 @@ class TestPromptsCompile(TestPrompts):
 class TestPromptsClearCache(TestPrompts):
     """Tests for the Prompts.clear_cache() method."""
 
+    def _populate_versioned_cache(self, prompts, mock_get):
+        """Populate cache with latest and versioned entries for the same prompt."""
+        latest_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Latest prompt",
+            "version": 2,
+        }
+        versioned_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Prompt version 1",
+            "version": 1,
+        }
+        mock_get.side_effect = [
+            MockResponse(json_data=latest_prompt_response),
+            MockResponse(json_data=versioned_prompt_response),
+        ]
+
+        prompts.get("test-prompt")
+        prompts.get("test-prompt", version=1)
+
+        return latest_prompt_response, versioned_prompt_response
+
+    def test_clear_cache_with_version_and_no_name_raises_value_error(self):
+        """Should enforce that versioned cache clearing requires a prompt name."""
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        with self.assertRaises(ValueError) as context:
+            prompts.clear_cache(version=1)
+
+        self.assertIn("requires 'name'", str(context.exception))
+
     @patch("posthog.ai.prompts._get_session")
     def test_clear_a_specific_prompt_from_cache(self, mock_get_session):
         """Should clear a specific prompt from cache."""
@@ -572,6 +677,49 @@ class TestPromptsClearCache(TestPrompts):
         # other-prompt should still be cached
         prompts.get("other-prompt")
         self.assertEqual(mock_get.call_count, 3)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_clear_a_specific_prompt_version_from_cache(self, mock_get_session):
+        """Should clear only the requested prompt version from cache."""
+        mock_get = mock_get_session.return_value.get
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        _, versioned_prompt_response = self._populate_versioned_cache(prompts, mock_get)
+        self.assertEqual(mock_get.call_count, 2)
+
+        mock_get.side_effect = [MockResponse(json_data=versioned_prompt_response)]
+        prompts.clear_cache("test-prompt", version=1)
+
+        prompts.get("test-prompt")
+        self.assertEqual(mock_get.call_count, 2)
+
+        prompts.get("test-prompt", version=1)
+        self.assertEqual(mock_get.call_count, 3)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_clear_a_prompt_name_clears_all_cached_versions(self, mock_get_session):
+        """Should clear latest and versioned cache entries for the same prompt name."""
+        mock_get = mock_get_session.return_value.get
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        latest_prompt_response, versioned_prompt_response = (
+            self._populate_versioned_cache(prompts, mock_get)
+        )
+        self.assertEqual(mock_get.call_count, 2)
+
+        mock_get.side_effect = [
+            MockResponse(json_data=latest_prompt_response),
+            MockResponse(json_data=versioned_prompt_response),
+        ]
+        prompts.clear_cache("test-prompt")
+
+        prompts.get("test-prompt")
+        prompts.get("test-prompt", version=1)
+        self.assertEqual(mock_get.call_count, 4)
 
     @patch("posthog.ai.prompts._get_session")
     def test_clear_all_prompts_from_cache(self, mock_get_session):

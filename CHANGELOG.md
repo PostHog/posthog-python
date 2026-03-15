@@ -1,5 +1,36 @@
 # posthog
 
+## 7.9.12 — 2026-03-12
+
+### Patch changes
+
+- [1729be4](https://github.com/posthog/posthog-python/commit/1729be4b5ea87ebd361cc95ce44733b0db596e63) chore(flags): expose flag_definition_cache_provider — Thanks @matheus-vb for your first contribution 🎉!
+
+## 7.9.11 — 2026-03-11
+
+### Patch changes
+
+- [4547810](https://github.com/posthog/posthog-python/commit/4547810669d3c01fa1e1ab7595c00bfc1357ebe1) chore(ci): fix release attribution — Thanks @Piccirello!
+
+## 7.9.10 — 2026-03-10
+
+### Patch changes
+
+- [b48a7ac](https://github.com/posthog/posthog-python/commit/b48a7ac16112a3ae338b95194404710ca57bd75b) chore(ci): attribute release tag to GitHub App — Thanks @Piccirello!
+
+## 7.9.9 — 2026-03-10
+
+### Patch changes
+
+- [591d3e0](https://github.com/posthog/posthog-python/commit/591d3e0ffe88aa7d8913bec9709dc0647b3a09bb) chore(ci): use signed commits when publishing release — Thanks @Piccirello!
+
+## 7.9.8 — 2026-03-09
+
+### Patch changes
+
+- [11466c6](https://github.com/posthog/posthog-python/commit/11466c625e74864dcb75c951b8efbf87f5ec4c8b) feat(llma): support fetching versioned prompts from the prompts sdk — Thanks @Radu-Raicea!
+- [535e9c5](https://github.com/posthog/posthog-python/commit/535e9c530336930d27ec5dfd6072c55369d36a8e) chore(llma): clean up prompt SDK review follow-ups — Thanks @Radu-Raicea!
+
 ## 7.9.7 — 2026-03-05
 
 ### Patch changes
