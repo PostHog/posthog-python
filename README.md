@@ -22,6 +22,8 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 
 ## Development
 
+This repo requires all commits to be signed. To configure commit signing, see the [PostHog handbook](https://posthog.com/handbook/engineering/security#commit-signing).
+
 ### Testing Locally
 
 We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
