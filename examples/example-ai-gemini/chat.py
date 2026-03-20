@@ -49,6 +49,7 @@ response = client.models.generate_content(
     config=config,
 )
 
+# In production, send tool results back to the model for a final response.
 for candidate in response.candidates:
     for part in candidate.content.parts:
         if hasattr(part, "function_call") and part.function_call:

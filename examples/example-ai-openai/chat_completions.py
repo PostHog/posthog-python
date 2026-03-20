@@ -60,6 +60,7 @@ message = response.choices[0].message
 if message.content:
     print(message.content)
 
+# In production, send tool results back to the model for a final response.
 if message.tool_calls:
     for tool_call in message.tool_calls:
         args = json.loads(tool_call.function.arguments)

@@ -45,6 +45,7 @@ response = model_with_tools.invoke(messages, config={"callbacks": [callback_hand
 if response.content:
     print(response.content)
 
+# In production, send tool results back to the model for a final response.
 if response.tool_calls:
     for tool_call in response.tool_calls:
         result = tool_map[tool_call["name"]].invoke(tool_call["args"])

@@ -45,7 +45,8 @@ message = client.messages.create(
     messages=[{"role": "user", "content": "What's the weather like in San Francisco?"}],
 )
 
-# Handle tool use if the model requests it
+# Handle tool use if the model requests it.
+# In production, send tool results back to the model for a final response.
 for block in message.content:
     if block.type == "text":
         print(block.text)
