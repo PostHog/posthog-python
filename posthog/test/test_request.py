@@ -1,8 +1,8 @@
 import json
 import unittest
 from datetime import date, datetime
+from unittest import mock
 
-import mock
 import pytest
 import requests
 
