@@ -22,4 +22,5 @@ cp .env.example .env
 source .env
 python chat.py
 python streaming.py
+python image_generation.py
 ```

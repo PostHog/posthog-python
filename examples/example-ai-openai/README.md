@@ -25,5 +25,10 @@ cp .env.example .env
 ```bash
 source .env
 python chat_completions.py
+python chat_completions_streaming.py
+python responses.py
 python responses_streaming.py
+python embeddings.py
+python transcription.py
+python image_generation.py
 ```
