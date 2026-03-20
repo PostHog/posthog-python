@@ -31,5 +31,5 @@ posthog/client.py:0: error: Incompatible types in assignment (expression has typ
 posthog/client.py:0: error: "None" has no attribute "start"  [attr-defined]
 posthog/client.py:0: error: Statement is unreachable  [unreachable]
 posthog/client.py:0: error: Statement is unreachable  [unreachable]
-posthog/client.py:0: error: Name "urlparse" already defined (possibly by an import)  [no-redef]
 posthog/client.py:0: error: Name "parse_qs" already defined (possibly by an import)  [no-redef]
+posthog/client.py:0: error: Name "urlparse" already defined (possibly by an import)  [no-redef]
