@@ -132,16 +132,16 @@ wheels = [
 
 [[package]]
 name = "django"
-version = "5.2.7"
+version = "5.2.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "sqlparse" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/96/bd84e2bb997994de8bcda47ae4560991084e86536541d7214393880f01a8/django-5.2.7.tar.gz", hash = "sha256:e0f6f12e2551b1716a95a63a1366ca91bbcd7be059862c1b18f989b1da356cdd", size = 10865812, upload-time = "2025-10-01T14:22:12.081Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/55/b9445fc0695b03746f355c05b2eecc54c34e05198c686f4fc4406b722b52/django-5.2.12.tar.gz", hash = "sha256:6b809af7165c73eff5ce1c87fdae75d4da6520d6667f86401ecf55b681eb1eeb", size = 10860574, upload-time = "2026-03-03T13:56:05.509Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/ef/81f3372b5dd35d8d354321155d1a38894b2b766f576d0abffac4d8ae78d9/django-5.2.7-py3-none-any.whl", hash = "sha256:59a13a6515f787dec9d97a0438cd2efac78c8aca1c80025244b0fe507fe0754b", size = 8307145, upload-time = "2025-10-01T14:22:49.476Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/32/4b144e125678efccf5d5b61581de1c4088d6b0286e46096e3b8de0d556c8/django-5.2.12-py3-none-any.whl", hash = "sha256:4853482f395c3a151937f6991272540fcbf531464f254a347bf7c89f53c8cff7", size = 8310245, upload-time = "2026-03-03T13:56:01.174Z" },
 ]
 
 [[package]]
@@ -248,7 +248,8 @@ wheels = [
 
 [[package]]
 name = "posthog"
-source = { editable = "../" }
+version = "7.9.7"
+source = { editable = "../../" }
 dependencies = [
     { name = "backoff" },
     { name = "distro" },
@@ -260,7 +261,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", marker = "extra == 'test'" },
+    { name = "anthropic", marker = "extra == 'test'", specifier = ">=0.72" },
     { name = "backoff", specifier = ">=1.10.0" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "distro", specifier = ">=1.5.0" },
@@ -269,16 +270,16 @@ requires-dist = [
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
     { name = "google-genai", marker = "extra == 'test'" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
-    { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=0.3.15" },
-    { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.3.25" },
-    { name = "langchain-core", marker = "extra == 'test'", specifier = ">=0.3.65" },
-    { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=0.3.22" },
-    { name = "langgraph", marker = "extra == 'test'", specifier = ">=0.4.8" },
+    { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
+    { name = "langchain-core", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "lxml", marker = "extra == 'dev'" },
     { name = "mock", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
-    { name = "openai", marker = "extra == 'test'" },
+    { name = "openai", marker = "extra == 'test'", specifier = ">=2.0" },
     { name = "packaging", marker = "extra == 'dev'" },
     { name = "parameterized", marker = "extra == 'test'", specifier = ">=0.8.1" },
     { name = "pre-commit", marker = "extra == 'dev'" },
@@ -482,7 +483,7 @@ dependencies = [
 requires-dist = [
     { name = "django", specifier = "~=5.2.7" },
     { name = "httpx", specifier = "~=0.28.1" },
-    { name = "posthog", editable = "../" },
+    { name = "posthog", editable = "../../" },
     { name = "pytest", specifier = "~=8.4.2" },
     { name = "pytest-asyncio", specifier = "~=1.2.0" },
     { name = "pytest-django", specifier = "~=4.11.1" },
