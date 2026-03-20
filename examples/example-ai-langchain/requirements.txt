@@ -1,0 +1,3 @@
+posthog>=6.6.1
+langchain
+langchain-openai
