@@ -6,7 +6,10 @@ import urllib.request
 from posthog import Posthog
 from posthog.ai.openai import OpenAI
 
-posthog = Posthog(os.environ["POSTHOG_API_KEY"], host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"))
+posthog = Posthog(
+    os.environ["POSTHOG_API_KEY"],
+    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
 
 tools = [
@@ -44,7 +47,10 @@ response = client.chat.completions.create(
     tools=tools,
     tool_choice="auto",
     messages=[
-        {"role": "system", "content": "You are a helpful assistant with access to weather data."},
+        {
+            "role": "system",
+            "content": "You are a helpful assistant with access to weather data.",
+        },
         {"role": "user", "content": "What's the weather like in Dublin, Ireland?"},
     ],
 )

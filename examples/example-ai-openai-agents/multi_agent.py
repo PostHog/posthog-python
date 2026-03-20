@@ -7,7 +7,10 @@ from agents import Agent, Runner, function_tool
 from posthog import Posthog
 from posthog.ai.openai_agents import instrument
 
-posthog = Posthog(os.environ["POSTHOG_API_KEY"], host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"))
+posthog = Posthog(
+    os.environ["POSTHOG_API_KEY"],
+    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+)
 instrument(posthog, distinct_id="example-user")
 
 

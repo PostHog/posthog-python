@@ -2,11 +2,22 @@
 
 import asyncio
 import os
-from agents import Agent, Runner, input_guardrail, output_guardrail, GuardrailFunctionOutput, RunContextWrapper, TResponseInputItem
+from agents import (
+    Agent,
+    Runner,
+    input_guardrail,
+    output_guardrail,
+    GuardrailFunctionOutput,
+    RunContextWrapper,
+    TResponseInputItem,
+)
 from posthog import Posthog
 from posthog.ai.openai_agents import instrument
 
-posthog = Posthog(os.environ["POSTHOG_API_KEY"], host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"))
+posthog = Posthog(
+    os.environ["POSTHOG_API_KEY"],
+    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+)
 instrument(posthog, distinct_id="example-user")
 
 BLOCKED_INPUT_WORDS = ["hack", "exploit", "bypass"]
@@ -18,14 +29,20 @@ async def content_filter(
     ctx: RunContextWrapper[None], agent: Agent, input: str | list[TResponseInputItem]
 ) -> GuardrailFunctionOutput:
     """Block requests containing prohibited words."""
-    text = str(input).lower() if isinstance(input, str) else " ".join(str(i) for i in input).lower()
+    text = (
+        str(input).lower()
+        if isinstance(input, str)
+        else " ".join(str(i) for i in input).lower()
+    )
     for word in BLOCKED_INPUT_WORDS:
         if word in text:
             return GuardrailFunctionOutput(
                 output_info={"blocked_word": word},
                 tripwire_triggered=True,
             )
-    return GuardrailFunctionOutput(output_info={"status": "passed"}, tripwire_triggered=False)
+    return GuardrailFunctionOutput(
+        output_info={"status": "passed"}, tripwire_triggered=False
+    )
 
 
 @output_guardrail
@@ -39,7 +56,9 @@ async def sensitive_data_filter(
                 output_info={"blocked_word": word},
                 tripwire_triggered=True,
             )
-    return GuardrailFunctionOutput(output_info={"status": "passed"}, tripwire_triggered=False)
+    return GuardrailFunctionOutput(
+        output_info={"status": "passed"}, tripwire_triggered=False
+    )
 
 
 guarded_agent = Agent(

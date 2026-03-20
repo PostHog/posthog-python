@@ -7,7 +7,10 @@ from google.genai import types
 from posthog import Posthog
 from posthog.ai.gemini import Client
 
-posthog = Posthog(os.environ["POSTHOG_API_KEY"], host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"))
+posthog = Posthog(
+    os.environ["POSTHOG_API_KEY"],
+    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+)
 client = Client(api_key=os.environ["GEMINI_API_KEY"], posthog_client=posthog)
 
 tool_declarations = [

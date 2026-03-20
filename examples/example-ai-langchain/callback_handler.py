@@ -5,11 +5,14 @@ import json
 import urllib.request
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from posthog import Posthog
 from posthog.ai.langchain import CallbackHandler
 
-posthog = Posthog(os.environ["POSTHOG_API_KEY"], host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"))
+posthog = Posthog(
+    os.environ["POSTHOG_API_KEY"],
+    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+)
 callback_handler = CallbackHandler(client=posthog)
 
 

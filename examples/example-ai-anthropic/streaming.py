@@ -4,7 +4,10 @@ import os
 from posthog import Posthog
 from posthog.ai.anthropic import Anthropic
 
-posthog = Posthog(os.environ["POSTHOG_API_KEY"], host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"))
+posthog = Posthog(
+    os.environ["POSTHOG_API_KEY"],
+    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+)
 client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], posthog_client=posthog)
 
 stream = client.messages.create(

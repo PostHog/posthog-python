@@ -17,7 +17,9 @@ os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = f"{posthog_host}/i/v0/ai/otel
 os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Bearer {posthog_api_key}"
 
 tracer_provider = TracerProvider(
-    resource=Resource.create({"service.name": "langchain-example", "user.id": "example-user"})
+    resource=Resource.create(
+        {"service.name": "langchain-example", "user.id": "example-user"}
+    )
 )
 tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
 trace.set_tracer_provider(tracer_provider)
