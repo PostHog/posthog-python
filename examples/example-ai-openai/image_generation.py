@@ -1,4 +1,4 @@
-"""OpenAI image generation via Responses API, tracked by PostHog."""
+"""OpenAI image generation, tracked by PostHog."""
 
 import os
 from posthog import Posthog
@@ -10,16 +10,15 @@ posthog = Posthog(
 )
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
 
-response = client.responses.create(
-    model="gpt-image-1-mini",
-    input="A hedgehog wearing a PostHog t-shirt, pixel art style",
-    tools=[{"type": "image_generation"}],
-    posthog_distinct_id="example-user",
+# Note: posthog.ai does not wrap images.generate yet,
+# so this call is not automatically tracked.
+response = client.images.generate(
+    model="gpt-image-1",
+    prompt="A hedgehog wearing a PostHog t-shirt, pixel art style",
+    size="1024x1024",
 )
 
-for output_item in response.output:
-    if hasattr(output_item, "type") and output_item.type == "image_generation_call":
-        image_base64 = output_item.result
-        print(f"Generated image: {len(image_base64)} chars of base64 data")
+image_base64 = response.data[0].b64_json
+print(f"Generated image: {len(image_base64)} chars of base64 data")
 
 posthog.shutdown()

@@ -1,8 +1,13 @@
 """Google Gemini image generation, tracked by PostHog."""
 
+import logging
 import os
+
 from posthog import Posthog
 from posthog.ai.gemini import Client
+
+# Suppress verbose Gemini SDK logging of base64 image data
+logging.getLogger("google.genai").setLevel(logging.WARNING)
 
 posthog = Posthog(
     os.environ["POSTHOG_API_KEY"],
@@ -13,6 +18,7 @@ client = Client(api_key=os.environ["GEMINI_API_KEY"], posthog_client=posthog)
 response = client.models.generate_content(
     model="gemini-2.5-flash-image",
     posthog_distinct_id="example-user",
+    posthog_privacy_mode=True,  # Redact base64 image data from the PostHog event
     contents=[{"role": "user", "parts": [{"text": "Generate a pixel art hedgehog"}]}],
 )
 
