@@ -56,6 +56,7 @@ from posthog.request import (
     get,
     normalize_host,
     remote_config,
+    reset_sessions,
 )
 from posthog.types import (
     FeatureFlag,
@@ -244,6 +245,7 @@ class Client(object):
         )
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
@@ -1109,42 +1111,56 @@ class Client(object):
         self._reinit_after_fork()
 
     def _reinit_after_fork(self):
-        """Reinitialize queue and consumer threads in a forked child process.
+        """Reinitialize fork-unsafe client state in a forked child process.
 
         Registered via os.register_at_fork(after_in_child=...) so it runs
         exactly once in each child, before any user code, covering all code
         paths (capture, flush, join, etc.).
 
         Python threads do not survive fork() and queue.Queue internal locks
-        may be in an inconsistent state, so both are replaced.
-        Inherited queue items are intentionally discarded as they'll be
-        handled by the parent process's consumers.
+        may be in an inconsistent state, so the event queue, consumer threads
+        and other state are replaced. Inherited queue items are not retained
+        as they'll be handled by the parent process's consumers.
         """
-        if self.consumers is None:
-            return
+        if self.consumers:
+            self.queue = queue.Queue(self._max_queue_size)
 
-        self.queue = queue.Queue(self._max_queue_size)
+            new_consumers = []
+            for old in self.consumers:
+                consumer = Consumer(
+                    self.queue,
+                    old.api_key,
+                    flush_at=old.flush_at,
+                    host=old.host,
+                    on_error=old.on_error,
+                    flush_interval=old.flush_interval,
+                    gzip=old.gzip,
+                    retries=old.retries,
+                    timeout=old.timeout,
+                    historical_migration=old.historical_migration,
+                )
+                new_consumers.append(consumer)
 
-        new_consumers = []
-        for old in self.consumers:
-            consumer = Consumer(
-                self.queue,
-                old.api_key,
-                flush_at=old.flush_at,
-                host=old.host,
-                on_error=old.on_error,
-                flush_interval=old.flush_interval,
-                gzip=old.gzip,
-                retries=old.retries,
-                timeout=old.timeout,
-                historical_migration=old.historical_migration,
+                if self.send:
+                    consumer.start()
+
+            self.consumers = new_consumers
+
+        if self.enable_local_evaluation:
+            self.poller = Poller(
+                interval=timedelta(seconds=self.poll_interval),
+                execute=self._load_feature_flags,
             )
-            new_consumers.append(consumer)
+            self.poller.start()
+        else:
+            self.poller = None
 
-            if self.send:
-                consumer.start()
+        # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
+        # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
+        if isinstance(self.flag_cache, RedisFlagCache):
+            self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
 
-        self.consumers = new_consumers
+        reset_sessions()
 
     def _enqueue(self, msg, disable_geoip):
         # type: (...) -> Optional[str]
