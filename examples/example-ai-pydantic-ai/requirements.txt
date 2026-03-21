@@ -1,0 +1,4 @@
+posthog>=6.6.1
+pydantic-ai
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
