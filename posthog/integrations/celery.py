@@ -23,25 +23,24 @@ Usage
     from posthog import Posthog
     from posthog.integrations.celery import PosthogCeleryIntegration
 
-    posthog = Posthog("<ph_project_api_key>", host="<ph_client_api_host>")
+    # ... init Posthog client
 
-    integration = PosthogCeleryIntegration(client=posthog)
+    integration = PosthogCeleryIntegration()
     integration.instrument()
 
-Both the producer process and each worker process must initialize the
-PostHog client and instrument the integration because the worker needs
-to bind to Celery signals, and the PostHog client may use background threads
-to send captured events (depending on ``sync_mode``). Celery provides a signal
-called ``worker_process_init`` that can be used to accomplish this.
+    # ... publish tasks or run workers ...
+
+    integration.shutdown()
+    posthog.shutdown()
 
 See ``examples/celery_integration.py`` for a complete working example.
 
 Supported task states for event emission:
+    - ``published``
     - ``started``
     - ``success``
     - ``failure``
     - ``retry``
-    - ``published``
 
 Event properties:
     All lifecycle and exception events include the following properties:
@@ -64,6 +63,7 @@ Event properties:
     - **retry**: ``celery_reason``
 """
 
+import atexit
 import json
 import logging
 import time
@@ -113,16 +113,28 @@ class PosthogCeleryIntegration:
         self.task_filter = task_filter
 
         self._instrumented = False
+        self._shut_down = False
         self._signals: Optional[Any] = None
         self._celery_version: Optional[str] = None
 
     def instrument(self) -> None:
+        """Connect Celery signal handlers to capture task events and exceptions.
+        Call this after initializing the PostHog client and this integration.
+
+        If Celery runs on a single host, reinstrumenting in worker children is
+        not strictly necessary because the PostHog client and this integration
+        are fork-safe. If Celery workers run across multiple hosts, each worker
+        process must initialize PostHog, this integration, and call
+        ``instrument()``. Celery provides ``worker_process_init`` signal to help
+        with this.
+        """
         if self._instrumented:
             return
 
         from celery import signals
         from celery import __version__ as celery_version
 
+        self._shut_down = False
         self._signals = signals
         self._celery_version = celery_version
 
@@ -133,9 +145,12 @@ class PosthogCeleryIntegration:
         signals.before_task_publish.connect(self._on_before_task_publish, weak=False)
         signals.after_task_publish.connect(self._on_after_task_publish, weak=False)
 
+        signals.worker_process_shutdown.connect(self._on_worker_process_shutdown, weak=False)
+        atexit.register(self.shutdown)
+
         self._instrumented = True
 
-    def uninstrument(self) -> None:
+    def _disconnect_signals(self) -> None:
         if not self._instrumented or not self._signals:
             return
 
@@ -146,8 +161,47 @@ class PosthogCeleryIntegration:
         self._signals.before_task_publish.disconnect(self._on_before_task_publish)
         self._signals.after_task_publish.disconnect(self._on_after_task_publish)
 
+        self._signals.worker_process_shutdown.disconnect(self._on_worker_process_shutdown)
+
         self._signals = None
         self._instrumented = False
+
+    def uninstrument(self) -> None:
+        """Disconnect Celery signal handlers and unregister exit cleanup.
+
+        Do not use directly, call `shutdown()` instead.
+        """
+        self._disconnect_signals()
+        atexit.unregister(self.shutdown)
+
+    def shutdown(self) -> None:
+        """Disconnect all signal handlers registered by ``instrument()``, flush all pending events
+        and cleanly shutdown the integration.
+
+        ``shutdown()`` is also registered on ``worker_process_shutdown`` and ``atexit`` signals,
+        but there is no guarantee those will always be called, so we strongly recommend calling
+        it manually when the integration is no longer needed to avoid data loss.
+        """
+        if self._shut_down:
+            return
+
+        try:
+            self._disconnect_signals()
+
+            if self.client:
+                self.client.flush()
+            else:
+                import posthog
+
+                posthog.flush()
+
+            self.uninstrument()
+            self._shut_down = True
+        except Exception:
+            logger.exception("Failed to shut down PostHog Celery integration")
+
+    def _on_worker_process_shutdown(self, *args, **kwargs) -> None:
+        self.shutdown()
 
     def _on_before_task_publish(self, *args, **kwargs):
         try:
@@ -226,10 +280,7 @@ class PosthogCeleryIntegration:
             if request is not None:
                 context_manager = contexts.new_context(
                     fresh=True,  # to prevent context bleed across tasks
-                    capture_exceptions=False,  # Celery catches task exceptions internally and
-                                               # delivers them via task_failure signal, so they
-                                               # never propagate through the context manager.
-                                               # We capture them in _on_task_failure.
+                    capture_exceptions=False,  # We capture them in _on_task_failure
                     client=self.client,
                 )
                 context_manager.__enter__()
@@ -298,7 +349,7 @@ class PosthogCeleryIntegration:
             if self.capture_task_lifecycle_events and self._should_track(task_name, task_properties):
                 self._capture_event(f"celery task {state}", properties=task_properties)
         except Exception:
-            logger.exception("Failed to process Celery %s", state)
+            logger.exception("Failed to process Celery %s state", state)
         finally:
             ctx = getattr(request, "_posthog_ctx", None)
             if ctx is not None:
