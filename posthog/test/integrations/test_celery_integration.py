@@ -33,6 +33,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             task_retry=FakeSignal(),
             before_task_publish=FakeSignal(),
             after_task_publish=FakeSignal(),
+            worker_process_shutdown=FakeSignal(),
         )
 
         integration = PosthogCeleryIntegration()
@@ -40,7 +41,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         fake_celery.signals = fake_signals
         fake_celery.__version__ = "5.0.0"
 
-        with patch.dict("sys.modules", {"celery": fake_celery}):
+        with patch.dict("sys.modules", {"celery": fake_celery}), patch(
+            "posthog.integrations.celery.atexit.register"
+        ) as mock_register:
             integration.instrument()
             integration.instrument()
 
@@ -51,8 +54,14 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             "task_retry",
             "before_task_publish",
             "after_task_publish",
+            "worker_process_shutdown",
         ]:
             self.assertEqual(len(getattr(fake_signals, sig).connected), 1, f"{sig} connected multiple times")
+        mock_register.assert_called_once_with(integration.shutdown)
+        self.assertEqual(
+            fake_signals.worker_process_shutdown.connected[0][0],
+            integration._on_worker_process_shutdown,
+        )
 
     def test_instrument_and_uninstrument_connect_signals(self):
         fake_signals = SimpleNamespace(
@@ -62,6 +71,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             task_retry=FakeSignal(),
             before_task_publish=FakeSignal(),
             after_task_publish=FakeSignal(),
+            worker_process_shutdown=FakeSignal(),
         )
 
         integration = PosthogCeleryIntegration()
@@ -70,15 +80,141 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         fake_celery.signals = fake_signals
         fake_celery.__version__ = "5.0.0"
 
-        with patch.dict("sys.modules", {"celery": fake_celery}):
+        with patch.dict("sys.modules", {"celery": fake_celery}), patch(
+            "posthog.integrations.celery.atexit.register"
+        ), patch("posthog.integrations.celery.atexit.unregister") as mock_unregister:
             integration.instrument()
             integration.uninstrument()
 
         for sig in ["task_prerun", "task_success", "task_failure",
                     "task_retry", "before_task_publish",
-                    "after_task_publish"]:
+                    "after_task_publish", "worker_process_shutdown"]:
             self.assertEqual(len(getattr(fake_signals, sig).connected), 1, f"{sig} not connected")
             self.assertEqual(len(getattr(fake_signals, sig).disconnected), 1, f"{sig} not disconnected")
+        mock_unregister.assert_called_once_with(integration.shutdown)
+        self.assertEqual(
+            fake_signals.worker_process_shutdown.disconnected[0],
+            integration._on_worker_process_shutdown,
+        )
+
+    def test_shutdown_uninstruments_and_flushes_client(self):
+        mock_client = Mock()
+        integration = PosthogCeleryIntegration(client=mock_client)
+
+        with patch.object(integration, "_disconnect_signals") as mock_disconnect, patch.object(
+            integration, "uninstrument"
+        ) as mock_uninstrument:
+            integration.shutdown()
+
+        mock_disconnect.assert_called_once_with()
+        mock_uninstrument.assert_called_once_with()
+        mock_client.flush.assert_called_once_with()
+        self.assertTrue(integration._shut_down)
+
+    def test_shutdown_falls_back_to_global_posthog_flush(self):
+        integration = PosthogCeleryIntegration(client=None)
+
+        with patch.object(integration, "_disconnect_signals") as mock_disconnect, patch.object(
+            integration, "uninstrument"
+        ) as mock_uninstrument, patch("posthog.flush") as mock_flush:
+            integration.shutdown()
+
+        mock_disconnect.assert_called_once_with()
+        mock_uninstrument.assert_called_once_with()
+        mock_flush.assert_called_once_with()
+        self.assertTrue(integration._shut_down)
+
+    def test_shutdown_is_idempotent(self):
+        mock_client = Mock()
+        integration = PosthogCeleryIntegration(client=mock_client)
+
+        with patch.object(integration, "_disconnect_signals") as mock_disconnect, patch.object(
+            integration, "uninstrument"
+        ) as mock_uninstrument:
+            integration.shutdown()
+            integration.shutdown()
+
+        mock_disconnect.assert_called_once_with()
+        mock_uninstrument.assert_called_once_with()
+        mock_client.flush.assert_called_once_with()
+
+    def test_shutdown_keeps_atexit_registration_when_flush_fails(self):
+        fake_signals = SimpleNamespace(
+            task_prerun=FakeSignal(),
+            task_success=FakeSignal(),
+            task_failure=FakeSignal(),
+            task_retry=FakeSignal(),
+            before_task_publish=FakeSignal(),
+            after_task_publish=FakeSignal(),
+            worker_process_shutdown=FakeSignal(),
+        )
+
+        mock_client = Mock()
+        mock_client.flush.side_effect = RuntimeError("flush failed")
+        integration = PosthogCeleryIntegration(client=mock_client)
+        fake_celery = ModuleType("celery")
+        fake_celery.signals = fake_signals
+        fake_celery.__version__ = "5.0.0"
+
+        with patch.dict("sys.modules", {"celery": fake_celery}), patch(
+            "posthog.integrations.celery.atexit.register"
+        ), patch("posthog.integrations.celery.atexit.unregister") as mock_unregister:
+            integration.instrument()
+            integration.shutdown()
+
+        self.assertFalse(integration._shut_down)
+        self.assertTrue(integration._signals is None)
+        self.assertFalse(integration._instrumented)
+        mock_unregister.assert_not_called()
+        self.assertEqual(len(fake_signals.worker_process_shutdown.disconnected), 1)
+
+    def test_reinstrument_after_shutdown_allows_shutdown_again(self):
+        fake_signals = SimpleNamespace(
+            task_prerun=FakeSignal(),
+            task_success=FakeSignal(),
+            task_failure=FakeSignal(),
+            task_retry=FakeSignal(),
+            before_task_publish=FakeSignal(),
+            after_task_publish=FakeSignal(),
+            worker_process_shutdown=FakeSignal(),
+        )
+
+        mock_client = Mock()
+        integration = PosthogCeleryIntegration(client=mock_client)
+        fake_celery = ModuleType("celery")
+        fake_celery.signals = fake_signals
+        fake_celery.__version__ = "5.0.0"
+
+        with patch.dict("sys.modules", {"celery": fake_celery}), patch(
+            "posthog.integrations.celery.atexit.register"
+        ) as mock_register, patch("posthog.integrations.celery.atexit.unregister") as mock_unregister:
+            integration.instrument()
+            integration.shutdown()
+            integration.instrument()
+            integration.shutdown()
+
+        self.assertEqual(mock_client.flush.call_count, 2)
+        self.assertEqual(mock_register.call_count, 2)
+        self.assertEqual(mock_unregister.call_count, 2)
+        for sig in [
+            "task_prerun",
+            "task_success",
+            "task_failure",
+            "task_retry",
+            "before_task_publish",
+            "after_task_publish",
+            "worker_process_shutdown",
+        ]:
+            self.assertEqual(len(getattr(fake_signals, sig).connected), 2, f"{sig} not reconnected")
+            self.assertEqual(len(getattr(fake_signals, sig).disconnected), 2, f"{sig} not disconnected twice")
+
+    def test_worker_process_shutdown_hook_calls_shutdown(self):
+        integration = PosthogCeleryIntegration(client=Mock())
+
+        with patch.object(integration, "shutdown") as mock_shutdown:
+            integration._on_worker_process_shutdown()
+
+        mock_shutdown.assert_called_once_with()
 
     def test_before_task_publish_propagates_context_headers(self):
         integration = PosthogCeleryIntegration()
@@ -139,6 +275,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         self.assertEqual(contexts.get_context_session_id(), "sess-rt")
         self.assertEqual(contexts.get_tags().get("env"), "test")
 
+        # close out the task lifecycle so the test doesn't leave context hanging around
         integration._on_task_success(sender=task)
 
     def test_before_task_publish_respects_propagate_context_flag(self):
@@ -195,6 +332,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         self.assertIsNone(contexts.get_context_session_id())
         self.assertNotIn("source", contexts.get_tags())
 
+        # cleanup to not leave context hanging around
         integration._on_task_success(sender=second_task, task_id="task-2")
 
     def test_task_prerun_hydrates_context_and_postrun_cleans_up(self):
