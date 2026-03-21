@@ -132,6 +132,20 @@ def _get_flags_session() -> requests.Session:
     return _build_flags_session(_socket_options)
 
 
+def reset_sessions() -> None:
+    """
+    Reset the global sessions. This should be called after a fork to ensure
+    that the child process does not use the parent's connection pool.
+    """
+    global _session, _flags_session
+    if _session:
+        _session.close()
+    if _flags_session:
+        _flags_session.close()
+    _session = _build_session(_socket_options)
+    _flags_session = _build_flags_session(_socket_options)
+
+
 def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
     """
     Configure socket options for all HTTP connections.

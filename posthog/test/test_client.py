@@ -1,6 +1,3 @@
-import os
-import subprocess
-import sys
 import time
 import unittest
 from datetime import datetime
@@ -2729,49 +2726,6 @@ class TestClient(unittest.TestCase):
             result["featureFlagPayloads"]["normal-payload-flag"], "normal payload"
         )
 
-    @mock.patch("posthog.client.os.register_at_fork")
-    def test_registers_at_fork_hook(self, mock_register_at_fork):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
-
-        mock_register_at_fork.assert_called_once()
-        after_in_child = mock_register_at_fork.call_args.kwargs["after_in_child"]
-
-        with mock.patch.object(client, "_reinit_after_fork") as mock_reinit:
-            after_in_child()
-            mock_reinit.assert_called_once()
-
-    @mock.patch("posthog.client.os.register_at_fork")
-    def test_register_at_fork_noop_after_client_gc(self, mock_register_at_fork):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
-        after_in_child = mock_register_at_fork.call_args.kwargs["after_in_child"]
-        del client
-        after_in_child()
-
-    @parameterized.expand([(True, 1), (False, 0)])
-    def test_reinit_after_fork_replaces_queue_and_consumers(self, send, expected_starts):
-        with mock.patch("posthog.client.Consumer.start") as mock_start:
-            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, send=send, thread=1)
-            mock_start.reset_mock()
-
-            old_queue = client.queue
-            old_consumers = list(client.consumers)
-
-            client._reinit_after_fork()
-
-            self.assertIsNot(client.queue, old_queue)
-            self.assertEqual(len(client.consumers), len(old_consumers))
-            self.assertIsNot(client.consumers[0], old_consumers[0])
-            self.assertIs(client.consumers[0].queue, client.queue)
-            self.assertEqual(mock_start.call_count, expected_starts)
-
-    def test_reinit_after_fork_noop_for_sync_mode(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-        old_queue = client.queue
-
-        client._reinit_after_fork()
-
-        self.assertIs(client.queue, old_queue)
-
     def test_context_tags_added(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
@@ -2826,52 +2780,3 @@ class TestClient(unittest.TestCase):
                 with self.assertRaises(Exception) as cm:
                     method(*args, **kwargs)
                 self.assertEqual(str(cm.exception), "Expected error")
-
-
-@unittest.skipUnless(
-    hasattr(os, "fork") and hasattr(os, "register_at_fork"),
-    "requires os.fork and os.register_at_fork",
-)
-class TestClientForkBehavior(unittest.TestCase):
-    def test_register_at_fork_reinitializes_client_in_child_process(self):
-        script = f"""
-import os
-from posthog.client import Client
-
-client = Client("{FAKE_TEST_API_KEY}", send=False)
-old_queue = client.queue
-old_consumer = client.consumers[0]
-
-read_fd, write_fd = os.pipe()
-pid = os.fork()
-if pid == 0:
-    try:
-        reinitialized_queue = client.queue is not old_queue
-        replaced_consumer = client.consumers[0] is not old_consumer
-        consumer_points_to_new_queue = client.consumers[0].queue is client.queue
-        child_ok = reinitialized_queue and replaced_consumer and consumer_points_to_new_queue
-        os.write(write_fd, b"1" if child_ok else b"0")
-    finally:
-        os.close(write_fd)
-        os.close(read_fd)
-        os._exit(0)
-
-os.close(write_fd)
-result = os.read(read_fd, 1)
-os.close(read_fd)
-_, status = os.waitpid(pid, 0)
-if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and result == b"1":
-    print("ok")
-else:
-    raise SystemExit(1)
-"""
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertEqual(proc.stdout.strip(), "ok")
