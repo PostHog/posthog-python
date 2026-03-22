@@ -2232,15 +2232,10 @@ class TestClient(unittest.TestCase):
 
                 # Special handling for Linux which uses distro module
                 if sys_platform == "linux":
-                    # Directly patch the get_os_info function to return our expected values
-                    with mock.patch(
-                        "posthog.utils.get_os_info",
-                        return_value={
-                            "$os": expected_os,
-                            "$os_version": expected_os_version,
-                            "$os_distro": expected_os_distro,
-                        },
-                    ):
+                    with mock.patch("posthog.utils.distro") as mock_distro:
+                        mock_distro.info.return_value = {"version": expected_os_version}
+                        mock_distro.name.return_value = expected_os_distro or ""
+
                         from posthog.utils import system_context
 
                         context = system_context()
@@ -2258,7 +2253,7 @@ class TestClient(unittest.TestCase):
                     "$os_version": expected_os_version,
                 }
 
-                if expected_os_distro:
+                if sys_platform == "linux":
                     expected_context["$os_distro"] = expected_os_distro
 
                 assert context == expected_context
