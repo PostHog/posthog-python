@@ -2164,7 +2164,7 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            # name, sys_platform, version_info, expected_runtime, expected_version, expected_os, expected_os_version, platform_method, platform_return, distro_info
+            # name, sys_platform, version_info, expected_runtime, expected_version, expected_os, expected_os_version, expected_os_distro, platform_method, platform_return
             (
                 "macOS",
                 "darwin",
@@ -2173,9 +2173,9 @@ class TestClient(unittest.TestCase):
                 "3.8.10",
                 "Mac OS X",
                 "10.15.7",
+                None,
                 "mac_ver",
                 ("10.15.7", "", ""),
-                None,
             ),
             (
                 "Windows",
@@ -2185,9 +2185,9 @@ class TestClient(unittest.TestCase):
                 "3.8.10",
                 "Windows",
                 "10",
+                None,
                 "win32_ver",
                 ("10", "", "", ""),
-                None,
             ),
             (
                 "Linux",
@@ -2197,9 +2197,9 @@ class TestClient(unittest.TestCase):
                 "3.8.10",
                 "Linux",
                 "20.04",
+                "Ubuntu",
                 None,
                 None,
-                {"version": "20.04"},
             ),
         ]
     )
@@ -2212,9 +2212,9 @@ class TestClient(unittest.TestCase):
         expected_version,
         expected_os,
         expected_os_version,
+        expected_os_distro,
         platform_method,
         platform_return,
-        distro_info,
     ):
         """Test that we can mock platform and sys for testing system_context"""
         with mock.patch("posthog.utils.platform") as mock_platform:
@@ -2235,7 +2235,11 @@ class TestClient(unittest.TestCase):
                     # Directly patch the get_os_info function to return our expected values
                     with mock.patch(
                         "posthog.utils.get_os_info",
-                        return_value=(expected_os, expected_os_version),
+                        return_value={
+                            "$os": expected_os,
+                            "$os_version": expected_os_version,
+                            "$os_distro": expected_os_distro,
+                        },
                     ):
                         from posthog.utils import system_context
 
@@ -2253,6 +2257,9 @@ class TestClient(unittest.TestCase):
                     "$os": expected_os,
                     "$os_version": expected_os_version,
                 }
+
+                if expected_os_distro:
+                    expected_context["$os_distro"] = expected_os_distro
 
                 assert context == expected_context
 
