@@ -467,11 +467,12 @@ def str_iequals(value, comparand):
 
 def get_os_info():
     """
-    Returns standardized OS name and version information.
+    Returns standardized OS name, version and distro (in case of Linux) information.
     Similar to how user agent parsing works in JS.
     """
     os_name = ""
     os_version = ""
+    os_distro = ""
 
     platform_name = sys.platform
 
@@ -494,6 +495,9 @@ def get_os_info():
         linux_info = distro.info()
         if linux_info["version"]:
             os_version = linux_info["version"]
+        linux_distro = distro.name()
+        if linux_distro:
+            os_distro = linux_distro
 
     elif platform_name.startswith("freebsd"):
         os_name = "FreeBSD"
@@ -505,15 +509,19 @@ def get_os_info():
         if hasattr(platform, "release"):
             os_version = platform.release()
 
-    return os_name, os_version
+    info = {
+        "$os": os_name,
+        "$os_version": os_version,
+    }
+    if os_name == "Linux":
+        info["$os_distro"] = os_distro
+
+    return info
 
 
 def system_context() -> dict[str, Any]:
-    os_name, os_version = get_os_info()
-
     return {
         "$python_runtime": platform.python_implementation(),
         "$python_version": "%s.%s.%s" % (sys.version_info[:3]),
-        "$os": os_name,
-        "$os_version": os_version,
+        **get_os_info(),
     }
