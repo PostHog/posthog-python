@@ -8,7 +8,7 @@ import posthog
 # Initialize PostHog client
 posthog.api_key = "phc_..."
 posthog.personal_api_key = "phs_..."  # or "phx_..."
-posthog.host = "http://localhost:8000"  # or "https://us.posthog.com"
+posthog.host = "http://localhost:8010"  # or "https://us.posthog.com"
 posthog.debug = True
 
 
