@@ -33,7 +33,7 @@ load_env_file()
 # Get configuration
 project_key = os.getenv("POSTHOG_PROJECT_API_KEY", "")
 personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "")
-host = os.getenv("POSTHOG_HOST", "http://localhost:8000")
+host = os.getenv("POSTHOG_HOST", "http://localhost:8010")
 
 # Check if project key is provided (required)
 if not project_key:
