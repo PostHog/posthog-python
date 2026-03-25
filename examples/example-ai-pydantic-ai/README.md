@@ -7,6 +7,7 @@ Track Pydantic AI agent calls with PostHog via OpenTelemetry.
 ```bash
 cp .env.example .env
 # Fill in your API keys in .env
+# Install uv if you haven't already: https://docs.astral.sh/uv/getting-started/installation/
 uv sync
 ```
 
