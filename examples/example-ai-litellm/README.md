@@ -5,9 +5,9 @@ Track LiteLLM calls with PostHog using the built-in callback integration.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
+uv sync
 ```
 
 ## Examples
@@ -19,6 +19,6 @@ cp .env.example .env
 
 ```bash
 source .env
-python chat.py
-python streaming.py
+uv run python chat.py
+uv run python streaming.py
 ```

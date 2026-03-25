@@ -5,9 +5,9 @@ Track Pydantic AI agent calls with PostHog via OpenTelemetry.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
+uv sync
 ```
 
 ## Examples
@@ -18,5 +18,5 @@ cp .env.example .env
 
 ```bash
 source .env
-python agent_with_otel.py
+uv run python agent_with_otel.py
 ```

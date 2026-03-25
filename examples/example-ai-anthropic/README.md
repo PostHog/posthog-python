@@ -5,9 +5,9 @@ Track Anthropic Claude API calls with PostHog.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
+uv sync
 ```
 
 ## Examples
@@ -20,7 +20,7 @@ cp .env.example .env
 
 ```bash
 source .env
-python chat.py
-python streaming.py
-python extended_thinking.py
+uv run python chat.py
+uv run python streaming.py
+uv run python extended_thinking.py
 ```

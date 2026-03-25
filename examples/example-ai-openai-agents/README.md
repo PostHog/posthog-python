@@ -5,9 +5,9 @@ Track OpenAI Agents SDK calls with PostHog.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
+uv sync
 ```
 
 ## Examples
@@ -21,8 +21,8 @@ cp .env.example .env
 
 ```bash
 source .env
-python multi_agent.py
-python single_agent.py
-python guardrails.py
-python custom_spans.py
+uv run python multi_agent.py
+uv run python single_agent.py
+uv run python guardrails.py
+uv run python custom_spans.py
 ```

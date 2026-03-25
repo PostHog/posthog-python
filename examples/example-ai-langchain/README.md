@@ -5,15 +5,9 @@ Track LangChain LLM calls with PostHog.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
-```
-
-For the OTEL example, also install:
-
-```bash
-pip install opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
+uv sync
 ```
 
 ## Examples
@@ -25,6 +19,6 @@ pip install opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
 
 ```bash
 source .env
-python callback_handler.py
-python otel.py
+uv run python callback_handler.py
+uv run python otel.py
 ```
