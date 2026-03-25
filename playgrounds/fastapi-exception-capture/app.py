@@ -33,6 +33,7 @@ async def global_exception_handler(request, exception):
         distinct_id=user_id,
         properties=properties,
     )
+    client.shutdown()
 
     logger.info(
         f"Captured exception: {exception.__class__.__name__} ({str(exception)[:100]}), id: {capture_id}"
