@@ -15,25 +15,24 @@ app = FastAPI()
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "phc_PLACEHOLDER_KEY")
 POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
 
+posthog_client = Posthog(
+    POSTHOG_API_KEY,
+    host=POSTHOG_HOST,
+    log_captured_exceptions=True,
+    debug=True,
+)
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exception):
-    client = Posthog(
-        POSTHOG_API_KEY,
-        host=POSTHOG_HOST,
-        log_captured_exceptions=True,
-        debug=True,
-    )
-
     user_id = "anonymous"
     properties = {"url": str(request.url)}
 
-    capture_id = client.capture_exception(
+    capture_id = posthog_client.capture_exception(
         exception,
         distinct_id=user_id,
         properties=properties,
     )
-    client.shutdown()
 
     logger.info(
         f"Captured exception: {exception.__class__.__name__} ({str(exception)[:100]}), id: {capture_id}"
