@@ -288,14 +288,7 @@ class Client(object):
         else:
             self.log.setLevel(logging.WARNING)
 
-        if before_send is not None:
-            if callable(before_send):
-                self.before_send = before_send
-            else:
-                self.log.warning("before_send is not callable, it will be ignored")
-                self.before_send = None
-        else:
-            self.before_send = None
+        self._set_before_send(before_send)
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(self)
@@ -331,6 +324,16 @@ class Client(object):
                 # if we've disabled sending, just don't start the consumer
                 if send:
                     consumer.start()
+
+    def _set_before_send(self, before_send):
+        if before_send is not None:
+            if callable(before_send):
+                self.before_send = before_send
+            else:
+                self.log.warning("before_send is not callable, it will be ignored")
+                self.before_send = None
+        else:
+            self.before_send = None
 
     def new_context(self, fresh=False, capture_exceptions=True):
         """

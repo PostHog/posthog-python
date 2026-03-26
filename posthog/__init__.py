@@ -889,6 +889,7 @@ def setup() -> Client:
     # always set incase user changes it
     default_client.disabled = disabled
     default_client.debug = debug
+    default_client._set_before_send(before_send)
 
     return default_client
 
