@@ -248,3 +248,28 @@ class TestModuleLevelBeforeSend(unittest.TestCase):
             batch_data = mock_post.call_args[1]["batch"]
             enqueued_msg = batch_data[0]
             self.assertTrue(enqueued_msg["properties"]["module_level_before_send"])
+
+    def test_before_send_callback_updates_after_client_initialization(self):
+        def my_before_send(event):
+            event["properties"]["updated_after_init"] = True
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            posthog.api_key = FAKE_TEST_API_KEY
+            posthog.sync_mode = True
+
+            first_msg_uuid = posthog.capture("first_event", distinct_id="user1")
+
+            posthog.before_send = my_before_send
+            second_msg_uuid = posthog.capture("second_event", distinct_id="user1")
+
+            self.assertIsNotNone(first_msg_uuid)
+            self.assertIsNotNone(second_msg_uuid)
+            self.assertIs(posthog.default_client.before_send, my_before_send)
+
+            self.assertEqual(mock_post.call_count, 2)
+            first_batch = mock_post.call_args_list[0][1]["batch"]
+            second_batch = mock_post.call_args_list[1][1]["batch"]
+
+            self.assertNotIn("updated_after_init", first_batch[0]["properties"])
+            self.assertTrue(second_batch[0]["properties"]["updated_after_init"])
