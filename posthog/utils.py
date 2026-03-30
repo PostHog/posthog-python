@@ -513,7 +513,7 @@ def get_os_info():
         "$os": os_name,
         "$os_version": os_version,
     }
-    if os_name == "Linux":
+    if os_distro:
         info["$os_distro"] = os_distro
 
     return info
