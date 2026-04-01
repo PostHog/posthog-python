@@ -16,7 +16,11 @@ try:
         ToolUseBlock,
     )
 
-    from posthog.ai.claude_agent_sdk import PostHogClaudeAgentProcessor, instrument, query
+    from posthog.ai.claude_agent_sdk import (
+        PostHogClaudeAgentProcessor,
+        instrument,
+        query,
+    )
 
     CLAUDE_AGENT_SDK_AVAILABLE = True
 except ImportError:
@@ -29,7 +33,10 @@ pytestmark = pytest.mark.skipif(
 
 # ── Helpers ──────────────────────────────────────────────────────
 
-def _make_stream_event(event_type: str, data: Optional[Dict[str, Any]] = None, session_id: str = "sess_123") -> StreamEvent:
+
+def _make_stream_event(
+    event_type: str, data: Optional[Dict[str, Any]] = None, session_id: str = "sess_123"
+) -> StreamEvent:
     event = {"type": event_type, **(data or {})}
     return StreamEvent(uuid="evt_1", session_id=session_id, event=event)
 
@@ -41,23 +48,29 @@ def _make_message_start(
     cache_read: int = 0,
     cache_creation: int = 0,
 ) -> StreamEvent:
-    return _make_stream_event("message_start", {
-        "message": {
-            "model": model,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_input_tokens": cache_read,
-                "cache_creation_input_tokens": cache_creation,
+    return _make_stream_event(
+        "message_start",
+        {
+            "message": {
+                "model": model,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_read_input_tokens": cache_read,
+                    "cache_creation_input_tokens": cache_creation,
+                },
             },
         },
-    })
+    )
 
 
 def _make_message_delta(output_tokens: int = 50) -> StreamEvent:
-    return _make_stream_event("message_delta", {
-        "usage": {"output_tokens": output_tokens},
-    })
+    return _make_stream_event(
+        "message_delta",
+        {
+            "usage": {"output_tokens": output_tokens},
+        },
+    )
 
 
 def _make_message_stop() -> StreamEvent:
@@ -72,7 +85,9 @@ def _make_assistant_message(
     content = [TextBlock(text=text)]
     if tool_uses:
         for tu in tool_uses:
-            content.append(ToolUseBlock(id=tu["id"], name=tu["name"], input=tu.get("input", {})))
+            content.append(
+                ToolUseBlock(id=tu["id"], name=tu["name"], input=tu.get("input", {}))
+            )
     return AssistantMessage(content=content, model=model)
 
 
@@ -112,6 +127,7 @@ async def _fake_query(messages):
 
 # ── Fixtures ─────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def mock_client():
     client = MagicMock()
@@ -131,8 +147,8 @@ def processor(mock_client):
 
 # ── Tests ────────────────────────────────────────────────────────
 
-class TestPostHogClaudeAgentProcessor:
 
+class TestPostHogClaudeAgentProcessor:
     def test_initialization(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
             client=mock_client,
@@ -158,7 +174,6 @@ class TestPostHogClaudeAgentProcessor:
 
 
 class TestGenerationEmission:
-
     @pytest.mark.asyncio
     async def test_emits_generation_from_stream_events(self, processor, mock_client):
         messages = [
@@ -169,7 +184,10 @@ class TestGenerationEmission:
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             collected = []
             async for msg in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
                 collected.append(msg)
@@ -181,7 +199,11 @@ class TestGenerationEmission:
         assert "$ai_trace" in events
 
         # Check generation properties
-        gen_call = next(c for c in calls if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation")
+        gen_call = next(
+            c
+            for c in calls
+            if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
+        )
         props = gen_call.kwargs.get("properties") or gen_call[1].get("properties")
         assert props["$ai_provider"] == "anthropic"
         assert props["$ai_framework"] == "claude-agent-sdk"
@@ -191,7 +213,9 @@ class TestGenerationEmission:
         assert props["$ai_cache_read_input_tokens"] == 20
 
     @pytest.mark.asyncio
-    async def test_emits_multiple_generations_for_multi_turn(self, processor, mock_client):
+    async def test_emits_multiple_generations_for_multi_turn(
+        self, processor, mock_client
+    ):
         messages = [
             # Turn 1
             _make_message_start(input_tokens=50),
@@ -206,68 +230,92 @@ class TestGenerationEmission:
             _make_result_message(num_turns=2),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
         gen_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 2
 
     @pytest.mark.asyncio
-    async def test_fallback_generation_from_result_when_no_stream_events(self, processor, mock_client):
+    async def test_fallback_generation_from_result_when_no_stream_events(
+        self, processor, mock_client
+    ):
         """When StreamEvents are not available, fall back to ResultMessage data."""
         messages = [
             _make_assistant_message(),
             _make_result_message(input_tokens=200, output_tokens=100),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
         gen_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 1
-        props = gen_calls[0].kwargs.get("properties") or gen_calls[0][1].get("properties")
+        props = gen_calls[0].kwargs.get("properties") or gen_calls[0][1].get(
+            "properties"
+        )
         assert props["$ai_input_tokens"] == 200
         assert props["$ai_output_tokens"] == 100
 
 
 class TestToolSpanEmission:
-
     @pytest.mark.asyncio
     async def test_emits_span_for_tool_use(self, processor, mock_client):
         messages = [
             _make_message_start(),
             _make_message_stop(),
-            _make_assistant_message(tool_uses=[
-                {"id": "tu_1", "name": "Read", "input": {"file_path": "/tmp/test.py"}},
-            ]),
+            _make_assistant_message(
+                tool_uses=[
+                    {
+                        "id": "tu_1",
+                        "name": "Read",
+                        "input": {"file_path": "/tmp/test.py"},
+                    },
+                ]
+            ),
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
-            async for _ in processor.query(prompt="Read a file", options=ClaudeAgentOptions()):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in processor.query(
+                prompt="Read a file", options=ClaudeAgentOptions()
+            ):
                 pass
 
         span_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_span"
         ]
         assert len(span_calls) == 1
-        props = span_calls[0].kwargs.get("properties") or span_calls[0][1].get("properties")
+        props = span_calls[0].kwargs.get("properties") or span_calls[0][1].get(
+            "properties"
+        )
         assert props["$ai_span_name"] == "Read"
         assert props["$ai_span_type"] == "tool"
         assert props["$ai_input_state"] == {"file_path": "/tmp/test.py"}
 
 
 class TestTraceEmission:
-
     @pytest.mark.asyncio
     async def test_emits_trace_on_result(self, processor, mock_client):
         messages = [
@@ -277,16 +325,22 @@ class TestTraceEmission:
             _make_result_message(total_cost_usd=0.05, duration_ms=3000, is_error=False),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
         trace_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
-        props = trace_calls[0].kwargs.get("properties") or trace_calls[0][1].get("properties")
+        props = trace_calls[0].kwargs.get("properties") or trace_calls[0][1].get(
+            "properties"
+        )
         assert props["$ai_trace_name"] == "claude_agent_sdk_query"
         assert props["$ai_total_cost_usd"] == 0.05
         assert props["$ai_latency"] == 3.0
@@ -298,21 +352,26 @@ class TestTraceEmission:
             _make_result_message(is_error=True, total_cost_usd=0.0),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
         trace_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
-        props = trace_calls[0].kwargs.get("properties") or trace_calls[0][1].get("properties")
+        props = trace_calls[0].kwargs.get("properties") or trace_calls[0][1].get(
+            "properties"
+        )
         assert props["$ai_is_error"] is True
 
 
 class TestPrivacyMode:
-
     @pytest.mark.asyncio
     async def test_privacy_mode_redacts_tool_input(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
@@ -323,27 +382,40 @@ class TestPrivacyMode:
         messages = [
             _make_message_start(),
             _make_message_stop(),
-            _make_assistant_message(tool_uses=[
-                {"id": "tu_1", "name": "Read", "input": {"file_path": "/secret/file"}},
-            ]),
+            _make_assistant_message(
+                tool_uses=[
+                    {
+                        "id": "tu_1",
+                        "name": "Read",
+                        "input": {"file_path": "/secret/file"},
+                    },
+                ]
+            ),
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
-            async for _ in proc.query(prompt="Read secret", options=ClaudeAgentOptions()):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(
+                prompt="Read secret", options=ClaudeAgentOptions()
+            ):
                 pass
 
         span_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_span"
         ]
         assert len(span_calls) == 1
-        props = span_calls[0].kwargs.get("properties") or span_calls[0][1].get("properties")
+        props = span_calls[0].kwargs.get("properties") or span_calls[0][1].get(
+            "properties"
+        )
         assert "$ai_input_state" not in props
 
 
 class TestPersonlessMode:
-
     @pytest.mark.asyncio
     async def test_no_distinct_id_sets_process_person_profile_false(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
@@ -357,7 +429,10 @@ class TestPersonlessMode:
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in proc.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
@@ -367,7 +442,6 @@ class TestPersonlessMode:
 
 
 class TestCustomProperties:
-
     @pytest.mark.asyncio
     async def test_instance_properties_merged(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
@@ -382,7 +456,10 @@ class TestCustomProperties:
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in proc.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
@@ -400,7 +477,10 @@ class TestCustomProperties:
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in processor.query(
                 prompt="Hi",
                 options=ClaudeAgentOptions(),
@@ -414,7 +494,6 @@ class TestCustomProperties:
 
 
 class TestCallableDistinctId:
-
     @pytest.mark.asyncio
     async def test_callable_distinct_id_resolved_on_trace(self, mock_client):
         def resolver(result):
@@ -428,21 +507,26 @@ class TestCallableDistinctId:
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
             async for _ in proc.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
         trace_calls = [
-            c for c in mock_client.capture.call_args_list
+            c
+            for c in mock_client.capture.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
-        did = trace_calls[0].kwargs.get("distinct_id") or trace_calls[0][1].get("distinct_id")
+        did = trace_calls[0].kwargs.get("distinct_id") or trace_calls[0][1].get(
+            "distinct_id"
+        )
         assert did == "user-sess_123"
 
 
 class TestMessagePassthrough:
-
     @pytest.mark.asyncio
     async def test_all_messages_yielded_unchanged(self, processor, mock_client):
         original_messages = [
@@ -453,7 +537,10 @@ class TestMessagePassthrough:
             _make_result_message(),
         ]
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=lambda **kw: _fake_query(original_messages)):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(original_messages),
+        ):
             collected = []
             async for msg in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
                 collected.append(msg)
@@ -465,7 +552,6 @@ class TestMessagePassthrough:
 
 
 class TestInstrumentFunction:
-
     def test_instrument_returns_processor(self, mock_client):
         proc = instrument(client=mock_client, distinct_id="test")
         assert isinstance(proc, PostHogClaudeAgentProcessor)
@@ -474,7 +560,6 @@ class TestInstrumentFunction:
 
 
 class TestEnsurePartialMessages:
-
     @pytest.mark.asyncio
     async def test_enables_partial_messages_on_options(self, processor, mock_client):
         """Verify that the processor enables include_partial_messages."""
@@ -485,7 +570,10 @@ class TestEnsurePartialMessages:
             return
             yield  # make it an async generator
 
-        with patch("posthog.ai.claude_agent_sdk.processor.original_query", side_effect=fake_query_capture):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=fake_query_capture,
+        ):
             async for _ in processor.query(
                 prompt="Hi",
                 options=ClaudeAgentOptions(include_partial_messages=False),

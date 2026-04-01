@@ -69,8 +69,12 @@ class _GenerationTracker:
             usage = message.get("usage", {})
             self._current.input_tokens = usage.get("input_tokens", 0)
             self._current.output_tokens = usage.get("output_tokens", 0)
-            self._current.cache_read_input_tokens = usage.get("cache_read_input_tokens", 0)
-            self._current.cache_creation_input_tokens = usage.get("cache_creation_input_tokens", 0)
+            self._current.cache_read_input_tokens = usage.get(
+                "cache_read_input_tokens", 0
+            )
+            self._current.cache_creation_input_tokens = usage.get(
+                "cache_creation_input_tokens", 0
+            )
 
         elif event_type == "message_delta" and self._current is not None:
             usage = raw.get("usage", {})
@@ -127,7 +131,9 @@ class PostHogClaudeAgentProcessor:
     def __init__(
         self,
         client: Optional[Client] = None,
-        distinct_id: Optional[Union[str, Callable[["ResultMessage"], Optional[str]]]] = None,
+        distinct_id: Optional[
+            Union[str, Callable[["ResultMessage"], Optional[str]]]
+        ] = None,
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
@@ -138,7 +144,9 @@ class PostHogClaudeAgentProcessor:
         self._groups = groups or {}
         self._properties = properties or {}
 
-    def _get_distinct_id(self, result: Optional["ResultMessage"] = None) -> Optional[str]:
+    def _get_distinct_id(
+        self, result: Optional["ResultMessage"] = None
+    ) -> Optional[str]:
         if callable(self._distinct_id):
             if result:
                 val = self._distinct_id(result)
@@ -164,7 +172,9 @@ class PostHogClaudeAgentProcessor:
         groups: Optional[Dict[str, Any]] = None,
     ) -> None:
         try:
-            if not hasattr(self._client, "capture") or not callable(self._client.capture):
+            if not hasattr(self._client, "capture") or not callable(
+                self._client.capture
+            ):
                 return
 
             final_properties = {
@@ -187,7 +197,9 @@ class PostHogClaudeAgentProcessor:
         prompt: Any,
         options: Optional[ClaudeAgentOptions] = None,
         transport: Any = None,
-        posthog_distinct_id: Optional[Union[str, Callable[["ResultMessage"], Optional[str]]]] = None,
+        posthog_distinct_id: Optional[
+            Union[str, Callable[["ResultMessage"], Optional[str]]]
+        ] = None,
         posthog_trace_id: Optional[str] = None,
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
@@ -214,7 +226,11 @@ class PostHogClaudeAgentProcessor:
         distinct_id_override = posthog_distinct_id or self._distinct_id
         trace_id = posthog_trace_id or str(uuid.uuid4())
         extra_props = posthog_properties or {}
-        privacy = posthog_privacy_mode if posthog_privacy_mode is not None else self._privacy_mode
+        privacy = (
+            posthog_privacy_mode
+            if posthog_privacy_mode is not None
+            else self._privacy_mode
+        )
         groups = posthog_groups or self._groups
 
         # Ensure partial messages are enabled for per-generation tracking
@@ -233,7 +249,9 @@ class PostHogClaudeAgentProcessor:
         if isinstance(prompt, str):
             initial_input = [{"role": "user", "content": prompt}]
         if options and options.system_prompt and isinstance(options.system_prompt, str):
-            initial_input = [{"role": "system", "content": options.system_prompt}] + initial_input
+            initial_input = [
+                {"role": "system", "content": options.system_prompt}
+            ] + initial_input
 
         # Two-slot input tracking:
         # - current_input: input for the generation currently in progress
@@ -249,7 +267,9 @@ class PostHogClaudeAgentProcessor:
         # Accumulate assistant output per generation
         pending_output: List[Dict[str, Any]] = []
 
-        async for message in original_query(prompt=prompt, options=options, transport=transport):
+        async for message in original_query(
+            prompt=prompt, options=options, transport=transport
+        ):
             # All instrumentation is wrapped in try/except so PostHog errors
             # never interrupt the underlying Claude Agent SDK query.
             try:
@@ -262,10 +282,15 @@ class PostHogClaudeAgentProcessor:
                         generation_index += 1
                         current_generation_span_id = gen.span_id
                         self._emit_generation(
-                            gen, trace_id, generation_index,
+                            gen,
+                            trace_id,
+                            generation_index,
                             current_input,
                             pending_output or None,
-                            distinct_id_override, extra_props, privacy, groups,
+                            distinct_id_override,
+                            extra_props,
+                            privacy,
+                            groups,
                         )
                         # Promote: tool results from this turn become input for next turn
                         current_input = next_input
@@ -284,17 +309,29 @@ class PostHogClaudeAgentProcessor:
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
                             self._emit_tool_span(
-                                block, trace_id, parent_id,
-                                distinct_id_override, extra_props, privacy, groups,
+                                block,
+                                trace_id,
+                                parent_id,
+                                distinct_id_override,
+                                extra_props,
+                                privacy,
+                                groups,
                             )
-                            output_content.append({
-                                "type": "function",
-                                "function": {"name": block.name, "arguments": block.input},
-                            })
+                            output_content.append(
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": block.name,
+                                        "arguments": block.input,
+                                    },
+                                }
+                            )
                         elif hasattr(block, "text"):
                             output_content.append({"type": "text", "text": block.text})
                     if output_content:
-                        pending_output = [{"role": "assistant", "content": output_content}]
+                        pending_output = [
+                            {"role": "assistant", "content": output_content}
+                        ]
 
                 elif isinstance(message, UserMessage):
                     # UserMessages carry tool results. They arrive *before* message_stop
@@ -306,11 +343,15 @@ class PostHogClaudeAgentProcessor:
                         formatted: List[Dict[str, Any]] = []
                         for block in content:
                             if hasattr(block, "tool_use_id"):
-                                formatted.append({
-                                    "type": "tool_result",
-                                    "tool_use_id": block.tool_use_id,
-                                    "content": str(block.content)[:500] if block.content else None,
-                                })
+                                formatted.append(
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": block.tool_use_id,
+                                        "content": str(block.content)[:500]
+                                        if block.content
+                                        else None,
+                                    }
+                                )
                             elif hasattr(block, "text"):
                                 formatted.append({"type": "text", "text": block.text})
                         if formatted:
@@ -321,14 +362,26 @@ class PostHogClaudeAgentProcessor:
                     # generation from ResultMessage aggregate data
                     if not tracker.had_any_stream_events:
                         self._emit_generation_from_result(
-                            message, trace_id, tracker.last_model,
-                            query_start, initial_input, pending_output,
-                            distinct_id_override, extra_props, privacy, groups,
+                            message,
+                            trace_id,
+                            tracker.last_model,
+                            query_start,
+                            initial_input,
+                            pending_output,
+                            distinct_id_override,
+                            extra_props,
+                            privacy,
+                            groups,
                         )
 
                     self._emit_trace(
-                        message, trace_id, query_start,
-                        distinct_id_override, extra_props, privacy, groups,
+                        message,
+                        trace_id,
+                        query_start,
+                        distinct_id_override,
+                        extra_props,
+                        privacy,
+                        groups,
                     )
 
             except Exception as e:
@@ -349,7 +402,9 @@ class PostHogClaudeAgentProcessor:
         groups: Dict[str, Any],
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id)
-        latency = (gen.end_time - gen.start_time) if gen.start_time and gen.end_time else 0
+        latency = (
+            (gen.end_time - gen.start_time) if gen.start_time and gen.end_time else 0
+        )
 
         properties: Dict[str, Any] = {
             "$ai_trace_id": trace_id,
@@ -365,19 +420,27 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = None if privacy else self._with_privacy_mode(input_messages)
+            properties["$ai_input"] = (
+                None if privacy else self._with_privacy_mode(input_messages)
+            )
         if output_choices is not None:
-            properties["$ai_output_choices"] = None if privacy else self._with_privacy_mode(output_choices)
+            properties["$ai_output_choices"] = (
+                None if privacy else self._with_privacy_mode(output_choices)
+            )
 
         if gen.cache_read_input_tokens:
             properties["$ai_cache_read_input_tokens"] = gen.cache_read_input_tokens
         if gen.cache_creation_input_tokens:
-            properties["$ai_cache_creation_input_tokens"] = gen.cache_creation_input_tokens
+            properties["$ai_cache_creation_input_tokens"] = (
+                gen.cache_creation_input_tokens
+            )
 
         if resolved_id is None:
             properties["$process_person_profile"] = False
 
-        self._capture_event("$ai_generation", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_generation", properties, resolved_id or trace_id, groups
+        )
 
     def _emit_generation_from_result(
         self,
@@ -405,15 +468,21 @@ class PostHogClaudeAgentProcessor:
             "$ai_model": model,
             "$ai_input_tokens": usage.get("input_tokens", 0),
             "$ai_output_tokens": usage.get("output_tokens", 0),
-            "$ai_latency": result.duration_api_ms / 1000.0 if result.duration_api_ms else 0,
+            "$ai_latency": result.duration_api_ms / 1000.0
+            if result.duration_api_ms
+            else 0,
             "$ai_is_error": result.is_error,
             **extra_props,
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = None if privacy else self._with_privacy_mode(input_messages)
+            properties["$ai_input"] = (
+                None if privacy else self._with_privacy_mode(input_messages)
+            )
         if output_choices is not None:
-            properties["$ai_output_choices"] = None if privacy else self._with_privacy_mode(output_choices)
+            properties["$ai_output_choices"] = (
+                None if privacy else self._with_privacy_mode(output_choices)
+            )
 
         cache_read = usage.get("cache_read_input_tokens", 0)
         cache_creation = usage.get("cache_creation_input_tokens", 0)
@@ -428,7 +497,9 @@ class PostHogClaudeAgentProcessor:
         if resolved_id is None:
             properties["$process_person_profile"] = False
 
-        self._capture_event("$ai_generation", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_generation", properties, resolved_id or trace_id, groups
+        )
 
     def _emit_tool_span(
         self,
@@ -453,7 +524,9 @@ class PostHogClaudeAgentProcessor:
             **extra_props,
         }
 
-        if not privacy and not (hasattr(self._client, "privacy_mode") and self._client.privacy_mode):
+        if not privacy and not (
+            hasattr(self._client, "privacy_mode") and self._client.privacy_mode
+        ):
             properties["$ai_input_state"] = _ensure_serializable(block.input)
 
         if resolved_id is None:
@@ -472,7 +545,11 @@ class PostHogClaudeAgentProcessor:
         groups: Dict[str, Any],
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id, result)
-        latency = result.duration_ms / 1000.0 if result.duration_ms else (time.time() - query_start)
+        latency = (
+            result.duration_ms / 1000.0
+            if result.duration_ms
+            else (time.time() - query_start)
+        )
 
         properties: Dict[str, Any] = {
             "$ai_trace_id": trace_id,
@@ -523,6 +600,7 @@ def _ensure_serializable(obj: Any) -> Any:
         return None
     try:
         import json
+
         json.dumps(obj)
         return obj
     except (TypeError, ValueError):

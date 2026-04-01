@@ -69,7 +69,9 @@ async def query(
     options: Optional[ClaudeAgentOptions] = None,
     transport: Any = None,
     posthog_client: Optional[Client] = None,
-    posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None,
+    posthog_distinct_id: Optional[
+        Union[str, Callable[[ResultMessage], Optional[str]]]
+    ] = None,
     posthog_trace_id: Optional[str] = None,
     posthog_properties: Optional[Dict[str, Any]] = None,
     posthog_privacy_mode: bool = False,
