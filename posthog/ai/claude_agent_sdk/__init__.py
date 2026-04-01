@@ -14,10 +14,8 @@ except ImportError:
         "Please install the Claude Agent SDK to use this feature: 'pip install claude-agent-sdk'"
     )
 
-from posthog.ai.claude_agent_sdk.processor import (
-    PostHogClaudeAgentProcessor,
-    PostHogClaudeSDKClient,
-)
+from posthog.ai.claude_agent_sdk.client import PostHogClaudeSDKClient
+from posthog.ai.claude_agent_sdk.processor import PostHogClaudeAgentProcessor
 
 __all__ = [
     "PostHogClaudeAgentProcessor",
