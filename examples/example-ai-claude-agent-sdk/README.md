@@ -14,6 +14,7 @@ cp .env.example .env
 
 - **simple_query.py** - Single query using the `query()` drop-in replacement
 - **instrument_reuse.py** - Configure-once with `instrument()`, reuse across multiple queries
+- **multi_turn.py** - Multi-turn conversation with history using `PostHogClaudeSDKClient`
 
 ## Run
 
@@ -21,4 +22,5 @@ cp .env.example .env
 source .env
 python simple_query.py
 python instrument_reuse.py
+python multi_turn.py
 ```
