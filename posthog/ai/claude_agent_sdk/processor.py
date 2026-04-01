@@ -105,6 +105,11 @@ class _GenerationTracker:
         return len(self._completed)
 
     @property
+    def current_span_id(self) -> Optional[str]:
+        """Span ID of the generation currently in progress (before message_stop)."""
+        return self._current.span_id if self._current else None
+
+    @property
     def had_any_stream_events(self) -> bool:
         """Whether we received any StreamEvents at all."""
         return self._received_stream_events
@@ -156,6 +161,7 @@ class PostHogClaudeAgentProcessor:
         event: str,
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
+        groups: Optional[Dict[str, Any]] = None,
     ) -> None:
         try:
             if not hasattr(self._client, "capture") or not callable(self._client.capture):
@@ -170,7 +176,7 @@ class PostHogClaudeAgentProcessor:
                 distinct_id=distinct_id or "unknown",
                 event=event,
                 properties=final_properties,
-                groups=self._groups,
+                groups=groups if groups is not None else self._groups,
             )
         except Exception as e:
             log.debug(f"Failed to capture PostHog event: {e}")
@@ -268,12 +274,17 @@ class PostHogClaudeAgentProcessor:
 
                 elif isinstance(message, AssistantMessage):
                     tracker.set_model(message.model)
+                    # Use the in-progress generation's span_id as parent for tool spans.
+                    # AssistantMessage arrives before message_stop, so current_generation_span_id
+                    # would be stale (from the previous turn). tracker.current_span_id gives us
+                    # the correct in-progress generation.
+                    parent_id = tracker.current_span_id or current_generation_span_id
                     # Build output content from assistant blocks
                     output_content: List[Dict[str, Any]] = []
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
                             self._emit_tool_span(
-                                block, trace_id, current_generation_span_id,
+                                block, trace_id, parent_id,
                                 distinct_id_override, extra_props, privacy, groups,
                             )
                             output_content.append({
@@ -354,9 +365,9 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = self._with_privacy_mode(input_messages)
+            properties["$ai_input"] = None if privacy else self._with_privacy_mode(input_messages)
         if output_choices is not None:
-            properties["$ai_output_choices"] = self._with_privacy_mode(output_choices)
+            properties["$ai_output_choices"] = None if privacy else self._with_privacy_mode(output_choices)
 
         if gen.cache_read_input_tokens:
             properties["$ai_cache_read_input_tokens"] = gen.cache_read_input_tokens
@@ -366,10 +377,7 @@ class PostHogClaudeAgentProcessor:
         if resolved_id is None:
             properties["$process_person_profile"] = False
 
-        saved_groups = self._groups
-        self._groups = groups
-        self._capture_event("$ai_generation", properties, resolved_id or trace_id)
-        self._groups = saved_groups
+        self._capture_event("$ai_generation", properties, resolved_id or trace_id, groups)
 
     def _emit_generation_from_result(
         self,
@@ -403,9 +411,9 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = self._with_privacy_mode(input_messages)
+            properties["$ai_input"] = None if privacy else self._with_privacy_mode(input_messages)
         if output_choices is not None:
-            properties["$ai_output_choices"] = self._with_privacy_mode(output_choices)
+            properties["$ai_output_choices"] = None if privacy else self._with_privacy_mode(output_choices)
 
         cache_read = usage.get("cache_read_input_tokens", 0)
         cache_creation = usage.get("cache_creation_input_tokens", 0)
@@ -420,10 +428,7 @@ class PostHogClaudeAgentProcessor:
         if resolved_id is None:
             properties["$process_person_profile"] = False
 
-        saved_groups = self._groups
-        self._groups = groups
-        self._capture_event("$ai_generation", properties, resolved_id or trace_id)
-        self._groups = saved_groups
+        self._capture_event("$ai_generation", properties, resolved_id or trace_id, groups)
 
     def _emit_tool_span(
         self,
@@ -454,10 +459,7 @@ class PostHogClaudeAgentProcessor:
         if resolved_id is None:
             properties["$process_person_profile"] = False
 
-        saved_groups = self._groups
-        self._groups = groups
-        self._capture_event("$ai_span", properties, resolved_id or trace_id)
-        self._groups = saved_groups
+        self._capture_event("$ai_span", properties, resolved_id or trace_id, groups)
 
     def _emit_trace(
         self,
@@ -488,10 +490,7 @@ class PostHogClaudeAgentProcessor:
         if resolved_id is None:
             properties["$process_person_profile"] = False
 
-        saved_groups = self._groups
-        self._groups = groups
-        self._capture_event("$ai_trace", properties, resolved_id or trace_id)
-        self._groups = saved_groups
+        self._capture_event("$ai_trace", properties, resolved_id or trace_id, groups)
 
         # Flush to ensure events are sent before process exits
         try:
