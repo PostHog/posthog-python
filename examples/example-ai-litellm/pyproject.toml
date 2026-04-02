@@ -1,0 +1,8 @@
+[project]
+name = "example-ai-litellm"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "posthog==7.9.12",
+    "litellm==1.81.13",
+]

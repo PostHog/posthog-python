@@ -9,6 +9,7 @@ build/
 .vscode/
 env/
 venv/
+.venv/
 flake8.out
 pylint.out
 posthog-analytics
