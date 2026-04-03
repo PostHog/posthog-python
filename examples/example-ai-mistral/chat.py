@@ -16,7 +16,7 @@ client = OpenAI(
 
 response = client.chat.completions.create(
     model="mistral-large-latest",
-    max_completion_tokens=1024,
+    max_tokens=1024,
     posthog_distinct_id="example-user",
     messages=[
         {"role": "user", "content": "Tell me a fun fact about hedgehogs."},
