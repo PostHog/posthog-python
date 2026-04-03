@@ -39,7 +39,9 @@ async def main():
 
         # Turn 2 — has full conversation history
         print("\n> And what language do they speak there?")
-        await client.query("And what language do they speak there? Reply in one sentence.")
+        await client.query(
+            "And what language do they speak there? Reply in one sentence."
+        )
         async for message in client.receive_response():
             if isinstance(message, AssistantMessage):
                 for block in message.content:
@@ -50,7 +52,9 @@ async def main():
 
         # Turn 3 — still has context from both previous turns
         print("\n> How do you say 'hello' in that language?")
-        await client.query("How do you say 'hello' in that language? Reply in one sentence.")
+        await client.query(
+            "How do you say 'hello' in that language? Reply in one sentence."
+        )
         async for message in client.receive_response():
             if isinstance(message, AssistantMessage):
                 for block in message.content:
