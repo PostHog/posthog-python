@@ -5,9 +5,10 @@ Track OpenAI API calls with PostHog.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
+# Install uv if you haven't already: https://docs.astral.sh/uv/getting-started/installation/
+uv sync
 ```
 
 ## Examples
@@ -24,11 +25,11 @@ cp .env.example .env
 
 ```bash
 source .env
-python chat_completions.py
-python chat_completions_streaming.py
-python responses.py
-python responses_streaming.py
-python embeddings.py
-python transcription.py
-python image_generation.py
+uv run python chat_completions.py
+uv run python chat_completions_streaming.py
+uv run python responses.py
+uv run python responses_streaming.py
+uv run python embeddings.py
+uv run python transcription.py
+uv run python image_generation.py
 ```

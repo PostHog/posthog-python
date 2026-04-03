@@ -1,2 +1,0 @@
-posthog>=6.6.1
-litellm==1.81.13
