@@ -17,10 +17,7 @@ def recommend_book(genre: str):
     return f"Recommend a {genre} book."
 
 
-response = recommend_book(
-    "fantasy",
-    posthog_distinct_id="example-user",
-)
+response = recommend_book("fantasy")
 
 print(response.content)
 posthog.shutdown()
