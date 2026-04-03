@@ -4,7 +4,7 @@ import asyncio
 import os
 
 from claude_agent_sdk import AssistantMessage, ResultMessage
-from claude_agent_sdk.types import ClaudeAgentOptions, TextBlock, ToolUseBlock
+from claude_agent_sdk.types import ClaudeAgentOptions, TextBlock
 from posthog import Posthog
 from posthog.ai.claude_agent_sdk import PostHogClaudeSDKClient
 

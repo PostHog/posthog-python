@@ -19,7 +19,6 @@ try:
     from posthog.ai.claude_agent_sdk import (
         PostHogClaudeAgentProcessor,
         instrument,
-        query,
     )
 
     CLAUDE_AGENT_SDK_AVAILABLE = True
@@ -548,7 +547,7 @@ class TestMessagePassthrough:
         assert len(collected) == len(original_messages)
         # Verify types match
         for orig, got in zip(original_messages, collected):
-            assert type(orig) == type(got)
+            assert type(orig) is type(got)
 
 
 class TestInstrumentFunction:

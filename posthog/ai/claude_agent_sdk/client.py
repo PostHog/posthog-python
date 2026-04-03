@@ -26,7 +26,6 @@ except ImportError:
 from posthog.ai.claude_agent_sdk.processor import (
     PostHogClaudeAgentProcessor,
     _GenerationTracker,
-    _ensure_serializable,
 )
 from posthog.client import Client
 
