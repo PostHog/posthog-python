@@ -391,6 +391,7 @@ def group_identify(
     timestamp=None,  # type: Optional[datetime.datetime]
     uuid=None,  # type: Optional[str]
     disable_geoip=None,  # type: Optional[bool]
+    distinct_id=None,  # type: Optional[str]
 ):
     # type: (...) -> Optional[str]
     """
@@ -403,6 +404,7 @@ def group_identify(
         timestamp: Optional timestamp for the event
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
+        distinct_id: Optional distinct ID of the user performing the action
 
     Examples:
         ```python
@@ -425,6 +427,7 @@ def group_identify(
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
+        distinct_id=distinct_id,
     )
 
 
@@ -611,6 +614,7 @@ def get_all_flags(
     only_evaluate_locally=False,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
     device_id=None,  # type: Optional[str]
+    flag_keys_to_evaluate=None,  # type: Optional[list[str]]
 ) -> Optional[dict[str, FeatureFlag]]:
     """
     Get all flags for a given user.
@@ -644,6 +648,7 @@ def get_all_flags(
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
         device_id=device_id,
+        flag_keys_to_evaluate=flag_keys_to_evaluate,
     )
 
 
@@ -747,6 +752,7 @@ def get_all_flags_and_payloads(
     only_evaluate_locally=False,
     disable_geoip=None,  # type: Optional[bool]
     device_id=None,  # type: Optional[str]
+    flag_keys_to_evaluate=None,  # type: Optional[list[str]]
 ) -> FlagsAndPayloads:
     return _proxy(
         "get_all_flags_and_payloads",
@@ -757,6 +763,7 @@ def get_all_flags_and_payloads(
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
         device_id=device_id,
+        flag_keys_to_evaluate=flag_keys_to_evaluate,
     )
 
 
