@@ -626,6 +626,7 @@ def get_all_flags(
         group_properties: Group properties
         only_evaluate_locally: Whether to evaluate only locally
         disable_geoip: Whether to disable GeoIP lookup
+        flag_keys_to_evaluate: Optional list of flag keys to evaluate (evaluates all if None)
 
     Details:
         Flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
