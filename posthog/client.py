@@ -1315,7 +1315,11 @@ class Client(object):
                     etag=self._flags_etag,
                 )
             except Exception as e:
-                # If using a custom endpoint, fall back to the default Django one
+                # Fall back to the stable Django endpoint when the custom endpoint
+                # (e.g. the Rust-backed /flags/definitions) fails. This enables a
+                # zero-downtime gradual migration: the custom endpoint is tried first
+                # and, on any error, flag evaluation degrades transparently to the
+                # default rather than being blocked entirely.
                 if endpoint != self._DEFAULT_LOCAL_EVAL_ENDPOINT:
                     self.log.warning(
                         f"[FEATURE FLAGS] Custom endpoint {endpoint} failed ({e}), falling back to {self._DEFAULT_LOCAL_EVAL_ENDPOINT}"
