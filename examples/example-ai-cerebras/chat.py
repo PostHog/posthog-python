@@ -1,6 +1,7 @@
 """Cerebras chat completions via OpenAI-compatible API, tracked by PostHog."""
 
 import os
+
 from posthog import Posthog
 from posthog.ai.openai import OpenAI
 
@@ -15,7 +16,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="llama-3.3-70b",
+    model="llama3.1-8b",
     max_completion_tokens=1024,
     posthog_distinct_id="example-user",
     messages=[

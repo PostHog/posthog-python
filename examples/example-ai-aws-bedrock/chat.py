@@ -28,7 +28,7 @@ client = boto3.client(
 )
 
 response = client.converse(
-    modelId="us.anthropic.claude-3-5-haiku-20241022-v1:0",
+    modelId="openai.gpt-oss-20b-1:0",
     messages=[
         {
             "role": "user",
@@ -37,4 +37,7 @@ response = client.converse(
     ],
 )
 
-print(response["output"]["message"]["content"][0]["text"])
+for block in response["output"]["message"]["content"]:
+    if "text" in block:
+        print(block["text"])
+        break
