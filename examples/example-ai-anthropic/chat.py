@@ -1,16 +1,29 @@
-"""Anthropic chat with tool calling, tracked by PostHog."""
+"""Anthropic chat with tool calling, tracked via OpenTelemetry."""
 
 import os
 import json
 import urllib.request
-from posthog import Posthog
-from posthog.ai.anthropic import Anthropic
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(attributes={SERVICE_NAME: "example-anthropic-app"})
+exporter = OTLPSpanExporter(
+    endpoint=f"{os.environ.get('POSTHOG_HOST', 'https://us.i.posthog.com')}/i/v0/ai/otel",
+    headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
 )
-client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], posthog_client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
+
+AnthropicInstrumentor().instrument()
+
+import anthropic
+
+client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 tools = [
     {
@@ -40,7 +53,6 @@ def get_weather(latitude: float, longitude: float, location_name: str) -> str:
 message = client.messages.create(
     model="claude-sonnet-4-5-20250929",
     max_tokens=1024,
-    posthog_distinct_id="example-user",
     tools=tools,
     messages=[{"role": "user", "content": "What's the weather like in San Francisco?"}],
 )
@@ -54,4 +66,4 @@ for block in message.content:
         result = get_weather(**block.input)
         print(result)
 
-posthog.shutdown()
+provider.shutdown()

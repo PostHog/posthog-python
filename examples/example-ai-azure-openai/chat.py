@@ -1,28 +1,39 @@
-"""Azure OpenAI chat completions, tracked by PostHog."""
+"""Azure OpenAI chat completions, tracked via OpenTelemetry."""
 
 import os
-from posthog import Posthog
-from posthog.ai.openai import AzureOpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(attributes={SERVICE_NAME: "example-azure-openai-app"})
+exporter = OTLPSpanExporter(
+    endpoint=f"{os.environ.get('POSTHOG_HOST', 'https://us.i.posthog.com')}/i/v0/ai/otel",
+    headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
 )
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
+
+OpenAIInstrumentor().instrument()
+
+from openai import AzureOpenAI
+
 client = AzureOpenAI(
     api_key=os.environ["AZURE_OPENAI_API_KEY"],
     api_version="2024-10-21",
     azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    posthog_client=posthog,
 )
 
 response = client.chat.completions.create(
     model="gpt-4o",
     max_completion_tokens=1024,
-    posthog_distinct_id="example-user",
     messages=[
         {"role": "user", "content": "Tell me a fun fact about hedgehogs."},
     ],
 )
 
 print(response.choices[0].message.content)
-posthog.shutdown()
+provider.shutdown()

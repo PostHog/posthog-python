@@ -3,6 +3,8 @@ name = "example-ai-deepseek"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "posthog==7.9.12",
-    "openai==2.29.0",
+    "openai>=1.0.0",
+    "opentelemetry-instrumentation-openai-v2>=2.0b0",
+    "opentelemetry-sdk>=1.30.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
 ]

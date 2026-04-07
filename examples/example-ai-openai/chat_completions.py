@@ -1,16 +1,29 @@
-"""OpenAI Chat Completions API with tool calling, tracked by PostHog."""
+"""OpenAI Chat Completions API with tool calling, tracked via OpenTelemetry."""
 
 import os
 import json
 import urllib.request
-from posthog import Posthog
-from posthog.ai.openai import OpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(attributes={SERVICE_NAME: "example-openai-app"})
+exporter = OTLPSpanExporter(
+    endpoint=f"{os.environ.get('POSTHOG_HOST', 'https://us.i.posthog.com')}/i/v0/ai/otel",
+    headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
 )
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
+
+OpenAIInstrumentor().instrument()
+
+import openai
+
+client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 tools = [
     {
@@ -43,7 +56,6 @@ def get_weather(latitude: float, longitude: float, location_name: str) -> str:
 response = client.chat.completions.create(
     model="gpt-4o-mini",
     max_completion_tokens=1024,
-    posthog_distinct_id="example-user",
     tools=tools,
     tool_choice="auto",
     messages=[
@@ -67,4 +79,4 @@ if message.tool_calls:
         result = get_weather(**args)
         print(result)
 
-posthog.shutdown()
+provider.shutdown()
