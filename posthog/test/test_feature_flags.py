@@ -3780,6 +3780,81 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 1)
 
 
+class TestLocalEvalEndpointConfig(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.capture_patch = mock.patch.object(Client, "capture")
+        cls.capture_patch.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.capture_patch.stop()
+
+    @mock.patch("posthog.client.get")
+    def test_custom_endpoint_env_var(self, patch_get):
+        patch_get.return_value = GetResponse(
+            data={"flags": [], "group_type_mapping": {}},
+            etag=None,
+            not_modified=False,
+        )
+        with mock.patch.dict("os.environ", {"POSTHOG_LOCAL_EVALUATION_ENDPOINT": "/flags/definitions"}):
+            client = Client(FAKE_TEST_API_KEY, personal_api_key="test-key")
+            client._fetch_feature_flags_from_api()
+            call_url = patch_get.call_args[0][1]
+            self.assertTrue(call_url.startswith("/flags/definitions?"), f"Expected custom endpoint, got: {call_url}")
+
+    @mock.patch("posthog.client.get")
+    def test_default_endpoint_when_env_var_not_set(self, patch_get):
+        patch_get.return_value = GetResponse(
+            data={"flags": [], "group_type_mapping": {}},
+            etag=None,
+            not_modified=False,
+        )
+        with mock.patch.dict("os.environ", {}, clear=False):
+            # Ensure env var is not set
+            import os
+            os.environ.pop("POSTHOG_LOCAL_EVALUATION_ENDPOINT", None)
+            client = Client(FAKE_TEST_API_KEY, personal_api_key="test-key")
+            client._fetch_feature_flags_from_api()
+            call_url = patch_get.call_args[0][1]
+            self.assertTrue(
+                call_url.startswith("/api/feature_flag/local_evaluation/"),
+                f"Expected default endpoint, got: {call_url}",
+            )
+
+    @mock.patch("posthog.client.get")
+    def test_fallback_to_default_on_custom_endpoint_failure(self, patch_get):
+        success_response = GetResponse(
+            data={"flags": [], "group_type_mapping": {}},
+            etag=None,
+            not_modified=False,
+        )
+        # First call (custom endpoint) fails, second call (fallback) succeeds
+        patch_get.side_effect = [Exception("connection refused"), success_response]
+
+        with mock.patch.dict("os.environ", {"POSTHOG_LOCAL_EVALUATION_ENDPOINT": "/flags/definitions"}):
+            client = Client(FAKE_TEST_API_KEY, personal_api_key="test-key")
+            client._fetch_feature_flags_from_api()
+
+            self.assertEqual(patch_get.call_count, 2)
+            # First call used custom endpoint
+            first_url = patch_get.call_args_list[0][0][1]
+            self.assertTrue(first_url.startswith("/flags/definitions?"))
+            # Second call fell back to default
+            second_url = patch_get.call_args_list[1][0][1]
+            self.assertTrue(second_url.startswith("/api/feature_flag/local_evaluation/"))
+
+    @mock.patch("posthog.client.get")
+    def test_no_fallback_when_default_endpoint_fails(self, patch_get):
+        patch_get.side_effect = Exception("connection refused")
+
+        client = Client(FAKE_TEST_API_KEY, personal_api_key="test-key")
+        # Should not raise — the outer try/except in _fetch_feature_flags_from_api handles it
+        client._fetch_feature_flags_from_api()
+        # Only one call — no fallback since we're already using the default
+        self.assertEqual(patch_get.call_count, 1)
+
+
 class TestMatchProperties(unittest.TestCase):
     def property(self, key, value, operator=None):
         result = {"key": key, "value": value}
