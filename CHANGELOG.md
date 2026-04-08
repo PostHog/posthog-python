@@ -1,5 +1,15 @@
 # posthog
 
+## 7.10.0 — 2026-04-07
+
+### Minor changes
+
+- [d234b53](https://github.com/posthog/posthog-python/commit/d234b53ff9578648d3bdb70d54cde98cdb7d9c87) feat(ai): add Claude Agent SDK integration for LLM analytics — Thanks @andrewm4894!
+
+### Patch changes
+
+- [754c45f](https://github.com/posthog/posthog-python/commit/754c45fa024be3fdb1f1d1f312a94070786652b7) fix: propagate missing params in module-level wrapper functions (`distinct_id` for `group_identify`, `flag_keys_to_evaluate` for `get_all_flags`/`get_all_flags_and_payloads`) — Thanks @dustinbyrne!
+
 ## 7.9.12 — 2026-03-12
 
 ### Patch changes
