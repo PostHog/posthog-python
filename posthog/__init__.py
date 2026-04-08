@@ -55,7 +55,11 @@ from posthog.request import (
     set_socket_options as set_socket_options,
     SocketOptions as SocketOptions,
 )
-from posthog.types import FeatureFlag, FlagsAndPayloads, BeforeSendCallback
+from posthog.types import (
+    BeforeSendCallback as BeforeSendCallback,
+    FeatureFlag,
+    FlagsAndPayloads,
+)
 from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
 )
