@@ -1,5 +1,11 @@
 # posthog
 
+## 7.10.1 — 2026-04-08
+
+### Patch changes
+
+- [a5052b0](https://github.com/posthog/posthog-python/commit/a5052b089b106af5a2fa5236fcf1f4f84943f899) fix: Django middleware accidentally passed capture_exceptions as positional arg, setting fresh=True and resetting context state — Thanks @marandaneto!
+
 ## 7.10.0 — 2026-04-07
 
 ### Minor changes
