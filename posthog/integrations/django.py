@@ -265,7 +265,9 @@ class PosthogContextMiddleware:
             if self.request_filter and not self.request_filter(request):
                 return self.get_response(request)
 
-            with contexts.new_context(capture_exceptions=self.capture_exceptions, client=self.client):
+            with contexts.new_context(
+                capture_exceptions=self.capture_exceptions, client=self.client
+            ):
                 for k, v in self.extract_tags(request).items():
                     contexts.tag(k, v)
 
@@ -283,7 +285,9 @@ class PosthogContextMiddleware:
         if self.request_filter and not self.request_filter(request):
             return await self.get_response(request)
 
-        with contexts.new_context(capture_exceptions=self.capture_exceptions, client=self.client):
+        with contexts.new_context(
+            capture_exceptions=self.capture_exceptions, client=self.client
+        ):
             for k, v in (await self.aextract_tags(request)).items():
                 contexts.tag(k, v)
 
