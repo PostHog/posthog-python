@@ -29,7 +29,7 @@ client = AzureOpenAI(
 )
 
 response = client.chat.completions.create(
-    model="grok-4-20-non-reasoning",
+    model="gpt-4o",
     max_completion_tokens=1024,
     messages=[
         {"role": "user", "content": "Tell me a fun fact about hedgehogs."},

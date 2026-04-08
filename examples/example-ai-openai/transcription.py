@@ -30,7 +30,6 @@ audio_path = os.environ.get("AUDIO_PATH", "audio.mp3")
 if not os.path.exists(audio_path):
     print(f"Skipping: audio file not found at '{audio_path}'")
     print("Set AUDIO_PATH to a valid audio file (mp3, wav, m4a, etc.)")
-    provider.shutdown()
     sys.exit(0)
 
 with open(audio_path, "rb") as audio_file:
