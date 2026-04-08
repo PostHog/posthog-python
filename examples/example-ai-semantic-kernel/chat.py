@@ -9,7 +9,12 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-resource = Resource(attributes={SERVICE_NAME: "example-semantic-kernel-app"})
+resource = Resource(attributes={
+    SERVICE_NAME: "example-semantic-kernel-app",
+    "posthog.distinct_id": "example-user",
+    "foo": "bar",
+    "conversation_id": "abc-123",
+})
 exporter = OTLPSpanExporter(
     endpoint=f"{os.environ.get('POSTHOG_HOST', 'https://us.i.posthog.com')}/i/v0/ai/otel",
     headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
