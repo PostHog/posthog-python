@@ -1,5 +1,11 @@
 # posthog
 
+## 7.10.3 — 2026-04-08
+
+### Patch changes
+
+- [e22e893](https://github.com/posthog/posthog-python/commit/e22e893b236bf6af1cb8f6c18712727d24fe5c7e) fix: pass the module-level `posthog.before_send` callback into the lazily initialized default client — Thanks @marandaneto!
+
 ## 7.10.2 — 2026-04-08
 
 ### Patch changes
