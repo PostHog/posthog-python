@@ -1,5 +1,11 @@
 # posthog
 
+## 7.10.2 — 2026-04-08
+
+### Patch changes
+
+- [bae355c](https://github.com/posthog/posthog-python/commit/bae355cd787f4c1a119fd2b396ba444b1a218b6a) feat(flags): make local evaluation endpoint configurable via `POSTHOG_LOCAL_EVALUATION_ENDPOINT` env var with fallback to default endpoint — Thanks @patricio-posthog for your first contribution 🎉!
+
 ## 7.10.1 — 2026-04-08
 
 ### Patch changes
