@@ -4,7 +4,7 @@ import os
 import sys
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
@@ -15,7 +15,7 @@ exporter = OTLPSpanExporter(
     headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
 )
 provider = TracerProvider(resource=resource)
-provider.add_span_processor(BatchSpanProcessor(exporter))
+provider.add_span_processor(SimpleSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
@@ -40,5 +40,3 @@ with open(audio_path, "rb") as audio_file:
     )
 
 print(f"Transcription: {transcription.text}")
-
-provider.shutdown()

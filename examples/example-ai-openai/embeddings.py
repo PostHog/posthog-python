@@ -3,7 +3,7 @@
 import os
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
@@ -14,7 +14,7 @@ exporter = OTLPSpanExporter(
     headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
 )
 provider = TracerProvider(resource=resource)
-provider.add_span_processor(BatchSpanProcessor(exporter))
+provider.add_span_processor(SimpleSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
@@ -31,5 +31,3 @@ response = client.embeddings.create(
 embedding = response.data[0].embedding
 print(f"Embedding dimensions: {len(embedding)}")
 print(f"First 5 values: {embedding[:5]}")
-
-provider.shutdown()

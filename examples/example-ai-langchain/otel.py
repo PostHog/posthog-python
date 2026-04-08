@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 # Configure OTEL to export traces to PostHog
@@ -21,7 +21,7 @@ tracer_provider = TracerProvider(
         {"service.name": "langchain-example", "user.id": "example-user"}
     )
 )
-tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
 trace.set_tracer_provider(tracer_provider)
 
 # Use LangChain as normal — OTEL captures the traces automatically
@@ -29,5 +29,3 @@ model = ChatOpenAI(openai_api_key=os.environ["OPENAI_API_KEY"], temperature=0)
 
 response = model.invoke([HumanMessage(content="What is product analytics?")])
 print(response.content)
-
-tracer_provider.shutdown()

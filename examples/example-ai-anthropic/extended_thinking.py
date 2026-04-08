@@ -6,7 +6,7 @@ Extended thinking lets Claude show its reasoning process before responding.
 import os
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
@@ -17,7 +17,7 @@ exporter = OTLPSpanExporter(
     headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
 )
 provider = TracerProvider(resource=resource)
-provider.add_span_processor(BatchSpanProcessor(exporter))
+provider.add_span_processor(SimpleSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
 AnthropicInstrumentor().instrument()
@@ -43,5 +43,3 @@ for block in message.content:
         print(f"Thinking: {block.thinking}\n")
     elif block.type == "text":
         print(f"Answer: {block.text}")
-
-provider.shutdown()
