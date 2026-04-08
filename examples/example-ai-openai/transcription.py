@@ -20,7 +20,7 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
+import openai  # noqa: E402
 
 client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 

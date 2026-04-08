@@ -21,7 +21,7 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
+import openai  # noqa: E402
 
 client = openai.OpenAI(
     base_url="https://ai-gateway.vercel.sh/v1",

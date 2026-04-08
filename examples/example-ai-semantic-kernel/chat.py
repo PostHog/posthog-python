@@ -20,9 +20,9 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+import openai  # noqa: E402
+from semantic_kernel import Kernel  # noqa: E402
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion  # noqa: E402
 
 openai_client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 

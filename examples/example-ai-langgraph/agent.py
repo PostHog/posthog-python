@@ -19,9 +19,9 @@ trace.set_tracer_provider(provider)
 
 LangchainInstrumentor().instrument()
 
-from langgraph.prebuilt import create_react_agent
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent  # noqa: E402
+from langchain_openai import ChatOpenAI  # noqa: E402
+from langchain_core.tools import tool  # noqa: E402
 
 
 @tool

@@ -20,7 +20,7 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-from openai import AzureOpenAI
+from openai import AzureOpenAI  # noqa: E402
 
 client = AzureOpenAI(
     api_key=os.environ["AZURE_OPENAI_API_KEY"],

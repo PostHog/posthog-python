@@ -21,8 +21,8 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-from portkey_ai import PORTKEY_GATEWAY_URL
-import openai
+from portkey_ai import PORTKEY_GATEWAY_URL  # noqa: E402
+import openai  # noqa: E402
 
 client = openai.OpenAI(
     base_url=PORTKEY_GATEWAY_URL,

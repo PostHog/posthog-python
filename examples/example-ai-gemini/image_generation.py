@@ -25,7 +25,7 @@ trace.set_tracer_provider(provider)
 
 GoogleGenerativeAiInstrumentor().instrument()
 
-from google import genai
+from google import genai  # noqa: E402
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 

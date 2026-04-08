@@ -21,7 +21,7 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
+import openai  # noqa: E402
 
 client = openai.OpenAI(
     base_url="https://api.cohere.ai/compatibility/v1",

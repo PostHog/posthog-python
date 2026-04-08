@@ -20,9 +20,9 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
-from autogen_agentchat.agents import AssistantAgent
-from autogen_ext.models.openai import OpenAIChatCompletionClient
+import openai  # noqa: E402
+from autogen_agentchat.agents import AssistantAgent  # noqa: E402
+from autogen_ext.models.openai import OpenAIChatCompletionClient  # noqa: E402
 
 openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 

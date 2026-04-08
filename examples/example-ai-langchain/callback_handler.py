@@ -21,9 +21,9 @@ trace.set_tracer_provider(provider)
 
 LangchainInstrumentor().instrument()
 
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI  # noqa: E402
+from langchain_core.tools import tool  # noqa: E402
+from langchain_core.messages import HumanMessage  # noqa: E402
 
 
 @tool

@@ -21,7 +21,7 @@ trace.set_tracer_provider(provider)
 
 AnthropicInstrumentor().instrument()
 
-import anthropic
+import anthropic  # noqa: E402
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 

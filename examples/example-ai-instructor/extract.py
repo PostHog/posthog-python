@@ -19,9 +19,9 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
-import instructor
-from pydantic import BaseModel
+import openai  # noqa: E402
+import instructor  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 client = instructor.from_openai(openai_client)

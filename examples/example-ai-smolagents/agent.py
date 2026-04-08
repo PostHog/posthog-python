@@ -19,8 +19,8 @@ trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()
 
-import openai
-from smolagents import CodeAgent, OpenAIServerModel
+import openai  # noqa: E402
+from smolagents import CodeAgent, OpenAIServerModel  # noqa: E402
 
 openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
