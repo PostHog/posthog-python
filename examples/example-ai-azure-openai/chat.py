@@ -1,12 +1,13 @@
 """Azure OpenAI chat completions, tracked via OpenTelemetry."""
 
 import os
+
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 resource = Resource(attributes={SERVICE_NAME: "example-azure-openai-app"})
 exporter = OTLPSpanExporter(
@@ -28,7 +29,7 @@ client = AzureOpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-4o",
+    model="grok-4-20-non-reasoning",
     max_completion_tokens=1024,
     messages=[
         {"role": "user", "content": "Tell me a fun fact about hedgehogs."},
