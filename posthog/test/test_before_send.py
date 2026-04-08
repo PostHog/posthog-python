@@ -1,6 +1,8 @@
+import importlib
 import unittest
 
 import mock
+import posthog
 
 from posthog.client import Client
 from posthog.test.test_utils import FAKE_TEST_API_KEY
@@ -216,3 +218,58 @@ class TestClient(unittest.TestCase):
             self.assertEqual(enqueued_msg["properties"]["email"], "***@example.com")
             self.assertNotIn("credit_card", enqueued_msg["properties"])
             self.assertEqual(enqueued_msg["properties"]["form_name"], "contact")
+
+
+class TestModuleLevelBeforeSend(unittest.TestCase):
+    def setUp(self):
+        importlib.reload(posthog)
+
+    def tearDown(self):
+        if posthog.default_client:
+            posthog.shutdown()
+        importlib.reload(posthog)
+
+    def test_before_send_callback_used_during_module_level_setup(self):
+        def my_before_send(event):
+            event["properties"]["module_level_before_send"] = True
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            posthog.api_key = FAKE_TEST_API_KEY
+            posthog.before_send = my_before_send
+            posthog.sync_mode = True
+
+            msg_uuid = posthog.capture("test_event", distinct_id="user1")
+
+            self.assertIsNotNone(msg_uuid)
+            self.assertIs(posthog.default_client.before_send, my_before_send)
+
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertTrue(enqueued_msg["properties"]["module_level_before_send"])
+
+    def test_before_send_callback_updates_after_client_initialization(self):
+        def my_before_send(event):
+            event["properties"]["updated_after_init"] = True
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            posthog.api_key = FAKE_TEST_API_KEY
+            posthog.sync_mode = True
+
+            first_msg_uuid = posthog.capture("first_event", distinct_id="user1")
+
+            posthog.before_send = my_before_send
+            second_msg_uuid = posthog.capture("second_event", distinct_id="user1")
+
+            self.assertIsNotNone(first_msg_uuid)
+            self.assertIsNotNone(second_msg_uuid)
+            self.assertIs(posthog.default_client.before_send, my_before_send)
+
+            self.assertEqual(mock_post.call_count, 2)
+            first_batch = mock_post.call_args_list[0][1]["batch"]
+            second_batch = mock_post.call_args_list[1][1]["batch"]
+
+            self.assertNotIn("updated_after_init", first_batch[0]["properties"])
+            self.assertTrue(second_batch[0]["properties"]["updated_after_init"])
