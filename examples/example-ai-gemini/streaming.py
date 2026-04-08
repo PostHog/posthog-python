@@ -10,12 +10,14 @@ from opentelemetry.instrumentation.google_generativeai import (
     GoogleGenerativeAiInstrumentor,
 )
 
-resource = Resource(attributes={
-    SERVICE_NAME: "example-gemini-app",
-    "posthog.distinct_id": "example-user",
-    "foo": "bar",
-    "conversation_id": "abc-123",
-})
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-gemini-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
+)
 exporter = OTLPSpanExporter(
     endpoint=f"{os.environ.get('POSTHOG_HOST', 'https://us.i.posthog.com')}/i/v0/ai/otel",
     headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
