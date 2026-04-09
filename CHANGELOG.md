@@ -1,5 +1,23 @@
 # posthog
 
+## 7.10.3 — 2026-04-08
+
+### Patch changes
+
+- [e22e893](https://github.com/posthog/posthog-python/commit/e22e893b236bf6af1cb8f6c18712727d24fe5c7e) fix: pass the module-level `posthog.before_send` callback into the lazily initialized default client — Thanks @marandaneto!
+
+## 7.10.2 — 2026-04-08
+
+### Patch changes
+
+- [bae355c](https://github.com/posthog/posthog-python/commit/bae355cd787f4c1a119fd2b396ba444b1a218b6a) feat(flags): make local evaluation endpoint configurable via `POSTHOG_LOCAL_EVALUATION_ENDPOINT` env var with fallback to default endpoint — Thanks @patricio-posthog for your first contribution 🎉!
+
+## 7.10.1 — 2026-04-08
+
+### Patch changes
+
+- [a5052b0](https://github.com/posthog/posthog-python/commit/a5052b089b106af5a2fa5236fcf1f4f84943f899) fix: Django middleware accidentally passed capture_exceptions as positional arg, setting fresh=True and resetting context state — Thanks @marandaneto!
+
 ## 7.10.0 — 2026-04-07
 
 ### Minor changes

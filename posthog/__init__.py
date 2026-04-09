@@ -56,6 +56,7 @@ from posthog.request import (
     SocketOptions as SocketOptions,
 )
 from posthog.types import (
+    BeforeSendCallback as BeforeSendCallback,
     FeatureFlag,
     FlagsAndPayloads,
 )
@@ -250,6 +251,7 @@ log_captured_exceptions = False  # type: bool
 project_root = None  # type: Optional[str]
 # Used for our AI observability feature to not capture any prompt or output just usage + metadata
 privacy_mode = False  # type: bool
+before_send = None  # type: Optional[BeforeSendCallback]
 # Whether to enable feature flag polling for local evaluation by default. Defaults to True.
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
@@ -875,6 +877,7 @@ def setup() -> Client:
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
+            before_send=before_send,
             enable_local_evaluation=enable_local_evaluation,
             flag_definition_cache_provider=flag_definition_cache_provider,
             capture_exception_code_variables=capture_exception_code_variables,
@@ -886,6 +889,7 @@ def setup() -> Client:
     # always set incase user changes it
     default_client.disabled = disabled
     default_client.debug = debug
+    default_client._set_before_send(before_send)
 
     return default_client
 
