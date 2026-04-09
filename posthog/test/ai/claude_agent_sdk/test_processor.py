@@ -607,3 +607,15 @@ class TestQueryGracefulFallback:
 
         assert len(collected) == 1
         assert collected[0] is result_msg
+
+    @pytest.mark.asyncio
+    async def test_non_config_errors_propagate(self):
+        with patch(
+            "posthog.ai.claude_agent_sdk.PostHogClaudeAgentProcessor",
+            side_effect=RuntimeError("unexpected init bug"),
+        ):
+            with pytest.raises(RuntimeError, match="unexpected init bug"):
+                async for _ in posthog_query(
+                    prompt="Hello", options=ClaudeAgentOptions()
+                ):
+                    pass
