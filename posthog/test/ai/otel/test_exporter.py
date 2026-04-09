@@ -1,16 +1,10 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from opentelemetry.sdk.trace.export import SpanExportResult
 
 from posthog.ai.otel.exporter import PostHogTraceExporter
-
-
-def _make_span(name: str = "test", attributes: dict | None = None) -> MagicMock:
-    span = MagicMock()
-    span.name = name
-    span.attributes = attributes or {}
-    return span
+from posthog.test.ai.otel.conftest import make_span
 
 
 class TestPostHogTraceExporter(unittest.TestCase):
@@ -36,7 +30,7 @@ class TestPostHogTraceExporter(unittest.TestCase):
         inner = mock_otlp_cls.return_value
         inner.export.return_value = SpanExportResult.SUCCESS
 
-        spans = [_make_span("gen_ai.chat"), _make_span("llm.call")]
+        spans = [make_span("gen_ai.chat"), make_span("llm.call")]
         result = exporter.export(spans)
 
         self.assertEqual(result, SpanExportResult.SUCCESS)
@@ -48,8 +42,8 @@ class TestPostHogTraceExporter(unittest.TestCase):
         inner = mock_otlp_cls.return_value
         inner.export.return_value = SpanExportResult.SUCCESS
 
-        ai_span = _make_span("gen_ai.chat")
-        http_span = _make_span("http.request")
+        ai_span = make_span("gen_ai.chat")
+        http_span = make_span("http.request")
         result = exporter.export([ai_span, http_span])
 
         self.assertEqual(result, SpanExportResult.SUCCESS)
@@ -60,7 +54,7 @@ class TestPostHogTraceExporter(unittest.TestCase):
         exporter = PostHogTraceExporter(api_key="phc_test")
         inner = mock_otlp_cls.return_value
 
-        result = exporter.export([_make_span("http.request"), _make_span("db.query")])
+        result = exporter.export([make_span("http.request"), make_span("db.query")])
 
         self.assertEqual(result, SpanExportResult.SUCCESS)
         inner.export.assert_not_called()
@@ -81,7 +75,7 @@ class TestPostHogTraceExporter(unittest.TestCase):
         inner = mock_otlp_cls.return_value
         inner.export.return_value = SpanExportResult.SUCCESS
 
-        span = _make_span("http.request", {"gen_ai.system": "openai"})
+        span = make_span("http.request", {"gen_ai.system": "openai"})
         result = exporter.export([span])
 
         self.assertEqual(result, SpanExportResult.SUCCESS)

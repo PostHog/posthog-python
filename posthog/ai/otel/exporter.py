@@ -11,9 +11,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-from .spans import is_ai_span
-
-DEFAULT_HOST = "https://us.i.posthog.com"
+from .spans import DEFAULT_HOST, is_ai_span
 
 
 class PostHogTraceExporter(SpanExporter):

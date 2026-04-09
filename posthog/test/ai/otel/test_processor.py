@@ -2,13 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from posthog.ai.otel.processor import PostHogSpanProcessor
-
-
-def _make_span(name: str = "test", attributes: dict | None = None) -> MagicMock:
-    span = MagicMock()
-    span.name = name
-    span.attributes = attributes or {}
-    return span
+from posthog.test.ai.otel.conftest import make_span
 
 
 class TestPostHogSpanProcessor(unittest.TestCase):
@@ -48,7 +42,7 @@ class TestPostHogSpanProcessor(unittest.TestCase):
         processor = PostHogSpanProcessor(api_key="phc_test")
         inner = mock_batch_cls.return_value
 
-        ai_span = _make_span("gen_ai.chat")
+        ai_span = make_span("gen_ai.chat")
         processor.on_end(ai_span)
         inner.on_end.assert_called_once_with(ai_span)
 
@@ -58,7 +52,7 @@ class TestPostHogSpanProcessor(unittest.TestCase):
         processor = PostHogSpanProcessor(api_key="phc_test")
         inner = mock_batch_cls.return_value
 
-        processor.on_end(_make_span("http.request"))
+        processor.on_end(make_span("http.request"))
         inner.on_end.assert_not_called()
 
     @patch("posthog.ai.otel.processor.OTLPSpanExporter")
@@ -67,7 +61,7 @@ class TestPostHogSpanProcessor(unittest.TestCase):
         processor = PostHogSpanProcessor(api_key="phc_test")
         inner = mock_batch_cls.return_value
 
-        span = _make_span("http.request", {"gen_ai.system": "openai"})
+        span = make_span("http.request", {"gen_ai.system": "openai"})
         processor.on_end(span)
         inner.on_end.assert_called_once_with(span)
 

@@ -1,9 +1,11 @@
-"""Shared AI span filtering logic for OpenTelemetry integration."""
+"""Shared AI span filtering logic and constants for OpenTelemetry integration."""
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import ReadableSpan
+
+DEFAULT_HOST = "https://us.i.posthog.com"
 
 AI_SPAN_PREFIXES = ("gen_ai.", "llm.", "ai.", "traceloop.")
 
