@@ -18,7 +18,7 @@ class TestPostHogTraceExporter(unittest.TestCase):
     def test_configures_exporter_with_correct_endpoint(self, mock_otlp_cls):
         PostHogTraceExporter(api_key="phc_test123")
         mock_otlp_cls.assert_called_once_with(
-            endpoint="https://us.i.posthog.com/v1/traces",
+            endpoint="https://us.i.posthog.com/i/v0/ai/otel",
             headers={"Authorization": "Bearer phc_test123"},
         )
 
@@ -26,7 +26,7 @@ class TestPostHogTraceExporter(unittest.TestCase):
     def test_configures_custom_host(self, mock_otlp_cls):
         PostHogTraceExporter(api_key="phc_test", host="https://eu.i.posthog.com")
         mock_otlp_cls.assert_called_once_with(
-            endpoint="https://eu.i.posthog.com/v1/traces",
+            endpoint="https://eu.i.posthog.com/i/v0/ai/otel",
             headers={"Authorization": "Bearer phc_test"},
         )
 

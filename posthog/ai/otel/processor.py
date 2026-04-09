@@ -49,7 +49,7 @@ class PostHogSpanProcessor(SpanProcessor):
         self._host = host.rstrip("/")
 
         exporter = OTLPSpanExporter(
-            endpoint=f"{self._host}/v1/traces",
+            endpoint=f"{self._host}/i/v0/ai/otel",
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
         self._processor = BatchSpanProcessor(exporter)

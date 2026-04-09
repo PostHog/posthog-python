@@ -50,7 +50,7 @@ class PostHogTraceExporter(SpanExporter):
         self._host = host.rstrip("/")
 
         self._exporter = OTLPSpanExporter(
-            endpoint=f"{self._host}/v1/traces",
+            endpoint=f"{self._host}/i/v0/ai/otel",
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
 

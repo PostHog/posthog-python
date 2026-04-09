@@ -19,7 +19,7 @@ class TestPostHogSpanProcessor(unittest.TestCase):
     ):
         PostHogSpanProcessor(api_key="phc_test123")
         mock_otlp_cls.assert_called_once_with(
-            endpoint="https://us.i.posthog.com/v1/traces",
+            endpoint="https://us.i.posthog.com/i/v0/ai/otel",
             headers={"Authorization": "Bearer phc_test123"},
         )
         mock_batch_cls.assert_called_once_with(mock_otlp_cls.return_value)
@@ -29,7 +29,7 @@ class TestPostHogSpanProcessor(unittest.TestCase):
     def test_configures_custom_host(self, mock_batch_cls, mock_otlp_cls):
         PostHogSpanProcessor(api_key="phc_test", host="https://eu.i.posthog.com")
         mock_otlp_cls.assert_called_once_with(
-            endpoint="https://eu.i.posthog.com/v1/traces",
+            endpoint="https://eu.i.posthog.com/i/v0/ai/otel",
             headers={"Authorization": "Bearer phc_test"},
         )
 
@@ -38,7 +38,7 @@ class TestPostHogSpanProcessor(unittest.TestCase):
     def test_strips_trailing_slash_from_host(self, mock_batch_cls, mock_otlp_cls):
         PostHogSpanProcessor(api_key="phc_test", host="https://us.i.posthog.com/")
         mock_otlp_cls.assert_called_once_with(
-            endpoint="https://us.i.posthog.com/v1/traces",
+            endpoint="https://us.i.posthog.com/i/v0/ai/otel",
             headers={"Authorization": "Bearer phc_test"},
         )
 
