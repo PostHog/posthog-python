@@ -586,7 +586,7 @@ class TestEnsurePartialMessages:
 class TestQueryGracefulFallback:
     @pytest.mark.asyncio
     async def test_falls_back_to_original_query_when_posthog_not_configured(self):
-        result_msg = _make_result()
+        result_msg = _make_result_message()
         messages_from_sdk = [result_msg]
 
         with (

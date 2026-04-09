@@ -126,7 +126,9 @@ async def query(
             groups=posthog_groups,
             properties={},
         )
-    except Exception as e:
+    except (ValueError, RuntimeError) as e:
+        # PostHog is not configured (e.g. missing API key); fall back to the
+        # plain SDK so callers are never broken by missing instrumentation.
         log.warning("PostHog instrumentation disabled: %s — falling back to plain claude_agent_sdk.query()", e)
         async for message in original_query(prompt=prompt, options=options, transport=transport):
             yield message
