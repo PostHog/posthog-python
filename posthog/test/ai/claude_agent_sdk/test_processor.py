@@ -590,11 +590,19 @@ class TestQueryGracefulFallback:
         messages_from_sdk = [result_msg]
 
         with (
-            patch("posthog.ai.claude_agent_sdk.PostHogClaudeAgentProcessor", side_effect=ValueError("API key is required")),
-            patch("claude_agent_sdk.query", side_effect=lambda **kwargs: _fake_query(messages_from_sdk)),
+            patch(
+                "posthog.ai.claude_agent_sdk.PostHogClaudeAgentProcessor",
+                side_effect=ValueError("API key is required"),
+            ),
+            patch(
+                "claude_agent_sdk.query",
+                side_effect=lambda **kwargs: _fake_query(messages_from_sdk),
+            ),
         ):
             collected = []
-            async for msg in posthog_query(prompt="Hello", options=ClaudeAgentOptions()):
+            async for msg in posthog_query(
+                prompt="Hello", options=ClaudeAgentOptions()
+            ):
                 collected.append(msg)
 
         assert len(collected) == 1
