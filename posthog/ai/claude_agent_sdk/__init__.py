@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 if TYPE_CHECKING:
@@ -16,6 +17,8 @@ except ImportError:
 
 from posthog.ai.claude_agent_sdk.client import PostHogClaudeSDKClient
 from posthog.ai.claude_agent_sdk.processor import PostHogClaudeAgentProcessor
+
+log = logging.getLogger("posthog")
 
 __all__ = [
     "PostHogClaudeAgentProcessor",
@@ -113,13 +116,21 @@ async def query(
             print(message)
         ```
     """
-    processor = PostHogClaudeAgentProcessor(
-        client=posthog_client,
-        distinct_id=posthog_distinct_id,
-        privacy_mode=posthog_privacy_mode,
-        groups=posthog_groups,
-        properties={},
-    )
+    from claude_agent_sdk import query as original_query
+
+    try:
+        processor = PostHogClaudeAgentProcessor(
+            client=posthog_client,
+            distinct_id=posthog_distinct_id,
+            privacy_mode=posthog_privacy_mode,
+            groups=posthog_groups,
+            properties={},
+        )
+    except Exception as e:
+        log.warning("PostHog instrumentation disabled: %s — falling back to plain claude_agent_sdk.query()", e)
+        async for message in original_query(prompt=prompt, options=options, transport=transport):
+            yield message
+        return
 
     async for message in processor.query(
         prompt=prompt,

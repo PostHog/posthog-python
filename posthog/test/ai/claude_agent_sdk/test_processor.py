@@ -19,6 +19,7 @@ try:
     from posthog.ai.claude_agent_sdk import (
         PostHogClaudeAgentProcessor,
         instrument,
+        query as posthog_query,
     )
 
     CLAUDE_AGENT_SDK_AVAILABLE = True
@@ -580,3 +581,21 @@ class TestEnsurePartialMessages:
                 pass
 
         assert captured_options.get("options").include_partial_messages is True
+
+
+class TestQueryGracefulFallback:
+    @pytest.mark.asyncio
+    async def test_falls_back_to_original_query_when_posthog_not_configured(self):
+        result_msg = _make_result()
+        messages_from_sdk = [result_msg]
+
+        with (
+            patch("posthog.ai.claude_agent_sdk.PostHogClaudeAgentProcessor", side_effect=ValueError("API key is required")),
+            patch("claude_agent_sdk.query", side_effect=lambda **kwargs: _fake_query(messages_from_sdk)),
+        ):
+            collected = []
+            async for msg in posthog_query(prompt="Hello", options=ClaudeAgentOptions()):
+                collected.append(msg)
+
+        assert len(collected) == 1
+        assert collected[0] is result_msg
