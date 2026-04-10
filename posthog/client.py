@@ -2250,7 +2250,7 @@ class Client(object):
                     )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload
-                except InconclusiveMatchError:
+                except (InconclusiveMatchError, RequiresServerEvaluation):
                     # No need to log this, since it's just telling us to fall back to `/flags`
                     fallback_to_flags = True
                 except Exception as e:

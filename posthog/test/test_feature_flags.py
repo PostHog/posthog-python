@@ -1036,6 +1036,72 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
+    def test_get_all_flags_and_payloads_does_not_log_error_for_static_cohorts(
+        self, patch_flags, patch_capture
+    ):
+        """
+        When a flag references a static cohort that can't be evaluated locally,
+        _get_all_flags_and_payloads_locally should catch RequiresServerEvaluation
+        silently (like InconclusiveMatchError) instead of logging at ERROR level.
+        """
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Simple Flag",
+                "key": "simple-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                    "payloads": {"true": "simple-payload"},
+                },
+            },
+            {
+                "id": 2,
+                "name": "Cohort Flag",
+                "key": "cohort-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {"type": "cohort", "key": "id", "value": 999}
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                    "payloads": {"true": "cohort-payload"},
+                },
+            },
+        ]
+        # Cohort 999 is NOT in the cohorts map — it's a static cohort
+        client.cohorts = {}
+
+        with mock.patch.object(client.log, "exception") as mock_log_exception:
+            result = client.get_all_flags_and_payloads(
+                "distinct_id", only_evaluate_locally=True
+            )
+
+            # simple-flag should be evaluated successfully
+            self.assertEqual(result["featureFlags"]["simple-flag"], True)
+            self.assertEqual(result["featureFlagPayloads"]["simple-flag"], "simple-payload")
+
+            # cohort-flag should be absent (can't evaluate locally)
+            self.assertNotIn("cohort-flag", result["featureFlags"])
+
+            # No ERROR-level logging should have occurred
+            mock_log_exception.assert_not_called()
+
+        # No server fallback should have been attempted
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
     def test_compute_inactive_flags_locally(self, patch_flags, patch_capture):
         client = self.client
         client.feature_flags = [
