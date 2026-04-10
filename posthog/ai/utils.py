@@ -240,7 +240,9 @@ def extract_stop_reason(response: Any, provider: str) -> Optional[str]:
 
         return extract_openai_stop_reason(response)
     elif provider == "anthropic":
-        from posthog.ai.anthropic.anthropic_converter import extract_anthropic_stop_reason
+        from posthog.ai.anthropic.anthropic_converter import (
+            extract_anthropic_stop_reason,
+        )
 
         return extract_anthropic_stop_reason(response)
     elif provider == "gemini":

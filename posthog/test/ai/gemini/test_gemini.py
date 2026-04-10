@@ -1168,9 +1168,18 @@ def test_empty_array_grounding_metadata_no_web_search(
     assert props["$ai_output_tokens"] == 12
 
 
-def test_stop_reason_captured(mock_client, mock_google_genai_client):
+@pytest.mark.parametrize(
+    "finish_reason_name,response_text",
+    [
+        ("STOP", "Test"),
+        ("MAX_TOKENS", "Truncated"),
+    ],
+)
+def test_stop_reason_captured(
+    mock_client, mock_google_genai_client, finish_reason_name, response_text
+):
     mock_response = MagicMock()
-    mock_response.text = "Test"
+    mock_response.text = response_text
 
     mock_usage = MagicMock()
     mock_usage.prompt_token_count = 10
@@ -1185,45 +1194,9 @@ def test_stop_reason_captured(mock_client, mock_google_genai_client):
 
     mock_candidate = MagicMock()
     mock_candidate.finish_reason = MagicMock()
-    mock_candidate.finish_reason.name = "STOP"
+    mock_candidate.finish_reason.name = finish_reason_name
     mock_candidate.content = MagicMock()
-    mock_candidate.content.parts = [MagicMock(text="Test")]
-    mock_response.candidates = [mock_candidate]
-
-    mock_google_genai_client.models.generate_content.return_value = mock_response
-
-    client = Client(api_key="test-key", posthog_client=mock_client)
-    client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=["Hello"],
-        posthog_distinct_id="test-id",
-    )
-
-    assert mock_client.capture.call_count == 1
-    props = mock_client.capture.call_args[1]["properties"]
-    assert props["$ai_stop_reason"] == "STOP"
-
-
-def test_stop_reason_max_tokens(mock_client, mock_google_genai_client):
-    mock_response = MagicMock()
-    mock_response.text = "Truncated"
-
-    mock_usage = MagicMock()
-    mock_usage.prompt_token_count = 10
-    mock_usage.candidates_token_count = 5
-    mock_usage.cached_content_token_count = 0
-    mock_usage.thoughts_token_count = 0
-    mock_usage.model_dump.return_value = {
-        "prompt_token_count": 10,
-        "candidates_token_count": 5,
-    }
-    mock_response.usage_metadata = mock_usage
-
-    mock_candidate = MagicMock()
-    mock_candidate.finish_reason = MagicMock()
-    mock_candidate.finish_reason.name = "MAX_TOKENS"
-    mock_candidate.content = MagicMock()
-    mock_candidate.content.parts = [MagicMock(text="Truncated")]
+    mock_candidate.content.parts = [MagicMock(text=response_text)]
     mock_response.candidates = [mock_candidate]
 
     mock_google_genai_client.models.generate_content.return_value = mock_response
@@ -1236,7 +1209,7 @@ def test_stop_reason_max_tokens(mock_client, mock_google_genai_client):
     )
 
     props = mock_client.capture.call_args[1]["properties"]
-    assert props["$ai_stop_reason"] == "MAX_TOKENS"
+    assert props["$ai_stop_reason"] == finish_reason_name
 
 
 def test_stop_reason_streaming(mock_client, mock_google_genai_client):
