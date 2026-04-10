@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1286,3 +1287,22 @@ def test_stop_reason_streaming(mock_client, mock_google_genai_client):
     assert mock_client.capture.call_count == 1
     props = mock_client.capture.call_args[1]["properties"]
     assert props["$ai_stop_reason"] == "STOP"
+
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+
+@pytest.mark.skipif(not GEMINI_API_KEY, reason="GEMINI_API_KEY is not set")
+def test_integration_stop_reason(mock_client):
+    client = Client(api_key=GEMINI_API_KEY, posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents="Say hi",
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] is not None
+    assert isinstance(props["$ai_stop_reason"], str)
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_input_tokens"] > 0
