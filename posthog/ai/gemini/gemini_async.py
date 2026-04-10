@@ -22,6 +22,7 @@ from posthog.ai.utils import (
 from posthog.ai.gemini.gemini_converter import (
     extract_gemini_usage_from_chunk,
     extract_gemini_content_from_chunk,
+    extract_gemini_stop_reason_from_chunk,
     format_gemini_streaming_output,
 )
 from posthog.ai.sanitization import sanitize_gemini
@@ -298,6 +299,7 @@ class AsyncModels:
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
         accumulated_content = []
+        stop_reason: Optional[str] = None
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
         response = await self._client.aio.models.generate_content_stream(
@@ -307,6 +309,7 @@ class AsyncModels:
         async def async_generator():
             nonlocal usage_stats
             nonlocal accumulated_content
+            nonlocal stop_reason
 
             try:
                 async for chunk in response:
@@ -322,6 +325,11 @@ class AsyncModels:
 
                     if content_block is not None:
                         accumulated_content.append(content_block)
+
+                    # Extract stop reason from chunk
+                    chunk_stop_reason = extract_gemini_stop_reason_from_chunk(chunk)
+                    if chunk_stop_reason is not None:
+                        stop_reason = chunk_stop_reason
 
                     yield chunk
 
@@ -341,6 +349,7 @@ class AsyncModels:
                     usage_stats,
                     latency,
                     accumulated_content,
+                    stop_reason=stop_reason,
                 )
 
         return async_generator()
@@ -358,6 +367,7 @@ class AsyncModels:
         usage_stats: TokenUsage,
         latency: float,
         output: Any,
+        stop_reason: Optional[str] = None,
     ):
         # Prepare standardized event data
         formatted_input = self._format_input(contents, **kwargs)
@@ -377,6 +387,7 @@ class AsyncModels:
             properties=properties,
             privacy_mode=privacy_mode,
             groups=groups,
+            stop_reason=stop_reason,
         )
 
         # Use the common capture function

@@ -894,6 +894,7 @@ def test_openai_chain(mock_client):
     )
     assert gen_props["$ai_input_tokens"] == 20
     assert gen_props["$ai_output_tokens"] == 1
+    assert gen_props["$ai_stop_reason"] == "stop"
 
 
 @pytest.mark.skipif(not OPENAI_API_KEY, reason="OpenAI API key not set")
@@ -1172,6 +1173,7 @@ def test_anthropic_chain(mock_client):
     )
     assert gen_props["$ai_input_tokens"] == 17
     assert gen_props["$ai_output_tokens"] == 4
+    assert gen_props["$ai_stop_reason"] == "end_turn"
 
     assert trace_args["event"] == "$ai_trace"
     assert trace_props["$ai_input_state"] == {}
