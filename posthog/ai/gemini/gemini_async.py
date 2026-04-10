@@ -481,9 +481,7 @@ class AsyncModels:
             event_properties = {
                 "$ai_provider": "gemini",
                 "$ai_model": model,
-                "$ai_input": with_privacy_mode(
-                    self._ph_client, privacy_mode, contents
-                ),
+                "$ai_input": with_privacy_mode(self._ph_client, privacy_mode, contents),
                 "$ai_http_status": http_status,
                 "$ai_input_tokens": input_tokens,
                 "$ai_latency": latency,

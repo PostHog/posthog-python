@@ -883,8 +883,12 @@ def mock_embed_content_response_with_stats():
     return mock_response
 
 
-async def test_async_embed_content_basic(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response)
+async def test_async_embed_content_basic(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
     response = await client.models.embed_content(
@@ -917,8 +921,12 @@ async def test_async_embed_content_basic(mock_client, mock_google_genai_client, 
     )
 
 
-async def test_async_embed_content_with_token_counts(mock_client, mock_google_genai_client, mock_embed_content_response_with_stats):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response_with_stats)
+async def test_async_embed_content_with_token_counts(
+    mock_client, mock_google_genai_client, mock_embed_content_response_with_stats
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response_with_stats
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
     await client.models.embed_content(
@@ -931,8 +939,12 @@ async def test_async_embed_content_with_token_counts(mock_client, mock_google_ge
     assert props["$ai_input_tokens"] == 13  # 5 + 8
 
 
-async def test_async_embed_content_without_token_counts(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response)
+async def test_async_embed_content_without_token_counts(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
     await client.models.embed_content(
@@ -945,8 +957,12 @@ async def test_async_embed_content_without_token_counts(mock_client, mock_google
     assert props["$ai_input_tokens"] == 0
 
 
-async def test_async_embed_content_privacy_mode(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response)
+async def test_async_embed_content_privacy_mode(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
     await client.models.embed_content(
@@ -960,8 +976,12 @@ async def test_async_embed_content_privacy_mode(mock_client, mock_google_genai_c
     assert props["$ai_input"] is None
 
 
-async def test_async_embed_content_no_distinct_id(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response)
+async def test_async_embed_content_no_distinct_id(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
     await client.models.embed_content(
@@ -977,8 +997,12 @@ async def test_async_embed_content_no_distinct_id(mock_client, mock_google_genai
     assert props["$process_person_profile"] is False
 
 
-async def test_async_embed_content_default_params(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response)
+async def test_async_embed_content_default_params(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response
+    )
 
     client = AsyncClient(
         api_key="test-key",
@@ -1002,8 +1026,12 @@ async def test_async_embed_content_default_params(mock_client, mock_google_genai
     assert call_args["groups"] == {"company": "test-co"}
 
 
-async def test_async_embed_content_error_handling(mock_client, mock_google_genai_client):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(side_effect=Exception("API error"))
+async def test_async_embed_content_error_handling(
+    mock_client, mock_google_genai_client
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        side_effect=Exception("API error")
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
 
@@ -1022,8 +1050,12 @@ async def test_async_embed_content_error_handling(mock_client, mock_google_genai
     assert props["$ai_http_status"] == 0
 
 
-async def test_async_embed_content_kwargs_passthrough(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.aio.models.embed_content = AsyncMock(return_value=mock_embed_content_response)
+async def test_async_embed_content_kwargs_passthrough(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.aio.models.embed_content = AsyncMock(
+        return_value=mock_embed_content_response
+    )
 
     client = AsyncClient(api_key="test-key", posthog_client=mock_client)
     await client.models.embed_content(

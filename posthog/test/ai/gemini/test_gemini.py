@@ -1193,8 +1193,12 @@ def mock_embed_content_response_with_stats():
     return mock_response
 
 
-def test_embed_content_basic(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response
+def test_embed_content_basic(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
     response = client.models.embed_content(
@@ -1227,8 +1231,12 @@ def test_embed_content_basic(mock_client, mock_google_genai_client, mock_embed_c
     )
 
 
-def test_embed_content_with_token_counts(mock_client, mock_google_genai_client, mock_embed_content_response_with_stats):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response_with_stats
+def test_embed_content_with_token_counts(
+    mock_client, mock_google_genai_client, mock_embed_content_response_with_stats
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response_with_stats
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.embed_content(
@@ -1241,8 +1249,12 @@ def test_embed_content_with_token_counts(mock_client, mock_google_genai_client, 
     assert props["$ai_input_tokens"] == 13  # 5 + 8
 
 
-def test_embed_content_without_token_counts(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response
+def test_embed_content_without_token_counts(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.embed_content(
@@ -1255,8 +1267,12 @@ def test_embed_content_without_token_counts(mock_client, mock_google_genai_clien
     assert props["$ai_input_tokens"] == 0
 
 
-def test_embed_content_privacy_mode(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response
+def test_embed_content_privacy_mode(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.embed_content(
@@ -1270,8 +1286,12 @@ def test_embed_content_privacy_mode(mock_client, mock_google_genai_client, mock_
     assert props["$ai_input"] is None
 
 
-def test_embed_content_no_distinct_id(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response
+def test_embed_content_no_distinct_id(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.embed_content(
@@ -1287,8 +1307,12 @@ def test_embed_content_no_distinct_id(mock_client, mock_google_genai_client, moc
     assert props["$process_person_profile"] is False
 
 
-def test_embed_content_default_params(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response
+def test_embed_content_default_params(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
 
     client = Client(
         api_key="test-key",
@@ -1332,8 +1356,12 @@ def test_embed_content_error_handling(mock_client, mock_google_genai_client):
     assert props["$ai_http_status"] == 0
 
 
-def test_embed_content_kwargs_passthrough(mock_client, mock_google_genai_client, mock_embed_content_response):
-    mock_google_genai_client.models.embed_content.return_value = mock_embed_content_response
+def test_embed_content_kwargs_passthrough(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
 
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.embed_content(
