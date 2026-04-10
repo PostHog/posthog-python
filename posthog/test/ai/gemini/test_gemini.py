@@ -13,6 +13,8 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
 pytestmark = pytest.mark.skipif(
     not GEMINI_AVAILABLE, reason="Google Gemini package is not available"
 )
@@ -1166,6 +1168,258 @@ def test_empty_array_grounding_metadata_no_web_search(
     assert "$ai_web_search_count" not in props
     assert props["$ai_input_tokens"] == 15
     assert props["$ai_output_tokens"] == 12
+
+
+@pytest.fixture
+def mock_embed_content_response():
+    mock_response = MagicMock()
+    mock_embedding1 = MagicMock()
+    mock_embedding1.values = [0.1, 0.2, 0.3]
+    mock_embedding1.statistics = None
+    mock_response.embeddings = [mock_embedding1]
+    return mock_response
+
+
+@pytest.fixture
+def mock_embed_content_response_with_stats():
+    mock_response = MagicMock()
+    mock_embedding1 = MagicMock()
+    mock_embedding1.values = [0.1, 0.2, 0.3]
+    mock_stats1 = MagicMock()
+    mock_stats1.token_count = 5
+    mock_embedding1.statistics = mock_stats1
+    mock_embedding2 = MagicMock()
+    mock_embedding2.values = [0.4, 0.5, 0.6]
+    mock_stats2 = MagicMock()
+    mock_stats2.token_count = 8
+    mock_embedding2.statistics = mock_stats2
+    mock_response.embeddings = [mock_embedding1, mock_embedding2]
+    return mock_response
+
+
+def test_embed_content_basic(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Hello world",
+        posthog_distinct_id="test-id",
+        posthog_properties={"foo": "bar"},
+    )
+
+    assert response == mock_embed_content_response
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_model"] == "gemini-embedding-001"
+    assert props["$ai_input"] == "Hello world"
+    assert props["$ai_http_status"] == 200
+    assert isinstance(props["$ai_latency"], float)
+    assert "$ai_trace_id" in props
+    assert props["$ai_base_url"] == "https://generativelanguage.googleapis.com"
+    assert props["foo"] == "bar"
+
+    # Verify the underlying call received the right args
+    mock_google_genai_client.models.embed_content.assert_called_once_with(
+        model="gemini-embedding-001", contents="Hello world"
+    )
+
+
+def test_embed_content_with_token_counts(
+    mock_client, mock_google_genai_client, mock_embed_content_response_with_stats
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response_with_stats
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=["Hello", "World"],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_tokens"] == 13  # 5 + 8
+
+
+def test_embed_content_without_token_counts(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Hello",
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_tokens"] == 0
+
+
+def test_embed_content_privacy_mode(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Secret text",
+        posthog_distinct_id="test-id",
+        posthog_privacy_mode=True,
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input"] is None
+
+
+def test_embed_content_no_distinct_id(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Hello",
+    )
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    # Should fall back to trace_id as distinct_id
+    assert call_args["distinct_id"] == props["$ai_trace_id"]
+    assert props["$process_person_profile"] is False
+
+
+def test_embed_content_default_params(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(
+        api_key="test-key",
+        posthog_client=mock_client,
+        posthog_distinct_id="default-id",
+        posthog_properties={"team": "ai"},
+        posthog_groups={"company": "test-co"},
+    )
+    client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Hello",
+        posthog_properties={"extra": "prop"},
+    )
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+
+    assert call_args["distinct_id"] == "default-id"
+    assert props["team"] == "ai"
+    assert props["extra"] == "prop"
+    assert call_args["groups"] == {"company": "test-co"}
+
+
+def test_embed_content_error_handling(mock_client, mock_google_genai_client):
+    mock_google_genai_client.models.embed_content.side_effect = Exception("API error")
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    with pytest.raises(Exception, match="API error"):
+        client.models.embed_content(
+            model="gemini-embedding-001",
+            contents="Hello",
+            posthog_distinct_id="test-id",
+        )
+
+    # Event should still be captured
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "API error"
+    assert props["$ai_http_status"] == 0
+
+
+def test_embed_content_kwargs_passthrough(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Hello",
+        posthog_distinct_id="test-id",
+        config={"output_dimensionality": 64},
+    )
+
+    mock_google_genai_client.models.embed_content.assert_called_once_with(
+        model="gemini-embedding-001",
+        contents="Hello",
+        config={"output_dimensionality": 64},
+    )
+
+
+@pytest.mark.skipif(not GOOGLE_API_KEY, reason="GOOGLE_API_KEY is not set")
+def test_embed_content_integration(mock_client):
+    client = Client(api_key=GOOGLE_API_KEY, posthog_client=mock_client)
+    response = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents="Hello world",
+        posthog_distinct_id="test-id",
+    )
+
+    # Verify real response
+    assert response.embeddings is not None
+    assert len(response.embeddings) > 0
+    assert isinstance(response.embeddings[0].values, list)
+    assert all(isinstance(v, float) for v in response.embeddings[0].values)
+
+    # Verify event captured
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_model"] == "gemini-embedding-001"
+    assert props["$ai_input"] == "Hello world"
+    assert props["$ai_latency"] > 0
+
+
+@pytest.mark.skipif(not GOOGLE_API_KEY, reason="GOOGLE_API_KEY is not set")
+def test_embed_content_integration_batch(mock_client):
+    client = Client(api_key=GOOGLE_API_KEY, posthog_client=mock_client)
+    inputs = ["Hello", "World", "Test"]
+    response = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=inputs,
+        posthog_distinct_id="test-id",
+    )
+
+    assert response.embeddings is not None
+    assert len(response.embeddings) == len(inputs)
 
 
 @pytest.mark.parametrize(

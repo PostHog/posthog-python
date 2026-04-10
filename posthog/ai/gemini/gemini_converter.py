@@ -675,3 +675,19 @@ def format_gemini_streaming_output(
 
     # Fallback for empty or unexpected input
     return [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
+
+
+def extract_gemini_embedding_token_count(response) -> int:
+    """
+    Extract total token count from a Gemini embed_content response.
+    Token counts are only available per-embedding via Vertex AI's statistics.token_count.
+    Returns 0 if no token counts are available.
+    """
+    total = 0
+    if hasattr(response, "embeddings") and response.embeddings:
+        for embedding in response.embeddings:
+            if hasattr(embedding, "statistics") and embedding.statistics:
+                token_count = getattr(embedding.statistics, "token_count", None)
+                if token_count is not None:
+                    total += int(token_count)
+    return total
