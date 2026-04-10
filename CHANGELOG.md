@@ -1,5 +1,16 @@
 # posthog
 
+## 7.11.0 — 2026-04-10
+
+### Minor changes
+
+- [b921fe3](https://github.com/posthog/posthog-python/commit/b921fe33a9115fbf5f5171b80e1deabffd3e66ca) Add Gemini `embed_content` tracking support for both sync and async clients — Thanks @carlos-marchal-ph!
+- [44b92a8](https://github.com/posthog/posthog-python/commit/44b92a844a2d8170e5b2247e509279f4654c4ef6) feat(ai): add $ai_stop_reason extraction for all providers — Thanks @carlos-marchal-ph!
+
+### Patch changes
+
+- [7c5cad8](https://github.com/posthog/posthog-python/commit/7c5cad8fcf818c9b8b4f074876718b937f2f8072) fix: graceful fallback in claude_agent_sdk query wrapper when PostHog is not configured — Thanks @andrewm4894!
+
 ## 7.10.3 — 2026-04-08
 
 ### Patch changes
