@@ -131,6 +131,7 @@ class WrappedMessages(Messages):
         content_blocks: List[StreamingContentBlock] = []
         tools_in_progress: Dict[str, ToolInProgress] = {}
         current_text_block: Optional[StreamingContentBlock] = None
+        stop_reason: Optional[str] = None
         response = super().create(**kwargs)
 
         def generator():
@@ -139,6 +140,7 @@ class WrappedMessages(Messages):
             nonlocal content_blocks
             nonlocal tools_in_progress
             nonlocal current_text_block
+            nonlocal stop_reason
 
             try:
                 for event in response:
@@ -181,6 +183,14 @@ class WrappedMessages(Messages):
                             event, content_blocks, tools_in_progress
                         )
 
+                    # Capture stop reason from message_delta events
+                    if hasattr(event, "type") and event.type == "message_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta is not None:
+                            delta_stop_reason = getattr(delta, "stop_reason", None)
+                            if delta_stop_reason is not None:
+                                stop_reason = delta_stop_reason
+
                     yield event
 
             finally:
@@ -198,6 +208,7 @@ class WrappedMessages(Messages):
                     latency,
                     content_blocks,
                     accumulated_content,
+                    stop_reason=stop_reason,
                 )
 
         return generator()
@@ -214,6 +225,7 @@ class WrappedMessages(Messages):
         latency: float,
         content_blocks: List[StreamingContentBlock],
         accumulated_content: str,
+        stop_reason: Optional[str] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.anthropic.anthropic_converter import (
@@ -242,6 +254,7 @@ class WrappedMessages(Messages):
             properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
+            stop_reason=stop_reason,
         )
 
         # Use the common capture function

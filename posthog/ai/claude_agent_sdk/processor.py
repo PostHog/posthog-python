@@ -42,6 +42,7 @@ class _GenerationData:
     start_time: float = 0.0
     end_time: float = 0.0
     span_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    stop_reason: Optional[str] = None
 
 
 class _GenerationTracker:
@@ -81,6 +82,10 @@ class _GenerationTracker:
             # message_delta usage reports cumulative output tokens
             if usage.get("output_tokens"):
                 self._current.output_tokens = usage["output_tokens"]
+            # Extract stop reason from message_delta
+            delta_stop_reason = raw.get("delta", {}).get("stop_reason")
+            if delta_stop_reason is not None:
+                self._current.stop_reason = delta_stop_reason
 
         elif event_type == "message_stop" and self._current is not None:
             self._current.end_time = time.time()
@@ -434,6 +439,9 @@ class PostHogClaudeAgentProcessor:
             properties["$ai_cache_creation_input_tokens"] = (
                 gen.cache_creation_input_tokens
             )
+
+        if gen.stop_reason is not None:
+            properties["$ai_stop_reason"] = gen.stop_reason
 
         if resolved_id is None:
             properties["$process_person_profile"] = False

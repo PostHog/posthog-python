@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -308,6 +309,7 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_stop_reason"] == "end_turn"
         assert props["$ai_tokens_source"] == "sdk"
         assert isinstance(props["$ai_latency"], float)
         # Verify raw usage metadata is passed for backend processing
@@ -1400,3 +1402,22 @@ def test_explicit_distinct_id_overrides_outer_context(
 
         call_args = mock_client.capture.call_args[1]
         assert call_args["distinct_id"] == "explicit-user-789"
+
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+
+@pytest.mark.skipif(not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY is not set")
+def test_integration_stop_reason(mock_client):
+    client = Anthropic(api_key=ANTHROPIC_API_KEY, posthog_client=mock_client)
+    client.messages.create(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Say hi"}],
+        max_tokens=5,
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] in ("end_turn", "max_tokens")
+    assert props["$ai_provider"] == "anthropic"
+    assert props["$ai_input_tokens"] > 0

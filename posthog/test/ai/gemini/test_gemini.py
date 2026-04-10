@@ -49,6 +49,9 @@ def mock_gemini_response():
 
     mock_candidate = MagicMock()
     mock_candidate.text = "Test response from Gemini"
+    mock_finish_reason = MagicMock()
+    mock_finish_reason.name = "STOP"
+    mock_candidate.finish_reason = mock_finish_reason
     mock_content = MagicMock()
     mock_part = MagicMock()
     mock_part.text = "Test response from Gemini"
@@ -199,6 +202,7 @@ def test_new_client_basic_generation(
     assert props["foo"] == "bar"
     assert "$ai_trace_id" in props
     assert props["$ai_latency"] > 0
+    assert props["$ai_stop_reason"] == "STOP"
     # Verify raw usage metadata is passed for backend processing
     assert "$ai_usage" in props
     assert props["$ai_usage"] is not None
@@ -1416,3 +1420,116 @@ def test_embed_content_integration_batch(mock_client):
 
     assert response.embeddings is not None
     assert len(response.embeddings) == len(inputs)
+
+
+@pytest.mark.parametrize(
+    "finish_reason_name,response_text",
+    [
+        ("STOP", "Test"),
+        ("MAX_TOKENS", "Truncated"),
+    ],
+)
+def test_stop_reason_captured(
+    mock_client, mock_google_genai_client, finish_reason_name, response_text
+):
+    mock_response = MagicMock()
+    mock_response.text = response_text
+
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 10
+    mock_usage.candidates_token_count = 5
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_usage.model_dump.return_value = {
+        "prompt_token_count": 10,
+        "candidates_token_count": 5,
+    }
+    mock_response.usage_metadata = mock_usage
+
+    mock_candidate = MagicMock()
+    mock_candidate.finish_reason = MagicMock()
+    mock_candidate.finish_reason.name = finish_reason_name
+    mock_candidate.content = MagicMock()
+    mock_candidate.content.parts = [MagicMock(text=response_text)]
+    mock_response.candidates = [mock_candidate]
+
+    mock_google_genai_client.models.generate_content.return_value = mock_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == finish_reason_name
+
+
+def test_stop_reason_streaming(mock_client, mock_google_genai_client):
+    def mock_streaming_response():
+        mock_chunk1 = MagicMock()
+        mock_chunk1.text = "Hello "
+        mock_usage1 = MagicMock()
+        mock_usage1.prompt_token_count = 10
+        mock_usage1.candidates_token_count = 5
+        mock_usage1.cached_content_token_count = 0
+        mock_usage1.thoughts_token_count = 0
+        mock_chunk1.usage_metadata = mock_usage1
+        # No candidates with finish_reason on first chunk
+        mock_chunk1.candidates = []
+
+        mock_chunk2 = MagicMock()
+        mock_chunk2.text = "world!"
+        mock_usage2 = MagicMock()
+        mock_usage2.prompt_token_count = 10
+        mock_usage2.candidates_token_count = 10
+        mock_usage2.cached_content_token_count = 0
+        mock_usage2.thoughts_token_count = 0
+        mock_chunk2.usage_metadata = mock_usage2
+        # Final chunk has finish_reason
+        mock_candidate = MagicMock()
+        mock_candidate.finish_reason = MagicMock()
+        mock_candidate.finish_reason.name = "STOP"
+        mock_candidate.content = MagicMock()
+        mock_candidate.content.parts = [MagicMock(text="world!")]
+        mock_chunk2.candidates = [mock_candidate]
+
+        yield mock_chunk1
+        yield mock_chunk2
+
+    mock_google_genai_client.models.generate_content_stream.return_value = (
+        mock_streaming_response()
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.generate_content_stream(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    list(response)
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == "STOP"
+
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+
+@pytest.mark.skipif(not GEMINI_API_KEY, reason="GEMINI_API_KEY is not set")
+def test_integration_stop_reason(mock_client):
+    client = Client(api_key=GEMINI_API_KEY, posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents="Say hi",
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] is not None
+    assert isinstance(props["$ai_stop_reason"], str)
+    assert props["$ai_provider"] == "gemini"
+    assert props["$ai_input_tokens"] > 0

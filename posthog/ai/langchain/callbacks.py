@@ -629,6 +629,15 @@ class CallbackHandler(BaseCallbackHandler):
                 self._ph_client, self._privacy_mode, completions
             )
 
+            # Extract stop reason from generation info
+            if output.generations and output.generations[-1]:
+                last_gen = output.generations[-1][-1]
+                gen_info = getattr(last_gen, "generation_info", None)
+                if isinstance(gen_info, dict):
+                    finish_reason = gen_info.get("finish_reason")
+                    if finish_reason is not None:
+                        event_properties["$ai_stop_reason"] = finish_reason
+
         self._ph_client.capture(
             distinct_id=self._distinct_id or trace_id,
             event="$ai_generation",
