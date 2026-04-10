@@ -46,6 +46,9 @@ def mock_gemini_response():
 
     mock_candidate = MagicMock()
     mock_candidate.text = "Test response from Gemini"
+    mock_finish_reason = MagicMock()
+    mock_finish_reason.name = "STOP"
+    mock_candidate.finish_reason = mock_finish_reason
     mock_content = MagicMock()
     mock_part = MagicMock()
     mock_part.text = "Test response from Gemini"
@@ -196,6 +199,7 @@ def test_new_client_basic_generation(
     assert props["foo"] == "bar"
     assert "$ai_trace_id" in props
     assert props["$ai_latency"] > 0
+    assert props["$ai_stop_reason"] == "STOP"
     # Verify raw usage metadata is passed for backend processing
     assert "$ai_usage" in props
     assert props["$ai_usage"] is not None
@@ -1161,3 +1165,124 @@ def test_empty_array_grounding_metadata_no_web_search(
     assert "$ai_web_search_count" not in props
     assert props["$ai_input_tokens"] == 15
     assert props["$ai_output_tokens"] == 12
+
+
+def test_stop_reason_captured(mock_client, mock_google_genai_client):
+    mock_response = MagicMock()
+    mock_response.text = "Test"
+
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 10
+    mock_usage.candidates_token_count = 5
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_usage.model_dump.return_value = {
+        "prompt_token_count": 10,
+        "candidates_token_count": 5,
+    }
+    mock_response.usage_metadata = mock_usage
+
+    mock_candidate = MagicMock()
+    mock_candidate.finish_reason = MagicMock()
+    mock_candidate.finish_reason.name = "STOP"
+    mock_candidate.content = MagicMock()
+    mock_candidate.content.parts = [MagicMock(text="Test")]
+    mock_response.candidates = [mock_candidate]
+
+    mock_google_genai_client.models.generate_content.return_value = mock_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == "STOP"
+
+
+def test_stop_reason_max_tokens(mock_client, mock_google_genai_client):
+    mock_response = MagicMock()
+    mock_response.text = "Truncated"
+
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 10
+    mock_usage.candidates_token_count = 5
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_usage.model_dump.return_value = {
+        "prompt_token_count": 10,
+        "candidates_token_count": 5,
+    }
+    mock_response.usage_metadata = mock_usage
+
+    mock_candidate = MagicMock()
+    mock_candidate.finish_reason = MagicMock()
+    mock_candidate.finish_reason.name = "MAX_TOKENS"
+    mock_candidate.content = MagicMock()
+    mock_candidate.content.parts = [MagicMock(text="Truncated")]
+    mock_response.candidates = [mock_candidate]
+
+    mock_google_genai_client.models.generate_content.return_value = mock_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == "MAX_TOKENS"
+
+
+def test_stop_reason_streaming(mock_client, mock_google_genai_client):
+    def mock_streaming_response():
+        mock_chunk1 = MagicMock()
+        mock_chunk1.text = "Hello "
+        mock_usage1 = MagicMock()
+        mock_usage1.prompt_token_count = 10
+        mock_usage1.candidates_token_count = 5
+        mock_usage1.cached_content_token_count = 0
+        mock_usage1.thoughts_token_count = 0
+        mock_chunk1.usage_metadata = mock_usage1
+        # No candidates with finish_reason on first chunk
+        mock_chunk1.candidates = []
+
+        mock_chunk2 = MagicMock()
+        mock_chunk2.text = "world!"
+        mock_usage2 = MagicMock()
+        mock_usage2.prompt_token_count = 10
+        mock_usage2.candidates_token_count = 10
+        mock_usage2.cached_content_token_count = 0
+        mock_usage2.thoughts_token_count = 0
+        mock_chunk2.usage_metadata = mock_usage2
+        # Final chunk has finish_reason
+        mock_candidate = MagicMock()
+        mock_candidate.finish_reason = MagicMock()
+        mock_candidate.finish_reason.name = "STOP"
+        mock_candidate.content = MagicMock()
+        mock_candidate.content.parts = [MagicMock(text="world!")]
+        mock_chunk2.candidates = [mock_candidate]
+
+        yield mock_chunk1
+        yield mock_chunk2
+
+    mock_google_genai_client.models.generate_content_stream.return_value = (
+        mock_streaming_response()
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.generate_content_stream(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    list(response)
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == "STOP"

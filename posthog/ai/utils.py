@@ -233,6 +233,23 @@ def format_response(response, provider: str):
     return []
 
 
+def extract_stop_reason(response: Any, provider: str) -> Optional[str]:
+    """Extract stop reason from response based on provider."""
+    if provider == "openai":
+        from posthog.ai.openai.openai_converter import extract_openai_stop_reason
+
+        return extract_openai_stop_reason(response)
+    elif provider == "anthropic":
+        from posthog.ai.anthropic.anthropic_converter import extract_anthropic_stop_reason
+
+        return extract_anthropic_stop_reason(response)
+    elif provider == "gemini":
+        from posthog.ai.gemini.gemini_converter import extract_gemini_stop_reason
+
+        return extract_gemini_stop_reason(response)
+    return None
+
+
 def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     """
     Extract available tool calls for the given provider.
@@ -431,6 +448,10 @@ def call_llm_and_track_usage(
                 # Already serialized by converters
                 tag("$ai_usage", raw_usage)
 
+            stop_reason = extract_stop_reason(response, provider)
+            if stop_reason is not None:
+                tag("$ai_stop_reason", stop_reason)
+
             if not has_person_distinct_id:
                 tag("$process_person_profile", False)
 
@@ -575,6 +596,10 @@ async def call_llm_and_track_usage_async(
             if raw_usage is not None:
                 # Already serialized by converters
                 tag("$ai_usage", raw_usage)
+
+            stop_reason = extract_stop_reason(response, provider)
+            if stop_reason is not None:
+                tag("$ai_stop_reason", stop_reason)
 
             if not has_person_distinct_id:
                 tag("$process_person_profile", False)
@@ -732,6 +757,11 @@ def capture_streaming_event(
     if raw_usage is not None:
         # Already serialized by converters
         event_properties["$ai_usage"] = raw_usage
+
+    # Add stop reason if present
+    stop_reason = event_data.get("stop_reason")
+    if stop_reason is not None:
+        event_properties["$ai_stop_reason"] = stop_reason
 
     # Handle provider-specific fields
     if (

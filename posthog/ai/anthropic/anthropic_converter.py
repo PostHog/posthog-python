@@ -190,6 +190,11 @@ def extract_anthropic_web_search_count(response: Any) -> int:
     return 0
 
 
+def extract_anthropic_stop_reason(response: Any) -> Optional[str]:
+    """Extract stop reason from Anthropic response."""
+    return getattr(response, "stop_reason", None)
+
+
 def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage from a full Anthropic response (non-streaming).

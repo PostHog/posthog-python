@@ -369,6 +369,17 @@ def extract_openai_web_search_count(response: Any) -> int:
     return 0
 
 
+def extract_openai_stop_reason(response: Any) -> Optional[str]:
+    """Extract stop reason from OpenAI response."""
+    # Chat Completions API
+    if hasattr(response, "choices") and response.choices:
+        return getattr(response.choices[0], "finish_reason", None)
+    # Responses API
+    if hasattr(response, "status"):
+        return getattr(response, "status", None)
+    return None
+
+
 def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage statistics from a full OpenAI response (non-streaming).

@@ -287,6 +287,31 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
     return output
 
 
+def extract_gemini_stop_reason(response: Any) -> Optional[str]:
+    """Extract stop reason from Gemini response."""
+    if response and hasattr(response, "candidates") and response.candidates:
+        candidate = response.candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason is not None:
+            # Gemini uses enum values — convert to string name
+            if hasattr(finish_reason, "name"):
+                return finish_reason.name
+            return str(finish_reason)
+    return None
+
+
+def extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]:
+    """Extract stop reason from a Gemini streaming chunk."""
+    if chunk and hasattr(chunk, "candidates") and chunk.candidates:
+        candidate = chunk.candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason is not None:
+            if hasattr(finish_reason, "name"):
+                return finish_reason.name
+            return str(finish_reason)
+    return None
+
+
 def extract_gemini_system_instruction(config: Any) -> Optional[str]:
     """
     Extract system instruction from Gemini config parameter.

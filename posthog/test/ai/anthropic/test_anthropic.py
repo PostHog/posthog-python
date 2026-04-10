@@ -308,6 +308,7 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_stop_reason"] == "end_turn"
         assert props["$ai_tokens_source"] == "sdk"
         assert isinstance(props["$ai_latency"], float)
         # Verify raw usage metadata is passed for backend processing

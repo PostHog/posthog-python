@@ -125,12 +125,14 @@ class WrappedResponses:
         usage_stats: TokenUsage = TokenUsage()
         final_content = []
         model_from_response: Optional[str] = None
+        stop_reason: Optional[str] = None
         response = self._original.create(**kwargs)
 
         def generator():
             nonlocal usage_stats
             nonlocal final_content  # noqa: F824
             nonlocal model_from_response
+            nonlocal stop_reason
 
             try:
                 for chunk in response:
@@ -153,6 +155,17 @@ class WrappedResponses:
                     if content is not None:
                         final_content.append(content)
 
+                    # Capture stop reason from response.completed event
+                    if (
+                        hasattr(chunk, "type")
+                        and chunk.type == "response.completed"
+                        and hasattr(chunk, "response")
+                        and chunk.response
+                    ):
+                        chunk_status = getattr(chunk.response, "status", None)
+                        if chunk_status is not None:
+                            stop_reason = chunk_status
+
                     yield chunk
 
             finally:
@@ -171,6 +184,7 @@ class WrappedResponses:
                     output,
                     None,  # Responses API doesn't have tools
                     model_from_response,
+                    stop_reason=stop_reason,
                 )
 
         return generator()
@@ -188,6 +202,7 @@ class WrappedResponses:
         output: Any,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
         model_from_response: Optional[str] = None,
+        stop_reason: Optional[str] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.openai.openai_converter import (
@@ -217,6 +232,7 @@ class WrappedResponses:
             properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
+            stop_reason=stop_reason,
         )
 
         # Use the common capture function
@@ -335,6 +351,7 @@ class WrappedCompletions:
         accumulated_content = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
         model_from_response: Optional[str] = None
+        stop_reason: Optional[str] = None
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
@@ -345,6 +362,7 @@ class WrappedCompletions:
             nonlocal accumulated_content  # noqa: F824
             nonlocal accumulated_tool_calls
             nonlocal model_from_response
+            nonlocal stop_reason
 
             try:
                 for chunk in response:
@@ -370,6 +388,14 @@ class WrappedCompletions:
                         accumulate_openai_tool_calls(
                             accumulated_tool_calls, chunk_tool_calls
                         )
+
+                    # Capture stop reason from chunk
+                    if (
+                        hasattr(chunk, "choices")
+                        and chunk.choices
+                        and getattr(chunk.choices[0], "finish_reason", None) is not None
+                    ):
+                        stop_reason = chunk.choices[0].finish_reason
 
                     yield chunk
 
@@ -397,6 +423,7 @@ class WrappedCompletions:
                     tool_calls_list,
                     extract_available_tool_calls("openai", kwargs),
                     model_from_response,
+                    stop_reason=stop_reason,
                 )
 
         return generator()
@@ -415,6 +442,7 @@ class WrappedCompletions:
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         available_tool_calls: Optional[List[Dict[str, Any]]] = None,
         model_from_response: Optional[str] = None,
+        stop_reason: Optional[str] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.openai.openai_converter import (
@@ -444,6 +472,7 @@ class WrappedCompletions:
             properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
+            stop_reason=stop_reason,
         )
 
         # Use the common capture function

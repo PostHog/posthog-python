@@ -496,6 +496,7 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_stop_reason"] == "stop"
         assert isinstance(props["$ai_latency"], float)
         # Verify raw usage metadata is passed for backend processing
         assert "$ai_usage" in props
@@ -978,6 +979,7 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_reasoning_tokens"] == 15
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_stop_reason"] == "completed"
         assert isinstance(props["$ai_latency"], float)
 
 
