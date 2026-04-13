@@ -15,7 +15,6 @@ from posthog.request import (
     QuotaLimitError,
     _mask_tokens_in_url,
     batch_post,
-    decide,
     determine_server_host,
     disable_connection_reuse,
     enable_keep_alive,
@@ -116,7 +115,7 @@ class TestRequests(unittest.TestCase):
                 timeout=0.0001,
             )
 
-    def test_quota_limited_response(self):
+    def test_quota_limited_flags_response(self):
         mock_response = requests.Response()
         mock_response.status_code = 200
         mock_response._content = json.dumps(
@@ -128,14 +127,14 @@ class TestRequests(unittest.TestCase):
             }
         ).encode("utf-8")
 
-        with mock.patch("posthog.request._session.post", return_value=mock_response):
+        with mock.patch("posthog.request._flags_session.post", return_value=mock_response):
             with self.assertRaises(QuotaLimitError) as cm:
-                decide("fake_key", "fake_host")
+                flags("fake_key", "fake_host")
 
             self.assertEqual(cm.exception.status, 200)
             self.assertEqual(cm.exception.message, "Feature flags quota limited")
 
-    def test_normal_decide_response(self):
+    def test_normal_flags_response(self):
         mock_response = requests.Response()
         mock_response.status_code = 200
         mock_response._content = json.dumps(
@@ -146,8 +145,8 @@ class TestRequests(unittest.TestCase):
             }
         ).encode("utf-8")
 
-        with mock.patch("posthog.request._session.post", return_value=mock_response):
-            response = decide("fake_key", "fake_host")
+        with mock.patch("posthog.request._flags_session.post", return_value=mock_response):
+            response = flags("fake_key", "fake_host")
             self.assertEqual(response["featureFlags"], {"flag1": True})
 
 
