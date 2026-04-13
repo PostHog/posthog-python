@@ -127,7 +127,9 @@ class TestRequests(unittest.TestCase):
             }
         ).encode("utf-8")
 
-        with mock.patch("posthog.request._flags_session.post", return_value=mock_response):
+        with mock.patch(
+            "posthog.request._flags_session.post", return_value=mock_response
+        ):
             with self.assertRaises(QuotaLimitError) as cm:
                 flags("fake_key", "fake_host")
 
@@ -145,7 +147,9 @@ class TestRequests(unittest.TestCase):
             }
         ).encode("utf-8")
 
-        with mock.patch("posthog.request._flags_session.post", return_value=mock_response):
+        with mock.patch(
+            "posthog.request._flags_session.post", return_value=mock_response
+        ):
             response = flags("fake_key", "fake_host")
             self.assertEqual(response["featureFlags"], {"flag1": True})
 
