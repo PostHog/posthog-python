@@ -196,6 +196,7 @@ def health():
             "sdk_name": "posthog-python",
             "sdk_version": VERSION,
             "adapter_version": "1.0.0",
+            "capabilities": ["capture_v0", "encoding_gzip"],
         }
     )
 
