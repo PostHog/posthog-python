@@ -5,9 +5,8 @@ import json
 import urllib.request
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from posthog.ai.otel import PostHogSpanProcessor
 from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
 resource = Resource(
@@ -18,12 +17,13 @@ resource = Resource(
         "conversation_id": "abc-123",
     }
 )
-exporter = OTLPSpanExporter(
-    endpoint=f"{os.environ.get('POSTHOG_HOST', 'https://us.i.posthog.com')}/i/v0/ai/otel",
-    headers={"Authorization": f"Bearer {os.environ['POSTHOG_API_KEY']}"},
-)
 provider = TracerProvider(resource=resource)
-provider.add_span_processor(SimpleSpanProcessor(exporter))
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
 trace.set_tracer_provider(provider)
 
 OpenAIInstrumentor().instrument()

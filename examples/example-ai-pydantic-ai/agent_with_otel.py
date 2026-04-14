@@ -8,22 +8,19 @@ from pydantic_ai.models.openai import OpenAIModel
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-# Configure OTEL to export traces to PostHog
-posthog_api_key = os.environ["POSTHOG_API_KEY"]
-posthog_host = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
-
-os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = f"{posthog_host}/i/v0/ai/otel"
-os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Bearer {posthog_api_key}"
+from posthog.ai.otel import PostHogSpanProcessor
 
 tracer_provider = TracerProvider(
     resource=Resource.create(
         {"service.name": "pydantic-ai-example", "user.id": "example-user"}
     )
 )
-tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter()))
+tracer_provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
 trace.set_tracer_provider(tracer_provider)
 
 # Create an agent with a tool
