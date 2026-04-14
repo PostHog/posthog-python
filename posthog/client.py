@@ -288,14 +288,7 @@ class Client(object):
         else:
             self.log.setLevel(logging.WARNING)
 
-        if before_send is not None:
-            if callable(before_send):
-                self.before_send = before_send
-            else:
-                self.log.warning("before_send is not callable, it will be ignored")
-                self.before_send = None
-        else:
-            self.before_send = None
+        self._set_before_send(before_send)
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(self)
@@ -331,6 +324,16 @@ class Client(object):
                 # if we've disabled sending, just don't start the consumer
                 if send:
                     consumer.start()
+
+    def _set_before_send(self, before_send):
+        if before_send is not None:
+            if callable(before_send):
+                self.before_send = before_send
+            else:
+                self.log.warning("before_send is not callable, it will be ignored")
+                self.before_send = None
+        else:
+            self.before_send = None
 
     def new_context(self, fresh=False, capture_exceptions=True):
         """
@@ -1284,19 +1287,55 @@ class Client(object):
         if should_fetch:
             self._fetch_feature_flags_from_api()
 
+    # Default (Django) endpoint for local evaluation
+    _DEFAULT_LOCAL_EVAL_ENDPOINT = "/api/feature_flag/local_evaluation/"
+
+    def _get_local_eval_endpoint(self):
+        """Get the local evaluation endpoint URL, configurable via env var."""
+        return os.environ.get(
+            "POSTHOG_LOCAL_EVALUATION_ENDPOINT",
+            self._DEFAULT_LOCAL_EVAL_ENDPOINT,
+        )
+
     def _fetch_feature_flags_from_api(self):
         """Fetch feature flags from the PostHog API."""
         try:
             # Store old flags to detect changes
             old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
 
-            response = get(
-                self.personal_api_key,
-                f"/api/feature_flag/local_evaluation/?token={self.api_key}&send_cohorts",
-                self.host,
-                timeout=10,
-                etag=self._flags_etag,
-            )
+            endpoint = self._get_local_eval_endpoint()
+            url = f"{endpoint}?token={self.api_key}&send_cohorts"
+            # Ensure URL has leading slash
+            if not url.startswith("/"):
+                url = f"/{url}"
+
+            try:
+                response = get(
+                    self.personal_api_key,
+                    url,
+                    self.host,
+                    timeout=10,
+                    etag=self._flags_etag,
+                )
+            except Exception as e:
+                # Fall back to the stable Django endpoint when the custom endpoint
+                # (e.g. the Rust-backed /flags/definitions) fails. This enables a
+                # zero-downtime gradual migration: the custom endpoint is tried first
+                # and, on any error, flag evaluation degrades transparently to the
+                # default rather than being blocked entirely.
+                if endpoint != self._DEFAULT_LOCAL_EVAL_ENDPOINT:
+                    self.log.warning(
+                        f"[FEATURE FLAGS] Custom endpoint {endpoint} failed ({e}), falling back to {self._DEFAULT_LOCAL_EVAL_ENDPOINT}"
+                    )
+                    response = get(
+                        self.personal_api_key,
+                        f"{self._DEFAULT_LOCAL_EVAL_ENDPOINT}?token={self.api_key}&send_cohorts",
+                        self.host,
+                        timeout=10,
+                        etag=self._flags_etag,
+                    )
+                else:
+                    raise
 
             # Update stored ETag (clear if server stops sending one)
             self._flags_etag = response.etag

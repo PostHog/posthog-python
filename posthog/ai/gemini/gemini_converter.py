@@ -287,6 +287,24 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
     return output
 
 
+def extract_gemini_stop_reason(response: Any) -> Optional[str]:
+    """Extract stop reason from Gemini response."""
+    if response and hasattr(response, "candidates") and response.candidates:
+        candidate = response.candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason is not None:
+            # Gemini uses enum values — convert to string name
+            if hasattr(finish_reason, "name"):
+                return finish_reason.name
+            return str(finish_reason)
+    return None
+
+
+def extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]:
+    """Extract stop reason from a Gemini streaming chunk."""
+    return extract_gemini_stop_reason(chunk)
+
+
 def extract_gemini_system_instruction(config: Any) -> Optional[str]:
     """
     Extract system instruction from Gemini config parameter.
@@ -657,3 +675,19 @@ def format_gemini_streaming_output(
 
     # Fallback for empty or unexpected input
     return [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
+
+
+def extract_gemini_embedding_token_count(response) -> int:
+    """
+    Extract total token count from a Gemini embed_content response.
+    Token counts are only available per-embedding via Vertex AI's statistics.token_count.
+    Returns 0 if no token counts are available.
+    """
+    total = 0
+    if hasattr(response, "embeddings") and response.embeddings:
+        for embedding in response.embeddings:
+            if hasattr(embedding, "statistics") and embedding.statistics:
+                token_count = getattr(embedding.statistics, "token_count", None)
+                if token_count is not None:
+                    total += int(token_count)
+    return total

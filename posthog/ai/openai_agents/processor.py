@@ -549,6 +549,13 @@ class PostHogTracingProcessor(TracingProcessor):
                 "cache_creation_input_tokens"
             ]
 
+        # Extract stop reason from response if available
+        response = getattr(span_data, "response", None)
+        if response is not None:
+            finish_reason = getattr(response, "finish_reason", None)
+            if finish_reason is not None:
+                properties["$ai_stop_reason"] = finish_reason
+
         self._capture_event("$ai_generation", properties, distinct_id)
 
     def _handle_function_span(
@@ -703,6 +710,11 @@ class PostHogTracingProcessor(TracingProcessor):
                 properties["$ai_output_choices"] = self._with_privacy_mode(
                     _ensure_serializable(output_items)
                 )
+
+            # Extract stop reason (status) from response
+            status = getattr(response, "status", None)
+            if status is not None:
+                properties["$ai_stop_reason"] = status
 
         self._capture_event("$ai_generation", properties, distinct_id)
 

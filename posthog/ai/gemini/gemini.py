@@ -20,10 +20,13 @@ from posthog.ai.utils import (
     merge_usage_stats,
 )
 from posthog.ai.gemini.gemini_converter import (
+    extract_gemini_embedding_token_count,
     extract_gemini_usage_from_chunk,
     extract_gemini_content_from_chunk,
+    extract_gemini_stop_reason_from_chunk,
     format_gemini_streaming_output,
 )
+from posthog.ai.utils import with_privacy_mode
 from posthog.ai.sanitization import sanitize_gemini
 from posthog.client import Client as PostHogClient
 
@@ -298,6 +301,7 @@ class Models:
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
         accumulated_content = []
+        stop_reason: Optional[str] = None
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
         response = self._client.models.generate_content_stream(**kwargs_without_stream)
@@ -305,6 +309,7 @@ class Models:
         def generator():
             nonlocal usage_stats
             nonlocal accumulated_content
+            nonlocal stop_reason
             try:
                 for chunk in response:
                     # Extract usage stats from chunk
@@ -319,6 +324,11 @@ class Models:
 
                     if content_block is not None:
                         accumulated_content.append(content_block)
+
+                    # Extract stop reason from chunk
+                    chunk_stop_reason = extract_gemini_stop_reason_from_chunk(chunk)
+                    if chunk_stop_reason is not None:
+                        stop_reason = chunk_stop_reason
 
                     yield chunk
 
@@ -338,6 +348,7 @@ class Models:
                     usage_stats,
                     latency,
                     accumulated_content,
+                    stop_reason=stop_reason,
                 )
 
         return generator()
@@ -355,6 +366,7 @@ class Models:
         usage_stats: TokenUsage,
         latency: float,
         output: Any,
+        stop_reason: Optional[str] = None,
     ):
         # Prepare standardized event data
         formatted_input = self._format_input(contents, **kwargs)
@@ -374,6 +386,7 @@ class Models:
             properties=properties,
             privacy_mode=privacy_mode,
             groups=groups,
+            stop_reason=stop_reason,
         )
 
         # Use the common capture function
@@ -418,3 +431,88 @@ class Models:
             groups,
             **kwargs,
         )
+
+    def embed_content(
+        self,
+        model: str,
+        contents,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: Optional[bool] = None,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Create embeddings using Gemini's API while tracking usage in PostHog.
+
+        Args:
+            model: The model to use (e.g., 'gemini-embedding-001')
+            contents: The input content for embedding
+            posthog_distinct_id: ID to associate with the usage event (overrides client default)
+            posthog_trace_id: Trace UUID for linking events (auto-generated if not provided)
+            posthog_properties: Extra properties to include in the event (merged with client defaults)
+            posthog_privacy_mode: Whether to redact sensitive information (overrides client default)
+            posthog_groups: Group analytics properties (overrides client default)
+            **kwargs: Arguments passed to Gemini's embed_content (e.g., config)
+        """
+        distinct_id, trace_id, properties, privacy_mode, groups = (
+            self._merge_posthog_params(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+            )
+        )
+
+        start_time = time.time()
+        response = None
+        error = None
+        http_status = 200
+
+        try:
+            response = self._client.models.embed_content(
+                model=model, contents=contents, **kwargs
+            )
+        except Exception as exc:
+            error = exc
+            http_status = getattr(exc, "status_code", 0)
+        finally:
+            end_time = time.time()
+            latency = end_time - start_time
+
+            input_tokens = (
+                extract_gemini_embedding_token_count(response) if response else 0
+            )
+
+            event_properties = {
+                "$ai_provider": "gemini",
+                "$ai_model": model,
+                "$ai_input": with_privacy_mode(self._ph_client, privacy_mode, contents),
+                "$ai_http_status": http_status,
+                "$ai_input_tokens": input_tokens,
+                "$ai_latency": latency,
+                "$ai_trace_id": trace_id,
+                "$ai_base_url": self._base_url,
+                **(properties or {}),
+            }
+
+            if error:
+                event_properties["$ai_is_error"] = True
+                event_properties["$ai_error"] = str(error)
+
+            if distinct_id is None:
+                event_properties["$process_person_profile"] = False
+
+            self._ph_client.capture(
+                distinct_id=distinct_id or trace_id,
+                event="$ai_embedding",
+                properties=event_properties,
+                groups=groups,
+            )
+
+        if error:
+            raise error
+
+        return response

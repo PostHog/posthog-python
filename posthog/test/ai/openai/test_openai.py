@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -496,6 +497,7 @@ def test_basic_completion(mock_client, mock_openai_response):
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_stop_reason"] == "stop"
         assert isinstance(props["$ai_latency"], float)
         # Verify raw usage metadata is passed for backend processing
         assert "$ai_usage" in props
@@ -978,6 +980,7 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
         assert props["$ai_reasoning_tokens"] == 15
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
+        assert props["$ai_stop_reason"] == "completed"
         assert isinstance(props["$ai_latency"], float)
 
 
@@ -2152,3 +2155,22 @@ async def test_async_streaming_responses_extracts_model_from_response(mock_clien
     props = call_args["properties"]
 
     assert props["$ai_model"] == "gpt-4o-mini-async-stored"
+
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+
+@pytest.mark.skipif(not OPENAI_API_KEY, reason="OPENAI_API_KEY is not set")
+def test_integration_stop_reason(mock_client):
+    client = OpenAI(api_key=OPENAI_API_KEY, posthog_client=mock_client)
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Say hi"}],
+        max_tokens=5,
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] in ("stop", "length")
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_input_tokens"] > 0

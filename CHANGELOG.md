@@ -1,5 +1,44 @@
 # posthog
 
+## 7.11.0 — 2026-04-10
+
+### Minor changes
+
+- [b921fe3](https://github.com/posthog/posthog-python/commit/b921fe33a9115fbf5f5171b80e1deabffd3e66ca) Add Gemini `embed_content` tracking support for both sync and async clients — Thanks @carlos-marchal-ph!
+- [44b92a8](https://github.com/posthog/posthog-python/commit/44b92a844a2d8170e5b2247e509279f4654c4ef6) feat(ai): add $ai_stop_reason extraction for all providers — Thanks @carlos-marchal-ph!
+
+### Patch changes
+
+- [7c5cad8](https://github.com/posthog/posthog-python/commit/7c5cad8fcf818c9b8b4f074876718b937f2f8072) fix: graceful fallback in claude_agent_sdk query wrapper when PostHog is not configured — Thanks @andrewm4894!
+
+## 7.10.3 — 2026-04-08
+
+### Patch changes
+
+- [e22e893](https://github.com/posthog/posthog-python/commit/e22e893b236bf6af1cb8f6c18712727d24fe5c7e) fix: pass the module-level `posthog.before_send` callback into the lazily initialized default client — Thanks @marandaneto!
+
+## 7.10.2 — 2026-04-08
+
+### Patch changes
+
+- [bae355c](https://github.com/posthog/posthog-python/commit/bae355cd787f4c1a119fd2b396ba444b1a218b6a) feat(flags): make local evaluation endpoint configurable via `POSTHOG_LOCAL_EVALUATION_ENDPOINT` env var with fallback to default endpoint — Thanks @patricio-posthog for your first contribution 🎉!
+
+## 7.10.1 — 2026-04-08
+
+### Patch changes
+
+- [a5052b0](https://github.com/posthog/posthog-python/commit/a5052b089b106af5a2fa5236fcf1f4f84943f899) fix: Django middleware accidentally passed capture_exceptions as positional arg, setting fresh=True and resetting context state — Thanks @marandaneto!
+
+## 7.10.0 — 2026-04-07
+
+### Minor changes
+
+- [d234b53](https://github.com/posthog/posthog-python/commit/d234b53ff9578648d3bdb70d54cde98cdb7d9c87) feat(ai): add Claude Agent SDK integration for LLM analytics — Thanks @andrewm4894!
+
+### Patch changes
+
+- [754c45f](https://github.com/posthog/posthog-python/commit/754c45fa024be3fdb1f1d1f312a94070786652b7) fix: propagate missing params in module-level wrapper functions (`distinct_id` for `group_identify`, `flag_keys_to_evaluate` for `get_all_flags`/`get_all_flags_and_payloads`) — Thanks @dustinbyrne!
+
 ## 7.9.12 — 2026-03-12
 
 ### Patch changes

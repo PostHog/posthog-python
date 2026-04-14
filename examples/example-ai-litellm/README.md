@@ -5,9 +5,10 @@ Track LiteLLM calls with PostHog using the built-in callback integration.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
 cp .env.example .env
 # Fill in your API keys in .env
+# Install uv if you haven't already: https://docs.astral.sh/uv/getting-started/installation/
+uv sync
 ```
 
 ## Examples
@@ -19,6 +20,6 @@ cp .env.example .env
 
 ```bash
 source .env
-python chat.py
-python streaming.py
+uv run python chat.py
+uv run python streaming.py
 ```
