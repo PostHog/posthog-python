@@ -3,7 +3,7 @@ name: "Release"
 on:
   pull_request:
     types: [closed]
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
   check-release-label:
     name: Check for release label
     runs-on: ubuntu-latest
-    # Run when PR with 'release' label is merged to master
+    # Run when PR with 'release' label is merged to main
     if: |
       github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' &&
@@ -31,7 +31,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: main
           fetch-depth: 0
 
       - name: Check release conditions
@@ -91,7 +91,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: main
           fetch-depth: 0
           token: ${{ steps.releaser.outputs.token }}
 
@@ -147,7 +147,7 @@ jobs:
         with:
           commit_message: "chore: Release v${{ steps.sampo-release.outputs.new_version }}"
           repo: ${{ github.repository }}
-          branch: master
+          branch: main
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
@@ -199,7 +199,7 @@ jobs:
         if: steps.commit-release.outputs.commit-hash != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run generate-references.yml --ref master
+        run: gh workflow run generate-references.yml --ref main
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
