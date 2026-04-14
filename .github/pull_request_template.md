@@ -18,6 +18,5 @@
 
 - [ ] Ran `sampo add` to generate a changeset file
 - [ ] Added the `release` label to the PR
-- [ ] A maintainer approved the GitHub `Release` environment
 
 <!-- For more details check RELEASING.md -->
