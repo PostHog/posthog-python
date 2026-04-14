@@ -1,5 +1,11 @@
 # posthog
 
+## 7.11.1 — 2026-04-14
+
+### Patch changes
+
+- [c3f097f](https://github.com/posthog/posthog-python/commit/c3f097f72f5ef6c1ecd25ade7d3ba08e57765eaf) feat: Add os_distro information to events — Thanks @parinporecha!
+
 ## 7.11.0 — 2026-04-10
 
 ### Minor changes
