@@ -11,7 +11,7 @@ cp .env.example .env
 uv sync
 ```
 
-`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_GATEWAY_ID`, and `OPENAI_API_KEY` are required.
+`POSTHOG_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_GATEWAY_ID`, and `OPENAI_API_KEY` are required.
 
 ## Examples
 
