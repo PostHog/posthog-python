@@ -8,7 +8,9 @@ import logging
 import re
 import time
 import urllib.parse
-from typing import Any, Dict, Optional, Union
+import warnings
+from dataclasses import dataclass
+from typing import Any, Dict, Literal, Optional, Union, overload
 
 from posthog.request import USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
@@ -21,13 +23,27 @@ DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int]]
 
+PromptSource = Literal["api", "cache", "stale_cache", "code_fallback"]
+
+
+@dataclass(frozen=True)
+class PromptResult:
+    """Result of a prompt fetch with metadata about its source."""
+
+    source: PromptSource
+    prompt: str
+    name: Optional[str] = None
+    version: Optional[int] = None
+
 
 class CachedPrompt:
     """Cached prompt with metadata."""
 
-    def __init__(self, prompt: str, fetched_at: float):
+    def __init__(self, prompt: str, fetched_at: float, name: str, version: int):
         self.prompt = prompt
         self.fetched_at = fetched_at
+        self.name = name
+        self.version = version
 
 
 def _cache_key(name: str, version: Optional[int]) -> PromptCacheKey:
@@ -50,8 +66,9 @@ def _is_prompt_api_response(data: Any) -> bool:
     """Check if the response is a valid prompt API response."""
     return (
         isinstance(data, dict)
-        and "prompt" in data
         and isinstance(data.get("prompt"), str)
+        and isinstance(data.get("name"), str)
+        and isinstance(data.get("version"), int)
     )
 
 
@@ -114,6 +131,7 @@ class Prompts:
             default_cache_ttl_seconds or DEFAULT_CACHE_TTL_SECONDS
         )
         self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
+        self._has_warned_deprecation = False
 
         if posthog is not None:
             self._personal_api_key = getattr(posthog, "personal_api_key", None) or ""
@@ -126,35 +144,115 @@ class Prompts:
             self._project_api_key = project_api_key or ""
             self._host = remove_trailing_slash(host or APP_ENDPOINT)
 
+    @overload
     def get(
         self,
         name: str,
         *,
+        with_metadata: Literal[True],
+        cache_ttl_seconds: Optional[int] = ...,
+        fallback: Optional[str] = ...,
+        version: Optional[int] = ...,
+    ) -> PromptResult: ...
+
+    @overload
+    def get(
+        self,
+        name: str,
+        *,
+        with_metadata: Literal[False],
+        cache_ttl_seconds: Optional[int] = ...,
+        fallback: Optional[str] = ...,
+        version: Optional[int] = ...,
+    ) -> str: ...
+
+    @overload
+    def get(
+        self,
+        name: str,
+        *,
+        cache_ttl_seconds: Optional[int] = ...,
+        fallback: Optional[str] = ...,
+        version: Optional[int] = ...,
+    ) -> str: ...
+
+    def get(
+        self,
+        name: str,
+        *,
+        with_metadata: Optional[bool] = None,
         cache_ttl_seconds: Optional[int] = None,
         fallback: Optional[str] = None,
         version: Optional[int] = None,
-    ) -> str:
+    ) -> Union[str, PromptResult]:
         """
         Fetch a prompt by name from the PostHog API.
 
-        Caching behavior:
-        1. If cache is fresh, return cached value
-        2. If fetch fails and cache exists (stale), return stale cache with warning
-        3. If fetch fails and fallback provided, return fallback with warning
-        4. If fetch fails with no cache/fallback, raise exception
+        When ``with_metadata`` is ``True``, returns a :class:`PromptResult`
+        with ``source``, ``name``, and ``version`` metadata.  When omitted or
+        ``False``, returns a plain string (deprecated -- will be removed in a
+        future major version).
 
         Args:
             name: The name of the prompt to fetch
+            with_metadata: If True, returns a PromptResult with source info.
+                Omitting this parameter is deprecated.
             cache_ttl_seconds: Cache TTL in seconds (defaults to instance default)
             fallback: Fallback prompt to use if fetch fails and no cache available
             version: Specific prompt version to fetch. If None, fetches the latest
                 version
 
         Returns:
-            The prompt string
+            str if with_metadata is False/omitted, PromptResult if True
 
         Raises:
             Exception: If the prompt cannot be fetched and no fallback is available
+        """
+        if with_metadata is None and not self._has_warned_deprecation:
+            self._has_warned_deprecation = True
+            warnings.warn(
+                "[PostHog Prompts] Calling get() without with_metadata=True is "
+                "deprecated and will be removed in a future major version. "
+                "Pass with_metadata=True to receive a PromptResult object with "
+                "source, name, and version metadata. You can pass "
+                "with_metadata=False to silence this warning, but the "
+                "plain-string return will still be removed in the next major "
+                "version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        try:
+            result = self._get_internal(
+                name, cache_ttl_seconds=cache_ttl_seconds, version=version
+            )
+            if with_metadata is True:
+                return result
+            return result.prompt
+        except Exception as error:
+            prompt_reference = _prompt_reference(name, version)
+            if fallback is not None:
+                log.warning(
+                    "[PostHog Prompts] Failed to fetch %s, using fallback: %s",
+                    prompt_reference,
+                    error,
+                )
+                if with_metadata is True:
+                    return PromptResult(source="code_fallback", prompt=fallback)
+                return fallback
+            raise
+
+    def _get_internal(
+        self,
+        name: str,
+        *,
+        cache_ttl_seconds: Optional[int] = None,
+        version: Optional[int] = None,
+    ) -> PromptResult:
+        """
+        Internal method that handles cache + fetch logic, returning full metadata.
+
+        Does NOT handle the string ``fallback`` option -- the caller handles that.
         """
         ttl = (
             cache_ttl_seconds
@@ -171,40 +269,48 @@ class Prompts:
             is_fresh = (now - cached.fetched_at) < ttl
 
             if is_fresh:
-                return cached.prompt
+                return PromptResult(
+                    source="cache",
+                    prompt=cached.prompt,
+                    name=cached.name,
+                    version=cached.version,
+                )
 
         # Try to fetch from API
         try:
-            prompt = self._fetch_prompt_from_api(name, version)
-            fetched_at = time.time()
+            data = self._fetch_prompt_from_api(name, version)
 
             # Update cache
-            self._cache[cache_key] = CachedPrompt(prompt=prompt, fetched_at=fetched_at)
+            self._cache[cache_key] = CachedPrompt(
+                prompt=data["prompt"],
+                fetched_at=time.time(),
+                name=data["name"],
+                version=data["version"],
+            )
 
-            return prompt
+            return PromptResult(
+                source="api",
+                prompt=data["prompt"],
+                name=data["name"],
+                version=data["version"],
+            )
 
         except Exception as error:
             prompt_reference = _prompt_reference(name, version)
-            # Fallback order:
-            # 1. Return stale cache (with warning)
+            # Return stale cache (with warning)
             if cached is not None:
                 log.warning(
                     "[PostHog Prompts] Failed to fetch %s, using stale cache: %s",
                     prompt_reference,
                     error,
                 )
-                return cached.prompt
-
-            # 2. Return fallback (with warning)
-            if fallback is not None:
-                log.warning(
-                    "[PostHog Prompts] Failed to fetch %s, using fallback: %s",
-                    prompt_reference,
-                    error,
+                return PromptResult(
+                    source="stale_cache",
+                    prompt=cached.prompt,
+                    name=cached.name,
+                    version=cached.version,
                 )
-                return fallback
 
-            # 3. Raise error
             raise
 
     def compile(self, prompt: str, variables: PromptVariables) -> str:
@@ -257,7 +363,9 @@ class Prompts:
         for key in keys_to_clear:
             self._cache.pop(key, None)
 
-    def _fetch_prompt_from_api(self, name: str, version: Optional[int] = None) -> str:
+    def _fetch_prompt_from_api(
+        self, name: str, version: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Fetch prompt from PostHog API.
 
@@ -271,7 +379,7 @@ class Prompts:
             version: Specific prompt version to fetch. If None, fetches the latest
 
         Returns:
-            The prompt string
+            The validated API response dict containing prompt, name, and version
 
         Raises:
             Exception: If the prompt cannot be fetched
@@ -329,4 +437,4 @@ class Prompts:
                 f"[PostHog Prompts] Invalid response format for {prompt_label}"
             )
 
-        return data["prompt"]
+        return data
