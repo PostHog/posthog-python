@@ -1,5 +1,11 @@
 # posthog
 
+## 7.11.2 — 2026-04-15
+
+### Patch changes
+
+- [f5a95b4](https://github.com/posthog/posthog-python/commit/f5a95b454ae7fd8bf46381b1c624df827903260d) feat(flags): switch local evaluation polling from `/api/feature_flag/local_evaluation` to `/flags/definitions` — Thanks @patricio-posthog!
+
 ## 7.11.1 — 2026-04-14
 
 ### Patch changes

@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-07T11:05:50.636596721Z"
+exclude-newer = "2026-04-08T15:44:36.377095312Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -1952,7 +1952,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.11.1"
+version = "7.11.2"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
