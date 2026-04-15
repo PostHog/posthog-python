@@ -1,11 +1,9 @@
 import datetime
-import os
 import unittest
 
 import mock
 from dateutil import parser, tz
 from freezegun import freeze_time
-from parameterized import parameterized
 
 from posthog.client import Client
 from posthog.feature_flags import (
