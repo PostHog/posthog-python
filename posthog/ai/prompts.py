@@ -68,7 +68,7 @@ def _is_prompt_api_response(data: Any) -> bool:
         isinstance(data, dict)
         and isinstance(data.get("prompt"), str)
         and isinstance(data.get("name"), str)
-        and isinstance(data.get("version"), int)
+        and type(data.get("version")) is int
     )
 
 

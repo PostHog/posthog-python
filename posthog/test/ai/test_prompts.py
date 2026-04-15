@@ -502,7 +502,9 @@ class TestPromptsGetWithMetadata(TestPrompts):
     """Tests for Prompts.get() with with_metadata=True."""
 
     @patch("posthog.ai.prompts._get_session")
-    def test_return_prompt_result_with_source_api_on_fresh_fetch(self, mock_get_session):
+    def test_return_prompt_result_with_source_api_on_fresh_fetch(
+        self, mock_get_session
+    ):
         """Should return a PromptResult with source='api' on a fresh fetch."""
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
