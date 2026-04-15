@@ -3,7 +3,12 @@ name = "example-ai-langgraph"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "posthog==7.9.12",
     "langgraph>=0.2.0",
-    "langchain-openai>=0.2.0",
+    "langchain-openai>=0.3.0",
+    "opentelemetry-instrumentation-langchain>=0.24.0",
+    "opentelemetry-sdk>=1.30.0",
+    "posthog[otel]>=7.11.0",
 ]
+
+[tool.uv.sources]
+posthog = { path = "../.." }
