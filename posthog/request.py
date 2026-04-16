@@ -73,7 +73,7 @@ class HTTPAdapterWithSocketOptions(HTTPAdapter):
 
 
 def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.Session:
-    """Build a session for general requests (batch, decide, etc.)."""
+    """Build a session for general requests (batch, remote config, etc.)."""
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(
             total=2,
@@ -221,7 +221,7 @@ def _process_response(
     if res.status_code == 200:
         log.debug(success_message)
         response = res.json() if return_json else res
-        # Handle quota limited decide responses by raising a specific error
+        # Handle quota-limited feature flag responses by raising a specific error
         # NB: other services also put entries into the quotaLimited key, but right now we only care about feature flags
         # since most of the other services handle quota limiting in other places in the application.
         if (
@@ -260,18 +260,6 @@ def _process_response(
         raise APIError(res.status_code, payload["detail"], retry_after=retry_after)
     except (KeyError, ValueError):
         raise APIError(res.status_code, res.text, retry_after=retry_after)
-
-
-def decide(
-    api_key: str,
-    host: Optional[str] = None,
-    gzip: bool = False,
-    timeout: int = 15,
-    **kwargs,
-) -> Any:
-    """Post the `kwargs to the decide API endpoint"""
-    res = post(api_key, host, "/decide/?v=4", gzip, timeout, **kwargs)
-    return _process_response(res, success_message="Feature flags decided successfully")
 
 
 def flags(

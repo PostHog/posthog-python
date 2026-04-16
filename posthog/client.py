@@ -390,7 +390,7 @@ class Client(object):
         device_id: Optional[str] = None,
     ) -> dict[str, Union[bool, str]]:
         """
-        Get feature flag variants for a user by calling decide.
+        Get feature flag variants for a user.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -427,7 +427,7 @@ class Client(object):
         device_id: Optional[str] = None,
     ) -> dict[str, str]:
         """
-        Get feature flag payloads for a user by calling decide.
+        Get feature flag payloads for a user.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -469,7 +469,7 @@ class Client(object):
         device_id: Optional[str] = None,
     ) -> FlagsAndPayloads:
         """
-        Get feature flags and payloads for a user by calling decide.
+        Get feature flags and payloads for a user.
 
         Args:
             distinct_id: The distinct ID of the user.
