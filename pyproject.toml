@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "posthog"
 version = "7.12.0"
 description = "Integrate PostHog into any python application."
-authors = [{ name = "PostHog", email = "hey@posthog.com" }]
-maintainers = [{ name = "PostHog", email = "hey@posthog.com" }]
+authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
+maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
