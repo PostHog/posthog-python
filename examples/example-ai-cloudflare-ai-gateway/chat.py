@@ -28,12 +28,12 @@ OpenAIInstrumentor().instrument()
 
 import openai  # noqa: E402
 
-account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
-gateway_id = os.environ["CLOUDFLARE_GATEWAY_ID"]
-
 client = openai.OpenAI(
-    base_url=f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/compat",
     api_key=os.environ["OPENAI_API_KEY"],
+    default_headers={
+        "cf-aig-authorization": f"Bearer {os.environ['CF_AIG_TOKEN']}",
+    },
+    base_url=f"https://gateway.ai.cloudflare.com/v1/{os.environ['CF_AIG_ACCOUNT_ID']}/{os.environ['CF_AIG_GATEWAY_ID']}/compat",
 )
 
 response = client.chat.completions.create(
