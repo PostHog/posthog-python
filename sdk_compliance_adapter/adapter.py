@@ -361,6 +361,46 @@ def get_state():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/get_feature_flag", methods=["POST"])
+def get_feature_flag():
+    """Evaluate a feature flag"""
+    try:
+        if not state.client:
+            return jsonify({"error": "SDK not initialized"}), 400
+
+        data = request.json or {}
+
+        key = data.get("key")
+        distinct_id = data.get("distinct_id")
+        person_properties = data.get("person_properties")
+        groups = data.get("groups")
+        group_properties = data.get("group_properties")
+        disable_geoip = data.get("disable_geoip")
+        force_remote = data.get("force_remote", True)
+
+        if not key:
+            return jsonify({"error": "key is required"}), 400
+        if not distinct_id:
+            return jsonify({"error": "distinct_id is required"}), 400
+
+        value = state.client.get_feature_flag(
+            key,
+            distinct_id,
+            person_properties=person_properties,
+            groups=groups,
+            group_properties=group_properties,
+            disable_geoip=disable_geoip,
+            only_evaluate_locally=not force_remote,
+        )
+
+        logger.info(f"Feature flag {key} for {distinct_id}: {value}")
+
+        return jsonify({"success": True, "value": value})
+    except Exception as e:
+        logger.exception("Error evaluating feature flag")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/reset", methods=["POST"])
 def reset():
     """Reset SDK state"""
