@@ -234,10 +234,10 @@ class FeatureFlagResult:
 
 def normalize_flags_response(resp: Any) -> FlagsResponse:
     """
-    Normalize the response from the decide or flags API endpoint into a FlagsResponse.
+    Normalize the response from the flags API endpoint into a FlagsResponse.
 
     Args:
-        resp: A v3 or v4 response from the decide (or a v1 or v2 response from the flags) API endpoint.
+        resp: A v1 or v2 response from the flags API endpoint.
 
     Returns:
         A FlagsResponse containing feature flags and their details.

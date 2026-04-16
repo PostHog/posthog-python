@@ -1,19 +1,36 @@
-"""LangChain with PostHog callback handler for automatic tracking."""
+"""LangChain with OpenTelemetry instrumentation for automatic tracking."""
 
 import os
 import json
 import urllib.request
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage
-from posthog import Posthog
-from posthog.ai.langchain import CallbackHandler
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.langchain import LangchainInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-langchain-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-callback_handler = CallbackHandler(client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
+
+LangchainInstrumentor().instrument()
+
+from langchain_openai import ChatOpenAI  # noqa: E402
+from langchain_core.tools import tool  # noqa: E402
+from langchain_core.messages import HumanMessage  # noqa: E402
 
 
 @tool
@@ -40,7 +57,7 @@ model_with_tools = model.bind_tools(tools)
 
 messages = [HumanMessage(content="What's the weather in Berlin?")]
 
-response = model_with_tools.invoke(messages, config={"callbacks": [callback_handler]})
+response = model_with_tools.invoke(messages)
 
 if response.content:
     print(response.content)
@@ -50,5 +67,3 @@ if response.tool_calls:
     for tool_call in response.tool_calls:
         result = tool_map[tool_call["name"]].invoke(tool_call["args"])
         print(result)
-
-posthog.shutdown()

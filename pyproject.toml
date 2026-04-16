@@ -38,6 +38,10 @@ Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
 langchain = ["langchain>=0.2.0"]
+otel = [
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+]
 dev = [
     "django-stubs",
     "lxml",
@@ -79,6 +83,8 @@ test = [
     "pydantic>=2.12.0",
     "parameterized>=0.8.1",
     "claude-agent-sdk",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
 ]
 
 [tool.setuptools]
@@ -91,10 +97,12 @@ packages = [
     "posthog.ai.anthropic",
     "posthog.ai.gemini",
     "posthog.ai.claude_agent_sdk",
+    "posthog.ai.otel",
     "posthog.test",
     "posthog.test.ai",
     "posthog.test.ai.openai_agents",
     "posthog.test.ai.claude_agent_sdk",
+    "posthog.test.ai.otel",
     "posthog.integrations",
 ]
 

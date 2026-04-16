@@ -1,17 +1,37 @@
-"""AutoGen with PostHog tracking via OpenAI wrapper."""
+"""AutoGen with OpenTelemetry tracking via OpenAI instrumentation."""
 
 import os
 import asyncio
-from posthog import Posthog
-from posthog.ai.openai import OpenAI
-from autogen_agentchat.agents import AssistantAgent
-from autogen_ext.models.openai import OpenAIChatCompletionClient
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-autogen-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
+
+OpenAIInstrumentor().instrument()
+
+import openai  # noqa: E402
+from autogen_agentchat.agents import AssistantAgent  # noqa: E402
+from autogen_ext.models.openai import OpenAIChatCompletionClient  # noqa: E402
+
+openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 model_client = OpenAIChatCompletionClient(
     model="gpt-4o-mini",
@@ -28,4 +48,3 @@ async def main():
 
 
 asyncio.run(main())
-posthog.shutdown()

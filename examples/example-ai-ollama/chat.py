@@ -1,27 +1,44 @@
-"""Ollama chat completions via OpenAI-compatible API, tracked by PostHog."""
+"""Ollama chat completions via OpenAI-compatible API, tracked by PostHog via OpenTelemetry."""
 
 import os
-from posthog import Posthog
-from posthog.ai.openai import OpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-ollama-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-client = OpenAI(
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
+
+OpenAIInstrumentor().instrument()
+
+import openai  # noqa: E402
+
+client = openai.OpenAI(
     base_url="http://localhost:11434/v1",
-    api_key="ollama",
-    posthog_client=posthog,
+    api_key=os.environ.get("OLLAMA_API_KEY", "ollama"),
 )
 
 response = client.chat.completions.create(
     model="llama3.2",
     max_completion_tokens=1024,
-    posthog_distinct_id="example-user",
     messages=[
         {"role": "user", "content": "Tell me a fun fact about hedgehogs."},
     ],
 )
 
 print(response.choices[0].message.content)
-posthog.shutdown()

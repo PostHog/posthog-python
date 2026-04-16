@@ -1,15 +1,35 @@
-"""Mirascope with PostHog tracking via OpenAI wrapper."""
+"""Mirascope with OpenTelemetry tracking via OpenAI instrumentation."""
 
 import os
-from mirascope.llm import call
-from posthog import Posthog
-from posthog.ai.openai import OpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-mirascope-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
+
+OpenAIInstrumentor().instrument()
+
+import openai  # noqa: E402
+from mirascope.llm import call  # noqa: E402
+
+openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 @call(model="openai/gpt-4o-mini", client=openai_client)
@@ -20,4 +40,3 @@ def recommend_book(genre: str):
 response = recommend_book("fantasy")
 
 print(response.content)
-posthog.shutdown()

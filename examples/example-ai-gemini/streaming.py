@@ -1,18 +1,39 @@
-"""Google Gemini streaming chat, tracked by PostHog."""
+"""Google Gemini streaming chat, tracked via OpenTelemetry."""
 
 import os
-from posthog import Posthog
-from posthog.ai.gemini import Client
-
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.google_generativeai import (
+    GoogleGenerativeAiInstrumentor,
 )
-client = Client(api_key=os.environ["GEMINI_API_KEY"], posthog_client=posthog)
+
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-gemini-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
+)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
+
+GoogleGenerativeAiInstrumentor().instrument()
+
+from google import genai  # noqa: E402
+
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 stream = client.models.generate_content_stream(
     model="gemini-2.5-flash",
-    posthog_distinct_id="example-user",
     contents=[
         {
             "role": "user",
@@ -28,4 +49,3 @@ for chunk in stream:
                 print(part.text, end="", flush=True)
 
 print()
-posthog.shutdown()

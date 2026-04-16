@@ -1,19 +1,37 @@
-"""Semantic Kernel with PostHog tracking via AsyncOpenAI wrapper."""
+"""Semantic Kernel with OpenTelemetry tracking via OpenAI instrumentation."""
 
 import os
 import asyncio
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
-from posthog import Posthog
-from posthog.ai.openai import AsyncOpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-semantic-kernel-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-openai_client = AsyncOpenAI(
-    api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
 )
+trace.set_tracer_provider(provider)
+
+OpenAIInstrumentor().instrument()
+
+import openai  # noqa: E402
+from semantic_kernel import Kernel  # noqa: E402
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion  # noqa: E402
+
+openai_client = openai.AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 kernel = Kernel()
 kernel.add_service(
@@ -27,4 +45,3 @@ async def main():
 
 
 asyncio.run(main())
-posthog.shutdown()
