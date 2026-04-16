@@ -108,6 +108,7 @@ packages = [
 
 [tool.uv]
 exclude-newer = "7 days"
+required-version = ">=0.8.0"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
