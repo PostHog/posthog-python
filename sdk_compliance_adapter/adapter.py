@@ -376,7 +376,7 @@ def get_feature_flag():
         groups = data.get("groups")
         group_properties = data.get("group_properties")
         disable_geoip = data.get("disable_geoip")
-        force_remote = data.get("force_remote", False)
+        force_remote = data.get("force_remote", True)
 
         if not key:
             return jsonify({"error": "key is required"}), 400
