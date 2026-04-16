@@ -1,20 +1,34 @@
-"""LlamaIndex with PostHog tracking via OpenAI wrapper."""
+"""LlamaIndex with OpenTelemetry instrumentation for tracking."""
 
 import os
-from llama_index.llms.openai import OpenAI as LlamaOpenAI
-from posthog import Posthog
-from posthog.ai.openai import OpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.llamaindex import LlamaIndexInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-llamaindex-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
+
+LlamaIndexInstrumentor().instrument()
+
+from llama_index.llms.openai import OpenAI as LlamaOpenAI  # noqa: E402
 
 llm = LlamaOpenAI(model="gpt-4o-mini", api_key=os.environ["OPENAI_API_KEY"])
-llm._client = openai_client
 
 response = llm.complete("Tell me a fun fact about hedgehogs.")
 print(response)
-
-posthog.shutdown()

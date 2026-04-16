@@ -25,9 +25,9 @@ setup(
     # Basic fields for backward compatibility
     url="https://github.com/posthog/posthog-python",
     author="Posthog",
-    author_email="hey@posthog.com",
+    author_email="engineering@posthog.com",
     maintainer="PostHog",
-    maintainer_email="hey@posthog.com",
+    maintainer_email="engineering@posthog.com",
     license="MIT License",
     description="Integrate PostHog into any python application.",
     long_description=long_description,

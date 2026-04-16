@@ -1,9 +1,10 @@
 import unittest
+import warnings
 from unittest.mock import MagicMock, patch
 
 from parameterized import parameterized
 
-from posthog.ai.prompts import Prompts
+from posthog.ai.prompts import PromptResult, Prompts
 
 
 class MockResponse:
@@ -495,6 +496,241 @@ class TestPromptsGet(TestPrompts):
         # Second call - should refetch
         prompts.get("test-prompt")
         self.assertEqual(mock_get.call_count, 2)
+
+
+class TestPromptsGetWithMetadata(TestPrompts):
+    """Tests for Prompts.get() with with_metadata=True."""
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_return_prompt_result_with_source_api_on_fresh_fetch(
+        self, mock_get_session
+    ):
+        """Should return a PromptResult with source='api' on a fresh fetch."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        result = prompts.get("test-prompt", with_metadata=True)
+
+        self.assertEqual(
+            result,
+            PromptResult(
+                source="api",
+                prompt=self.mock_prompt_response["prompt"],
+                name="test-prompt",
+                version=1,
+            ),
+        )
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_return_source_cache_on_fresh_cache_hit(self, mock_get_session):
+        """Should return source='cache' on a fresh cache hit."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        # First call populates cache
+        prompts.get("test-prompt", with_metadata=True)
+
+        # Second call should hit cache
+        result = prompts.get("test-prompt", with_metadata=True, cache_ttl_seconds=300)
+
+        self.assertEqual(result.source, "cache")
+        self.assertEqual(result.prompt, self.mock_prompt_response["prompt"])
+        self.assertEqual(result.name, "test-prompt")
+        self.assertEqual(result.version, 1)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("posthog.ai.prompts._get_session")
+    @patch("posthog.ai.prompts.time.time")
+    def test_return_source_stale_cache_on_fetch_failure(
+        self, mock_time, mock_get_session
+    ):
+        """Should return source='stale_cache' on fetch failure with stale cache."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = [
+            MockResponse(json_data=self.mock_prompt_response),
+            Exception("Network error"),
+        ]
+        mock_time.return_value = 1000.0
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        # First call populates cache
+        prompts.get("test-prompt", with_metadata=True, cache_ttl_seconds=60)
+
+        # Advance past TTL
+        mock_time.return_value = 1061.0
+
+        # Second call should use stale cache
+        result = prompts.get("test-prompt", with_metadata=True, cache_ttl_seconds=60)
+
+        self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(result.prompt, self.mock_prompt_response["prompt"])
+        self.assertEqual(result.name, "test-prompt")
+        self.assertEqual(result.version, 1)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_return_source_code_fallback_with_none_metadata(self, mock_get_session):
+        """Should return source='code_fallback' with name=None, version=None."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        result = prompts.get(
+            "test-prompt", with_metadata=True, fallback="Default system prompt."
+        )
+
+        self.assertEqual(
+            result,
+            PromptResult(
+                source="code_fallback",
+                prompt="Default system prompt.",
+                name=None,
+                version=None,
+            ),
+        )
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_throw_when_no_cache_and_no_fallback(self, mock_get_session):
+        """Should throw when no cache and no fallback."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        with self.assertRaises(Exception) as context:
+            prompts.get("test-prompt", with_metadata=True)
+
+        self.assertIn("Network error", str(context.exception))
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_return_correct_version_metadata_for_versioned_fetch(
+        self, mock_get_session
+    ):
+        """Should return correct version metadata for versioned fetches."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(
+            json_data={
+                **self.mock_prompt_response,
+                "version": 3,
+                "prompt": "Version 3 prompt",
+            }
+        )
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        result = prompts.get("test-prompt", with_metadata=True, version=3)
+
+        self.assertEqual(
+            result,
+            PromptResult(
+                source="api",
+                prompt="Version 3 prompt",
+                name="test-prompt",
+                version=3,
+            ),
+        )
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_share_cache_with_non_metadata_calls(self, mock_get_session):
+        """Should share cache between with_metadata=True and with_metadata=False."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        # First call without metadata populates cache
+        string_result = prompts.get("test-prompt", with_metadata=False)
+        self.assertEqual(string_result, self.mock_prompt_response["prompt"])
+
+        # Second call with metadata should use cache
+        metadata_result = prompts.get("test-prompt", with_metadata=True)
+        self.assertEqual(
+            metadata_result,
+            PromptResult(
+                source="cache",
+                prompt=self.mock_prompt_response["prompt"],
+                name="test-prompt",
+                version=1,
+            ),
+        )
+        self.assertEqual(mock_get.call_count, 1)
+
+
+class TestPromptsGetDeprecationWarning(TestPrompts):
+    """Tests for the deprecation warning when with_metadata is not passed."""
+
+    @parameterized.expand(
+        [
+            ("not_passed", None, 1),
+            ("explicit_false", False, 0),
+            ("explicit_true", True, 0),
+        ]
+    )
+    @patch("posthog.ai.prompts._get_session")
+    def test_deprecation_warning_count(
+        self, _scenario, with_metadata, expected_warnings, mock_get_session
+    ):
+        """Should emit the correct number of deprecation warnings."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        kwargs = {}
+        if with_metadata is not None:
+            kwargs["with_metadata"] = with_metadata
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            prompts.get("test-prompt", **kwargs)
+            # Second call — should never warn again
+            prompts.get("test-prompt", **kwargs)
+
+        deprecation_warnings = [
+            w for w in caught if issubclass(w.category, DeprecationWarning)
+        ]
+        self.assertEqual(len(deprecation_warnings), expected_warnings)
+
+
+class TestPromptsApiResponseValidation(TestPrompts):
+    """Tests for strengthened API response validation."""
+
+    @parameterized.expand(
+        [
+            ("missing_name", {"prompt": "hello", "version": 1}),
+            ("missing_version", {"prompt": "hello", "name": "test"}),
+            ("name_not_string", {"prompt": "hello", "name": 123, "version": 1}),
+            ("version_not_int", {"prompt": "hello", "name": "test", "version": "1"}),
+        ]
+    )
+    @patch("posthog.ai.prompts._get_session")
+    def test_reject_api_response_with_invalid_metadata(
+        self, _scenario, json_data, mock_get_session
+    ):
+        """Should reject API responses with missing or invalid name/version."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=json_data)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        with self.assertRaises(Exception) as context:
+            prompts.get("test-prompt", with_metadata=True)
+
+        self.assertIn("Invalid response format", str(context.exception))
 
 
 class TestPromptsCompile(TestPrompts):

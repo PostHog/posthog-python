@@ -1,5 +1,23 @@
 # posthog
 
+## 7.12.0 — 2026-04-16
+
+### Minor changes
+
+- [220d9e8](https://github.com/posthog/posthog-python/commit/220d9e88877dee7eabd34fed68c2a4a65e6526a7) `Prompts.get()` now accepts `with_metadata=True` and returns a `PromptResult` dataclass containing `source` (`api`, `cache`, `stale_cache`, or `code_fallback`), `name`, and `version` alongside the prompt text. The previous plain-string return is deprecated and will be removed in a future major version. — Thanks @marandaneto!
+
+## 7.11.2 — 2026-04-15
+
+### Patch changes
+
+- [f5a95b4](https://github.com/posthog/posthog-python/commit/f5a95b454ae7fd8bf46381b1c624df827903260d) feat(flags): switch local evaluation polling from `/api/feature_flag/local_evaluation` to `/flags/definitions` — Thanks @patricio-posthog!
+
+## 7.11.1 — 2026-04-14
+
+### Patch changes
+
+- [c3f097f](https://github.com/posthog/posthog-python/commit/c3f097f72f5ef6c1ecd25ade7d3ba08e57765eaf) feat: Add os_distro information to events — Thanks @parinporecha!
+
 ## 7.11.0 — 2026-04-10
 
 ### Minor changes

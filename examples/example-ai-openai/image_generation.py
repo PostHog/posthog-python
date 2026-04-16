@@ -1,17 +1,35 @@
-"""OpenAI image generation, tracked by PostHog."""
+"""OpenAI image generation, tracked via OpenTelemetry."""
 
 import os
-from posthog import Posthog
-from posthog.ai.openai import OpenAI
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from posthog.ai.otel import PostHogSpanProcessor
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
 
-posthog = Posthog(
-    os.environ["POSTHOG_API_KEY"],
-    host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+resource = Resource(
+    attributes={
+        SERVICE_NAME: "example-openai-app",
+        "posthog.distinct_id": "example-user",
+        "foo": "bar",
+        "conversation_id": "abc-123",
+    }
 )
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], posthog_client=posthog)
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(
+    PostHogSpanProcessor(
+        api_key=os.environ["POSTHOG_API_KEY"],
+        host=os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com"),
+    )
+)
+trace.set_tracer_provider(provider)
 
-# Note: posthog.ai does not wrap images.generate yet,
-# so this call is not automatically tracked.
+OpenAIInstrumentor().instrument()
+
+import openai  # noqa: E402
+
+client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 response = client.images.generate(
     model="gpt-image-1",
     prompt="A hedgehog wearing a PostHog t-shirt, pixel art style",
@@ -20,5 +38,3 @@ response = client.images.generate(
 
 image_base64 = response.data[0].b64_json
 print(f"Generated image: {len(image_base64)} chars of base64 data")
-
-posthog.shutdown()
