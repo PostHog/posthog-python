@@ -3,7 +3,8 @@ updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
       time: "10:00"
       timezone: "UTC"
     groups:
@@ -12,19 +13,13 @@ updates:
           - "openai"
           - "anthropic"
           - "google-genai"
-          - "langchain-core"
-          - "langchain-community"
-          - "langchain-openai"
-          - "langchain-anthropic"
+          - "langchain*"
           - "langgraph"
     allow:
       - dependency-name: "openai"
       - dependency-name: "anthropic"
       - dependency-name: "google-genai"
-      - dependency-name: "langchain-core"
-      - dependency-name: "langchain-community"
-      - dependency-name: "langchain-openai"
-      - dependency-name: "langchain-anthropic"
+      - dependency-name: "langchain*"
       - dependency-name: "langgraph"
     open-pull-requests-limit: 1
     reviewers:
