@@ -9,44 +9,9 @@ This is a simple Flask app that:
 2. Exposes a REST API for the test harness to control
 3. Tracks internal SDK state for test assertions
 
-## Running Tests
+## Contributing
 
-Tests run automatically in CI via GitHub Actions. See the test harness repo for details.
-
-### Locally with Docker Compose
-
-```bash
-# From the posthog-python/sdk_compliance_adapter directory
-docker-compose up --build --abort-on-container-exit
-```
-
-This will:
-1. Build the Python SDK adapter
-2. Pull the test harness image
-3. Run all compliance tests
-4. Show results
-
-### Manually with Docker
-
-```bash
-# Create network
-docker network create test-network
-
-# Build and run adapter
-docker build -f sdk_compliance_adapter/Dockerfile -t posthog-python-adapter .
-docker run -d --name sdk-adapter --network test-network -p 8080:8080 posthog-python-adapter
-
-# Run test harness
-docker run --rm \
-  --name test-harness \
-  --network test-network \
-  ghcr.io/posthog/sdk-test-harness:latest \
-  run --adapter-url http://sdk-adapter:8080 --mock-url http://test-harness:8081
-
-# Cleanup
-docker stop sdk-adapter && docker rm sdk-adapter
-docker network rm test-network
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local build and compliance test instructions.
 
 ## Adapter Implementation
 

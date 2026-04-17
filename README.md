@@ -20,52 +20,6 @@ Please see the [Python integration docs](https://posthog.com/docs/integrations/p
 | 7.0.0 - 7.0.1 | 3.10, 3.11, 3.12, 3.13       | Dropped Python 3.9 support |
 | 4.0.1 - 6.x   | 3.9, 3.10, 3.11, 3.12, 3.13  | Python 3.9+ required       |
 
-## Development
+## Contributing
 
-This repo requires all commits to be signed. To configure commit signing, see the [PostHog handbook](https://posthog.com/handbook/engineering/security#commit-signing).
-
-### Testing Locally
-
-We recommend using [uv](https://docs.astral.sh/uv/). It's super fast.
-
-1. Run `uv venv env` (creates virtual environment called "env")
-   - or `python3 -m venv env`
-2. Run `source env/bin/activate` (activates the virtual environment)
-3. Run `uv sync --extra dev --extra test` (installs the package in develop mode, along with test dependencies)
-   - or `pip install -e ".[dev,test]"`
-4. you have to run `pre-commit install` to have auto linting pre commit
-5. Run `make test`
-6. To run a specific test do `pytest -k test_no_api_key`
-
-## PostHog recommends `uv` so...
-
-```bash
-uv python install 3.12
-uv python pin 3.12
-uv venv
-source env/bin/activate
-uv sync --extra dev --extra test
-pre-commit install
-make test
-```
-
-### Running Locally
-
-Assuming you have a [local version of PostHog](https://posthog.com/docs/developing-locally) running, you can run `python3 example.py` to see the library in action.
-
-### Testing changes locally with the PostHog app
-
-You can run `make prep_local`, and it'll create a new folder alongside the SDK repo one called `posthog-python-local`, which you can then import into the posthog project by changing pyproject.toml to look like this:
-
-```toml
-dependencies = [
-    ...
-    "posthoganalytics" #NOTE: no version number
-    ...
-]
-...
-[tools.uv.sources]
-posthoganalytics = { path = "../posthog-python-local" }
-```
-
-This'll let you build and test SDK changes fully locally, incorporating them into your local posthog app stack. It mainly takes care of the `posthog -> posthoganalytics` module renaming. You'll need to re-run `make prep_local` each time you make a change, and re-run `uv sync --active` in the posthog app project.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, test, and development workflow instructions.
