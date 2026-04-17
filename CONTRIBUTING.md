@@ -31,7 +31,7 @@ We recommend using [uv](https://docs.astral.sh/uv/).
 uv python install 3.12
 uv python pin 3.12
 uv venv
-source env/bin/activate
+source .venv/bin/activate
 uv sync --extra dev --extra test
 pre-commit install
 make test
