@@ -323,12 +323,11 @@ def match_feature_flag_properties(
             # Per-condition aggregation overrides only when the condition explicitly
             # sets its own aggregation_group_type_index (mixed targeting).
             # When absent, use the properties/bucketing already resolved by the caller.
-            has_condition_aggregation = "aggregation_group_type_index" in condition
             condition_aggregation = condition.get(
                 "aggregation_group_type_index", flag_aggregation
             )
 
-            if has_condition_aggregation and condition_aggregation != flag_aggregation:
+            if condition_aggregation != flag_aggregation:
                 if condition_aggregation is not None:
                     group_name = group_type_mapping.get(str(condition_aggregation))
                     if not group_name or group_name not in groups:
