@@ -304,7 +304,7 @@ class Prompts:
             )
 
         except Exception as error:
-            self._maybe_capture_error(error)
+            self._maybe_capture_error(error, name=name, version=version)
 
             prompt_reference = _prompt_reference(name, version)
             # Return stale cache (with warning)
@@ -373,14 +373,24 @@ class Prompts:
         for key in keys_to_clear:
             self._cache.pop(key, None)
 
-    def _maybe_capture_error(self, error: Exception) -> None:
+    def _maybe_capture_error(
+        self, error: Exception, *, name: str, version: Optional[int]
+    ) -> None:
         """Report a prompt fetch error to PostHog error tracking if enabled."""
         if not self._capture_errors or self._client is None:
             return
         if not hasattr(self._client, "capture_exception"):
             return
         try:
-            self._client.capture_exception(error)
+            self._client.capture_exception(
+                error,
+                properties={
+                    "$lib_feature": "ai.prompts",
+                    "prompt_name": name,
+                    "prompt_version": version,
+                    "posthog_host": self._host,
+                },
+            )
         except Exception:
             log.debug("[PostHog Prompts] Failed to capture exception to error tracking")
 

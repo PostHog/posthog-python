@@ -862,12 +862,18 @@ class TestPromptsCaptureErrors(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog, capture_errors=True)
 
-        result = prompts.get("test-prompt", fallback="fallback prompt")
+        result = prompts.get("test-prompt", fallback="fallback prompt", version=3)
 
         self.assertEqual(result, "fallback prompt")
         posthog.capture_exception.assert_called_once()
         captured_exc = posthog.capture_exception.call_args[0][0]
         self.assertIn("Network error", str(captured_exc))
+
+        properties = posthog.capture_exception.call_args.kwargs["properties"]
+        self.assertEqual(properties["$lib_feature"], "ai.prompts")
+        self.assertEqual(properties["prompt_name"], "test-prompt")
+        self.assertEqual(properties["prompt_version"], 3)
+        self.assertEqual(properties["posthog_host"], "https://us.posthog.com")
 
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
