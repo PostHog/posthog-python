@@ -25,7 +25,6 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.7,<3.0",
-    "six>=1.5",
     "python-dateutil>=2.2",
     "backoff>=1.10.0",
     "distro>=1.5.0",
@@ -47,11 +46,9 @@ dev = [
     "lxml",
     "mypy",
     "mypy-baseline",
-    "types-mock",
     "types-python-dateutil",
     "types-requests",
     "types-setuptools",
-    "types-six",
     "pre-commit",
     "pydantic>=2.12.0",
     "ruff",
@@ -63,7 +60,6 @@ dev = [
     "tomli_w",
 ]
 test = [
-    "mock>=2.0.0",
     "freezegun==1.5.1",
     "coverage",
     "pytest",
