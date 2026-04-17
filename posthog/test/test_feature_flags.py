@@ -3862,7 +3862,6 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     def test_mixed_targeting_only_group_conditions_no_groups_passed(self, patch_flags):
-        patch_flags.return_value = {"featureFlags": {"mixed-flag": "from-api"}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -3889,6 +3888,7 @@ class TestLocalEvaluation(unittest.TestCase):
             "user-123",
         )
         self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
     def test_mixed_targeting_rollout_uses_correct_bucketing(self, patch_flags):
