@@ -3720,14 +3720,25 @@ class TestLocalEvaluation(unittest.TestCase):
                         {
                             "aggregation_group_type_index": 0,
                             "properties": [
-                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                                {
+                                    "key": "plan",
+                                    "value": "enterprise",
+                                    "operator": "exact",
+                                    "type": "group",
+                                    "group_type_index": 0,
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
                         {
                             "aggregation_group_type_index": None,
                             "properties": [
-                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                                {
+                                    "key": "email",
+                                    "value": "test@example.com",
+                                    "operator": "exact",
+                                    "type": "person",
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
@@ -3759,14 +3770,25 @@ class TestLocalEvaluation(unittest.TestCase):
                         {
                             "aggregation_group_type_index": 0,
                             "properties": [
-                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                                {
+                                    "key": "plan",
+                                    "value": "enterprise",
+                                    "operator": "exact",
+                                    "type": "group",
+                                    "group_type_index": 0,
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
                         {
                             "aggregation_group_type_index": None,
                             "properties": [
-                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                                {
+                                    "key": "email",
+                                    "value": "test@example.com",
+                                    "operator": "exact",
+                                    "type": "person",
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
@@ -3799,14 +3821,25 @@ class TestLocalEvaluation(unittest.TestCase):
                         {
                             "aggregation_group_type_index": 0,
                             "properties": [
-                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                                {
+                                    "key": "plan",
+                                    "value": "enterprise",
+                                    "operator": "exact",
+                                    "type": "group",
+                                    "group_type_index": 0,
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
                         {
                             "aggregation_group_type_index": None,
                             "properties": [
-                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                                {
+                                    "key": "email",
+                                    "value": "test@example.com",
+                                    "operator": "exact",
+                                    "type": "person",
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
@@ -3840,14 +3873,25 @@ class TestLocalEvaluation(unittest.TestCase):
                         {
                             "aggregation_group_type_index": 0,
                             "properties": [
-                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                                {
+                                    "key": "plan",
+                                    "value": "enterprise",
+                                    "operator": "exact",
+                                    "type": "group",
+                                    "group_type_index": 0,
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
                         {
                             "aggregation_group_type_index": None,
                             "properties": [
-                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                                {
+                                    "key": "email",
+                                    "value": "test@example.com",
+                                    "operator": "exact",
+                                    "type": "person",
+                                }
                             ],
                             "rollout_percentage": 100,
                         },
