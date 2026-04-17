@@ -3708,6 +3708,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     def test_mixed_targeting_person_condition_matches(self, patch_flags):
+        # No groups passed — group condition skips, person condition matches
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
@@ -3857,57 +3858,6 @@ class TestLocalEvaluation(unittest.TestCase):
             group_properties={"company": {"plan": "free"}},
         )
         self.assertFalse(result)
-        self.assertEqual(patch_flags.call_count, 0)
-
-    @mock.patch("posthog.client.flags")
-    def test_mixed_targeting_group_without_groups_skips_to_person(self, patch_flags):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
-        client.feature_flags = [
-            {
-                "id": 1,
-                "key": "mixed-flag",
-                "active": True,
-                "filters": {
-                    "aggregation_group_type_index": None,
-                    "groups": [
-                        {
-                            "aggregation_group_type_index": 0,
-                            "properties": [
-                                {
-                                    "key": "plan",
-                                    "value": "enterprise",
-                                    "operator": "exact",
-                                    "type": "group",
-                                    "group_type_index": 0,
-                                }
-                            ],
-                            "rollout_percentage": 100,
-                        },
-                        {
-                            "aggregation_group_type_index": None,
-                            "properties": [
-                                {
-                                    "key": "email",
-                                    "value": "test@example.com",
-                                    "operator": "exact",
-                                    "type": "person",
-                                }
-                            ],
-                            "rollout_percentage": 100,
-                        },
-                    ],
-                },
-            }
-        ]
-        client.group_type_mapping = {"0": "company"}
-
-        # No groups passed — group condition skips, person condition matches
-        result = client.get_feature_flag(
-            "mixed-flag",
-            "user-123",
-            person_properties={"email": "test@example.com"},
-        )
-        self.assertTrue(result)
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
