@@ -3,8 +3,7 @@ import unittest
 from datetime import datetime
 from uuid import uuid4
 
-import mock
-import six
+from unittest import mock
 from parameterized import parameterized
 
 from posthog.client import Client
@@ -1728,7 +1727,7 @@ class TestClient(unittest.TestCase):
         self.assertIsNone(msg_uuid)
 
     def test_unicode(self):
-        Client(six.u("unicode_key"))
+        Client("unicode_key")
 
     def test_numeric_distinct_id(self):
         self.client.capture("python event", distinct_id=1234)

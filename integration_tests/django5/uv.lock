@@ -254,7 +254,6 @@ dependencies = [
     { name = "distro" },
     { name = "python-dateutil" },
     { name = "requests" },
-    { name = "six" },
     { name = "typing-extensions" },
 ]
 
@@ -275,7 +274,6 @@ requires-dist = [
     { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=0.3.22" },
     { name = "langgraph", marker = "extra == 'test'", specifier = ">=0.4.8" },
     { name = "lxml", marker = "extra == 'dev'" },
-    { name = "mock", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
     { name = "openai", marker = "extra == 'test'" },
@@ -291,15 +289,12 @@ requires-dist = [
     { name = "requests", specifier = ">=2.7,<3.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "setuptools", marker = "extra == 'dev'" },
-    { name = "six", specifier = ">=1.5" },
     { name = "tomli", marker = "extra == 'dev'" },
     { name = "tomli-w", marker = "extra == 'dev'" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "types-mock", marker = "extra == 'dev'" },
     { name = "types-python-dateutil", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "types-setuptools", marker = "extra == 'dev'" },
-    { name = "types-six", marker = "extra == 'dev'" },
     { name = "typing-extensions", specifier = ">=4.2.0" },
     { name = "wheel", marker = "extra == 'dev'" },
 ]

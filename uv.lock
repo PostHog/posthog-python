@@ -1418,15 +1418,6 @@ wheels = [
 ]
 
 [[package]]
-name = "mock"
-version = "5.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/07/8c/14c2ae915e5f9dca5a22edd68b35be94400719ccfa068a03e0fb63d0f6f6/mock-5.2.0.tar.gz", hash = "sha256:4e460e818629b4b173f32d08bf30d3af8123afbb8e04bb5707a1fd4799e503f0", size = 92796, upload-time = "2025-03-03T12:31:42.911Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/d9/617e6af809bf3a1d468e0d58c3997b1dc219a9a9202e650d30c2fc85d481/mock-5.2.0-py3-none-any.whl", hash = "sha256:7ba87f72ca0e915175596069dbbcc7c75af7b5e9b9bc107ad6349ede0819982f", size = 31617, upload-time = "2025-03-03T12:31:41.518Z" },
-]
-
-[[package]]
 name = "more-itertools"
 version = "10.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2053,7 +2044,6 @@ dependencies = [
     { name = "distro" },
     { name = "python-dateutil" },
     { name = "requests" },
-    { name = "six" },
     { name = "typing-extensions" },
 ]
 
@@ -2071,11 +2061,9 @@ dev = [
     { name = "tomli" },
     { name = "tomli-w" },
     { name = "twine" },
-    { name = "types-mock" },
     { name = "types-python-dateutil" },
     { name = "types-requests" },
     { name = "types-setuptools" },
-    { name = "types-six" },
     { name = "wheel" },
 ]
 langchain = [
@@ -2098,7 +2086,6 @@ test = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint" },
-    { name = "mock" },
     { name = "openai" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
@@ -2134,7 +2121,6 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=3.0.1" },
     { name = "lxml", marker = "extra == 'dev'" },
-    { name = "mock", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
     { name = "openai", marker = "extra == 'test'", specifier = ">=2.0" },
@@ -2154,16 +2140,13 @@ requires-dist = [
     { name = "requests", specifier = ">=2.7,<3.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "setuptools", marker = "extra == 'dev'" },
-    { name = "six", specifier = ">=1.5" },
     { name = "tiktoken", marker = "extra == 'test'", specifier = ">=0.12.0" },
     { name = "tomli", marker = "extra == 'dev'" },
     { name = "tomli-w", marker = "extra == 'dev'" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "types-mock", marker = "extra == 'dev'" },
     { name = "types-python-dateutil", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "types-setuptools", marker = "extra == 'dev'" },
-    { name = "types-six", marker = "extra == 'dev'" },
     { name = "typing-extensions", specifier = ">=4.2.0" },
     { name = "wheel", marker = "extra == 'dev'" },
 ]
@@ -3219,15 +3202,6 @@ wheels = [
 ]
 
 [[package]]
-name = "types-mock"
-version = "5.2.0.20250516"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/17/20/7b9e8068bc2db2432389e40683f5d04c1901f72c150332f6749aa37bc5ef/types_mock-5.2.0.20250516.tar.gz", hash = "sha256:aab7d3d9ad3814f2f8da12cc8e42d9be7d38200c5f214e3c0278c38fa01299d7", size = 11220, upload-time = "2025-05-16T03:08:11.623Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/80/9e4a5f6dddb4ee046884e06ce6c80bc2266604e3452154a0e383a6f49414/types_mock-5.2.0.20250516-py3-none-any.whl", hash = "sha256:e50fbd0c3be8bcea25c30a47fac0b7a6ca22f630ef2f53416a73b319b39dfde1", size = 10516, upload-time = "2025-05-16T03:08:10.798Z" },
-]
-
-[[package]]
 name = "types-python-dateutil"
 version = "2.9.0.20250516"
 source = { registry = "https://pypi.org/simple" }
@@ -3264,15 +3238,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/79/66/1b276526aad4696a9519919e637801f2c103419d2c248a6feb2729e034d1/types_setuptools-80.9.0.20250529.tar.gz", hash = "sha256:79e088ba0cba2186c8d6499cbd3e143abb142d28a44b042c28d3148b1e353c91", size = 41337, upload-time = "2025-05-29T03:07:34.487Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/d8/83790d67ec771bf029a45ff1bd1aedbb738d8aa58c09dd0cc3033eea0e69/types_setuptools-80.9.0.20250529-py3-none-any.whl", hash = "sha256:00dfcedd73e333a430e10db096e4d46af93faf9314f832f13b6bbe3d6757e95f", size = 63263, upload-time = "2025-05-29T03:07:33.064Z" },
-]
-
-[[package]]
-name = "types-six"
-version = "1.17.0.20250515"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/cc/78/344047eeced8d230140aa3d9503aa969acb61c6095e7308bbc1ff1de3865/types_six-1.17.0.20250515.tar.gz", hash = "sha256:f4f7f0398cb79304e88397336e642b15e96fbeacf5b96d7625da366b069d2d18", size = 15598, upload-time = "2025-05-15T03:04:19.806Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/85/5ee1c8e35b33b9c8ea1816d5a4e119c27f8bb1539b73b1f636f07aa64750/types_six-1.17.0.20250515-py3-none-any.whl", hash = "sha256:adfaa9568caf35e03d80ffa4ed765c33b282579c869b40bf4b6009c7d8db3fb1", size = 19987, upload-time = "2025-05-15T03:04:18.556Z" },
 ]
 
 [[package]]
