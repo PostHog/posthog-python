@@ -3707,6 +3707,233 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
+    def test_mixed_targeting_person_condition_matches(self, patch_flags):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": None,
+                    "groups": [
+                        {
+                            "aggregation_group_type_index": 0,
+                            "properties": [
+                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "aggregation_group_type_index": None,
+                            "properties": [
+                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "user-123",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_mixed_targeting_group_condition_matches(self, patch_flags):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": None,
+                    "groups": [
+                        {
+                            "aggregation_group_type_index": 0,
+                            "properties": [
+                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "aggregation_group_type_index": None,
+                            "properties": [
+                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "user-123",
+            groups={"company": "acme"},
+            group_properties={"company": {"plan": "enterprise"}},
+        )
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_mixed_targeting_no_match_returns_false(self, patch_flags):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": None,
+                    "groups": [
+                        {
+                            "aggregation_group_type_index": 0,
+                            "properties": [
+                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "aggregation_group_type_index": None,
+                            "properties": [
+                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "user-123",
+            person_properties={"email": "wrong@example.com"},
+            groups={"company": "acme"},
+            group_properties={"company": {"plan": "free"}},
+        )
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_mixed_targeting_group_without_groups_skips_to_person(self, patch_flags):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": None,
+                    "groups": [
+                        {
+                            "aggregation_group_type_index": 0,
+                            "properties": [
+                                {"key": "plan", "value": "enterprise", "operator": "exact", "type": "group", "group_type_index": 0}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "aggregation_group_type_index": None,
+                            "properties": [
+                                {"key": "email", "value": "test@example.com", "operator": "exact", "type": "person"}
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        # No groups passed — group condition skips, person condition matches
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "user-123",
+            person_properties={"email": "test@example.com"},
+        )
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_mixed_targeting_only_group_conditions_no_groups_passed(self, patch_flags):
+        patch_flags.return_value = {"featureFlags": {"mixed-flag": "from-api"}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": None,
+                    "groups": [
+                        {
+                            "aggregation_group_type_index": 0,
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        # No groups passed, no person condition — all conditions skip, returns False
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "user-123",
+        )
+        self.assertFalse(result)
+
+    @mock.patch("posthog.client.flags")
+    def test_mixed_targeting_rollout_uses_correct_bucketing(self, patch_flags):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "mixed-flag",
+                "active": True,
+                "filters": {
+                    "aggregation_group_type_index": None,
+                    "groups": [
+                        {
+                            "aggregation_group_type_index": 0,
+                            "properties": [],
+                            "rollout_percentage": 100,
+                        },
+                        {
+                            "aggregation_group_type_index": None,
+                            "properties": [],
+                            "rollout_percentage": 0,
+                        },
+                    ],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        # Group condition at 100% matches, person condition at 0% doesn't matter
+        result = client.get_feature_flag(
+            "mixed-flag",
+            "user-123",
+            groups={"company": "acme"},
+            group_properties={"company": {}},
+        )
+        self.assertTrue(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
     def test_get_all_flags_with_device_id_bucketing(self, patch_flags):
         """
         get_all_flags_and_payloads should properly handle flags with device_id bucketing.
