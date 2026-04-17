@@ -6,35 +6,26 @@ Thanks for your interest in improving the PostHog Python SDK.
 
 This repo requires all commits to be signed. To configure commit signing, see the [PostHog handbook](https://posthog.com/handbook/engineering/security#commit-signing).
 
-## Testing locally
+## Setup
 
 We recommend using [uv](https://docs.astral.sh/uv/).
 
-1. Create a virtual environment:
-   - `uv venv env`
-   - or `python3 -m venv env`
-2. Activate it:
-   - `source env/bin/activate`
-3. Install the package in editable mode with development and test dependencies:
-   - `uv sync --extra dev --extra test`
-   - or `pip install -e ".[dev,test]"`
-4. Install pre-commit hooks:
-   - `pre-commit install`
-5. Run the test suite:
-   - `make test`
-6. Run a specific test if needed:
-   - `pytest -k test_no_api_key`
-
-## Recommended `uv` workflow
-
 ```bash
-uv python install 3.12
-uv python pin 3.12
 uv venv
 source .venv/bin/activate
 uv sync --extra dev --extra test
-pre-commit install
-make test
+```
+
+## CI-aligned checks
+
+Run the same core checks CI uses before opening a PR:
+
+```bash
+ruff format --check .
+ruff check .
+mypy --no-site-packages --config-file mypy.ini . | mypy-baseline filter
+pytest --verbose --timeout=30
+python -W error -c "import posthog"
 ```
 
 ## Running locally
