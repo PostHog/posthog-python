@@ -94,6 +94,9 @@ class Prompts:
             host='https://us.posthog.com',
         )
 
+        # With error tracking: prompt fetch failures are reported to PostHog
+        prompts = Prompts(posthog, capture_errors=True)
+
         # Fetch with caching and fallback
         template = prompts.get('support-system-prompt', fallback='You are a helpful assistant.')
 
@@ -116,6 +119,7 @@ class Prompts:
         project_api_key: Optional[str] = None,
         host: Optional[str] = None,
         default_cache_ttl_seconds: Optional[int] = None,
+        capture_errors: bool = False,
     ):
         """
         Initialize Prompts.
@@ -126,12 +130,16 @@ class Prompts:
             project_api_key: Direct project API key (optional if posthog provided)
             host: PostHog host (defaults to app endpoint)
             default_cache_ttl_seconds: Default cache TTL (defaults to 300)
+            capture_errors: If True and a PostHog client is provided, prompt fetch
+                failures are reported to PostHog error tracking via capture_exception().
         """
         self._default_cache_ttl_seconds = (
             default_cache_ttl_seconds or DEFAULT_CACHE_TTL_SECONDS
         )
         self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
         self._has_warned_deprecation = False
+        self._client = posthog
+        self._capture_errors = capture_errors
 
         if posthog is not None:
             self._personal_api_key = getattr(posthog, "personal_api_key", None) or ""
@@ -296,6 +304,8 @@ class Prompts:
             )
 
         except Exception as error:
+            self._maybe_capture_error(error)
+
             prompt_reference = _prompt_reference(name, version)
             # Return stale cache (with warning)
             if cached is not None:
@@ -362,6 +372,17 @@ class Prompts:
         keys_to_clear = [key for key in self._cache if key[0] == name]
         for key in keys_to_clear:
             self._cache.pop(key, None)
+
+    def _maybe_capture_error(self, error: Exception) -> None:
+        """Report a prompt fetch error to PostHog error tracking if enabled."""
+        if not self._capture_errors or self._client is None:
+            return
+        if not hasattr(self._client, "capture_exception"):
+            return
+        try:
+            self._client.capture_exception(error)
+        except Exception:
+            log.debug("[PostHog Prompts] Failed to capture exception to error tracking")
 
     def _fetch_prompt_from_api(
         self, name: str, version: Optional[int] = None
