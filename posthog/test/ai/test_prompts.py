@@ -935,7 +935,11 @@ class TestPromptsCaptureErrors(TestPrompts):
         mock_get = mock_get_session.return_value.get
         mock_get.side_effect = Exception("Network error")
 
-        prompts = Prompts(personal_api_key="phx_test_key", capture_errors=True)
+        prompts = Prompts(
+            personal_api_key="phx_test_key",
+            project_api_key="phc_test_key",
+            capture_errors=True,
+        )
 
         result = prompts.get("test-prompt", fallback="fallback prompt")
 
