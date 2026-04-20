@@ -165,9 +165,17 @@ DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
 
 
+def normalize_host(host: Optional[str]) -> str:
+    """Normalize a configured host, defaulting blank values to DEFAULT_HOST."""
+    normalized_host = (host or "").strip()
+    if not normalized_host:
+        return DEFAULT_HOST
+    return normalized_host
+
+
 def determine_server_host(host: Optional[str]) -> str:
     """Determines the server host to use."""
-    host_or_default = host or DEFAULT_HOST
+    host_or_default = normalize_host(host)
     trimmed_host = remove_trailing_slash(host_or_default)
     if trimmed_host in ("https://app.posthog.com", "https://us.posthog.com"):
         return US_INGESTION_ENDPOINT
@@ -190,7 +198,8 @@ def post(
     log = logging.getLogger("posthog")
     body = kwargs
     body["sentAt"] = datetime.now(tz=tzutc()).isoformat()
-    url = remove_trailing_slash(host or DEFAULT_HOST) + path
+    trimmed_host = remove_trailing_slash(normalize_host(host))
+    url = trimmed_host + path
     body["api_key"] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
@@ -330,7 +339,8 @@ def get(
     - not_modified=False and data=response if server returns 200
     """
     log = logging.getLogger("posthog")
-    full_url = remove_trailing_slash(host or DEFAULT_HOST) + url
+    trimmed_host = remove_trailing_slash(normalize_host(host))
+    full_url = trimmed_host + url
     headers = {"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}
 
     if etag:
