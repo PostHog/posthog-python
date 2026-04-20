@@ -1297,12 +1297,19 @@ class Client(object):
 
     def _fetch_feature_flags_from_api(self):
         """Fetch feature flags from the PostHog API."""
+        personal_api_key = self.personal_api_key
+        if personal_api_key is None:
+            self.log.warning(
+                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+            )
+            return
+
         try:
             # Store old flags to detect changes
             old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
 
             response = get(
-                self.personal_api_key,
+                personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
