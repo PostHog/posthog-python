@@ -280,7 +280,9 @@ class Client(object):
 
         # personal_api_key: This should be a generated Personal API Key, private
         self.personal_api_key = (
-            personal_api_key.strip() if isinstance(personal_api_key, str) else personal_api_key
+            personal_api_key.strip()
+            if isinstance(personal_api_key, str)
+            else personal_api_key
         ) or None
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
