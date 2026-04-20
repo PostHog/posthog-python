@@ -185,7 +185,7 @@ jobs:
           COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
         run: |
           gh api "repos/${{ github.repository }}/git/refs" \
-            -f "ref=refs/tags/v${NEW_VERSION}" \
+            -f "ref=refs/tags/${NEW_VERSION}" \
             -f "sha=${COMMIT_HASH}"
 
       - name: Create GitHub Release
@@ -193,7 +193,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.releaser.outputs.token }}
           NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
-        run: gh release create "v$NEW_VERSION" --generate-notes
+        run: gh release create "$NEW_VERSION" --generate-notes
 
       - name: Dispatch generate-references
         if: steps.commit-release.outputs.commit-hash != ''
@@ -213,7 +213,7 @@ jobs:
               "commitSha": "${{ github.sha }}",
               "jobStatus": "${{ job.status }}",
               "ref": "${{ github.ref }}",
-              "version": "v${{ steps.sampo-release.outputs.new_version }}"
+              "version": "${{ steps.sampo-release.outputs.new_version }}"
             }
 
       - name: Notify Slack - Failed
@@ -223,7 +223,7 @@ jobs:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
           thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to release `posthog-python@v${{ steps.sampo-release.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          message: "❌ Failed to release `posthog-python@${{ steps.sampo-release.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
           emoji_reaction: "x"
 
   notify-released:
