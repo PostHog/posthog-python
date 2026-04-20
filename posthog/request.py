@@ -198,7 +198,8 @@ def post(
     log = logging.getLogger("posthog")
     body = kwargs
     body["sentAt"] = datetime.now(tz=tzutc()).isoformat()
-    url = remove_trailing_slash(normalize_host(host)) + path
+    trimmed_host = remove_trailing_slash(normalize_host(host))
+    url = trimmed_host + path
     body["api_key"] = api_key
     data = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
@@ -338,7 +339,8 @@ def get(
     - not_modified=False and data=response if server returns 200
     """
     log = logging.getLogger("posthog")
-    full_url = remove_trailing_slash(normalize_host(host)) + url
+    trimmed_host = remove_trailing_slash(normalize_host(host))
+    full_url = trimmed_host + url
     headers = {"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}
 
     if etag:
