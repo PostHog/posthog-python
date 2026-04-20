@@ -45,7 +45,6 @@ from posthog.flag_definition_cache import (
 )
 from posthog.poller import Poller
 from posthog.request import (
-    DEFAULT_HOST,
     APIError,
     QuotaLimitError,
     RequestsConnectionError,
