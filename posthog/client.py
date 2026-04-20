@@ -54,6 +54,7 @@ from posthog.request import (
     determine_server_host,
     flags,
     get,
+    normalize_host,
     remote_config,
 )
 from posthog.types import (
@@ -221,14 +222,14 @@ class Client(object):
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
-        self.api_key = project_api_key
+        self.api_key = project_api_key.strip()
 
         self.on_error = on_error
         self.debug = debug
         self.send = send
         self.sync_mode = sync_mode
         # Used for session replay URL generation - we don't want the server host here.
-        self.raw_host = host or DEFAULT_HOST
+        self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
@@ -278,7 +279,9 @@ class Client(object):
         self.project_root = project_root
 
         # personal_api_key: This should be a generated Personal API Key, private
-        self.personal_api_key = personal_api_key
+        self.personal_api_key = (
+            personal_api_key.strip() if isinstance(personal_api_key, str) else personal_api_key
+        ) or None
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
             # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
@@ -286,6 +289,11 @@ class Client(object):
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
+
+        if not self.api_key:
+            self.log.error(
+                "api_key is empty after trimming whitespace; check your project API key"
+            )
 
         self._set_before_send(before_send)
 

@@ -41,6 +41,26 @@ class TestClient(unittest.TestCase):
     def test_requires_api_key(self):
         self.assertRaises(TypeError, Client)
 
+    def test_trims_whitespace_sensitive_config(self):
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            client = Client(
+                " \n\t ",
+                host=" \nhttps://eu.posthog.com/\t ",
+                personal_api_key=" \n\t ",
+                send=False,
+            )
+
+        self.assertEqual(client.api_key, "")
+        self.assertEqual(client.raw_host, "https://eu.posthog.com/")
+        self.assertEqual(client.host, "https://eu.i.posthog.com")
+        self.assertIsNone(client.personal_api_key)
+        self.assertTrue(
+            any(
+                "api_key is empty after trimming whitespace" in message
+                for message in logs.output
+            )
+        )
+
     def test_empty_flush(self):
         self.client.flush()
 
