@@ -7384,3 +7384,280 @@ class TestConsistency(unittest.TestCase):
         # Should only return flag1 and flag3
         self.assertEqual(result, {"flag1": True, "flag3": True})
         self.assertNotIn("flag2", result)
+
+
+class TestGetFeatureFlagsBulk(unittest.TestCase):
+    """Tests for the bulk `get_feature_flags` method and the `send_feature_flag_events`
+    option on `get_all_flags` / `get_all_flags_and_payloads`.
+    """
+
+    def _remote_flags_response(self):
+        return {
+            "flags": {
+                "flag-one": {
+                    "key": "flag-one",
+                    "enabled": True,
+                    "variant": "variant-a",
+                    "reason": {
+                        "code": "matched",
+                        "condition_index": 0,
+                        "description": "Matched condition set 1",
+                    },
+                    "metadata": {
+                        "id": 11,
+                        "version": 3,
+                        "payload": '{"feature": "a"}',
+                    },
+                },
+                "flag-two": {
+                    "key": "flag-two",
+                    "enabled": False,
+                    "variant": None,
+                    "reason": {
+                        "code": "no_match",
+                        "description": "Did not match any condition",
+                    },
+                    "metadata": {"id": 22, "version": 7},
+                },
+            },
+            "requestId": "req-bulk-1",
+            "evaluatedAt": 1700000000000,
+        }
+
+    @mock.patch("posthog.client.flags")
+    def test_returns_feature_flag_result_per_key_from_single_remote_call(
+        self, patch_flags
+    ):
+        patch_flags.return_value = self._remote_flags_response()
+        client = Client(FAKE_TEST_API_KEY)
+
+        results = client.get_feature_flags(
+            ["flag-one", "flag-two"], "user-1", send_feature_flag_events=False
+        )
+
+        self.assertEqual(results["flag-one"].key, "flag-one")
+        self.assertTrue(results["flag-one"].enabled)
+        self.assertEqual(results["flag-one"].variant, "variant-a")
+        self.assertEqual(results["flag-one"].payload, {"feature": "a"})
+
+        self.assertEqual(results["flag-two"].key, "flag-two")
+        self.assertFalse(results["flag-two"].enabled)
+        self.assertIsNone(results["flag-two"].variant)
+
+        self.assertEqual(patch_flags.call_count, 1)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_emits_feature_flag_called_per_resolved_flag_with_metadata(
+        self, patch_flags, patch_capture
+    ):
+        patch_flags.return_value = self._remote_flags_response()
+        client = Client(FAKE_TEST_API_KEY)
+
+        client.get_feature_flags(["flag-one", "flag-two"], "user-1")
+
+        self.assertEqual(patch_capture.call_count, 2)
+        calls_by_key = {
+            call.kwargs["properties"]["$feature_flag"]: call.kwargs["properties"]
+            for call in patch_capture.call_args_list
+        }
+        self.assertEqual(
+            calls_by_key["flag-one"],
+            {
+                "$feature_flag": "flag-one",
+                "$feature_flag_response": "variant-a",
+                "locally_evaluated": False,
+                "$feature/flag-one": "variant-a",
+                "$feature_flag_reason": "Matched condition set 1",
+                "$feature_flag_id": 11,
+                "$feature_flag_version": 3,
+                "$feature_flag_request_id": "req-bulk-1",
+                "$feature_flag_evaluated_at": 1700000000000,
+                "$feature_flag_payload": {"feature": "a"},
+            },
+        )
+        self.assertEqual(
+            calls_by_key["flag-two"],
+            {
+                "$feature_flag": "flag-two",
+                "$feature_flag_response": False,
+                "locally_evaluated": False,
+                "$feature/flag-two": False,
+                "$feature_flag_reason": "Did not match any condition",
+                "$feature_flag_id": 22,
+                "$feature_flag_version": 7,
+                "$feature_flag_request_id": "req-bulk-1",
+                "$feature_flag_evaluated_at": 1700000000000,
+            },
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_dedupes_events_across_calls(self, patch_flags, patch_capture):
+        patch_flags.return_value = self._remote_flags_response()
+        client = Client(FAKE_TEST_API_KEY)
+
+        client.get_feature_flags(["flag-one"], "user-1")
+        client.get_feature_flags(["flag-one"], "user-1")
+
+        self.assertEqual(patch_capture.call_count, 1)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_no_events_when_send_feature_flag_events_is_false(
+        self, patch_flags, patch_capture
+    ):
+        patch_flags.return_value = self._remote_flags_response()
+        client = Client(FAKE_TEST_API_KEY)
+
+        client.get_feature_flags(["flag-one"], "user-1", send_feature_flag_events=False)
+
+        self.assertEqual(patch_capture.call_count, 0)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_emits_event_for_missing_key_with_none_response(
+        self, patch_flags, patch_capture
+    ):
+        patch_flags.return_value = self._remote_flags_response()
+        client = Client(FAKE_TEST_API_KEY)
+
+        results = client.get_feature_flags(["flag-one", "unknown-flag"], "user-1")
+
+        self.assertIsNone(results["unknown-flag"])
+        self.assertEqual(patch_capture.call_count, 2)
+        calls_by_key = {
+            call.kwargs["properties"]["$feature_flag"]: call.kwargs["properties"]
+            for call in patch_capture.call_args_list
+        }
+        self.assertIn("unknown-flag", calls_by_key)
+        self.assertIsNone(calls_by_key["unknown-flag"]["$feature_flag_response"])
+        self.assertFalse(calls_by_key["unknown-flag"]["locally_evaluated"])
+        self.assertIn(
+            "flag_missing", calls_by_key["unknown-flag"]["$feature_flag_error"]
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_only_evaluate_locally_skips_network_and_still_emits_events(
+        self, patch_flags, patch_capture
+    ):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = []
+        client.feature_flags_by_key = {}
+
+        results = client.get_feature_flags(
+            ["missing-flag"], "user-1", only_evaluate_locally=True
+        )
+
+        self.assertIsNone(results["missing-flag"])
+        self.assertEqual(patch_flags.call_count, 0)
+        self.assertEqual(patch_capture.call_count, 1)
+        props = patch_capture.call_args_list[0].kwargs["properties"]
+        self.assertEqual(props["$feature_flag"], "missing-flag")
+        self.assertIsNone(props["$feature_flag_response"])
+        self.assertFalse(props["locally_evaluated"])
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_hybrid_resolves_some_locally_and_falls_back_for_rest(
+        self, patch_flags, patch_capture
+    ):
+        patch_flags.return_value = {
+            "flags": {
+                "remote-flag": {
+                    "key": "remote-flag",
+                    "enabled": True,
+                    "variant": None,
+                    "reason": {"description": "Matched remotely"},
+                    "metadata": {"id": 99, "version": 1},
+                },
+            },
+            "requestId": "req-hybrid",
+            "evaluatedAt": 1700000000001,
+        }
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 42,
+                "name": "Local Flag",
+                "key": "local-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            }
+        ]
+        client.feature_flags_by_key = {
+            flag["key"]: flag for flag in client.feature_flags
+        }
+
+        results = client.get_feature_flags(["local-flag", "remote-flag"], "user-1")
+
+        self.assertTrue(results["local-flag"].enabled)
+        self.assertTrue(results["remote-flag"].enabled)
+
+        # Exactly one remote /flags call and it requested only the unresolved key.
+        self.assertEqual(patch_flags.call_count, 1)
+        self.assertEqual(
+            patch_flags.call_args.kwargs["flag_keys_to_evaluate"], ["remote-flag"]
+        )
+
+        self.assertEqual(patch_capture.call_count, 2)
+        calls_by_key = {
+            call.kwargs["properties"]["$feature_flag"]: call.kwargs["properties"]
+            for call in patch_capture.call_args_list
+        }
+        self.assertTrue(calls_by_key["local-flag"]["locally_evaluated"])
+        self.assertFalse(calls_by_key["remote-flag"]["locally_evaluated"])
+        self.assertEqual(
+            calls_by_key["remote-flag"]["$feature_flag_request_id"], "req-hybrid"
+        )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_get_all_flags_emits_events_when_send_feature_flag_events_enabled(
+        self, patch_flags, patch_capture
+    ):
+        patch_flags.return_value = {
+            "flags": {
+                "bulk-a": {
+                    "key": "bulk-a",
+                    "enabled": True,
+                    "variant": None,
+                    "reason": {"description": "Matched"},
+                    "metadata": {"id": 1, "version": 1},
+                },
+                "bulk-b": {
+                    "key": "bulk-b",
+                    "enabled": True,
+                    "variant": "b-variant",
+                    "reason": {"description": "Matched"},
+                    "metadata": {"id": 2, "version": 1},
+                },
+            },
+            "requestId": "req-all",
+        }
+        client = Client(FAKE_TEST_API_KEY)
+
+        result = client.get_all_flags("user-1", send_feature_flag_events=True)
+
+        self.assertEqual(result, {"bulk-a": True, "bulk-b": "b-variant"})
+        self.assertEqual(patch_capture.call_count, 2)
+        emitted_keys = sorted(
+            call.kwargs["properties"]["$feature_flag"]
+            for call in patch_capture.call_args_list
+        )
+        self.assertEqual(emitted_keys, ["bulk-a", "bulk-b"])
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_get_all_flags_default_does_not_emit_events(
+        self, patch_flags, patch_capture
+    ):
+        patch_flags.return_value = {
+            "featureFlags": {"bulk-a": True, "bulk-b": "b-variant"},
+        }
+        client = Client(FAKE_TEST_API_KEY)
+
+        client.get_all_flags("user-1")
+
+        self.assertEqual(patch_capture.call_count, 0)

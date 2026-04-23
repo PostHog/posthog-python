@@ -617,6 +617,7 @@ def get_all_flags(
     disable_geoip=None,  # type: Optional[bool]
     device_id=None,  # type: Optional[str]
     flag_keys_to_evaluate=None,  # type: Optional[list[str]]
+    send_feature_flag_events=False,  # type: bool
 ) -> Optional[dict[str, FeatureFlag]]:
     """
     Get all flags for a given user.
@@ -629,6 +630,8 @@ def get_all_flags(
         only_evaluate_locally: Whether to evaluate only locally
         disable_geoip: Whether to disable GeoIP lookup
         flag_keys_to_evaluate: Optional list of flag keys to evaluate (evaluates all if None)
+        send_feature_flag_events: If True, emit a `$feature_flag_called` event for each
+            resolved flag. Defaults to False to preserve historical behavior.
 
     Details:
         Flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
@@ -652,6 +655,7 @@ def get_all_flags(
         disable_geoip=disable_geoip,
         device_id=device_id,
         flag_keys_to_evaluate=flag_keys_to_evaluate,
+        send_feature_flag_events=send_feature_flag_events,
     )
 
 
@@ -756,6 +760,7 @@ def get_all_flags_and_payloads(
     disable_geoip=None,  # type: Optional[bool]
     device_id=None,  # type: Optional[str]
     flag_keys_to_evaluate=None,  # type: Optional[list[str]]
+    send_feature_flag_events=False,  # type: bool
 ) -> FlagsAndPayloads:
     return _proxy(
         "get_all_flags_and_payloads",
@@ -767,6 +772,49 @@ def get_all_flags_and_payloads(
         disable_geoip=disable_geoip,
         device_id=device_id,
         flag_keys_to_evaluate=flag_keys_to_evaluate,
+        send_feature_flag_events=send_feature_flag_events,
+    )
+
+
+def get_feature_flags(
+    keys,  # type: list[str]
+    distinct_id,
+    groups=None,  # type: Optional[dict]
+    person_properties=None,  # type: Optional[dict]
+    group_properties=None,  # type: Optional[dict]
+    only_evaluate_locally=False,
+    send_feature_flag_events=True,
+    disable_geoip=None,  # type: Optional[bool]
+    device_id=None,  # type: Optional[str]
+):
+    # type: (...) -> dict[str, Optional[FeatureFlagResult]]
+    """
+    Evaluate a subset of feature flags in one bulk pass and return a FeatureFlagResult per requested key.
+
+    Evaluates each key locally first (when local evaluation is enabled) and then makes at most one remote
+    `/flags` request for any keys that could not be resolved locally. Emits `$feature_flag_called` events
+    per resolved flag (deduped across calls via the same cache as `get_feature_flag`).
+
+    Example:
+    ```python
+    from posthog import get_feature_flags
+    results = get_feature_flags(['beta-feature', 'new-dashboard'], 'distinct_id')
+    if results['beta-feature'] and results['beta-feature'].enabled:
+        # Use the variant and payload
+        print(results['beta-feature'].variant)
+    ```
+    """
+    return _proxy(
+        "get_feature_flags",
+        keys=keys,
+        distinct_id=distinct_id,
+        groups=groups or {},
+        person_properties=person_properties or {},
+        group_properties=group_properties or {},
+        only_evaluate_locally=only_evaluate_locally,
+        send_feature_flag_events=send_feature_flag_events,
+        disable_geoip=disable_geoip,
+        device_id=device_id,
     )
 
 
