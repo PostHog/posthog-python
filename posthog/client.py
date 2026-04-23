@@ -1592,6 +1592,207 @@ class Client(object):
         )
         return feature_flag_result.get_value() if feature_flag_result else None
 
+    def _get_feature_flag_results(
+        self,
+        keys: list[str],
+        distinct_id: ID_TYPES,
+        *,
+        groups=None,
+        person_properties=None,
+        group_properties=None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
+    ) -> dict[str, Optional[FeatureFlagResult]]:
+        # Deduplicate requested keys while preserving order.
+        unique_keys: list[str] = list(dict.fromkeys(keys))
+
+        if self.disabled:
+            return {key: None for key in unique_keys}
+
+        person_properties, group_properties = (
+            self._add_local_person_and_group_properties(
+                distinct_id,
+                groups or {},
+                person_properties or {},
+                group_properties or {},
+            )
+        )
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
+
+        # Per-key metadata captured during evaluation so event emission mirrors
+        # the single-flag path's properties (request id, reason, version, id).
+        results: dict[str, Optional[FeatureFlagResult]] = {}
+        event_meta: dict[str, dict[str, Any]] = {}
+        still_unresolved: list[str] = []
+
+        for key in unique_keys:
+            flag_value = self._locally_evaluate_flag(
+                key, distinct_id, groups, person_properties, group_properties
+            )
+            if flag_value is not None:
+                payload = self._compute_payload_locally(key, flag_value)
+                flag_result = FeatureFlagResult.from_value_and_payload(
+                    key, flag_value, payload
+                )
+                results[key] = flag_result
+                event_meta[key] = {
+                    "locally_evaluated": True,
+                    "payload": payload,
+                    "request_id": None,
+                    "flag_details": None,
+                }
+                if self.flag_cache and flag_result:
+                    self.flag_cache.set_cached_flag(
+                        distinct_id, key, flag_result, self.flag_definition_version
+                    )
+            else:
+                still_unresolved.append(key)
+
+        if still_unresolved and not only_evaluate_locally:
+            try:
+                resp_data = self.get_flags_decision(
+                    distinct_id,
+                    groups,
+                    person_properties,
+                    group_properties,
+                    disable_geoip,
+                    flag_keys_to_evaluate=still_unresolved,
+                )
+                request_id = resp_data.get("requestId")
+                flags = resp_data.get("flags") or {}
+                for key in still_unresolved:
+                    flag_details = flags.get(key)
+                    flag_result = FeatureFlagResult.from_flag_details(flag_details)
+                    results[key] = flag_result
+                    event_meta[key] = {
+                        "locally_evaluated": False,
+                        "payload": flag_result.payload if flag_result else None,
+                        "request_id": request_id,
+                        "flag_details": flag_details,
+                    }
+                    if self.flag_cache and flag_result:
+                        self.flag_cache.set_cached_flag(
+                            distinct_id, key, flag_result, self.flag_definition_version
+                        )
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get flags remotely: {e}")
+                for key in still_unresolved:
+                    if key in results:
+                        continue
+                    stale_result = None
+                    if self.flag_cache:
+                        stale_result = self.flag_cache.get_stale_cached_flag(
+                            distinct_id, key
+                        )
+                        if stale_result:
+                            self.log.info(
+                                f"[FEATURE FLAGS] Using stale cached value for flag {key}"
+                            )
+                    results[key] = stale_result
+                    event_meta[key] = {
+                        "locally_evaluated": False,
+                        "payload": stale_result.payload if stale_result else None,
+                        "request_id": None,
+                        "flag_details": None,
+                    }
+        else:
+            # Either only_evaluate_locally is True or there were no unresolved keys.
+            for key in still_unresolved:
+                results[key] = None
+                event_meta[key] = {
+                    "locally_evaluated": False,
+                    "payload": None,
+                    "request_id": None,
+                    "flag_details": None,
+                }
+
+        if send_feature_flag_events:
+            for key in unique_keys:
+                meta = event_meta[key]
+                flag_result = results[key]
+                self._capture_feature_flag_called(
+                    distinct_id,
+                    key,
+                    flag_result.get_value() if flag_result else None,
+                    meta["payload"],
+                    meta["locally_evaluated"],
+                    groups,
+                    disable_geoip,
+                    meta["request_id"],
+                    meta["flag_details"],
+                )
+
+        return results
+
+    def get_feature_flags(
+        self,
+        keys: list[str],
+        distinct_id,
+        *,
+        groups=None,
+        person_properties=None,
+        group_properties=None,
+        only_evaluate_locally=False,
+        send_feature_flag_events=True,
+        disable_geoip=None,
+    ) -> dict[str, Optional[FeatureFlagResult]]:
+        """
+        Evaluate a subset of feature flags in one bulk pass and return a FeatureFlagResult
+        per requested key.
+
+        Evaluates each key locally first (when local evaluation is enabled) and then makes
+        at most one remote `/flags` request for any keys that could not be resolved locally —
+        avoiding the N remote round trips of calling `get_feature_flag` per flag while
+        preserving the per-flag `$feature_flag_called` usage signal that `get_all_flags` loses.
+
+        Events are emitted per resolved flag and deduped across calls using the same
+        `distinct_ids_feature_flags_reported` cache as the single-flag path, so a given
+        (distinct_id, key, value) tuple produces at most one event per process.
+
+        Examples:
+            ```python
+            results = posthog.get_feature_flags(
+                ['new-dashboard', 'beta-search'],
+                'user_123',
+                person_properties={'plan': 'pro'},
+            )
+            if results['new-dashboard'] and results['new-dashboard'].enabled:
+                # Do something differently for this user
+                payload = results['new-dashboard'].payload
+            ```
+
+        Args:
+            keys: The feature flag keys to evaluate.
+            distinct_id: The distinct ID of the user.
+            groups: A dictionary of group information.
+            person_properties: A dictionary of person properties.
+            group_properties: A dictionary of group properties.
+            only_evaluate_locally: If True, do not fall back to a remote request for keys
+                that cannot be resolved locally; those keys resolve to None.
+            send_feature_flag_events: Whether to emit `$feature_flag_called` events.
+            disable_geoip: Whether to disable GeoIP for this request.
+
+        Returns:
+            dict[str, Optional[FeatureFlagResult]]: A dict keyed by every requested flag key.
+                Keys that could not be resolved map to None.
+
+        Category:
+            Feature flags
+        """
+        return self._get_feature_flag_results(
+            keys,
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
+        )
+
     def _locally_evaluate_flag(
         self,
         key: str,
@@ -1818,6 +2019,7 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        send_feature_flag_events: bool = False,
     ) -> Optional[dict[str, Union[bool, str]]]:
         """
         Get all feature flags for a user.
@@ -1831,6 +2033,9 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            send_feature_flag_events: If True, emit a `$feature_flag_called` event for each
+                resolved flag (matching `get_feature_flag` behavior). Defaults to False to
+                preserve the historical behavior of this method.
 
         Examples:
             ```python
@@ -1848,6 +2053,7 @@ class Client(object):
             only_evaluate_locally=only_evaluate_locally,
             disable_geoip=disable_geoip,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
+            send_feature_flag_events=send_feature_flag_events,
         )
 
         return response["featureFlags"]
@@ -1862,6 +2068,7 @@ class Client(object):
         only_evaluate_locally=False,
         disable_geoip=None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
+        send_feature_flag_events: bool = False,
     ) -> FlagsAndPayloads:
         """
         Get all feature flags and their payloads for a user.
@@ -1875,6 +2082,9 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
+            send_feature_flag_events: If True, emit a `$feature_flag_called` event for each
+                resolved flag (matching `get_feature_flag` behavior). Defaults to False to
+                preserve the historical behavior of this method.
 
         Examples:
             ```python
@@ -1901,6 +2111,11 @@ class Client(object):
             flag_keys_to_evaluate=flag_keys_to_evaluate,
         )
 
+        locally_evaluated_keys: set[str] = set(
+            (response.get("featureFlags") or {}).keys()
+        )
+        decide_response: Optional[FlagsResponse] = None
+
         if fallback_to_flags and not only_evaluate_locally:
             try:
                 decide_response = self.get_flags_decision(
@@ -1911,10 +2126,33 @@ class Client(object):
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
                 )
-                return to_flags_and_payloads(decide_response)
+                response = to_flags_and_payloads(decide_response)
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}"
+                )
+
+        if send_feature_flag_events:
+            remote_flags = (decide_response or {}).get("flags") or {}
+            request_id = (decide_response or {}).get("requestId")
+            flag_values = response.get("featureFlags") or {}
+            flag_payloads = response.get("featureFlagPayloads") or {}
+            for key, value in flag_values.items():
+                flag_was_locally_evaluated = key in locally_evaluated_keys
+                flag_details = (
+                    None if flag_was_locally_evaluated else remote_flags.get(key)
+                )
+                payload = flag_payloads.get(key)
+                self._capture_feature_flag_called(
+                    distinct_id,
+                    key,
+                    value,
+                    payload,
+                    flag_was_locally_evaluated,
+                    groups or {},
+                    disable_geoip,
+                    None if flag_was_locally_evaluated else request_id,
+                    flag_details,
                 )
 
         return response
