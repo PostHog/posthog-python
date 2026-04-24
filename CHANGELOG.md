@@ -1,5 +1,11 @@
 # posthog
 
+## 7.13.1 — 2026-04-24
+
+### Patch changes
+
+- [0d36184](https://github.com/posthog/posthog-python/commit/0d361845acc18f660b6ca1f7a3a0ae1168339d2e) Support mixed user+group targeting in local flag evaluation. — Thanks @patricio-posthog!
+
 ## 7.13.0 — 2026-04-21
 
 ### Minor changes
