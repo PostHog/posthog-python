@@ -348,6 +348,8 @@ class TestGet(unittest.TestCase):
         ("https://app.posthog.com/", "https://us.i.posthog.com"),
         ("https://eu.posthog.com/", "https://eu.i.posthog.com"),
         ("https://us.posthog.com/", "https://us.i.posthog.com"),
+        (" \nhttps://eu.posthog.com/\t ", "https://eu.i.posthog.com"),
+        (" \n\t ", "https://us.i.posthog.com"),
         (None, "https://us.i.posthog.com"),
     ],
 )

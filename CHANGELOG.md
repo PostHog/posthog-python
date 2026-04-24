@@ -1,5 +1,15 @@
 # posthog
 
+## 7.13.0 — 2026-04-21
+
+### Minor changes
+
+- [12c38e7](https://github.com/posthog/posthog-python/commit/12c38e7a788c29a244b715c4f9965b1ac0bb4b3f) Add `capture_errors` option to `Prompts` that reports prompt fetch failures to PostHog error tracking via `capture_exception()` when enabled. — Thanks @andrewm4894!
+
+### Patch changes
+
+- [1b098e7](https://github.com/posthog/posthog-python/commit/1b098e7dc1b25b41ee35a2eef7469e71fe42b1fc) Trim surrounding whitespace from API keys and host config before using them. — Thanks @marandaneto!
+
 ## 7.12.0 — 2026-04-16
 
 ### Minor changes

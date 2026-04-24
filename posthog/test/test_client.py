@@ -41,6 +41,38 @@ class TestClient(unittest.TestCase):
     def test_requires_api_key(self):
         self.assertRaises(TypeError, Client)
 
+    @parameterized.expand(
+        [
+            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False),
+            ("whitespace_only", " \n\t ", "", True),
+        ]
+    )
+    def test_trims_api_key_whitespace(
+        self, _, raw_api_key, expected_api_key, expect_error_log
+    ):
+        with mock.patch.object(Client.log, "error") as mock_error:
+            client = Client(raw_api_key, send=False)
+
+        self.assertEqual(client.api_key, expected_api_key)
+        if expect_error_log:
+            mock_error.assert_called_once_with(
+                "api_key is empty after trimming whitespace; check your project API key"
+            )
+        else:
+            mock_error.assert_not_called()
+
+    def test_trims_host_and_personal_api_key_whitespace(self):
+        client = Client(
+            FAKE_TEST_API_KEY,
+            host=" \nhttps://eu.posthog.com/\t ",
+            personal_api_key=" \n\t ",
+            send=False,
+        )
+
+        self.assertEqual(client.raw_host, "https://eu.posthog.com/")
+        self.assertEqual(client.host, "https://eu.i.posthog.com")
+        self.assertIsNone(client.personal_api_key)
+
     def test_empty_flush(self):
         self.client.flush()
 
