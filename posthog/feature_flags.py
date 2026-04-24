@@ -293,6 +293,9 @@ def match_feature_flag_properties(
     evaluation_cache=None,
     device_id=None,
     bucketing_value=None,
+    group_type_mapping=None,
+    groups=None,
+    group_properties=None,
 ) -> FlagValue:
     if bucketing_value is None:
         warnings.warn(
@@ -305,32 +308,65 @@ def match_feature_flag_properties(
 
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
+    flag_aggregation = flag_filters.get("aggregation_group_type_index")
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
+    groups = groups or {}
+    group_properties = group_properties or {}
+    group_type_mapping = group_type_mapping or {}
     # Some filters can be explicitly set to null, which require accessing variants like so
     flag_variants = (flag_filters.get("multivariate") or {}).get("variants") or []
     valid_variant_keys = [variant["key"] for variant in flag_variants]
 
     for condition in flag_conditions:
         try:
-            # if any one condition resolves to True, we can shortcircuit and return
-            # the matching variant
+            # Per-condition aggregation overrides only when the condition explicitly
+            # sets its own aggregation_group_type_index (mixed targeting).
+            # When absent, use the properties/bucketing already resolved by the caller.
+            condition_aggregation = condition.get(
+                "aggregation_group_type_index", flag_aggregation
+            )
+
+            # Mixed-override path: condition-level aggregation differs from flag-level.
+            # This assumes flag-level aggregation is None for mixed flags.
+            if condition_aggregation != flag_aggregation:
+                if condition_aggregation is not None:
+                    group_name = group_type_mapping.get(str(condition_aggregation))
+                    if not group_name or group_name not in groups:
+                        log.debug(
+                            "Skipping group condition for flag '%s': group type index %s not available",
+                            flag.get("key", ""),
+                            condition_aggregation,
+                        )
+                        continue
+                    if group_name not in group_properties:
+                        is_inconclusive = True
+                        continue
+                    effective_properties = group_properties[group_name]
+                    effective_bucketing = groups[group_name]
+                else:
+                    effective_properties = properties
+                    effective_bucketing = bucketing_value
+            else:
+                effective_properties = properties
+                effective_bucketing = bucketing_value
+
             if is_condition_match(
                 flag,
                 distinct_id,
                 condition,
-                properties,
+                effective_properties,
                 cohort_properties,
                 flags_by_key,
                 evaluation_cache,
-                bucketing_value=bucketing_value,
+                bucketing_value=effective_bucketing,
                 device_id=device_id,
             ):
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
                     variant = variant_override
                 else:
-                    variant = get_matching_variant(flag, bucketing_value)
+                    variant = get_matching_variant(flag, effective_bucketing)
                 return variant or True
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
