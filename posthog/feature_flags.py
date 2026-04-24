@@ -327,10 +327,17 @@ def match_feature_flag_properties(
                 "aggregation_group_type_index", flag_aggregation
             )
 
+            # Mixed-override path: condition-level aggregation differs from flag-level.
+            # This assumes flag-level aggregation is None for mixed flags.
             if condition_aggregation != flag_aggregation:
                 if condition_aggregation is not None:
                     group_name = group_type_mapping.get(str(condition_aggregation))
                     if not group_name or group_name not in groups:
+                        log.debug(
+                            "Skipping group condition for flag '%s': group type index %s not available",
+                            flag.get("key", ""),
+                            condition_aggregation,
+                        )
                         continue
                     if group_name not in group_properties:
                         is_inconclusive = True
