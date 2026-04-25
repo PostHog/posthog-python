@@ -1454,8 +1454,9 @@ class Client(object):
 
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+        group_type_mapping = self.group_type_mapping or {}
+
         if aggregation_group_type_index is not None:
-            group_type_mapping = self.group_type_mapping or {}
             group_name = group_type_mapping.get(str(aggregation_group_type_index))
 
             if not group_name:
@@ -1493,6 +1494,9 @@ class Client(object):
                 evaluation_cache=evaluation_cache,
                 device_id=device_id,
                 bucketing_value=group_key,
+                group_type_mapping=group_type_mapping,
+                groups=groups,
+                group_properties=group_properties,
             )
         else:
             bucketing_value = resolve_bucketing_value(
@@ -1507,6 +1511,9 @@ class Client(object):
                 evaluation_cache=evaluation_cache,
                 device_id=device_id,
                 bucketing_value=bucketing_value,
+                group_type_mapping=group_type_mapping,
+                groups=groups,
+                group_properties=group_properties,
             )
 
     def feature_enabled(
