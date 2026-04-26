@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import warnings
+import weakref
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Union
 from uuid import uuid4
@@ -55,6 +56,7 @@ from posthog.request import (
     get,
     normalize_host,
     remote_config,
+    reset_sessions,
 )
 from posthog.types import (
     FeatureFlag,
@@ -218,6 +220,7 @@ class Client(object):
         Category:
             Initialization
         """
+        self._max_queue_size = max_queue_size
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
@@ -242,6 +245,7 @@ class Client(object):
         )
         self.poller = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
@@ -332,6 +336,10 @@ class Client(object):
                 # if we've disabled sending, just don't start the consumer
                 if send:
                     consumer.start()
+
+        if hasattr(os, "register_at_fork"):
+            weak_self = weakref.ref(self)
+            os.register_at_fork(after_in_child=lambda: Client._reinit_after_fork_weak(weak_self))
 
     def _set_before_send(self, before_send):
         if before_send is not None:
@@ -1090,6 +1098,69 @@ class Client(object):
             return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
+
+    @staticmethod
+    def _reinit_after_fork_weak(weak_self):
+        """
+        Reinitialize the client after a fork.
+        Garbage collected if the client is deleted.
+        """
+        self = weak_self()
+        if self is None:
+            return
+        self._reinit_after_fork()
+
+    def _reinit_after_fork(self):
+        """Reinitialize fork-unsafe client state in a forked child process.
+
+        Registered via os.register_at_fork(after_in_child=...) so it runs
+        exactly once in each child, before any user code, covering all code
+        paths (capture, flush, join, etc.).
+
+        Python threads do not survive fork() and queue.Queue internal locks
+        may be in an inconsistent state, so the event queue, consumer threads
+        and other state are replaced. Inherited queue items are not retained
+        as they'll be handled by the parent process's consumers.
+        """
+        if self.consumers:
+            self.queue = queue.Queue(self._max_queue_size)
+
+            new_consumers = []
+            for old in self.consumers:
+                consumer = Consumer(
+                    self.queue,
+                    old.api_key,
+                    flush_at=old.flush_at,
+                    host=old.host,
+                    on_error=old.on_error,
+                    flush_interval=old.flush_interval,
+                    gzip=old.gzip,
+                    retries=old.retries,
+                    timeout=old.timeout,
+                    historical_migration=old.historical_migration,
+                )
+                new_consumers.append(consumer)
+
+                if self.send:
+                    consumer.start()
+
+            self.consumers = new_consumers
+
+        if self.enable_local_evaluation:
+            self.poller = Poller(
+                interval=timedelta(seconds=self.poll_interval),
+                execute=self._load_feature_flags,
+            )
+            self.poller.start()
+        else:
+            self.poller = None
+
+        # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
+        # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
+        if isinstance(self.flag_cache, RedisFlagCache):
+            self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
+
+        reset_sessions()
 
     def _enqueue(self, msg, disable_geoip):
         # type: (...) -> Optional[str]
