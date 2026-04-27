@@ -31,7 +31,7 @@ def _sanitize_tracing_header_value(value) -> Optional[str]:
     """Return a safe tracing header value, or None if the value is invalid.
 
     Tracing headers come from user-controlled HTTP requests and are copied into event properties.
-    Match the PostHog app's header sanitization: accept strings only, remove ASCII control
+    Match the PostHog app's header sanitization: accept strings only, remove C0/C1 control
     characters, trim surrounding whitespace, cap length, and drop empty results.
     """
     if not isinstance(value, str) or not value:
