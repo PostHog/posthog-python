@@ -10,6 +10,8 @@ from posthog.contexts import (
     set_context_session,
     get_context_session_id,
     get_context_distinct_id,
+    set_context_window_id,
+    get_context_window_id,
 )
 
 
@@ -157,39 +159,56 @@ class TestContexts(unittest.TestCase):
             set_context_session("session456")
             assert get_context_session_id() == "session456"
 
+    def test_set_context_window_id(self):
+        with new_context(fresh=True):
+            # Initially no window ID
+            assert get_context_window_id() is None
+
+            # Set window ID
+            set_context_window_id("window789")
+            assert get_context_window_id() == "window789"
+
     def test_context_inheritance_fresh_context(self):
         with new_context(fresh=True):
             identify_context("user123")
             set_context_session("session456")
+            set_context_window_id("window789")
 
             with new_context(fresh=True):
                 # Fresh context should not inherit
                 assert get_context_distinct_id() is None
                 assert get_context_session_id() is None
+                assert get_context_window_id() is None
 
             # Original context should still have values
             assert get_context_distinct_id() == "user123"
             assert get_context_session_id() == "session456"
+            assert get_context_window_id() == "window789"
 
     def test_context_inheritance_non_fresh_context(self):
         with new_context(fresh=True):
             identify_context("user123")
             set_context_session("session456")
+            set_context_window_id("window789")
 
             with new_context(fresh=False):
                 # Non-fresh context should inherit
                 assert get_context_distinct_id() == "user123"
                 assert get_context_session_id() == "session456"
+                assert get_context_window_id() == "window789"
 
                 # Override in child context
                 identify_context("user789")
                 set_context_session("session999")
+                set_context_window_id("window999")
                 assert get_context_distinct_id() == "user789"
                 assert get_context_session_id() == "session999"
+                assert get_context_window_id() == "window999"
 
             # Original context should still have original values
             assert get_context_distinct_id() == "user123"
             assert get_context_session_id() == "session456"
+            assert get_context_window_id() == "window789"
 
     def test_child_tags_override_parent_tags_in_non_fresh_context(self):
         with new_context(fresh=True):
@@ -222,12 +241,19 @@ class TestContexts(unittest.TestCase):
         def function_with_context():
             identify_context("user456")
             set_context_session("session789")
-            return get_context_distinct_id(), get_context_session_id()
+            set_context_window_id("window789")
+            return (
+                get_context_distinct_id(),
+                get_context_session_id(),
+                get_context_window_id(),
+            )
 
-        distinct_id, session_id = function_with_context()
+        distinct_id, session_id, window_id = function_with_context()
         assert distinct_id == "user456"
         assert session_id == "session789"
+        assert window_id == "window789"
 
         # Context should be cleared after function execution
         assert get_context_distinct_id() is None
         assert get_context_session_id() is None
+        assert get_context_window_id() is None

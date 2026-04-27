@@ -20,6 +20,7 @@ from posthog.contexts import (
     get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
+    get_context_window_id,
     new_context,
 )
 from posthog.exception_capture import ExceptionCapture
@@ -112,8 +113,13 @@ def add_context_tags(properties):
         context_tags.update(properties)
         properties = context_tags
 
-    if "$session_id" not in properties and get_context_session_id():
-        properties["$session_id"] = get_context_session_id()
+    session_id = get_context_session_id()
+    if "$session_id" not in properties and session_id:
+        properties["$session_id"] = session_id
+
+    window_id = get_context_window_id()
+    if "$window_id" not in properties and window_id:
+        properties["$window_id"] = window_id
 
     return properties
 
@@ -913,8 +919,13 @@ class Client(object):
         }
 
         # NOTE - group_identify doesn't generally use context properties - should it?
-        if get_context_session_id():
-            msg["properties"]["$session_id"] = str(get_context_session_id())
+        session_id = get_context_session_id()
+        if session_id:
+            msg["properties"]["$session_id"] = str(session_id)
+
+        window_id = get_context_window_id()
+        if window_id:
+            msg["properties"]["$window_id"] = str(window_id)
 
         return self._enqueue(msg, disable_geoip)
 
@@ -963,8 +974,13 @@ class Client(object):
             "uuid": uuid,
         }
 
-        if get_context_session_id():
-            msg["properties"]["$session_id"] = str(get_context_session_id())
+        session_id = get_context_session_id()
+        if session_id:
+            msg["properties"]["$session_id"] = str(session_id)
+
+        window_id = get_context_window_id()
+        if window_id:
+            msg["properties"]["$window_id"] = str(window_id)
 
         return self._enqueue(msg, disable_geoip)
 

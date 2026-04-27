@@ -22,6 +22,7 @@ class ContextScope:
         self.session_id: Optional[str] = None
         self.distinct_id: Optional[str] = None
         self.device_id: Optional[str] = None
+        self.window_id: Optional[str] = None
         self.tags: Dict[str, Any] = {}
         self.capture_exception_code_variables: Optional[bool] = None
         self.code_variables_mask_patterns: Optional[list] = None
@@ -35,6 +36,9 @@ class ContextScope:
 
     def set_device_id(self, device_id: str):
         self.device_id = device_id
+
+    def set_window_id(self, window_id: str):
+        self.window_id = window_id
 
     def add_tag(self, key: str, value: Any):
         self.tags[key] = value
@@ -70,6 +74,13 @@ class ContextScope:
             return self.device_id
         if self.parent is not None and not self.fresh:
             return self.parent.get_device_id()
+        return None
+
+    def get_window_id(self) -> Optional[str]:
+        if self.window_id is not None:
+            return self.window_id
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_window_id()
         return None
 
     def collect_tags(self) -> Dict[str, Any]:
@@ -316,6 +327,39 @@ def get_context_device_id() -> Optional[str]:
     current_context = _get_current_context()
     if current_context:
         return current_context.get_device_id()
+    return None
+
+
+def set_context_window_id(window_id: str) -> None:
+    """
+    Set the window ID for the current context, associating all events captured in this or
+    child contexts with the given window ID (unless set_context_window_id is called again).
+    Entering a fresh context will clear the context-level window ID.
+
+    Args:
+        window_id: The window ID to associate with the current context and its children.
+
+    Category:
+        Contexts
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_window_id(window_id)
+
+
+def get_context_window_id() -> Optional[str]:
+    """
+    Get the window ID for the current context.
+
+    Returns:
+        The window ID if set, None otherwise
+
+    Category:
+        Contexts
+    """
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_window_id()
     return None
 
 
