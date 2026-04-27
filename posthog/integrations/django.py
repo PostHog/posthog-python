@@ -38,7 +38,9 @@ def _sanitize_tracing_header_value(value) -> Optional[str]:
         return None
 
     return (
-        _TRACING_HEADER_CONTROL_CHARS_RE.sub("", value).strip()[:_MAX_TRACING_HEADER_LENGTH]
+        _TRACING_HEADER_CONTROL_CHARS_RE.sub("", value).strip()[
+            :_MAX_TRACING_HEADER_LENGTH
+        ]
         or None
     )
 
@@ -163,8 +165,7 @@ class PosthogContextMiddleware:
 
         # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
         distinct_id = (
-            _get_sanitized_tracing_header(request, "X-POSTHOG-DISTINCT-ID")
-            or user_id
+            _get_sanitized_tracing_header(request, "X-POSTHOG-DISTINCT-ID") or user_id
         )
         if distinct_id:
             contexts.identify_context(distinct_id)
