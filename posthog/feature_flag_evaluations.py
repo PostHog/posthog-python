@@ -66,7 +66,6 @@ class FeatureFlagEvaluations:
         disable_geoip: Optional[bool] = None,
         request_id: Optional[str] = None,
         evaluated_at: Optional[int] = None,
-        flag_definitions_loaded_at: Optional[int] = None,
         accessed: Optional[Set[str]] = None,
     ) -> None:
         """Internal — instances are created by the SDK via ``Client.evaluate_flags()``."""
@@ -77,7 +76,6 @@ class FeatureFlagEvaluations:
         self._disable_geoip = disable_geoip
         self._request_id = request_id
         self._evaluated_at = evaluated_at
-        self._flag_definitions_loaded_at = flag_definitions_loaded_at
         self._accessed: Set[str] = set(accessed) if accessed is not None else set()
 
     def is_enabled(self, key: str) -> bool:
@@ -199,7 +197,6 @@ class FeatureFlagEvaluations:
             disable_geoip=self._disable_geoip,
             request_id=self._request_id,
             evaluated_at=self._evaluated_at,
-            flag_definitions_loaded_at=self._flag_definitions_loaded_at,
             # Copy the accessed set so the child tracks further access independently
             # of the parent. Callers expect ``only_accessed()`` on the parent to reflect
             # only what the parent saw, not what happened on filtered views.
@@ -239,10 +236,6 @@ class FeatureFlagEvaluations:
                 properties["$feature_flag_version"] = flag.version
             if flag.reason:
                 properties["$feature_flag_reason"] = flag.reason
-            if flag.locally_evaluated and self._flag_definitions_loaded_at is not None:
-                properties["$feature_flag_definitions_loaded_at"] = (
-                    self._flag_definitions_loaded_at
-                )
 
         if self._request_id:
             properties["$feature_flag_request_id"] = self._request_id

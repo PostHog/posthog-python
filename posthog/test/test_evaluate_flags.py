@@ -1,6 +1,8 @@
 import unittest
 from unittest import mock
 
+from parameterized import parameterized
+
 from posthog.client import Client
 from posthog.feature_flag_evaluations import FeatureFlagEvaluations
 from posthog.test.test_utils import FAKE_TEST_API_KEY
@@ -43,6 +45,9 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY)
 
+    def tearDown(self):
+        self.client.shutdown()
+
     @mock.patch("posthog.client.flags")
     def test_returns_a_FeatureFlagEvaluations_instance(self, patch_flags):
         patch_flags.return_value = _flags_response_fixture()
@@ -64,38 +69,91 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
         ]
         self.assertEqual(len(feature_flag_called), 0)
 
+    @parameterized.expand(
+        [
+            ("boolean_flag_is_enabled", "boolean-flag", True),
+            ("disabled_flag_is_disabled", "disabled-flag", False),
+            ("variant_flag_is_enabled", "variant-flag", True),
+        ]
+    )
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
-    def test_is_enabled_returns_correct_values_and_fires_events(
-        self, patch_capture, patch_flags
-    ):
+    def test_is_enabled(self, _name, key, expected, patch_capture, patch_flags):
         patch_flags.return_value = _flags_response_fixture()
         flags = self.client.evaluate_flags("user-1")
 
-        self.assertTrue(flags.is_enabled("boolean-flag"))
-        self.assertFalse(flags.is_enabled("disabled-flag"))
-        self.assertTrue(flags.is_enabled("variant-flag"))
+        self.assertEqual(flags.is_enabled(key), expected)
 
-        feature_flag_called = [
+        flag_called = [
             c
             for c in patch_capture.call_args_list
-            if c[0] and c[0][0] == "$feature_flag_called"
+            if c[0]
+            and c[0][0] == "$feature_flag_called"
+            and c[1]["properties"]["$feature_flag"] == key
         ]
-        self.assertEqual(len(feature_flag_called), 3)
-        keys = sorted(c[1]["properties"]["$feature_flag"] for c in feature_flag_called)
-        self.assertEqual(keys, ["boolean-flag", "disabled-flag", "variant-flag"])
+        self.assertEqual(len(flag_called), 1)
+
+    @parameterized.expand(
+        [
+            (
+                "variant_flag_returns_variant_string",
+                "variant-flag",
+                "variant-value",
+                {
+                    "$feature_flag_response": "variant-value",
+                    "$feature_flag_id": 2,
+                    "$feature_flag_version": 23,
+                    "$feature_flag_reason": "Matched condition set 3",
+                    "$feature_flag_request_id": "request-id-1",
+                    "locally_evaluated": False,
+                },
+            ),
+            (
+                "boolean_flag_returns_true",
+                "boolean-flag",
+                True,
+                {
+                    "$feature_flag_response": True,
+                    "$feature_flag_id": 1,
+                    "$feature_flag_version": 12,
+                    "locally_evaluated": False,
+                },
+            ),
+            (
+                "disabled_flag_returns_false",
+                "disabled-flag",
+                False,
+                {"$feature_flag_response": False, "locally_evaluated": False},
+            ),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_get_flag_known_keys(
+        self, _name, key, expected, expected_props, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        self.assertEqual(flags.get_flag(key), expected)
+
+        by_key = {
+            c[1]["properties"]["$feature_flag"]: c[1]["properties"]
+            for c in patch_capture.call_args_list
+            if c[0] and c[0][0] == "$feature_flag_called"
+        }
+        self.assertIn(key, by_key)
+        for prop, value in expected_props.items():
+            self.assertEqual(by_key[key][prop], value)
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
-    def test_get_flag_returns_variant_or_bool_with_full_metadata(
+    def test_get_flag_missing_key_emits_flag_missing_error(
         self, patch_capture, patch_flags
     ):
         patch_flags.return_value = _flags_response_fixture()
         flags = self.client.evaluate_flags("user-1")
 
-        self.assertEqual(flags.get_flag("variant-flag"), "variant-value")
-        self.assertEqual(flags.get_flag("boolean-flag"), True)
-        self.assertEqual(flags.get_flag("disabled-flag"), False)
         self.assertIsNone(flags.get_flag("missing-flag"))
 
         by_key = {
@@ -103,19 +161,6 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
             for c in patch_capture.call_args_list
             if c[0] and c[0][0] == "$feature_flag_called"
         }
-        self.assertEqual(
-            by_key["variant-flag"]["$feature_flag_response"], "variant-value"
-        )
-        self.assertEqual(by_key["variant-flag"]["$feature_flag_id"], 2)
-        self.assertEqual(by_key["variant-flag"]["$feature_flag_version"], 23)
-        self.assertEqual(
-            by_key["variant-flag"]["$feature_flag_reason"], "Matched condition set 3"
-        )
-        self.assertEqual(
-            by_key["variant-flag"]["$feature_flag_request_id"], "request-id-1"
-        )
-        self.assertFalse(by_key["variant-flag"]["locally_evaluated"])
-
         self.assertIsNone(by_key["missing-flag"]["$feature_flag_response"])
         self.assertEqual(by_key["missing-flag"]["$feature_flag_error"], "flag_missing")
 
