@@ -30,6 +30,12 @@ from posthog.contexts import (
     set_context_session as inner_set_context_session,
 )
 from posthog.contexts import (
+    set_context_window_id as inner_set_context_window_id,
+)
+from posthog.contexts import (
+    get_context_window_id as inner_get_context_window_id,
+)
+from posthog.contexts import (
     tag as inner_tag,
 )
 from posthog.contexts import (
@@ -155,6 +161,38 @@ def set_context_device_id(device_id: str):
         Contexts
     """
     return inner_set_context_device_id(device_id)
+
+
+def set_context_window_id(window_id: str):
+    """
+    Set the window ID for the current context.
+
+    Args:
+        window_id: The window ID to associate with the current context and its children
+
+    Examples:
+        ```python
+        from posthog import set_context_window_id
+        set_context_window_id("window_123")
+        ```
+
+    Category:
+        Contexts
+    """
+    return inner_set_context_window_id(window_id)
+
+
+def get_context_window_id() -> Optional[str]:
+    """
+    Get the window ID for the current context.
+
+    Returns:
+        The window ID if set, None otherwise
+
+    Category:
+        Contexts
+    """
+    return inner_get_context_window_id()
 
 
 def identify_context(distinct_id: str):

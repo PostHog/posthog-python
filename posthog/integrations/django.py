@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, cast
+import re
+from typing import TYPE_CHECKING, Optional, cast
+
 from posthog import contexts
 from posthog.client import Client
 
@@ -18,7 +20,36 @@ except ImportError:
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
-    from typing import Callable, Dict, Any, Optional, Union, Awaitable  # noqa: F401
+    from typing import Callable, Dict, Any, Union, Awaitable  # noqa: F401
+
+
+_MAX_TRACING_HEADER_LENGTH = 1000
+_TRACING_HEADER_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _sanitize_tracing_header_value(value) -> Optional[str]:
+    """Return a safe tracing header value, or None if the value is invalid.
+
+    Tracing headers come from user-controlled HTTP requests and are copied into event properties.
+    Match the PostHog app's header sanitization: accept strings only, remove C0/C1 control
+    characters, trim surrounding whitespace, cap length, and drop empty results.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+
+    return (
+        _TRACING_HEADER_CONTROL_CHARS_RE.sub("", value).strip()[
+            :_MAX_TRACING_HEADER_LENGTH
+        ]
+        or None
+    )
+
+
+def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
+    try:
+        return _sanitize_tracing_header_value(request.headers.get(header_name))
+    except Exception:
+        return None
 
 
 class PosthogContextMiddleware:
@@ -27,6 +58,7 @@ class PosthogContextMiddleware:
     This middleware wraps all calls with a posthog context. It attempts to extract the following from the request headers:
     - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
     - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`)
+    - Window ID, (extracted from `X-POSTHOG-WINDOW-ID`)
     - Request URL as $current_url
     - Request Method as $request_method
 
@@ -42,9 +74,10 @@ class PosthogContextMiddleware:
     You can use the `POSTHOG_MW_TAG_MAP` function to remove any default tags you don't want to capture, or override them with your own values.
 
     Context tags are automatically included as properties on all events captured within a context, including exceptions.
-    See the context documentation for more information. The extracted distinct ID and session ID, if found, are used to
-    associate all events captured in the middleware context with the same distinct ID and session as currently active on the
-    frontend. See the documentation for `set_context_session` and `identify_context` for more details.
+    See the context documentation for more information. The extracted distinct ID, session ID, and window ID,
+    if found, are used to associate all events captured in the middleware context with the same distinct ID,
+    session, and window as currently active on the frontend. See the documentation for `set_context_session`,
+    `set_context_window_id`, and `identify_context` for more details.
 
     This middleware is hybrid-capable: it supports both WSGI (sync) and ASGI (async) Django applications. The middleware
     detects at initialization whether the next middleware in the chain is async or sync, and adapts its behavior accordingly.
@@ -126,14 +159,21 @@ class PosthogContextMiddleware:
         tags = {}
 
         # Extract session ID from X-POSTHOG-SESSION-ID header
-        session_id = request.headers.get("X-POSTHOG-SESSION-ID")
+        session_id = _get_sanitized_tracing_header(request, "X-POSTHOG-SESSION-ID")
         if session_id:
             contexts.set_context_session(session_id)
 
         # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
-        distinct_id = request.headers.get("X-POSTHOG-DISTINCT-ID") or user_id
+        distinct_id = (
+            _get_sanitized_tracing_header(request, "X-POSTHOG-DISTINCT-ID") or user_id
+        )
         if distinct_id:
             contexts.identify_context(distinct_id)
+
+        # Extract window ID from X-POSTHOG-WINDOW-ID header
+        window_id = _get_sanitized_tracing_header(request, "X-POSTHOG-WINDOW-ID")
+        if window_id:
+            contexts.set_context_window_id(window_id)
 
         # Extract user email
         if user_email:

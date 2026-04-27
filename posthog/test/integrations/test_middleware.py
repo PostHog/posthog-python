@@ -2,10 +2,12 @@ from posthog.contexts import (
     new_context,
     get_context_session_id,
     get_context_distinct_id,
+    get_context_window_id,
 )
 import unittest
 from unittest.mock import Mock, patch
 import asyncio
+from parameterized import parameterized
 
 # Configure Django settings before importing middleware
 import django
@@ -21,6 +23,14 @@ if not settings.configured:
     django.setup()
 
 from posthog.integrations.django import PosthogContextMiddleware
+
+
+class CaseInsensitiveHeaders(dict):
+    def get(self, key, default=None):
+        for header_key, value in self.items():
+            if header_key.lower() == key.lower():
+                return value
+        return default
 
 
 class MockRequest:
@@ -89,6 +99,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 headers={
                     "X-POSTHOG-SESSION-ID": "session-123",
                     "X-POSTHOG-DISTINCT-ID": "user-456",
+                    "X-POSTHOG-WINDOW-ID": "window-789",
                 },
                 method="POST",
                 path="/api/test",
@@ -100,6 +111,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
             self.assertEqual(get_context_session_id(), "session-123")
             self.assertEqual(get_context_distinct_id(), "user-456")
+            self.assertEqual(get_context_window_id(), "window-789")
             self.assertEqual(tags["$current_url"], "https://example.com/api/test")
             self.assertEqual(tags["$request_method"], "POST")
 
@@ -114,6 +126,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
 
             self.assertIsNone(get_context_session_id())
             self.assertIsNone(get_context_distinct_id())
+            self.assertIsNone(get_context_window_id())
             self.assertEqual(tags["$current_url"], "http://example.com/home")
             self.assertEqual(tags["$request_method"], "GET")
 
@@ -131,6 +144,103 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             self.assertEqual(get_context_session_id(), "session-only")
             self.assertIsNone(get_context_distinct_id())
             self.assertEqual(tags["$request_method"], "PUT")
+
+    def test_extract_tags_reads_window_header_case_insensitively(self):
+        """Test Django-style case-insensitive headers work for window IDs."""
+
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(
+                headers=CaseInsensitiveHeaders({"x-posthog-window-id": "window-lower"}),
+                method="GET",
+            )
+
+            middleware.extract_tags(request)
+
+            self.assertEqual(get_context_window_id(), "window-lower")
+
+    @parameterized.expand(
+        [
+            (
+                "session_control_chars",
+                "X-POSTHOG-SESSION-ID",
+                "  session\n-\t123\x85  ",
+                get_context_session_id,
+                "session-123",
+                None,
+            ),
+            (
+                "distinct_empty_falls_back_to_user",
+                "X-POSTHOG-DISTINCT-ID",
+                "\r\n  ",
+                get_context_distinct_id,
+                "42",
+                42,
+            ),
+            (
+                "window_control_chars_and_length_limit",
+                "X-POSTHOG-WINDOW-ID",
+                "window\x00-" + ("x" * 1200),
+                get_context_window_id,
+                "window-" + ("x" * 993),
+                None,
+            ),
+        ]
+    )
+    def test_extract_tags_sanitizes_tracing_header(
+        self, _name, header_name, raw_value, get_context_value, expected_value, user_pk
+    ):
+        """Test tracing header values are sanitized before entering context."""
+
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(headers={header_name: raw_value}, method="GET")
+            if user_pk is not None:
+                user = Mock()
+                user.is_authenticated = True
+                user.pk = user_pk
+                request.user = user
+
+            middleware.extract_tags(request)
+
+            self.assertEqual(get_context_value(), expected_value)
+            if header_name == "X-POSTHOG-WINDOW-ID":
+                self.assertEqual(len(get_context_value()), 1000)
+
+    @parameterized.expand(
+        [
+            (
+                "session_non_string",
+                "X-POSTHOG-SESSION-ID",
+                123,
+                get_context_session_id,
+            ),
+            (
+                "distinct_non_string",
+                "X-POSTHOG-DISTINCT-ID",
+                object(),
+                get_context_distinct_id,
+            ),
+            (
+                "window_non_string",
+                "X-POSTHOG-WINDOW-ID",
+                b"window",
+                get_context_window_id,
+            ),
+        ]
+    )
+    def test_extract_tags_ignores_non_string_tracing_header(
+        self, _name, header_name, raw_value, get_context_value
+    ):
+        """Test non-string tracing header values are ignored without throwing."""
+
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(headers={header_name: raw_value}, method="GET")
+
+            middleware.extract_tags(request)
+
+            self.assertIsNone(get_context_value())
 
     def test_extract_tags_with_extra_tags(self):
         """Test tag extraction with extra_tags function"""
