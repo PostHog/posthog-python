@@ -1,7 +1,6 @@
 import unittest
 import warnings
-
-import mock
+from unittest import mock
 
 from posthog.client import Client
 from posthog.feature_flag_evaluations import FeatureFlagEvaluations
