@@ -2348,16 +2348,60 @@ class TestClient(unittest.TestCase):
             "requestId": "test-id",
         }
 
-    def test_set_context_session_with_capture(self):
+    @parameterized.expand(
+        [
+            (
+                "session_context",
+                set_context_session,
+                "context-session-123",
+                "$session_id",
+                {},
+                "context-session-123",
+            ),
+            (
+                "session_override",
+                set_context_session,
+                "context-session-override",
+                "$session_id",
+                {"$session_id": "explicit-session-override"},
+                "explicit-session-override",
+            ),
+            (
+                "window_context",
+                set_context_window_id,
+                "context-window-123",
+                "$window_id",
+                {},
+                "context-window-123",
+            ),
+            (
+                "window_override",
+                set_context_window_id,
+                "context-window-override",
+                "$window_id",
+                {"$window_id": "explicit-window-override"},
+                "explicit-window-override",
+            ),
+        ]
+    )
+    def test_context_id_with_capture(
+        self,
+        _name,
+        set_context_id,
+        context_id,
+        property_name,
+        explicit_properties,
+        expected_property_value,
+    ):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with new_context():
-                set_context_session("context-session-123")
+                set_context_id(context_id)
 
                 msg_uuid = client.capture(
                     "test_event",
                     distinct_id="distinct_id",
-                    properties={"custom_prop": "value"},
+                    properties={"custom_prop": "value", **explicit_properties},
                 )
 
                 self.assertIsNotNone(msg_uuid)
@@ -2368,7 +2412,7 @@ class TestClient(unittest.TestCase):
                 msg = batch_data[0]
 
                 self.assertEqual(
-                    msg["properties"]["$session_id"], "context-session-123"
+                    msg["properties"][property_name], expected_property_value
                 )
 
     def test_set_context_session_with_page_explicit_properties(self):
@@ -2394,83 +2438,6 @@ class TestClient(unittest.TestCase):
 
                 self.assertEqual(
                     msg["properties"]["$session_id"], "page-explicit-session-789"
-                )
-
-    def test_set_context_session_override_in_capture(self):
-        """Test that explicit session ID overrides context session ID in capture"""
-        from posthog.contexts import new_context, set_context_session
-
-        with mock.patch("posthog.client.batch_post") as mock_post:
-            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            with new_context():
-                set_context_session("context-session-override")
-
-                msg_uuid = client.capture(
-                    "test_event",
-                    distinct_id="distinct_id",
-                    properties={
-                        "$session_id": "explicit-session-override",
-                        "custom_prop": "value",
-                    },
-                )
-
-                self.assertIsNotNone(msg_uuid)
-
-                # Get the enqueued message from the mock
-                mock_post.assert_called_once()
-                batch_data = mock_post.call_args[1]["batch"]
-                msg = batch_data[0]
-
-                self.assertEqual(
-                    msg["properties"]["$session_id"], "explicit-session-override"
-                )
-
-    def test_set_context_window_id_with_capture(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
-            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            with new_context():
-                set_context_window_id("context-window-123")
-
-                msg_uuid = client.capture(
-                    "test_event",
-                    distinct_id="distinct_id",
-                    properties={"custom_prop": "value"},
-                )
-
-                self.assertIsNotNone(msg_uuid)
-
-                # Get the enqueued message from the mock
-                mock_post.assert_called_once()
-                batch_data = mock_post.call_args[1]["batch"]
-                msg = batch_data[0]
-
-                self.assertEqual(msg["properties"]["$window_id"], "context-window-123")
-
-    def test_set_context_window_id_override_in_capture(self):
-        """Test that explicit window ID overrides context window ID in capture"""
-        with mock.patch("posthog.client.batch_post") as mock_post:
-            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            with new_context():
-                set_context_window_id("context-window-override")
-
-                msg_uuid = client.capture(
-                    "test_event",
-                    distinct_id="distinct_id",
-                    properties={
-                        "$window_id": "explicit-window-override",
-                        "custom_prop": "value",
-                    },
-                )
-
-                self.assertIsNotNone(msg_uuid)
-
-                # Get the enqueued message from the mock
-                mock_post.assert_called_once()
-                batch_data = mock_post.call_args[1]["batch"]
-                msg = batch_data[0]
-
-                self.assertEqual(
-                    msg["properties"]["$window_id"], "explicit-window-override"
                 )
 
     @mock.patch("posthog.client.Poller")
