@@ -675,15 +675,6 @@ class Client(object):
             flag_options = self._parse_send_feature_flags(send_feature_flags)
 
             if flag_options["should_send"]:
-                warnings.warn(
-                    "`send_feature_flags` is deprecated and will be removed in a "
-                    "future major version. Pass a `flags` snapshot from "
-                    "`posthog.evaluate_flags(...)` instead — it avoids a second "
-                    "`/flags` request per capture and guarantees the event carries "
-                    "the exact flag values your code branched on.",
-                    DeprecationWarning,
-                    stacklevel=3,
-                )
                 try:
                     if flag_options["only_evaluate_locally"] is True:
                         # Local evaluation explicitly requested
@@ -1577,17 +1568,7 @@ class Client(object):
         Category:
             Feature flags
         """
-        warnings.warn(
-            "`feature_enabled` is deprecated and will be removed in a future major version. "
-            "Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` "
-            "instead — this consolidates flag evaluation into a single `/flags` request per "
-            "incoming request.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # Call the internal method directly to avoid emitting nested deprecation warnings
-        # from get_feature_flag → get_feature_flag_result.
-        flag_result = self._get_feature_flag_result(
+        response = self.get_feature_flag(
             key,
             distinct_id,
             groups=groups,
@@ -1598,7 +1579,6 @@ class Client(object):
             disable_geoip=disable_geoip,
             device_id=device_id,
         )
-        response = flag_result.get_value() if flag_result else None
 
         if response is None:
             return None
@@ -1848,17 +1828,7 @@ class Client(object):
         Category:
             Feature flags
         """
-        warnings.warn(
-            "`get_feature_flag` is deprecated and will be removed in a future major version. "
-            "Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` "
-            "instead — this consolidates flag evaluation into a single `/flags` request per "
-            "incoming request.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # Call the internal method directly to bypass the public ``get_feature_flag_result``
-        # so the user only sees a single deprecation warning per call.
-        feature_flag_result = self._get_feature_flag_result(
+        feature_flag_result = self.get_feature_flag_result(
             key,
             distinct_id,
             groups=groups,
@@ -1953,14 +1923,6 @@ class Client(object):
         Category:
             Feature flags
         """
-        warnings.warn(
-            "`get_feature_flag_payload` is deprecated and will be removed in a future major "
-            "version. Use `posthog.evaluate_flags(distinct_id, ...)` and call "
-            "`flags.get_flag_payload(key)` instead — this consolidates flag evaluation into "
-            "a single `/flags` request per incoming request.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         if send_feature_flag_events:
             warnings.warn(
                 "send_feature_flag_events is deprecated in get_feature_flag_payload() and will be removed "
