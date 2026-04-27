@@ -164,7 +164,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             (
                 "session_control_chars",
                 "X-POSTHOG-SESSION-ID",
-                "  session\n-\t123  ",
+                "  session\n-\t123\x85  ",
                 get_context_session_id,
                 "session-123",
                 None,

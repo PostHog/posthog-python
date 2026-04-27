@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 _MAX_TRACING_HEADER_LENGTH = 1000
-_TRACING_HEADER_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_TRACING_HEADER_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def _sanitize_tracing_header_value(value) -> Optional[str]:
