@@ -383,6 +383,23 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, calls_before)
 
     @mock.patch("posthog.client.flags")
+    def test_capture_exception_forwards_flags_snapshot(self, patch_flags):
+        # Auto/manual exception captures should be able to attach a flags snapshot the
+        # same way capture() does, so $exception events carry the same flag context.
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        with mock.patch.object(self.client, "capture") as inner_capture:
+            try:
+                raise ValueError("boom")
+            except ValueError as exc:
+                self.client.capture_exception(exc, distinct_id="user-1", flags=flags)
+
+        self.assertEqual(inner_capture.call_count, 1)
+        forwarded = inner_capture.call_args.kwargs.get("flags")
+        self.assertIs(forwarded, flags)
+
+    @mock.patch("posthog.client.flags")
     def test_capture_warns_and_uses_flags_when_both_flags_and_send_feature_flags_set(
         self, patch_flags
     ):

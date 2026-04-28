@@ -1007,7 +1007,9 @@ class Client(object):
             exception: The exception to capture.
             distinct_id: The distinct ID of the user.
             properties: A dictionary of additional properties.
-            send_feature_flags: Whether to send feature flags with the exception.
+            flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
+                Attaches those exact flag values to the captured `$exception` event.
+            send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -1024,6 +1026,7 @@ class Client(object):
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
+        flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
@@ -1106,6 +1109,7 @@ class Client(object):
                 timestamp=timestamp,
                 uuid=uuid,
                 groups=groups,
+                flags=flags_snapshot,
                 send_feature_flags=send_feature_flags,
                 disable_geoip=disable_geoip,
             )
