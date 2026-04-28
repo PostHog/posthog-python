@@ -1,5 +1,7 @@
 posthog/request.py:0: error: Library stubs not installed for "requests"  [import-untyped]
 posthog/request.py:0: note: Hint: "python3 -m pip install types-requests"
+posthog/request.py:0: note: (or run "mypy --install-types" to install all missing stub packages)
+posthog/request.py:0: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports
 posthog/request.py:0: error: Incompatible types in assignment (expression has type "bytes", variable has type "str")  [assignment]
 posthog/consumer.py:0: error: Name "Empty" already defined (possibly by an import)  [no-redef]
 posthog/consumer.py:0: error: Need type annotation for "items" (hint: "items: list[<type>] = ...")  [var-annotated]
