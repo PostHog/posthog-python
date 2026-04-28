@@ -829,9 +829,9 @@ def relative_date_parse_for_feature_flag_matching(
         elif interval == "w":
             parsed_dt = parsed_dt - datetime.timedelta(weeks=number)
         elif interval == "m":
-            parsed_dt = _subtract_months(parsed_dt, number)
+            return _subtract_months(parsed_dt, number)
         elif interval == "y":
-            parsed_dt = _subtract_years(parsed_dt, number)
+            return _subtract_years(parsed_dt, number)
         else:
             return None
 
