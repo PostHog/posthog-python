@@ -784,21 +784,26 @@ def parse_datetime(value: str) -> datetime.datetime:
         now = datetime.datetime.now()
         return datetime.datetime(int(text), now.month, now.day)
 
+    text = re.sub(r" ([+-]\d{2}:\d{2})$", r"\1", text)
     return datetime.datetime.fromisoformat(text)
 
 
 # Python's stdlib doesn't provide a calendar-aware month/year delta.
 # Clamp the day to the target month's end to match dateutil.relativedelta behavior.
-def _subtract_months(dt: datetime.datetime, months: int) -> datetime.datetime:
+def _subtract_months(dt: datetime.datetime, months: int) -> Optional[datetime.datetime]:
     month_index = dt.year * 12 + dt.month - 1 - months
     year = month_index // 12
     month = month_index % 12 + 1
+    if not 1 <= year <= 9999:
+        return None
     day = min(dt.day, calendar.monthrange(year, month)[1])
     return dt.replace(year=year, month=month, day=day)
 
 
-def _subtract_years(dt: datetime.datetime, years: int) -> datetime.datetime:
+def _subtract_years(dt: datetime.datetime, years: int) -> Optional[datetime.datetime]:
     year = dt.year - years
+    if not 1 <= year <= 9999:
+        return None
     day = min(dt.day, calendar.monthrange(year, dt.month)[1])
     return dt.replace(year=year, day=day)
 

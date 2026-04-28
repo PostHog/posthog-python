@@ -4580,14 +4580,16 @@ class TestMatchProperties(unittest.TestCase):
 
 
 class TestDateParsing(unittest.TestCase):
-    def test_parse_datetime_matches_dateutil_for_supported_formats(self):
-        for value in (
-            "2022-05-01",
-            "2022-04-05T12:34:12Z",
-            "2022-04-05 12:34:12 UTC",
-            "2022-04-05 12:34:12 +01:00",
-        ):
-            assert parse_datetime(value) == parser.parse(value)
+    @parameterized.expand(
+        [
+            ("iso_date", "2022-05-01"),
+            ("iso_datetime_Z", "2022-04-05T12:34:12Z"),
+            ("iso_datetime_utc", "2022-04-05 12:34:12 UTC"),
+            ("iso_datetime_offset", "2022-04-05 12:34:12 +01:00"),
+        ]
+    )
+    def test_parse_datetime_matches_dateutil_for_supported_formats(self, _name, value):
+        assert parse_datetime(value) == parser.parse(value)
 
     def test_parse_datetime_year_only_matches_previous_dateutil_behavior(self):
         with freeze_time("2020-04-03T00:00:00"):
@@ -4614,6 +4616,7 @@ class TestRelativeDateParsing(unittest.TestCase):
 
     def test_overflow(self):
         assert relative_date_parse_for_feature_flag_matching("1000000h") is None
+        assert relative_date_parse_for_feature_flag_matching("9999y") is None
         assert (
             relative_date_parse_for_feature_flag_matching("100000000000000000y") is None
         )
