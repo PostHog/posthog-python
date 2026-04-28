@@ -3,11 +3,10 @@ import logging
 import os
 import sys
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Union
 from uuid import uuid4
 
-from dateutil.tz import tzutc
 from typing_extensions import Unpack
 
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
@@ -1100,7 +1099,7 @@ class Client(object):
 
         timestamp = msg["timestamp"]
         if timestamp is None:
-            timestamp = datetime.now(tz=tzutc())
+            timestamp = datetime.now(tz=timezone.utc)
 
         # add common
         timestamp = guess_timezone(timestamp)
@@ -1277,7 +1276,7 @@ class Client(object):
                     self._update_flag_state(
                         cached_data, old_flags_by_key=self.feature_flags_by_key or {}
                     )
-                    self._last_feature_flag_poll = datetime.now(tz=tzutc())
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                     return
                 else:
                     # Emergency fallback: if cache is empty and we have no flags, fetch anyway.
@@ -1324,7 +1323,7 @@ class Client(object):
                 self.log.debug(
                     "[FEATURE FLAGS] Flags not modified (304), using cached data"
                 )
-                self._last_feature_flag_poll = datetime.now(tz=tzutc())
+                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                 return
 
             if response.data is None:
@@ -1395,7 +1394,7 @@ class Client(object):
             )
             self.log.warning(e)
 
-        self._last_feature_flag_poll = datetime.now(tz=tzutc())
+        self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
 
     def load_feature_flags(self):
         """
