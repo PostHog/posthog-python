@@ -1,12 +1,10 @@
+import calendar
 import datetime
 import hashlib
 import logging
 import re
 import warnings
 from typing import Optional
-
-from dateutil import parser
-from dateutil.relativedelta import relativedelta
 
 from posthog import utils
 from posthog.types import FlagValue
@@ -530,7 +528,7 @@ def match_property(property, property_values) -> bool:
             parsed_date = relative_date_parse_for_feature_flag_matching(str(value))
 
             if not parsed_date:
-                parsed_date = parser.parse(str(value))
+                parsed_date = parse_datetime(str(value))
                 parsed_date = convert_to_datetime_aware(parsed_date)
         except Exception as e:
             raise InconclusiveMatchError(
@@ -555,7 +553,7 @@ def match_property(property, property_values) -> bool:
                 return override_value > parsed_date.date()
         elif isinstance(override_value, str):
             try:
-                override_date = parser.parse(override_value)
+                override_date = parse_datetime(override_value)
                 override_date = convert_to_datetime_aware(override_date)
                 if operator == "is_date_before":
                     return override_date < parsed_date
@@ -776,6 +774,40 @@ def match_property_group(
         return property_group_type == "AND"
 
 
+def parse_datetime(value: str) -> datetime.datetime:
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    elif text.upper().endswith(" UTC"):
+        text = text[:-4] + "+00:00"
+    elif re.fullmatch(r"\d{4}", text):
+        now = datetime.datetime.now()
+        return datetime.datetime(int(text), now.month, now.day)
+
+    text = re.sub(r" ([+-]\d{2}:\d{2})$", r"\1", text)
+    return datetime.datetime.fromisoformat(text)
+
+
+# Python's stdlib doesn't provide a calendar-aware month/year delta.
+# Clamp the day to the target month's end to match dateutil.relativedelta behavior.
+def _subtract_months(dt: datetime.datetime, months: int) -> Optional[datetime.datetime]:
+    month_index = dt.year * 12 + dt.month - 1 - months
+    year = month_index // 12
+    month = month_index % 12 + 1
+    if not 1 <= year <= 9999:
+        return None
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def _subtract_years(dt: datetime.datetime, years: int) -> Optional[datetime.datetime]:
+    year = dt.year - years
+    if not 1 <= year <= 9999:
+        return None
+    day = min(dt.day, calendar.monthrange(year, dt.month)[1])
+    return dt.replace(year=year, day=day)
+
+
 def relative_date_parse_for_feature_flag_matching(
     value: str,
 ) -> Optional[datetime.datetime]:
@@ -791,15 +823,15 @@ def relative_date_parse_for_feature_flag_matching(
 
         interval = match.group("interval")
         if interval == "h":
-            parsed_dt = parsed_dt - relativedelta(hours=number)
+            parsed_dt = parsed_dt - datetime.timedelta(hours=number)
         elif interval == "d":
-            parsed_dt = parsed_dt - relativedelta(days=number)
+            parsed_dt = parsed_dt - datetime.timedelta(days=number)
         elif interval == "w":
-            parsed_dt = parsed_dt - relativedelta(weeks=number)
+            parsed_dt = parsed_dt - datetime.timedelta(weeks=number)
         elif interval == "m":
-            parsed_dt = parsed_dt - relativedelta(months=number)
+            return _subtract_months(parsed_dt, number)
         elif interval == "y":
-            parsed_dt = parsed_dt - relativedelta(years=number)
+            return _subtract_years(parsed_dt, number)
         else:
             return None
 

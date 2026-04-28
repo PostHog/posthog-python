@@ -9,7 +9,6 @@ from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union
 
 import requests
-from dateutil.tz import tzutc
 from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
 from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
@@ -197,7 +196,7 @@ def post(
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
     body = kwargs
-    body["sentAt"] = datetime.now(tz=tzutc()).isoformat()
+    body["sentAt"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + path
     body["api_key"] = api_key
