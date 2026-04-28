@@ -2,6 +2,7 @@ import datetime
 import unittest
 
 from unittest import mock
+from zoneinfo import ZoneInfo
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from freezegun import freeze_time
@@ -4115,7 +4116,7 @@ class TestMatchProperties(unittest.TestCase):
                         1,
                         2,
                         3,
-                        tzinfo=datetime.timezone(datetime.timedelta(hours=2)),
+                        tzinfo=ZoneInfo("Europe/Madrid"),
                     )
                 },
             )
@@ -4214,7 +4215,7 @@ class TestMatchProperties(unittest.TestCase):
                         1,
                         2,
                         3,
-                        tzinfo=datetime.timezone(datetime.timedelta(hours=2)),
+                        tzinfo=ZoneInfo("Europe/Madrid"),
                     )
                 },
             )
