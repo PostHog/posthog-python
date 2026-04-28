@@ -66,6 +66,8 @@ class FeatureFlagEvaluations:
         disable_geoip: Optional[bool] = None,
         request_id: Optional[str] = None,
         evaluated_at: Optional[int] = None,
+        errors_while_computing: bool = False,
+        quota_limited: bool = False,
         accessed: Optional[Set[str]] = None,
     ) -> None:
         """Internal — instances are created by the SDK via ``Client.evaluate_flags()``."""
@@ -76,6 +78,8 @@ class FeatureFlagEvaluations:
         self._disable_geoip = disable_geoip
         self._request_id = request_id
         self._evaluated_at = evaluated_at
+        self._errors_while_computing = errors_while_computing
+        self._quota_limited = quota_limited
         self._accessed: Set[str] = set(accessed) if accessed is not None else set()
 
     def is_enabled(self, key: str) -> bool:
@@ -116,19 +120,9 @@ class FeatureFlagEvaluations:
         """Return a filtered copy containing only flags accessed via :meth:`is_enabled`
         or :meth:`get_flag` before this call.
 
-        **Empty-access fallback:** if no flags have been accessed yet, this method logs
-        a warning and returns a copy with *all* evaluated flags. This avoids silently
-        dropping every flag from the captured event when ``only_accessed()`` is called
-        out of order. Pre-access before calling this if you want a guaranteed-empty
-        result.
+        Order-dependent: if nothing has been accessed yet, the returned snapshot is
+        empty. The method honors its name — pre-access if you want a populated result.
         """
-        if not self._accessed:
-            self._host.log_warning(
-                "FeatureFlagEvaluations.only_accessed() was called before any flags were accessed — "
-                "attaching all evaluated flags as a fallback. See "
-                "https://posthog.com/docs/feature-flags/server-sdks for details."
-            )
-            return self._clone_with(self._flags)
         filtered = {k: self._flags[k] for k in self._accessed if k in self._flags}
         return self._clone_with(filtered)
 
@@ -197,6 +191,8 @@ class FeatureFlagEvaluations:
             disable_geoip=self._disable_geoip,
             request_id=self._request_id,
             evaluated_at=self._evaluated_at,
+            errors_while_computing=self._errors_while_computing,
+            quota_limited=self._quota_limited,
             # Copy the accessed set so the child tracks further access independently
             # of the parent. Callers expect ``only_accessed()`` on the parent to reflect
             # only what the parent saw, not what happened on filtered views.
@@ -241,8 +237,19 @@ class FeatureFlagEvaluations:
             properties["$feature_flag_request_id"] = self._request_id
         if self._evaluated_at and not (flag and flag.locally_evaluated):
             properties["$feature_flag_evaluated_at"] = self._evaluated_at
+
+        # Build the comma-joined `$feature_flag_error` matching the single-flag path's
+        # granularity: response-level errors (errors-while-computing, quota-limited) are
+        # combined with per-flag errors (flag-missing) so consumers can filter by type.
+        errors: List[str] = []
+        if self._errors_while_computing:
+            errors.append("errors_while_computing_flags")
+        if self._quota_limited:
+            errors.append("quota_limited")
         if flag is None:
-            properties["$feature_flag_error"] = "flag_missing"
+            errors.append("flag_missing")
+        if errors:
+            properties["$feature_flag_error"] = ",".join(errors)
 
         self._host.capture_flag_called_event_if_needed(
             distinct_id=self._distinct_id,

@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-17T19:08:13.029980724Z"
+exclude-newer = "2026-04-21T13:48:20.831231Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -2042,7 +2042,6 @@ source = { editable = "." }
 dependencies = [
     { name = "backoff" },
     { name = "distro" },
-    { name = "python-dateutil" },
     { name = "requests" },
     { name = "typing-extensions" },
 ]
@@ -2061,7 +2060,6 @@ dev = [
     { name = "tomli" },
     { name = "tomli-w" },
     { name = "twine" },
-    { name = "types-python-dateutil" },
     { name = "types-requests" },
     { name = "types-setuptools" },
     { name = "wheel" },
@@ -2094,7 +2092,9 @@ test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "python-dateutil" },
     { name = "tiktoken" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -2136,7 +2136,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-asyncio", marker = "extra == 'test'" },
     { name = "pytest-timeout", marker = "extra == 'test'" },
-    { name = "python-dateutil", specifier = ">=2.2" },
+    { name = "python-dateutil", marker = "extra == 'test'", specifier = ">=2.9.0.post0" },
     { name = "requests", specifier = ">=2.7,<3.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "setuptools", marker = "extra == 'dev'" },
@@ -2144,10 +2144,10 @@ requires-dist = [
     { name = "tomli", marker = "extra == 'dev'" },
     { name = "tomli-w", marker = "extra == 'dev'" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "types-python-dateutil", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "types-setuptools", marker = "extra == 'dev'" },
     { name = "typing-extensions", specifier = ">=4.2.0" },
+    { name = "tzdata", marker = "extra == 'test'" },
     { name = "wheel", marker = "extra == 'dev'" },
 ]
 provides-extras = ["langchain", "otel", "dev", "test"]
@@ -3199,15 +3199,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c8/a2/6df94fc5c8e2170d21d7134a565c3a8fb84f9797c1dd65a5976aaf714418/twine-6.1.0.tar.gz", hash = "sha256:be324f6272eff91d07ee93f251edf232fc647935dd585ac003539b42404a8dbd", size = 168404, upload-time = "2025-01-21T18:45:26.758Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/b6/74e927715a285743351233f33ea3c684528a0d374d2e43ff9ce9585b73fe/twine-6.1.0-py3-none-any.whl", hash = "sha256:a47f973caf122930bf0fbbf17f80b83bc1602c9ce393c7845f289a3001dc5384", size = 40791, upload-time = "2025-01-21T18:45:24.584Z" },
-]
-
-[[package]]
-name = "types-python-dateutil"
-version = "2.9.0.20250516"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ef/88/d65ed807393285204ab6e2801e5d11fbbea811adcaa979a2ed3b67a5ef41/types_python_dateutil-2.9.0.20250516.tar.gz", hash = "sha256:13e80d6c9c47df23ad773d54b2826bd52dbbb41be87c3f339381c1700ad21ee5", size = 13943, upload-time = "2025-05-16T03:06:58.385Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c5/3f/b0e8db149896005adc938a1e7f371d6d7e9eca4053a29b108978ed15e0c2/types_python_dateutil-2.9.0.20250516-py3-none-any.whl", hash = "sha256:2b2b3f57f9c6a61fba26a9c0ffb9ea5681c9b83e69cd897c6b5f668d9c0cab93", size = 14356, upload-time = "2025-05-16T03:06:57.249Z" },
 ]
 
 [[package]]

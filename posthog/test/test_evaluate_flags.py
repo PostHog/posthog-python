@@ -166,6 +166,35 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
+    def test_errors_while_computing_flags_propagates_to_event(
+        self, patch_capture, patch_flags
+    ):
+        # Response-level errors are combined with per-flag errors so each
+        # $feature_flag_called event carries the granular error code(s).
+        response = _flags_response_fixture()
+        response["errorsWhileComputingFlags"] = True
+        patch_flags.return_value = response
+
+        flags = self.client.evaluate_flags("user-1")
+        flags.is_enabled("boolean-flag")  # known flag — only response-level error
+        flags.is_enabled("missing-flag")  # missing — both errors combined
+
+        by_key = {
+            c[1]["properties"]["$feature_flag"]: c[1]["properties"]
+            for c in patch_capture.call_args_list
+            if c[0] and c[0][0] == "$feature_flag_called"
+        }
+        self.assertEqual(
+            by_key["boolean-flag"]["$feature_flag_error"],
+            "errors_while_computing_flags",
+        )
+        self.assertEqual(
+            by_key["missing-flag"]["$feature_flag_error"],
+            "errors_while_computing_flags,flag_missing",
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
     def test_dedupes_repeated_access(self, patch_capture, patch_flags):
         patch_flags.return_value = _flags_response_fixture()
         flags = self.client.evaluate_flags("user-1")
@@ -247,23 +276,14 @@ class TestEvaluateFlagsFiltering(unittest.TestCase):
         self.assertEqual(sorted(accessed.keys), ["boolean-flag", "variant-flag"])
 
     @mock.patch("posthog.client.flags")
-    def test_only_accessed_falls_back_with_warning_when_empty(self, patch_flags):
+    def test_only_accessed_returns_empty_when_no_flags_accessed(self, patch_flags):
+        # The method honors its name: nothing accessed → empty snapshot, no fallback.
         patch_flags.return_value = _flags_response_fixture()
         flags = self.client.evaluate_flags("user-1")
 
-        with self.assertLogs("posthog", level="WARNING") as logs:
-            accessed = flags.only_accessed()
+        accessed = flags.only_accessed()
 
-        self.assertEqual(
-            sorted(accessed.keys),
-            ["boolean-flag", "disabled-flag", "variant-flag"],
-        )
-        self.assertTrue(
-            any(
-                "only_accessed() was called before any flags were accessed" in m
-                for m in logs.output
-            )
-        )
+        self.assertEqual(accessed.keys, [])
 
     @mock.patch("posthog.client.flags")
     def test_only_drops_unknown_keys_with_warning(self, patch_flags):
@@ -360,6 +380,32 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
         self.client.capture("page_viewed", distinct_id="user-1", flags=flags)
 
         self.assertEqual(patch_flags.call_count, calls_before)
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_warns_and_uses_flags_when_both_flags_and_send_feature_flags_set(
+        self, patch_flags
+    ):
+        # `flags` always wins regardless of `send_feature_flags`. We log a warning so
+        # the precedence isn't surprising when both are provided.
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+        calls_before = patch_flags.call_count
+
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            self.client.capture(
+                "page_viewed",
+                distinct_id="user-1",
+                flags=flags,
+                send_feature_flags=True,
+            )
+
+        self.assertEqual(patch_flags.call_count, calls_before)
+        self.assertTrue(
+            any(
+                "Both `flags` and `send_feature_flags` were passed" in m
+                for m in logs.output
+            )
+        )
 
 
 if __name__ == "__main__":

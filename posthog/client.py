@@ -4,11 +4,10 @@ import logging
 import os
 import sys
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
-from dateutil.tz import tzutc
 from typing_extensions import Unpack
 
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
@@ -664,9 +663,16 @@ class Client(object):
 
         extra_properties: dict[str, Any] = {}
 
+        # Precedence: an explicit ``flags`` snapshot always wins, regardless of
+        # ``send_feature_flags``. The snapshot guarantees the event carries the same
+        # values the developer branched on with no additional network call. The
+        # ``send_feature_flags`` path only runs when no snapshot is provided.
         if flags_snapshot is not None:
-            # Prefer the explicit ``flags`` snapshot — it guarantees the event carries
-            # the same values the developer branched on, with no additional network call.
+            if send_feature_flags:
+                self.log.warning(
+                    "[FEATURE FLAGS] Both `flags` and `send_feature_flags` were passed to "
+                    "capture(); using `flags` and ignoring `send_feature_flags`."
+                )
             extra_properties = flags_snapshot._get_event_properties()
         else:
             feature_variants: Optional[dict[str, Union[bool, str]]] = {}
@@ -1113,7 +1119,7 @@ class Client(object):
 
         timestamp = msg["timestamp"]
         if timestamp is None:
-            timestamp = datetime.now(tz=tzutc())
+            timestamp = datetime.now(tz=timezone.utc)
 
         # add common
         timestamp = guess_timezone(timestamp)
@@ -1290,7 +1296,7 @@ class Client(object):
                     self._update_flag_state(
                         cached_data, old_flags_by_key=self.feature_flags_by_key or {}
                     )
-                    self._last_feature_flag_poll = datetime.now(tz=tzutc())
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                     return
                 else:
                     # Emergency fallback: if cache is empty and we have no flags, fetch anyway.
@@ -1337,7 +1343,7 @@ class Client(object):
                 self.log.debug(
                     "[FEATURE FLAGS] Flags not modified (304), using cached data"
                 )
-                self._last_feature_flag_poll = datetime.now(tz=tzutc())
+                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                 return
 
             if response.data is None:
@@ -1408,7 +1414,7 @@ class Client(object):
             )
             self.log.warning(e)
 
-        self._last_feature_flag_poll = datetime.now(tz=tzutc())
+        self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
 
     def load_feature_flags(self):
         """
@@ -2285,6 +2291,10 @@ class Client(object):
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
 
+        # Resolve device_id from context (may be set via tracing headers) so the
+        # remote /flags request can use it for experience-continuity flag matching.
+        device_id = get_context_device_id()
+
         if not distinct_id or self.disabled:
             # Empty snapshot. The class short-circuits on empty distinct_id so calling
             # is_enabled()/get_flag() on it won't emit events.
@@ -2303,6 +2313,8 @@ class Client(object):
         records: Dict[str, _EvaluatedFlagRecord] = {}
         request_id: Optional[str] = None
         evaluated_at: Optional[int] = None
+        errors_while_computing = False
+        quota_limited = False
         locally_evaluated_keys: set[str] = set()
 
         # Try local evaluation first when the poller has loaded definitions.
@@ -2345,11 +2357,15 @@ class Client(object):
                     group_properties=group_properties,
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys,
+                    device_id=device_id,
                 )
                 request_id = response.get("requestId")
                 raw_evaluated_at = response.get("evaluatedAt")
                 evaluated_at = (
                     raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
+                )
+                errors_while_computing = bool(
+                    response.get("errorsWhileComputingFlags", False)
                 )
                 for key, detail in response.get("flags", {}).items():
                     if key in locally_evaluated_keys:
@@ -2389,6 +2405,9 @@ class Client(object):
                         ),
                         locally_evaluated=False,
                     )
+            except QuotaLimitError as e:
+                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+                quota_limited = True
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to evaluate flags remotely: {e}"
@@ -2402,6 +2421,8 @@ class Client(object):
             disable_geoip=disable_geoip,
             request_id=request_id,
             evaluated_at=evaluated_at,
+            errors_while_computing=errors_while_computing,
+            quota_limited=quota_limited,
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None

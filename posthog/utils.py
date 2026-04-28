@@ -13,8 +13,6 @@ import sys
 import platform
 import distro  # For Linux OS detection
 
-from dateutil.tz import tzlocal, tzutc
-
 log = logging.getLogger("posthog")
 
 
@@ -36,12 +34,12 @@ def guess_timezone(dt):
         # case, and then defaults to utc
         delta = datetime.now() - dt
         if total_seconds(delta) < 5:
-            # this was created using datetime.datetime.now()
-            # so we are in the local timezone
-            return dt.replace(tzinfo=tzlocal())
+            # this was created using datetime.datetime.now(),
+            # so use the current system local timezone
+            return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
         else:
             # at this point, the best we can do is guess UTC
-            return dt.replace(tzinfo=tzutc())
+            return dt.replace(tzinfo=timezone.utc)
 
     return dt
 

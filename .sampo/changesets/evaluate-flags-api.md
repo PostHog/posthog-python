@@ -1,5 +1,5 @@
 ---
-"posthog": minor
+pypi/posthog: minor
 ---
 
 Add `evaluate_flags()` and a new `flags` option on `capture()` so a single `/flags` call can power both flag branching and event enrichment per request:

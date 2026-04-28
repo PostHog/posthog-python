@@ -799,8 +799,10 @@ def evaluate_flags(
         group_properties: Group properties keyed by group type.
         only_evaluate_locally: If ``True``, never fall back to remote evaluation.
         disable_geoip: Whether to disable GeoIP lookup.
-        flag_keys: Optional list of flag keys to scope the underlying ``/flags``
-            request to a subset.
+        flag_keys: Optional list of flag keys. When provided, only these flags are
+            evaluated — the underlying ``/flags`` request asks the server for just
+            this subset, which makes the response smaller and the request cheaper.
+            Use this when you only need a handful of flags out of many.
 
     Examples:
         ```python

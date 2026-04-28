@@ -2,12 +2,11 @@ import sys
 import time
 import unittest
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from dateutil.tz import tzutc
 from parameterized import parameterized
 from pydantic import BaseModel
 from pydantic.v1 import BaseModel as BaseModelV1
@@ -30,13 +29,13 @@ class TestUtils(unittest.TestCase):
         if expected_naive:
             dt = datetime.now()  # naive datetime
         else:
-            dt = datetime.now(tz=tzutc())  # timezone-aware datetime
+            dt = datetime.now(tz=timezone.utc)  # timezone-aware datetime
 
         assert utils.is_naive(dt) is expected_naive
 
     def test_timezone_utils(self):
         now = datetime.now()
-        utcnow = datetime.now(tz=tzutc())
+        utcnow = datetime.now(tz=timezone.utc)
 
         fixed = utils.guess_timezone(now)
         assert utils.is_naive(fixed) is False
@@ -80,7 +79,7 @@ class TestUtils(unittest.TestCase):
     def test_clean_with_dates(self):
         dict_with_dates = {
             "birthdate": date(1980, 1, 1),
-            "registration": datetime.now(tz=tzutc()),
+            "registration": datetime.now(tz=timezone.utc),
         }
         assert dict_with_dates == utils.clean(dict_with_dates)
 
