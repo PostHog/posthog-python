@@ -6,6 +6,7 @@ from posthog.contexts import (
 import unittest
 from unittest.mock import Mock, patch
 import asyncio
+from parameterized import parameterized
 
 # Configure Django settings before importing middleware
 import django
@@ -131,6 +132,73 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             self.assertEqual(get_context_session_id(), "session-only")
             self.assertIsNone(get_context_distinct_id())
             self.assertEqual(tags["$request_method"], "PUT")
+
+    @parameterized.expand(
+        [
+            (
+                "session_control_chars",
+                "X-POSTHOG-SESSION-ID",
+                "  session\n-\t123\x85  ",
+                get_context_session_id,
+                "session-123",
+                None,
+            ),
+            (
+                "distinct_empty_falls_back_to_user",
+                "X-POSTHOG-DISTINCT-ID",
+                "\r\n  ",
+                get_context_distinct_id,
+                "42",
+                42,
+            ),
+        ]
+    )
+    def test_extract_tags_sanitizes_tracing_header(
+        self, _name, header_name, raw_value, get_context_value, expected_value, user_pk
+    ):
+        """Test tracing header values are sanitized before entering context."""
+
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(headers={header_name: raw_value}, method="GET")
+            if user_pk is not None:
+                user = Mock()
+                user.is_authenticated = True
+                user.pk = user_pk
+                request.user = user
+
+            middleware.extract_tags(request)
+
+            self.assertEqual(get_context_value(), expected_value)
+
+    @parameterized.expand(
+        [
+            (
+                "session_non_string",
+                "X-POSTHOG-SESSION-ID",
+                123,
+                get_context_session_id,
+            ),
+            (
+                "distinct_non_string",
+                "X-POSTHOG-DISTINCT-ID",
+                object(),
+                get_context_distinct_id,
+            ),
+        ]
+    )
+    def test_extract_tags_ignores_non_string_tracing_header(
+        self, _name, header_name, raw_value, get_context_value
+    ):
+        """Test non-string tracing header values are ignored without throwing."""
+
+        with new_context():
+            middleware = self.create_middleware()
+            request = MockRequest(headers={header_name: raw_value}, method="GET")
+
+            middleware.extract_tags(request)
+
+            self.assertIsNone(get_context_value())
 
     def test_extract_tags_with_extra_tags(self):
         """Test tag extraction with extra_tags function"""
