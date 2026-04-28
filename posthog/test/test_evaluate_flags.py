@@ -1,4 +1,5 @@
 import unittest
+import warnings
 from unittest import mock
 
 from parameterized import parameterized
@@ -406,6 +407,82 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
                 for m in logs.output
             )
         )
+
+
+class TestDeprecationWarnings(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY)
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @parameterized.expand(
+        [
+            ("feature_enabled", "feature_enabled", ("boolean-flag", "user-1"), {}),
+            ("get_feature_flag", "get_feature_flag", ("boolean-flag", "user-1"), {}),
+            (
+                "get_feature_flag_payload",
+                "get_feature_flag_payload",
+                ("variant-flag", "user-1"),
+                {},
+            ),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_legacy_single_flag_methods_emit_deprecation_warning(
+        self, _name, method_name, args, kwargs, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            getattr(self.client, method_name)(*args, **kwargs)
+
+        deprecation = [
+            w
+            for w in caught
+            if issubclass(w.category, DeprecationWarning)
+            and method_name in str(w.message)
+        ]
+        self.assertEqual(len(deprecation), 1)
+        self.assertIn("evaluate_flags", str(deprecation[0].message))
+
+    @mock.patch("posthog.client.flags")
+    def test_capture_send_feature_flags_emits_deprecation_warning(self, patch_flags):
+        patch_flags.return_value = _flags_response_fixture()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.client.capture(
+                "page_viewed", distinct_id="user-1", send_feature_flags=True
+            )
+
+        deprecation = [
+            w
+            for w in caught
+            if issubclass(w.category, DeprecationWarning)
+            and "send_feature_flags" in str(w.message)
+        ]
+        self.assertEqual(len(deprecation), 1)
+        self.assertIn("evaluate_flags", str(deprecation[0].message))
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_feature_enabled_does_not_cascade_deprecation_warnings(
+        self, patch_capture, patch_flags
+    ):
+        # `feature_enabled` calls `_get_feature_flag_result` directly so the user only
+        # sees one warning, not three (one each from feature_enabled →
+        # get_feature_flag → get_feature_flag_result if it had one).
+        patch_flags.return_value = _flags_response_fixture()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.client.feature_enabled("boolean-flag", "user-1")
+
+        deprecation = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        self.assertEqual(len(deprecation), 1)
 
 
 if __name__ == "__main__":

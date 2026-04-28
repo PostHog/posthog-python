@@ -13,4 +13,4 @@ posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
 
 The returned `FeatureFlagEvaluations` snapshot exposes `is_enabled()`, `get_flag()`, `get_flag_payload()` for branching and `only_accessed()` / `only([keys])` filter helpers. Pass `flag_keys=[...]` to `evaluate_flags()` to scope the underlying `/flags` request itself.
 
-Existing `feature_enabled()`, `get_feature_flag()`, `get_feature_flag_payload()`, and `capture(send_feature_flags=...)` continue to work unchanged. They will be deprecated in a follow-up minor and removed in the next major version.
+Deprecates `feature_enabled()`, `get_feature_flag()`, `get_feature_flag_payload()`, and `capture(send_feature_flags=...)`. They continue to work but now emit a `DeprecationWarning` pointing at `evaluate_flags()`. Removal is planned for the next major version.
