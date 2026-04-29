@@ -45,6 +45,7 @@ class TestConsumer(unittest.TestCase):
         next = consumer.next()
         self.assertEqual(next, [])
         self.assertTrue(q.empty())
+        self.assertEqual(q.unfinished_tasks, 0)
 
     def test_upload(self) -> None:
         q = Queue()

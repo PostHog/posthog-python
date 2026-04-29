@@ -73,6 +73,12 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.host, "https://eu.i.posthog.com")
         self.assertIsNone(client.personal_api_key)
 
+    def test_disabled_client_allows_missing_api_key(self):
+        client = Client(None, disabled=True, send=False)
+
+        self.assertEqual(client.api_key, "")
+        self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
+
     def test_empty_flush(self):
         self.client.flush()
 
@@ -522,7 +528,9 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.feature_flags_by_key, {})
             self.assertEqual(client.group_type_mapping, {})
             self.assertEqual(client.cohorts, {})
-            self.assertIn("please set a valid personal_api_key", logs.output[0])
+            self.assertIn("Unauthorized", logs.output[0])
+            self.assertIn("project_api_key", logs.output[0])
+            self.assertIn("personal_api_key", logs.output[0])
 
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):

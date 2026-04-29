@@ -36,6 +36,29 @@ class TestModule(unittest.TestCase):
         self.posthog.flush()
 
 
+class TestModuleLevelDisabledSetup(unittest.TestCase):
+    def setUp(self):
+        self._original_default_client = posthog.default_client
+        self._original_api_key = posthog.api_key
+        self._original_disabled = posthog.disabled
+        self._original_send = posthog.send
+        posthog.default_client = None
+        posthog.api_key = None
+        posthog.disabled = True
+        posthog.send = False
+
+    def tearDown(self):
+        posthog.default_client = self._original_default_client
+        posthog.api_key = self._original_api_key
+        posthog.disabled = self._original_disabled
+        posthog.send = self._original_send
+
+    def test_disabled_module_level_capture_allows_missing_api_key(self):
+        self.assertIsNone(posthog.capture("event", distinct_id="distinct_id"))
+        self.assertIsNotNone(posthog.default_client)
+        self.assertEqual(posthog.default_client.api_key, "")
+
+
 class TestModuleLevelWrappers(unittest.TestCase):
     """Test that module-level wrapper functions in posthog/__init__.py
     correctly propagate all parameters to the Client methods."""

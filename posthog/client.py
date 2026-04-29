@@ -166,7 +166,7 @@ class Client(object):
 
     def __init__(
         self,
-        project_api_key: str,
+        project_api_key: Optional[str],
         host=None,
         debug=False,
         max_queue_size=10000,
@@ -220,7 +220,12 @@ class Client(object):
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
-        self.api_key = project_api_key.strip()
+        if project_api_key is None:
+            if not disabled:
+                raise ValueError("API key is required")
+            self.api_key = ""
+        else:
+            self.api_key = project_api_key.strip()
 
         self.on_error = on_error
         self.debug = debug
@@ -290,7 +295,7 @@ class Client(object):
         else:
             self.log.setLevel(logging.WARNING)
 
-        if not self.api_key:
+        if not self.api_key and not self.disabled:
             self.log.error(
                 "api_key is empty after trimming whitespace; check your project API key"
             )
@@ -1351,7 +1356,8 @@ class Client(object):
         except APIError as e:
             if e.status == 401:
                 self.log.error(
-                    "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
+                    "[FEATURE FLAGS] Error loading feature flags: %s. Please verify both your project_api_key and personal_api_key. More information: https://posthog.com/docs/api/overview",
+                    e.message,
                 )
                 self.feature_flags = []
                 self.group_type_mapping = {}
@@ -1363,8 +1369,8 @@ class Client(object):
                 if self.debug:
                     raise APIError(
                         status=401,
-                        message="You are using a write-only key with feature flags. "
-                        "To use feature flags, please set a personal_api_key "
+                        message=f"Error loading feature flags: {e.message}. "
+                        "Please verify both your project_api_key and personal_api_key. "
                         "More information: https://posthog.com/docs/api/overview",
                     )
             elif e.status == 402:

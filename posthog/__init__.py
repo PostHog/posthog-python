@@ -857,7 +857,7 @@ def shutdown():
 def setup() -> Client:
     global default_client
     if not default_client:
-        if not api_key:
+        if not api_key and not disabled:
             raise ValueError("API key is required")
         default_client = Client(
             api_key,
