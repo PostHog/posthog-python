@@ -68,7 +68,6 @@ jobs:
     environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
     permissions:
       contents: write
-      actions: write
       id-token: write
     steps:
       - name: Notify Slack - Approved
@@ -194,11 +193,34 @@ jobs:
           NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
         run: gh release create "$NEW_VERSION" --generate-notes
 
-      - name: Dispatch generate-references
+      - name: Generate references
         if: steps.commit-release.outputs.commit-hash != ''
+        run: |
+          uv run bin/docs generate-references
+
+      - name: Check for changes in references
+        if: steps.commit-release.outputs.commit-hash != ''
+        id: references-changes
+        run: |
+          if [ -n "$(git status --porcelain references/)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "New references generated in references directory:"
+            git status --porcelain references/
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No new references generated in references directory"
+          fi
+
+      - name: Commit generated references
+        if: steps.commit-release.outputs.commit-hash != '' && steps.references-changes.outputs.changed == 'true'
+        uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
+        with:
+          commit_message: "Update generated references"
+          repo: ${{ github.repository }}
+          branch: main
+          file_pattern: references/
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run generate-references.yml --ref main
+          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
