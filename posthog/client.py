@@ -1353,9 +1353,12 @@ class Client(object):
 
         except APIError as e:
             if e.status == 401:
-                self.log.error(
-                    "[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview"
+                detail = (
+                    f"Error loading feature flags: {e.message}. "
+                    "Please verify both your project_api_key and personal_api_key. "
+                    "More information: https://posthog.com/docs/api/overview"
                 )
+                self.log.error("[FEATURE FLAGS] %s", detail)
                 self.feature_flags = []
                 self.group_type_mapping = {}
                 self.cohorts = {}
@@ -1364,12 +1367,7 @@ class Client(object):
                     self.flag_cache.clear()
 
                 if self.debug:
-                    raise APIError(
-                        status=401,
-                        message="You are using a write-only key with feature flags. "
-                        "To use feature flags, please set a personal_api_key "
-                        "More information: https://posthog.com/docs/api/overview",
-                    )
+                    raise APIError(status=401, message=detail)
             elif e.status == 402:
                 self.log.warning(
                     "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"

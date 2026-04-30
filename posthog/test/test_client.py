@@ -555,7 +555,9 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.feature_flags_by_key, {})
             self.assertEqual(client.group_type_mapping, {})
             self.assertEqual(client.cohorts, {})
-            self.assertIn("please set a valid personal_api_key", logs.output[0])
+            self.assertIn("Unauthorized", logs.output[0])
+            self.assertIn("project_api_key", logs.output[0])
+            self.assertIn("personal_api_key", logs.output[0])
 
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):
