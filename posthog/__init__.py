@@ -886,8 +886,9 @@ def setup() -> Client:
             in_app_modules=in_app_modules,
         )
 
-    # always set incase user changes it
-    default_client.disabled = disabled
+    # Always set in case user changes it. Preserve Client's auto-disabled state
+    # for API keys that become empty after trimming.
+    default_client.disabled = disabled or not default_client.api_key
     default_client.debug = debug
     default_client._set_before_send(before_send)
 

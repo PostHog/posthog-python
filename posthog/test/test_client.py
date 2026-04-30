@@ -43,17 +43,19 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False),
-            ("whitespace_only", " \n\t ", "", True),
+            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False, False),
+            ("whitespace_only", " \n\t ", "", True, True),
+            ("empty_string", "", "", True, True),
         ]
     )
     def test_trims_api_key_whitespace(
-        self, _, raw_api_key, expected_api_key, expect_error_log
+        self, _, raw_api_key, expected_api_key, expected_disabled, expect_error_log
     ):
         with mock.patch.object(Client.log, "error") as mock_error:
             client = Client(raw_api_key, send=False)
 
         self.assertEqual(client.api_key, expected_api_key)
+        self.assertEqual(client.disabled, expected_disabled)
         if expect_error_log:
             mock_error.assert_called_once_with(
                 "api_key is empty after trimming whitespace; check your project API key"
@@ -72,6 +74,37 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.raw_host, "https://eu.posthog.com/")
         self.assertEqual(client.host, "https://eu.i.posthog.com")
         self.assertIsNone(client.personal_api_key)
+
+    def test_client_with_empty_api_key_is_noop(self):
+        client = Client("", send=False)
+
+        self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
+
+    @mock.patch("posthog.client.get")
+    def test_disabled_client_does_not_load_feature_flags(self, patch_get):
+        client = Client("", personal_api_key="test", send=False)
+
+        client.load_feature_flags()
+
+        patch_get.assert_not_called()
+        self.assertEqual(client.feature_flags, [])
+        self.assertIsNone(client.poller)
+
+    @mock.patch("posthog.client.flags")
+    def test_disabled_client_does_not_get_flags_decision(self, patch_flags):
+        client = Client("", send=False)
+
+        self.assertEqual(client.get_flags_decision("distinct_id")["flags"], {})
+        self.assertEqual(client.get_feature_variants("distinct_id"), {})
+        self.assertEqual(client.get_feature_payloads("distinct_id"), {})
+        self.assertEqual(
+            client.get_feature_flags_and_payloads("distinct_id"),
+            {"featureFlags": {}, "featureFlagPayloads": {}},
+        )
+        self.assertIsNone(
+            client.capture("event", distinct_id="distinct_id", send_feature_flags=True)
+        )
+        patch_flags.assert_not_called()
 
     def test_empty_flush(self):
         self.client.flush()
