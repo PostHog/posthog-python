@@ -1,5 +1,15 @@
 # posthog
 
+## 7.13.2 — 2026-04-30
+
+### Patch changes
+
+- [f4af88a](https://github.com/posthog/posthog-python/commit/f4af88a3c3e5a095366af8789aa6c649eaeb4fd9) Prevent flush from hanging after dropping oversized queued events. — Thanks @marandaneto!
+- [6b3d1c7](https://github.com/posthog/posthog-python/commit/6b3d1c75780d10eb8aec2efede9d0d1de0adc889) Sanitize PostHog tracing headers extracted by Django middleware. — Thanks @dustinbyrne!
+- [dea848f](https://github.com/posthog/posthog-python/commit/dea848fd60a8857d8087c8b5058b0a8d7965981d) Remove python-dateutil as a runtime dependency — Thanks @marandaneto!
+- [a1c6640](https://github.com/posthog/posthog-python/commit/a1c6640d42924a006a3495033b55e4be5ed5ede7) Improve local feature flag authentication error messages. — Thanks @marandaneto!
+- [8bdd3fa](https://github.com/posthog/posthog-python/commit/8bdd3fa126b29a366efbcf66060cb54e09010c05) Treat clients with an empty project API key as disabled no-ops. — Thanks @marandaneto!
+
 ## 7.13.1 — 2026-04-24
 
 ### Patch changes
