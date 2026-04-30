@@ -220,7 +220,7 @@ class Client(object):
         self.queue = queue.Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
-        self.api_key = project_api_key.strip()
+        self.api_key = (project_api_key or "").strip()
 
         self.on_error = on_error
         self.debug = debug
@@ -245,7 +245,7 @@ class Client(object):
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
         self._flag_definition_cache_provider = flag_definition_cache_provider
-        self.disabled = disabled
+        self.disabled = disabled or not self.api_key
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
         self.super_properties = super_properties
@@ -538,6 +538,9 @@ class Client(object):
         Category:
             Feature flags
         """
+        if self.disabled:
+            return normalize_flags_response({})
+
         groups = groups or {}
         person_properties = person_properties or {}
         group_properties = group_properties or {}
@@ -1408,6 +1411,10 @@ class Client(object):
         Category:
             Feature flags
         """
+        if self.disabled:
+            self.feature_flags = []
+            return
+
         if not self.personal_api_key:
             self.log.warning(
                 "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
