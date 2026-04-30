@@ -2546,12 +2546,12 @@ class TestLocalEvaluation(unittest.TestCase):
 
         with self.assertLogs("posthog", level="ERROR") as logs:
             client.load_feature_flags()
-            self.assertEqual(
-                logs.output[0],
-                "ERROR:posthog:[FEATURE FLAGS] Error loading feature flags: To use feature flags, please set a valid personal_api_key. More information: https://posthog.com/docs/api/overview",
-            )
+            self.assertIn("Unauthorized", logs.output[0])
+            self.assertIn("project_api_key", logs.output[0])
+            self.assertIn("personal_api_key", logs.output[0])
         client.debug = True
-        self.assertRaises(APIError, client.load_feature_flags)
+        with self.assertRaisesRegex(APIError, "Unauthorized"):
+            client.load_feature_flags()
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
