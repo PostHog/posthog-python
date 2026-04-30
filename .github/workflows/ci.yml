@@ -25,7 +25,6 @@ jobs:
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
-                  pyproject-file: 'pyproject.toml'
 
             - name: Install dev dependencies
               shell: bash
@@ -65,7 +64,6 @@ jobs:
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
-                  pyproject-file: 'pyproject.toml'
 
             - name: Install test dependencies
               shell: bash
@@ -117,7 +115,6 @@ jobs:
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
-                  pyproject-file: 'integration_tests/django5/pyproject.toml'
 
             - name: Install Django 5 test project dependencies
               shell: bash
