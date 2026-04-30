@@ -112,6 +112,7 @@ class Consumer(Thread):
                     self.log.error(
                         "Item exceeds 900kib limit, dropping. (%s)", str(item)
                     )
+                    queue.task_done()
                     continue
                 items.append(item)
                 total_size += item_size
