@@ -242,6 +242,18 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
         )
 
     @mock.patch("posthog.client.flags")
+    def test_explicit_device_id_overrides_context(self, patch_flags):
+        # Parity with the deprecated single-flag methods: callers can pass an
+        # explicit device_id to bypass whatever the context resolver returns.
+        patch_flags.return_value = _flags_response_fixture()
+
+        self.client.evaluate_flags("user-1", device_id="explicit-device")
+
+        self.assertEqual(
+            patch_flags.call_args.kwargs.get("device_id"), "explicit-device"
+        )
+
+    @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
     def test_empty_distinct_id_returns_empty_snapshot_without_events(
         self, patch_capture, patch_flags

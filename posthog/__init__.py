@@ -781,6 +781,7 @@ def evaluate_flags(
     only_evaluate_locally=False,  # type: bool
     disable_geoip=None,  # type: Optional[bool]
     flag_keys=None,  # type: Optional[list]
+    device_id=None,  # type: Optional[str]
 ) -> FeatureFlagEvaluations:
     """Evaluate all feature flags for a user in a single call and return a
     :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
@@ -803,6 +804,9 @@ def evaluate_flags(
             evaluated — the underlying ``/flags`` request asks the server for just
             this subset, which makes the response smaller and the request cheaper.
             Use this when you only need a handful of flags out of many.
+        device_id: Optional device ID override. If not provided, falls back to the
+            context device_id (which may be set via tracing headers). Used by
+            experience-continuity flags to match users across distinct_id changes.
 
     Examples:
         ```python
@@ -825,6 +829,7 @@ def evaluate_flags(
         only_evaluate_locally=only_evaluate_locally,
         disable_geoip=disable_geoip,
         flag_keys=flag_keys,
+        device_id=device_id,
     )
 
 

@@ -2284,6 +2284,7 @@ class Client(object):
         only_evaluate_locally: bool = False,
         disable_geoip: Optional[bool] = None,
         flag_keys: Optional[List[str]] = None,
+        device_id: Optional[str] = None,
     ) -> FeatureFlagEvaluations:
         """Evaluate all feature flags for a user in a single call and return a
         :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
@@ -2309,6 +2310,9 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP lookup.
             flag_keys: Optional list of flag keys to scope the underlying ``/flags``
                 request to a subset.
+            device_id: Optional device ID override. If not provided, falls back to the
+                context device_id (which may be set via tracing headers). Used by
+                experience-continuity flags to match users across distinct_id changes.
 
         Returns:
             A :class:`FeatureFlagEvaluations` snapshot.
@@ -2332,9 +2336,12 @@ class Client(object):
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
 
-        # Resolve device_id from context (may be set via tracing headers) so the
-        # remote /flags request can use it for experience-continuity flag matching.
-        device_id = get_context_device_id()
+        # Resolve device_id from context when not explicitly provided. The context value
+        # may be set via tracing headers; the explicit parameter is an override for callers
+        # who want to bypass it. Used by the remote /flags request for experience-continuity
+        # flag matching.
+        if device_id is None:
+            device_id = get_context_device_id()
 
         if not distinct_id or self.disabled:
             # Empty snapshot. The class short-circuits on empty distinct_id so calling
