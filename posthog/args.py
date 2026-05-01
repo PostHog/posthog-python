@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, Any, Dict, Union, Tuple, Type
+from typing import TYPE_CHECKING, TypedDict, Optional, Any, Dict, Union, Tuple, Type
 from types import TracebackType
 from typing_extensions import NotRequired  # For Python < 3.11 compatibility
 from datetime import datetime
@@ -6,6 +6,9 @@ import numbers
 from uuid import UUID
 
 from posthog.types import SendFeatureFlagsOptions
+
+if TYPE_CHECKING:
+    from posthog.feature_flag_evaluations import FeatureFlagEvaluations
 
 ID_TYPES = Union[numbers.Number, str, UUID, int]
 
@@ -23,9 +26,14 @@ class OptionalCaptureArgs(TypedDict):
             UUID is returned, so you can correlate it with actions in your app (like showing users an
             error ID if you capture an exception).
         groups: Group identifiers to associate with this event (format: {group_type: group_key})
-        send_feature_flags: Whether to include currently active feature flags in the event properties.
-            Can be a boolean (True/False) or a SendFeatureFlagsOptions object for advanced configuration.
-            Defaults to False.
+        flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``. The exact flag
+            values from the snapshot are attached to the event with no additional network call —
+            prefer this over ``send_feature_flags``.
+        send_feature_flags: Deprecated — prefer ``flags`` with a ``FeatureFlagEvaluations``
+            snapshot. Whether to include currently active feature flags in the event properties.
+            Can be a boolean or a SendFeatureFlagsOptions object. Defaults to False. Fires a
+            hidden ``/flags`` request on capture and may return different values than the ones
+            the code branched on.
         disable_geoip: Whether to disable GeoIP lookup for this event. Defaults to False.
     """
 
@@ -34,6 +42,7 @@ class OptionalCaptureArgs(TypedDict):
     timestamp: NotRequired[Optional[Union[datetime, str]]]
     uuid: NotRequired[Optional[str]]
     groups: NotRequired[Optional[Dict[str, str]]]
+    flags: NotRequired[Optional["FeatureFlagEvaluations"]]
     send_feature_flags: NotRequired[
         Optional[Union[bool, SendFeatureFlagsOptions]]
     ]  # Updated to support both boolean and options object

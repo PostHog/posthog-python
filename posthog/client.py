@@ -1,10 +1,11 @@
 import atexit
+import json
 import logging
 import os
 import sys
 import warnings
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from typing_extensions import Unpack
@@ -31,6 +32,11 @@ from posthog.exception_utils import (
     handle_in_app,
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
+)
+from posthog.feature_flag_evaluations import (
+    FeatureFlagEvaluations,
+    _EvaluatedFlagRecord,
+    _FeatureFlagEvaluationsHost,
 )
 from posthog.feature_flags import (
     InconclusiveMatchError,
@@ -633,6 +639,7 @@ class Client(object):
         timestamp = kwargs.get("timestamp", None)
         uuid = kwargs.get("uuid", None)
         groups = kwargs.get("groups", None)
+        flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
 
@@ -658,70 +665,91 @@ class Client(object):
             properties["$groups"] = groups
 
         extra_properties: dict[str, Any] = {}
-        feature_variants: Optional[dict[str, Union[bool, str]]] = {}
 
-        # Parse and normalize send_feature_flags parameter
-        flag_options = self._parse_send_feature_flags(send_feature_flags)
-
-        if flag_options["should_send"]:
-            try:
-                if flag_options["only_evaluate_locally"] is True:
-                    # Local evaluation explicitly requested
-                    feature_variants = self.get_all_flags(
-                        distinct_id,
-                        groups=(groups or {}),
-                        person_properties=flag_options["person_properties"],
-                        group_properties=flag_options["group_properties"],
-                        disable_geoip=disable_geoip,
-                        only_evaluate_locally=True,
-                        flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                    )
-                elif flag_options["only_evaluate_locally"] is False:
-                    # Remote evaluation explicitly requested
-                    feature_variants = self.get_feature_variants(
-                        distinct_id,
-                        groups,
-                        person_properties=flag_options["person_properties"],
-                        group_properties=flag_options["group_properties"],
-                        disable_geoip=disable_geoip,
-                        flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                    )
-                elif self.feature_flags:
-                    # Local flags available, prefer local evaluation
-                    feature_variants = self.get_all_flags(
-                        distinct_id,
-                        groups=(groups or {}),
-                        person_properties=flag_options["person_properties"],
-                        group_properties=flag_options["group_properties"],
-                        disable_geoip=disable_geoip,
-                        only_evaluate_locally=True,
-                        flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                    )
-                else:
-                    # Fall back to remote evaluation
-                    feature_variants = self.get_feature_variants(
-                        distinct_id,
-                        groups,
-                        person_properties=flag_options["person_properties"],
-                        group_properties=flag_options["group_properties"],
-                        disable_geoip=disable_geoip,
-                        flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                    )
-            except Exception as e:
-                self.log.exception(
-                    f"[FEATURE FLAGS] Unable to get feature variants: {e}"
+        # Precedence: an explicit ``flags`` snapshot always wins, regardless of
+        # ``send_feature_flags``. The snapshot guarantees the event carries the same
+        # values the developer branched on with no additional network call. The
+        # ``send_feature_flags`` path only runs when no snapshot is provided.
+        if flags_snapshot is not None:
+            if send_feature_flags:
+                self.log.warning(
+                    "[FEATURE FLAGS] Both `flags` and `send_feature_flags` were passed to "
+                    "capture(); using `flags` and ignoring `send_feature_flags`."
                 )
+            extra_properties = flags_snapshot._get_event_properties()
+        else:
+            feature_variants: Optional[dict[str, Union[bool, str]]] = {}
 
-        for feature, variant in (feature_variants or {}).items():
-            extra_properties[f"$feature/{feature}"] = variant
+            # Parse and normalize send_feature_flags parameter
+            flag_options = self._parse_send_feature_flags(send_feature_flags)
 
-        active_feature_flags = [
-            key
-            for (key, value) in (feature_variants or {}).items()
-            if value is not False
-        ]
-        if active_feature_flags:
-            extra_properties["$active_feature_flags"] = active_feature_flags
+            if flag_options["should_send"]:
+                warnings.warn(
+                    "`send_feature_flags` is deprecated and will be removed in a future major "
+                    "version. Pass a `flags` snapshot from `posthog.evaluate_flags(...)` instead "
+                    "— it avoids a second `/flags` request per capture and guarantees the event "
+                    "carries the exact flag values your code branched on.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                try:
+                    if flag_options["only_evaluate_locally"] is True:
+                        # Local evaluation explicitly requested
+                        feature_variants = self.get_all_flags(
+                            distinct_id,
+                            groups=(groups or {}),
+                            person_properties=flag_options["person_properties"],
+                            group_properties=flag_options["group_properties"],
+                            disable_geoip=disable_geoip,
+                            only_evaluate_locally=True,
+                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                        )
+                    elif flag_options["only_evaluate_locally"] is False:
+                        # Remote evaluation explicitly requested
+                        feature_variants = self.get_feature_variants(
+                            distinct_id,
+                            groups,
+                            person_properties=flag_options["person_properties"],
+                            group_properties=flag_options["group_properties"],
+                            disable_geoip=disable_geoip,
+                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                        )
+                    elif self.feature_flags:
+                        # Local flags available, prefer local evaluation
+                        feature_variants = self.get_all_flags(
+                            distinct_id,
+                            groups=(groups or {}),
+                            person_properties=flag_options["person_properties"],
+                            group_properties=flag_options["group_properties"],
+                            disable_geoip=disable_geoip,
+                            only_evaluate_locally=True,
+                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                        )
+                    else:
+                        # Fall back to remote evaluation
+                        feature_variants = self.get_feature_variants(
+                            distinct_id,
+                            groups,
+                            person_properties=flag_options["person_properties"],
+                            group_properties=flag_options["group_properties"],
+                            disable_geoip=disable_geoip,
+                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                        )
+                except Exception as e:
+                    self.log.exception(
+                        f"[FEATURE FLAGS] Unable to get feature variants: {e}"
+                    )
+
+            for feature, variant in (feature_variants or {}).items():
+                extra_properties[f"$feature/{feature}"] = variant
+
+            active_feature_flags = [
+                key
+                for (key, value) in (feature_variants or {}).items()
+                if value is not False
+            ]
+            if active_feature_flags:
+                extra_properties["$active_feature_flags"] = active_feature_flags
 
         if extra_properties:
             properties = {**extra_properties, **properties}
@@ -982,7 +1010,9 @@ class Client(object):
             exception: The exception to capture.
             distinct_id: The distinct ID of the user.
             properties: A dictionary of additional properties.
-            send_feature_flags: Whether to send feature flags with the exception.
+            flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
+                Attaches those exact flag values to the captured `$exception` event.
+            send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -999,6 +1029,7 @@ class Client(object):
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
+        flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
         # this function shouldn't ever throw an error, so it logs exceptions instead of raising them.
@@ -1081,6 +1112,7 @@ class Client(object):
                 timestamp=timestamp,
                 uuid=uuid,
                 groups=groups,
+                flags=flags_snapshot,
                 send_feature_flags=send_feature_flags,
                 disable_geoip=disable_geoip,
             )
@@ -1559,7 +1591,17 @@ class Client(object):
         Category:
             Feature flags
         """
-        response = self.get_feature_flag(
+        warnings.warn(
+            "`feature_enabled` is deprecated and will be removed in a future major version. "
+            "Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` "
+            "instead — this consolidates flag evaluation into a single `/flags` request per "
+            "incoming request.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Bypass the public `get_feature_flag` so the user only sees a single deprecation
+        # warning per call, not three (feature_enabled → get_feature_flag → get_feature_flag_result).
+        flag_result = self._get_feature_flag_result(
             key,
             distinct_id,
             groups=groups,
@@ -1570,6 +1612,7 @@ class Client(object):
             disable_geoip=disable_geoip,
             device_id=device_id,
         )
+        response = flag_result.get_value() if flag_result else None
 
         if response is None:
             return None
@@ -1819,7 +1862,17 @@ class Client(object):
         Category:
             Feature flags
         """
-        feature_flag_result = self.get_feature_flag_result(
+        warnings.warn(
+            "`get_feature_flag` is deprecated and will be removed in a future major version. "
+            "Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` "
+            "instead — this consolidates flag evaluation into a single `/flags` request per "
+            "incoming request.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Bypass the public `get_feature_flag_result` so the user only sees one deprecation
+        # warning per call.
+        feature_flag_result = self._get_feature_flag_result(
             key,
             distinct_id,
             groups=groups,
@@ -1914,6 +1967,14 @@ class Client(object):
         Category:
             Feature flags
         """
+        warnings.warn(
+            "`get_feature_flag_payload` is deprecated and will be removed in a future major "
+            "version. Use `posthog.evaluate_flags(distinct_id, ...)` and call "
+            "`flags.get_flag_payload(key)` instead — this consolidates flag evaluation into "
+            "a single `/flags` request per incoming request.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if send_feature_flag_events:
             warnings.warn(
                 "send_feature_flag_events is deprecated in get_feature_flag_payload() and will be removed "
@@ -1980,6 +2041,56 @@ class Client(object):
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
     ):
+        properties: dict[str, Any] = {
+            "$feature_flag": key,
+            "$feature_flag_response": response,
+            "locally_evaluated": flag_was_locally_evaluated,
+            f"$feature/{key}": response,
+        }
+
+        if payload is not None:
+            # if payload is not a string, json serialize it to a string
+            properties["$feature_flag_payload"] = payload
+
+        if request_id:
+            properties["$feature_flag_request_id"] = request_id
+        if evaluated_at:
+            properties["$feature_flag_evaluated_at"] = evaluated_at
+        if isinstance(flag_details, FeatureFlag):
+            if flag_details.reason and flag_details.reason.description:
+                properties["$feature_flag_reason"] = flag_details.reason.description
+            if isinstance(flag_details.metadata, FlagMetadata):
+                if flag_details.metadata.version:
+                    properties["$feature_flag_version"] = flag_details.metadata.version
+                if flag_details.metadata.id:
+                    properties["$feature_flag_id"] = flag_details.metadata.id
+        if feature_flag_error:
+            properties["$feature_flag_error"] = feature_flag_error
+
+        self._capture_feature_flag_called_if_needed(
+            distinct_id=distinct_id,
+            key=key,
+            response=response,
+            properties=properties,
+            groups=groups,
+            disable_geoip=disable_geoip,
+        )
+
+    def _capture_feature_flag_called_if_needed(
+        self,
+        *,
+        distinct_id: ID_TYPES,
+        key: str,
+        response: Optional[FlagValue],
+        properties: dict[str, Any],
+        groups: Optional[Dict[str, str]] = None,
+        disable_geoip: Optional[bool] = None,
+    ) -> None:
+        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response)
+        triple hasn't already been reported on this client. Shared by the single-flag
+        evaluation path and ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so
+        both paths dedupe identically.
+        """
         feature_flag_reported_key = (
             f"{key}_{'::null::' if response is None else str(response)}"
         )
@@ -1989,43 +2100,17 @@ class Client(object):
             reported_flags = set()
             self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
 
-        if feature_flag_reported_key not in reported_flags:
-            properties: dict[str, Any] = {
-                "$feature_flag": key,
-                "$feature_flag_response": response,
-                "locally_evaluated": flag_was_locally_evaluated,
-                f"$feature/{key}": response,
-            }
+        if feature_flag_reported_key in reported_flags:
+            return
 
-            if payload is not None:
-                # if payload is not a string, json serialize it to a string
-                properties["$feature_flag_payload"] = payload
-
-            if request_id:
-                properties["$feature_flag_request_id"] = request_id
-            if evaluated_at:
-                properties["$feature_flag_evaluated_at"] = evaluated_at
-            if isinstance(flag_details, FeatureFlag):
-                if flag_details.reason and flag_details.reason.description:
-                    properties["$feature_flag_reason"] = flag_details.reason.description
-                if isinstance(flag_details.metadata, FlagMetadata):
-                    if flag_details.metadata.version:
-                        properties["$feature_flag_version"] = (
-                            flag_details.metadata.version
-                        )
-                    if flag_details.metadata.id:
-                        properties["$feature_flag_id"] = flag_details.metadata.id
-            if feature_flag_error:
-                properties["$feature_flag_error"] = feature_flag_error
-
-            self.capture(
-                "$feature_flag_called",
-                distinct_id=distinct_id,
-                properties=properties,
-                groups=groups,
-                disable_geoip=disable_geoip,
-            )
-            reported_flags.add(feature_flag_reported_key)
+        self.capture(
+            "$feature_flag_called",
+            distinct_id=distinct_id,
+            properties=properties,
+            groups=groups or {},
+            disable_geoip=disable_geoip,
+        )
+        reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         if self.disabled:
@@ -2193,6 +2278,215 @@ class Client(object):
                 )
 
         return response
+
+    def evaluate_flags(
+        self,
+        distinct_id: Optional[ID_TYPES] = None,
+        *,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        disable_geoip: Optional[bool] = None,
+        flag_keys: Optional[List[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FeatureFlagEvaluations:
+        """Evaluate all feature flags for a user in a single call and return a
+        :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
+        ``.get_flag()`` and pass the same snapshot to :meth:`capture` via the
+        ``flags`` option so events carry the exact flag values the code branched on.
+
+        Prefer this over repeated ``get_feature_flag()`` calls and over
+        ``capture(send_feature_flags=True)`` — it consolidates flag evaluation into
+        a single ``/flags`` request per incoming request.
+
+        Local evaluation is transparent: when the poller resolves a flag, the
+        snapshot's ``$feature_flag_called`` events are tagged ``locally_evaluated=True``
+        and reason ``"Evaluated locally"``.
+
+        Args:
+            distinct_id: The user's distinct ID. If ``None``, falls back to the
+                context distinct_id. If still unresolvable, returns an empty snapshot.
+            groups: Mapping of group type to group key.
+            person_properties: Person properties to use for evaluation.
+            group_properties: Group properties keyed by group type.
+            only_evaluate_locally: If True, never fall back to remote evaluation —
+                flags that can't be evaluated locally are simply omitted from the snapshot.
+            disable_geoip: Whether to disable GeoIP lookup.
+            flag_keys: Optional list of flag keys to scope the underlying ``/flags``
+                request to a subset.
+            device_id: Optional device ID override. If not provided, falls back to the
+                context device_id (which may be set via tracing headers). Used by
+                experience-continuity flags to match users across distinct_id changes.
+
+        Returns:
+            A :class:`FeatureFlagEvaluations` snapshot.
+
+        Examples:
+            ```python
+            flags = posthog.evaluate_flags(
+                "user_123",
+                person_properties={"plan": "enterprise"},
+            )
+            if flags.is_enabled("new-dashboard"):
+                render_new_dashboard()
+            posthog.capture("page_viewed", distinct_id="user_123", flags=flags)
+            ```
+
+        Category:
+            Feature flags
+        """
+        host = self._get_feature_flag_evaluations_host()
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
+        # Resolve device_id from context when not explicitly provided. The context value
+        # may be set via tracing headers; the explicit parameter is an override for callers
+        # who want to bypass it. Used by the remote /flags request for experience-continuity
+        # flag matching.
+        if device_id is None:
+            device_id = get_context_device_id()
+
+        if not distinct_id or self.disabled:
+            # Empty snapshot. The class short-circuits on empty distinct_id so calling
+            # is_enabled()/get_flag() on it won't emit events.
+            return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
+
+        person_properties, group_properties = (
+            self._add_local_person_and_group_properties(
+                distinct_id,
+                groups or {},
+                person_properties or {},
+                group_properties or {},
+            )
+        )
+        groups = groups or {}
+
+        records: Dict[str, _EvaluatedFlagRecord] = {}
+        request_id: Optional[str] = None
+        evaluated_at: Optional[int] = None
+        errors_while_computing = False
+        quota_limited = False
+        locally_evaluated_keys: set[str] = set()
+
+        # Try local evaluation first when the poller has loaded definitions.
+        local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
+            distinct_id,
+            groups=dict(groups),
+            person_properties=person_properties,
+            group_properties=group_properties,
+            flag_keys_to_evaluate=flag_keys,
+        )
+
+        feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
+        local_flags = local_result.get("featureFlags") or {}
+        local_payloads = local_result.get("featureFlagPayloads") or {}
+        for key, value in local_flags.items():
+            flag_def = feature_flags_by_key.get(key) or {}
+            records[key] = _EvaluatedFlagRecord(
+                key=key,
+                enabled=value is not False,
+                variant=value if isinstance(value, str) else None,
+                payload=local_payloads.get(key),
+                id=flag_def.get("id"),
+                # The local-evaluation flag definition does not carry a version field;
+                # only the remote ``/flags`` response does via ``metadata.version``.
+                version=None,
+                reason="Evaluated locally",
+                locally_evaluated=True,
+            )
+            locally_evaluated_keys.add(key)
+
+        # Fall back to remote evaluation for any flags the poller couldn't resolve locally.
+        # Use ``get_flags_decision`` directly so the resulting records carry id/version/reason
+        # and fired ``$feature_flag_called`` events match what ``get_feature_flag()`` emits.
+        if fallback_to_server and not only_evaluate_locally:
+            try:
+                response = self.get_flags_decision(
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    disable_geoip=disable_geoip,
+                    flag_keys_to_evaluate=flag_keys,
+                    device_id=device_id,
+                )
+                request_id = response.get("requestId")
+                raw_evaluated_at = response.get("evaluatedAt")
+                evaluated_at = (
+                    raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
+                )
+                errors_while_computing = bool(
+                    response.get("errorsWhileComputingFlags", False)
+                )
+                for key, detail in response.get("flags", {}).items():
+                    if key in locally_evaluated_keys:
+                        continue
+                    payload: Optional[Any] = None
+                    raw_payload = (
+                        detail.metadata.payload
+                        if isinstance(detail.metadata, FlagMetadata)
+                        else getattr(detail.metadata, "payload", None)
+                    )
+                    if isinstance(raw_payload, str) and raw_payload:
+                        try:
+                            payload = json.loads(raw_payload)
+                        except (json.JSONDecodeError, TypeError):
+                            payload = raw_payload
+                    elif raw_payload is not None:
+                        payload = raw_payload
+                    records[key] = _EvaluatedFlagRecord(
+                        key=key,
+                        enabled=detail.enabled,
+                        variant=detail.variant,
+                        payload=payload,
+                        id=(
+                            detail.metadata.id
+                            if isinstance(detail.metadata, FlagMetadata)
+                            else None
+                        ),
+                        version=(
+                            detail.metadata.version
+                            if isinstance(detail.metadata, FlagMetadata)
+                            else None
+                        ),
+                        reason=(
+                            detail.reason.description
+                            if detail.reason and detail.reason.description
+                            else None
+                        ),
+                        locally_evaluated=False,
+                    )
+            except QuotaLimitError as e:
+                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+                quota_limited = True
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Unable to evaluate flags remotely: {e}"
+                )
+
+        return FeatureFlagEvaluations(
+            host=host,
+            distinct_id=str(distinct_id),
+            flags=records,
+            groups=groups,
+            disable_geoip=disable_geoip,
+            request_id=request_id,
+            evaluated_at=evaluated_at,
+            errors_while_computing=errors_while_computing,
+            quota_limited=quota_limited,
+        )
+
+    _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None
+
+    def _get_feature_flag_evaluations_host(self) -> _FeatureFlagEvaluationsHost:
+        if self._feature_flag_evaluations_host_cache is None:
+            self._feature_flag_evaluations_host_cache = _FeatureFlagEvaluationsHost(
+                capture_flag_called_event_if_needed=self._capture_feature_flag_called_if_needed,
+                log_warning=lambda message: self.log.warning(message),
+            )
+        return self._feature_flag_evaluations_host_cache
 
     def _get_all_flags_and_payloads_locally(
         self,

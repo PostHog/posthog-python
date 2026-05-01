@@ -39,6 +39,9 @@ from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
 )
+from posthog.feature_flag_evaluations import (
+    FeatureFlagEvaluations as FeatureFlagEvaluations,
+)
 from posthog.feature_flags import (
     InconclusiveMatchError as InconclusiveMatchError,
 )
@@ -767,6 +770,66 @@ def get_all_flags_and_payloads(
         disable_geoip=disable_geoip,
         device_id=device_id,
         flag_keys_to_evaluate=flag_keys_to_evaluate,
+    )
+
+
+def evaluate_flags(
+    distinct_id=None,  # type: Optional[str]
+    groups=None,  # type: Optional[Dict[str, str]]
+    person_properties=None,  # type: Optional[Dict[str, Any]]
+    group_properties=None,  # type: Optional[Dict[str, Dict[str, Any]]]
+    only_evaluate_locally=False,  # type: bool
+    disable_geoip=None,  # type: Optional[bool]
+    flag_keys=None,  # type: Optional[list]
+    device_id=None,  # type: Optional[str]
+) -> FeatureFlagEvaluations:
+    """Evaluate all feature flags for a user in a single call and return a
+    :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
+    ``.get_flag()`` and pass the same snapshot to ``capture()`` via the
+    ``flags`` option so events carry the exact flag values the code branched on.
+
+    Prefer this over repeated ``get_feature_flag()`` calls and over
+    ``capture(send_feature_flags=True)`` — it consolidates flag evaluation into
+    a single ``/flags`` request per incoming request.
+
+    Args:
+        distinct_id: The user's distinct ID. If ``None``, falls back to the context
+            distinct_id. If still unresolvable, returns an empty snapshot.
+        groups: Mapping of group type to group key.
+        person_properties: Person properties to use for evaluation.
+        group_properties: Group properties keyed by group type.
+        only_evaluate_locally: If ``True``, never fall back to remote evaluation.
+        disable_geoip: Whether to disable GeoIP lookup.
+        flag_keys: Optional list of flag keys. When provided, only these flags are
+            evaluated — the underlying ``/flags`` request asks the server for just
+            this subset, which makes the response smaller and the request cheaper.
+            Use this when you only need a handful of flags out of many.
+        device_id: Optional device ID override. If not provided, falls back to the
+            context device_id (which may be set via tracing headers). Used by
+            experience-continuity flags to match users across distinct_id changes.
+
+    Examples:
+        ```python
+        from posthog import evaluate_flags, capture
+        flags = evaluate_flags("user_123", person_properties={"plan": "enterprise"})
+        if flags.is_enabled("new-dashboard"):
+            render_new_dashboard()
+        capture("page_viewed", distinct_id="user_123", flags=flags)
+        ```
+
+    Category:
+        Feature flags
+    """
+    return _proxy(
+        "evaluate_flags",
+        distinct_id=distinct_id,
+        groups=groups,
+        person_properties=person_properties,
+        group_properties=group_properties,
+        only_evaluate_locally=only_evaluate_locally,
+        disable_geoip=disable_geoip,
+        flag_keys=flag_keys,
+        device_id=device_id,
     )
 
 
