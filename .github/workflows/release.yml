@@ -149,6 +149,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
+      - name: Sync checkout to release commit
+        if: steps.commit-release.outputs.commit-hash != ''
+        env:
+          COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
+        run: |
+          git fetch origin main
+          git reset --hard "$COMMIT_HASH"
+
       # Publishing is done manually (not via `sampo publish`) because we need to
       # publish both `posthog` and `posthoganalytics` packages to PyPI.
       # Sampo only knows about the `posthog` package, so we handle both here.
