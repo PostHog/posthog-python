@@ -1,10 +1,26 @@
 # Releasing
 
-This repository uses [Sampo](https://github.com/bruits/sampo) for versioning and changelog generation, with GitHub Actions publishing packages to PyPI.
+This repository uses [Sampo](https://github.com/bruits/sampo) for versioning and changelog generation, with GitHub Actions handling publishing.
 
-1. When making changes, include a changeset: `sampo add`
-2. Create a PR with your changes and the changeset file
-3. Add the `release` label and merge to `main`
-4. Approve the release in Slack when prompted — this triggers the version bump, publishes both `posthog` and the `posthoganalytics` mirror package to PyPI, creates a git tag, and creates a GitHub Release
+## How to Release
 
-You can also trigger a release manually via the workflow's `workflow_dispatch` trigger (still requires pending changesets).
+1. When making a change that should be released, include a Sampo changeset:
+
+   ```bash
+   sampo add
+   ```
+
+2. Commit the generated `.sampo/changesets/*.md` file with your pull request.
+3. After review, merge the PR to `main`. No GitHub release label is required.
+4. A push to `main` that includes `.sampo/changesets/**` changes automatically starts the release workflow.
+5. Approve the release when prompted in Slack / the GitHub `Release` environment.
+
+After approval, The workflow runs Sampo, publishes both `posthog` and the `posthoganalytics` mirror package to PyPI, tags the release, and creates a GitHub Release.
+
+## Manual Trigger
+
+You can also manually trigger the release workflow from the Actions tab with `workflow_dispatch`. Manual runs still require pending Sampo changesets.
+
+## Troubleshooting
+
+If the release workflow reports that no changesets were found, make sure your PR includes at least one releasable `.sampo/changesets/*.md` file.
