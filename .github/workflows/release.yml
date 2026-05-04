@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - '.sampo/changesets/**'
+      - '.sampo/changesets/*.md'
   workflow_dispatch:
 
 permissions:
@@ -138,7 +138,7 @@ jobs:
         id: commit-release
         uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
         with:
-          commit_message: "chore: Release v${{ steps.sampo-release.outputs.new_version }}"
+          commit_message: "chore: Release v${{ steps.sampo-release.outputs.new_version }} [skip ci]"
           repo: ${{ github.repository }}
           branch: main
         env:
