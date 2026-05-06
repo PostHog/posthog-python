@@ -86,7 +86,10 @@ class PosthogCeleryIntegration:
     Args:
         client: Optional ``Client`` instance. When provided, all events and
             exceptions are captured through this client rather than the
-            global ``posthog`` module.
+            global ``posthog`` module. Don't skip this if using a custom flag
+            definition cache provider, and pass the custom ``Client`` instance
+            here initialized with the custom provider so fork safety for that
+            provider is handled correctly.
         capture_exceptions: Whether to capture task exceptions via
             ``capture_exception`` (default ``True``).
         capture_task_lifecycle_events: Whether to emit lifecycle events of the task

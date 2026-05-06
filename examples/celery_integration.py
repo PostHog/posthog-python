@@ -71,23 +71,26 @@ integration.instrument()
 
 
 # --- Worker process setup ---
-# Celery's default prefork pool runs tasks in child processes. This example
-# runs on a single host, so the inherited PostHog client and Celery
-# integration are fork-safe and do not need to be recreated in each child.
-# If workers run across multiple hosts, configure PostHog and instrument a
-# worker-local integration in worker_process_init.
-@worker_process_init.connect
-def on_worker_process_init(**kwargs) -> None:
-    # global integration
-
-    # configure_posthog()
-    # integration = create_integration()
-    # integration.instrument()
-    return
+# On a single host the forked child inherits the PostHog client and
+# integration, so nothing extra is needed. If workers run on different
+# hosts, uncomment the signal and handler below to initialise a fresh
+# client and integration in each worker process. If using a custom flag
+# definition cache provider, reinitialize your client in each worker with
+# the custom provider, and reinstrument the integration with that new client
+# instance.
+# @worker_process_init.connect
+# def on_worker_process_init(**kwargs) -> None:
+#     global integration
+#     configure_posthog()
+#     integration = create_integration()
+#     integration.instrument()
+#     return
 
 
 # Use this signal to shutdown the integration and PostHog client
-# Calling shutdown() is important to flush any pending events
+# in the worker processes. Calling shutdown() is important to flush
+# any pending events and is required even if the workers are running
+# on the same host as the producer.
 @worker_process_shutdown.connect
 def on_worker_process_shutdown(**kwargs) -> None:
     integration.shutdown()
@@ -186,5 +189,6 @@ if __name__ == "__main__":
     print("Tasks dispatched. Check your Celery worker logs and PostHog for events.")
     print()
 
+    # Shut down the integration and client in producer process
     integration.shutdown()
     posthog.shutdown()
