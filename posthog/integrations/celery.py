@@ -145,7 +145,9 @@ class PosthogCeleryIntegration:
         signals.before_task_publish.connect(self._on_before_task_publish, weak=False)
         signals.after_task_publish.connect(self._on_after_task_publish, weak=False)
 
-        signals.worker_process_shutdown.connect(self._on_worker_process_shutdown, weak=False)
+        signals.worker_process_shutdown.connect(
+            self._on_worker_process_shutdown, weak=False
+        )
         atexit.register(self.shutdown)
 
         self._instrumented = True
@@ -161,7 +163,9 @@ class PosthogCeleryIntegration:
         self._signals.before_task_publish.disconnect(self._on_before_task_publish)
         self._signals.after_task_publish.disconnect(self._on_after_task_publish)
 
-        self._signals.worker_process_shutdown.disconnect(self._on_worker_process_shutdown)
+        self._signals.worker_process_shutdown.disconnect(
+            self._on_worker_process_shutdown
+        )
 
         self._signals = None
         self._instrumented = False
@@ -233,14 +237,18 @@ class PosthogCeleryIntegration:
                 # Both sentry-sdk and dd-trace-py use this same workaround.
                 headers.setdefault("headers", {}).update(posthog_headers)
         except Exception:
-            logger.exception("Failed to propagate PostHog context in before_task_publish")
+            logger.exception(
+                "Failed to propagate PostHog context in before_task_publish"
+            )
 
     def _on_after_task_publish(self, *args, **kwargs):
         try:
             if not self.capture_task_lifecycle_events:
                 return
 
-            sender = kwargs.get("sender")   # contains task name for publish events, NOT task object
+            sender = kwargs.get(
+                "sender"
+            )  # contains task name for publish events, NOT task object
             headers = kwargs.get("headers")
             task_id = headers.get("id") if isinstance(headers, dict) else None
 
@@ -250,15 +258,21 @@ class PosthogCeleryIntegration:
                 "celery_state": "published",
                 "celery_exchange": kwargs.get("exchange"),
                 "celery_routing_key": kwargs.get("routing_key"),
-                "celery_hostname": None,    # Not available at publish time (no worker assigned yet)
-                "celery_retry_count": headers.get("retries") if isinstance(headers, dict) else None,
+                "celery_hostname": None,  # Not available at publish time (no worker assigned yet)
+                "celery_retry_count": headers.get("retries")
+                if isinstance(headers, dict)
+                else None,
                 "celery_version": self._celery_version,
             }
 
             if self._should_track(sender, sender_properties):
-                self._capture_event("celery task published", properties=sender_properties)
+                self._capture_event(
+                    "celery task published", properties=sender_properties
+                )
         except Exception:
-            logger.exception("Failed to capture Celery after_task_publish lifecycle event")
+            logger.exception(
+                "Failed to capture Celery after_task_publish lifecycle event"
+            )
 
     def _on_task_prerun(self, *args, **kwargs):
         context_manager = None
@@ -293,7 +307,9 @@ class PosthogCeleryIntegration:
             for key, value in merged_tags.items():
                 contexts.tag(key, value)
 
-            if self.capture_task_lifecycle_events and self._should_track(task_name, task_properties):
+            if self.capture_task_lifecycle_events and self._should_track(
+                task_name, task_properties
+            ):
                 self._capture_event("celery task started", properties=task_properties)
         except Exception:
             logger.exception("Failed to process Celery task_prerun")
@@ -310,9 +326,13 @@ class PosthogCeleryIntegration:
         self._handle_task_end("failure", **kwargs)
 
     def _on_task_retry(self, *args, **kwargs):
-        self._handle_task_end("retry", extra_properties={
-            "celery_reason": str(kwargs.get("reason")),
-        }, **kwargs)
+        self._handle_task_end(
+            "retry",
+            extra_properties={
+                "celery_reason": str(kwargs.get("reason")),
+            },
+            **kwargs,
+        )
 
     def _handle_task_end(
         self,
@@ -346,7 +366,9 @@ class PosthogCeleryIntegration:
                     self._capture_exception(exception)
 
             task_name = task_properties.get("celery_task_name")
-            if self.capture_task_lifecycle_events and self._should_track(task_name, task_properties):
+            if self.capture_task_lifecycle_events and self._should_track(
+                task_name, task_properties
+            ):
                 self._capture_event(f"celery task {state}", properties=task_properties)
         except Exception:
             logger.exception("Failed to process Celery %s state", state)
@@ -360,7 +382,7 @@ class PosthogCeleryIntegration:
         distinct_id = headers.get(CONTEXT_DISTINCT_ID_HEADER)
         if distinct_id:
             contexts.identify_context(str(distinct_id))
-        
+
         session_id = headers.get(CONTEXT_SESSION_ID_HEADER)
         if session_id:
             contexts.set_context_session(str(session_id))
@@ -425,7 +447,9 @@ class PosthogCeleryIntegration:
                 (time.monotonic() - start_time) * 1000.0, 3
             )
 
-    def _should_track(self, task_name: Optional[str], task_properties: dict[str, Any]) -> bool:
+    def _should_track(
+        self, task_name: Optional[str], task_properties: dict[str, Any]
+    ) -> bool:
         if self.task_filter:
             return bool(self.task_filter(task_name, task_properties))
         return True

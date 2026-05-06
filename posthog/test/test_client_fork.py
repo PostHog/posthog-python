@@ -30,7 +30,9 @@ class TestClientFork(unittest.TestCase):
             old_cache = client.flag_cache
 
             new_cache = RedisFlagCache(mock_redis_client)
-            with mock.patch.object(client, "_initialize_flag_cache", return_value=new_cache) as mock_init:
+            with mock.patch.object(
+                client, "_initialize_flag_cache", return_value=new_cache
+            ) as mock_init:
                 client._reinit_after_fork()
 
                 mock_init.assert_called_with("redis://localhost:6379/0")
@@ -123,7 +125,9 @@ class TestClientFork(unittest.TestCase):
             mock_reinit.assert_not_called()
 
     @parameterized.expand([(True, 1), (False, 0)])
-    def test_reinit_after_fork_replaces_queue_and_consumers(self, send, expected_starts):
+    def test_reinit_after_fork_replaces_queue_and_consumers(
+        self, send, expected_starts
+    ):
         with mock.patch("posthog.client.Consumer.start") as mock_start:
             client = Client(FAKE_TEST_API_KEY, send=send, thread=1)
             mock_start.reset_mock()
@@ -188,7 +192,9 @@ class TestClientForkEndToEnd(unittest.TestCase):
         client.flag_cache.set_cached_flag("user_1", "flag_a", "value_a", 1)
 
         self.assertIsInstance(client.flag_cache, FlagCache)
-        self.assertEqual(client.flag_cache.get_cached_flag("user_1", "flag_a", 1), "value_a")
+        self.assertEqual(
+            client.flag_cache.get_cached_flag("user_1", "flag_a", 1), "value_a"
+        )
 
         def child_probe():
             value = client.flag_cache.get_cached_flag("user_1", "flag_a", 1)
@@ -196,7 +202,9 @@ class TestClientForkEndToEnd(unittest.TestCase):
 
         status, result = self._run_fork_probe(child_probe)
 
-        self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result)
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
         self.assertEqual(result, "ok")
 
     def test_register_at_fork_reinitializes_queue_and_consumers_in_child_process(self):
@@ -209,7 +217,11 @@ class TestClientForkEndToEnd(unittest.TestCase):
             replaced_consumer = client.consumers[0] is not old_consumer
             consumer_points_to_new_queue = client.consumers[0].queue is client.queue
 
-            if reinitialized_queue and replaced_consumer and consumer_points_to_new_queue:
+            if (
+                reinitialized_queue
+                and replaced_consumer
+                and consumer_points_to_new_queue
+            ):
                 return "ok"
 
             return (
@@ -220,7 +232,9 @@ class TestClientForkEndToEnd(unittest.TestCase):
 
         status, result = self._run_fork_probe(child_probe)
 
-        self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result)
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
         self.assertEqual(result, "ok")
 
     def test_register_at_fork_reinitializes_poller_and_sessions_in_child_process(self):
@@ -275,5 +289,7 @@ class TestClientForkEndToEnd(unittest.TestCase):
             if client.poller:
                 client.poller.stop()
 
-        self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result)
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
         self.assertEqual(result, "ok")

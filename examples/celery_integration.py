@@ -40,10 +40,13 @@ app = Celery(
 
 # --- Integration wiring ---
 
+
 def configure_posthog() -> None:
     posthog.api_key = POSTHOG_PROJECT_API_KEY
     posthog.host = POSTHOG_HOST
-    posthog.enable_local_evaluation = False     # to not require personal_api_key for this example
+    posthog.enable_local_evaluation = (
+        False  # to not require personal_api_key for this example
+    )
     posthog.setup()
 
 
@@ -60,6 +63,7 @@ def create_integration() -> PosthogCeleryIntegration:
         propagate_context=True,
         task_filter=task_filter,
     )
+
 
 configure_posthog()
 integration = create_integration()
@@ -91,6 +95,7 @@ def on_worker_process_shutdown(**kwargs) -> None:
 
 
 # --- Example tasks ---
+
 
 @app.task
 def health_check() -> dict[str, str]:

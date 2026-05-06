@@ -344,7 +344,9 @@ class Client(object):
 
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
-            os.register_at_fork(after_in_child=lambda: Client._reinit_after_fork_weak(weak_self))
+            os.register_at_fork(
+                after_in_child=lambda: Client._reinit_after_fork_weak(weak_self)
+            )
 
     def _set_before_send(self, before_send):
         if before_send is not None:
