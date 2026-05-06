@@ -21,7 +21,7 @@ import time
 from typing import Any, Optional
 
 from celery import Celery
-from celery.signals import worker_process_init, worker_process_shutdown
+from celery.signals import worker_process_shutdown
 
 import posthog
 from posthog.integrations.celery import PosthogCeleryIntegration

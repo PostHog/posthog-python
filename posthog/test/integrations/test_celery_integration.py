@@ -25,21 +25,45 @@ class FakeSignal:
 
 
 class TestPosthogCeleryIntegration(unittest.TestCase):
-    def test_instrument_is_idempotent(self):
-        fake_signals = SimpleNamespace(
-            task_prerun=FakeSignal(),
-            task_success=FakeSignal(),
-            task_failure=FakeSignal(),
-            task_retry=FakeSignal(),
-            before_task_publish=FakeSignal(),
-            after_task_publish=FakeSignal(),
-            worker_process_shutdown=FakeSignal(),
-        )
+    SIGNAL_NAMES = (
+        "task_prerun",
+        "task_success",
+        "task_failure",
+        "task_retry",
+        "before_task_publish",
+        "after_task_publish",
+        "worker_process_shutdown",
+    )
 
-        integration = PosthogCeleryIntegration()
+    def _build_fake_celery(self):
+        fake_signals = SimpleNamespace(
+            **{signal_name: FakeSignal() for signal_name in self.SIGNAL_NAMES}
+        )
         fake_celery = ModuleType("celery")
         fake_celery.signals = fake_signals
         fake_celery.__version__ = "5.0.0"
+        return fake_signals, fake_celery
+
+    def _assert_signal_counts(
+        self, fake_signals, expected_connected, expected_disconnected=None
+    ):
+        for signal_name in self.SIGNAL_NAMES:
+            self.assertEqual(
+                len(getattr(fake_signals, signal_name).connected),
+                expected_connected,
+                f"{signal_name} connected count mismatch",
+            )
+            if expected_disconnected is not None:
+                self.assertEqual(
+                    len(getattr(fake_signals, signal_name).disconnected),
+                    expected_disconnected,
+                    f"{signal_name} disconnected count mismatch",
+                )
+
+    def test_instrument_is_idempotent(self):
+        fake_signals, fake_celery = self._build_fake_celery()
+
+        integration = PosthogCeleryIntegration()
 
         with (
             patch.dict("sys.modules", {"celery": fake_celery}),
@@ -48,20 +72,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             integration.instrument()
             integration.instrument()
 
-        for sig in [
-            "task_prerun",
-            "task_success",
-            "task_failure",
-            "task_retry",
-            "before_task_publish",
-            "after_task_publish",
-            "worker_process_shutdown",
-        ]:
-            self.assertEqual(
-                len(getattr(fake_signals, sig).connected),
-                1,
-                f"{sig} connected multiple times",
-            )
+        self._assert_signal_counts(fake_signals, expected_connected=1)
         mock_register.assert_called_once_with(integration.shutdown)
         self.assertEqual(
             fake_signals.worker_process_shutdown.connected[0][0],
@@ -69,21 +80,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         )
 
     def test_instrument_and_uninstrument_connect_signals(self):
-        fake_signals = SimpleNamespace(
-            task_prerun=FakeSignal(),
-            task_success=FakeSignal(),
-            task_failure=FakeSignal(),
-            task_retry=FakeSignal(),
-            before_task_publish=FakeSignal(),
-            after_task_publish=FakeSignal(),
-            worker_process_shutdown=FakeSignal(),
-        )
+        fake_signals, fake_celery = self._build_fake_celery()
 
         integration = PosthogCeleryIntegration()
-
-        fake_celery = ModuleType("celery")
-        fake_celery.signals = fake_signals
-        fake_celery.__version__ = "5.0.0"
 
         with (
             patch.dict("sys.modules", {"celery": fake_celery}),
@@ -93,23 +92,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             integration.instrument()
             integration.uninstrument()
 
-        for sig in [
-            "task_prerun",
-            "task_success",
-            "task_failure",
-            "task_retry",
-            "before_task_publish",
-            "after_task_publish",
-            "worker_process_shutdown",
-        ]:
-            self.assertEqual(
-                len(getattr(fake_signals, sig).connected), 1, f"{sig} not connected"
-            )
-            self.assertEqual(
-                len(getattr(fake_signals, sig).disconnected),
-                1,
-                f"{sig} not disconnected",
-            )
+        self._assert_signal_counts(
+            fake_signals, expected_connected=1, expected_disconnected=1
+        )
         mock_unregister.assert_called_once_with(integration.shutdown)
         self.assertEqual(
             fake_signals.worker_process_shutdown.disconnected[0],
@@ -162,22 +147,11 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         mock_client.flush.assert_called_once_with()
 
     def test_shutdown_keeps_atexit_registration_when_flush_fails(self):
-        fake_signals = SimpleNamespace(
-            task_prerun=FakeSignal(),
-            task_success=FakeSignal(),
-            task_failure=FakeSignal(),
-            task_retry=FakeSignal(),
-            before_task_publish=FakeSignal(),
-            after_task_publish=FakeSignal(),
-            worker_process_shutdown=FakeSignal(),
-        )
+        fake_signals, fake_celery = self._build_fake_celery()
 
         mock_client = Mock()
         mock_client.flush.side_effect = RuntimeError("flush failed")
         integration = PosthogCeleryIntegration(client=mock_client)
-        fake_celery = ModuleType("celery")
-        fake_celery.signals = fake_signals
-        fake_celery.__version__ = "5.0.0"
 
         with (
             patch.dict("sys.modules", {"celery": fake_celery}),
@@ -194,21 +168,10 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         self.assertEqual(len(fake_signals.worker_process_shutdown.disconnected), 1)
 
     def test_reinstrument_after_shutdown_allows_shutdown_again(self):
-        fake_signals = SimpleNamespace(
-            task_prerun=FakeSignal(),
-            task_success=FakeSignal(),
-            task_failure=FakeSignal(),
-            task_retry=FakeSignal(),
-            before_task_publish=FakeSignal(),
-            after_task_publish=FakeSignal(),
-            worker_process_shutdown=FakeSignal(),
-        )
+        fake_signals, fake_celery = self._build_fake_celery()
 
         mock_client = Mock()
         integration = PosthogCeleryIntegration(client=mock_client)
-        fake_celery = ModuleType("celery")
-        fake_celery.signals = fake_signals
-        fake_celery.__version__ = "5.0.0"
 
         with (
             patch.dict("sys.modules", {"celery": fake_celery}),
@@ -223,23 +186,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         self.assertEqual(mock_client.flush.call_count, 2)
         self.assertEqual(mock_register.call_count, 2)
         self.assertEqual(mock_unregister.call_count, 2)
-        for sig in [
-            "task_prerun",
-            "task_success",
-            "task_failure",
-            "task_retry",
-            "before_task_publish",
-            "after_task_publish",
-            "worker_process_shutdown",
-        ]:
-            self.assertEqual(
-                len(getattr(fake_signals, sig).connected), 2, f"{sig} not reconnected"
-            )
-            self.assertEqual(
-                len(getattr(fake_signals, sig).disconnected),
-                2,
-                f"{sig} not disconnected twice",
-            )
+        self._assert_signal_counts(
+            fake_signals, expected_connected=2, expected_disconnected=2
+        )
 
     def test_worker_process_shutdown_hook_calls_shutdown(self):
         integration = PosthogCeleryIntegration(client=Mock())
