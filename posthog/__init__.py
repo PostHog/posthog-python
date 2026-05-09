@@ -73,7 +73,11 @@ __version__ = VERSION
 """Context management."""
 
 
-def new_context(fresh=False, capture_exceptions=True, client=None):
+def new_context(
+    fresh: bool = False,
+    capture_exceptions: bool = True,
+    client: Optional[Client] = None,
+):
     """
     Create a new context scope that will be active for the duration of the with block.
 
