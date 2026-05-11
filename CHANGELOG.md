@@ -1,5 +1,11 @@
 # posthog
 
+## 7.14.1 — 2026-05-11
+
+### Patch changes
+
+- [f6c8ede](https://github.com/posthog/posthog-python/commit/f6c8ede23505e3e97ba14aebb8efd4f237cb1dca) fix: type warning on new_context — Thanks @itsaphel for your first contribution 🎉!
+
 ## 7.14.0 — 2026-05-01
 
 ### Minor changes
