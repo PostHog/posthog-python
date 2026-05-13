@@ -248,6 +248,33 @@ class TestContexts(unittest.TestCase):
         assert get_context_distinct_id() is None
         assert get_context_session_id() is None
 
+    def test_scoped_decorator_async_concurrent_context_isolation(self):
+        first_ready = asyncio.Event()
+        second_ready = asyncio.Event()
+        first_checked = asyncio.Event()
+
+        @scoped()
+        async def first():
+            identify_context("user_1")
+            first_ready.set()
+            await second_ready.wait()
+            distinct_id = get_context_distinct_id()
+            first_checked.set()
+            return distinct_id
+
+        @scoped()
+        async def second():
+            await first_ready.wait()
+            identify_context("user_2")
+            second_ready.set()
+            await first_checked.wait()
+            return get_context_distinct_id()
+
+        async def run():
+            return await asyncio.wait_for(asyncio.gather(first(), second()), timeout=1)
+
+        assert asyncio.run(run()) == ["user_1", "user_2"]
+
     @patch("posthog.capture_exception")
     def test_scoped_decorator_async_exception(self, mock_capture):
         test_exception = ValueError("Test async exception")
