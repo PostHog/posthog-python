@@ -391,12 +391,29 @@ def scoped(fresh: bool = False, capture_exceptions: bool = True):
             # and then re-raised
             some_risky_function()
 
+        # When stacking decorators, the posthog.scoped decorator must be
+        # closest to the function. For example, with FastAPI middleware:
+        @app.middleware("http")
+        @posthog.scoped()
+        async def middleware(request, call_next):
+            return await call_next(request)
+
     Category:
         Contexts
     """
 
     def decorator(func: F) -> F:
         from functools import wraps
+        from inspect import iscoroutinefunction
+
+        if iscoroutinefunction(func):
+
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
+                    return await func(*args, **kwargs)
+
+            return cast(F, async_wrapper)
 
         @wraps(func)
         def wrapper(*args, **kwargs):
