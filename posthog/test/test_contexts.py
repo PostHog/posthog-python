@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -227,6 +228,47 @@ class TestContexts(unittest.TestCase):
         distinct_id, session_id = function_with_context()
         assert distinct_id == "user456"
         assert session_id == "session789"
+
+        # Context should be cleared after function execution
+        assert get_context_distinct_id() is None
+        assert get_context_session_id() is None
+
+    def test_scoped_decorator_async_function(self):
+        @scoped()
+        async def async_function_with_context():
+            identify_context("user_async")
+            set_context_session("session_async")
+            return get_context_distinct_id(), get_context_session_id()
+
+        distinct_id, session_id = asyncio.run(async_function_with_context())
+        assert distinct_id == "user_async"
+        assert session_id == "session_async"
+
+        # Context should be cleared after function execution
+        assert get_context_distinct_id() is None
+        assert get_context_session_id() is None
+
+    @patch("posthog.capture_exception")
+    def test_scoped_decorator_async_exception(self, mock_capture):
+        test_exception = ValueError("Test async exception")
+
+        def check_context_on_capture(exception, **kwargs):
+            # Assert context IDs are available when capture_exception is called
+            assert get_context_distinct_id() == "user_async"
+            assert get_context_session_id() == "session_async"
+
+        mock_capture.side_effect = check_context_on_capture
+
+        @scoped()
+        async def failing_async_function():
+            identify_context("user_async")
+            set_context_session("session_async")
+            raise test_exception
+
+        with self.assertRaises(ValueError):
+            asyncio.run(failing_async_function())
+
+        mock_capture.assert_called_once_with(test_exception)
 
         # Context should be cleared after function execution
         assert get_context_distinct_id() is None
