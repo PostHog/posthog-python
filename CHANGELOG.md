@@ -1,5 +1,11 @@
 # posthog
 
+## 7.14.2 — 2026-05-13
+
+### Patch changes
+
+- [44c1261](https://github.com/posthog/posthog-python/commit/44c1261ce17f07ce4ce430d1b188501a5a1e2f45) Fix scoped context support for async functions — Thanks @marandaneto!
+
 ## 7.14.1 — 2026-05-11
 
 ### Patch changes
