@@ -490,11 +490,23 @@ class TestFlagCache(unittest.TestCase):
         assert old_empty_user not in self.cache.cache
         assert old_empty_user not in self.cache.access_times
 
+    def test_cache_misses_when_user_exists_without_flag(self):
+        self.cache.cache["user123"] = {}
+
+        assert self.cache.get_cached_flag("user123", "missing-flag", 1) is None
+
     def test_stale_cache_misses(self):
         assert self.cache.get_stale_cached_flag("missing-user", "test-flag") is None
 
         self.cache.cache["user123"] = {}
         assert self.cache.get_stale_cached_flag("user123", "missing-flag") is None
+
+    def test_stale_cache_returns_none_when_entry_is_too_old(self):
+        self.cache.cache["user123"] = {
+            "test-flag": utils.FlagCacheEntry(self.flag_result, 1, timestamp=100)
+        }
+
+        assert self.cache.get_stale_cached_flag("user123", "test-flag", 10) is None
 
     def test_stale_cache_passes_current_time_and_max_age(self):
         class StrictEntry:
