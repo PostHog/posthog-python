@@ -296,6 +296,10 @@ class TestUtils(unittest.TestCase):
         ):
             assert utils.get_os_info() == {"$os": "Windows", "$os_version": ""}
 
+        with mock.patch.object(utils.platform, "win32_ver", create=True):
+            delattr(utils.platform, "win32_ver")
+            assert utils._get_windows_os_info() == ("Windows", "", "")
+
         with (
             mock.patch.object(utils.sys, "platform", "darwin"),
             mock.patch.object(
@@ -303,6 +307,15 @@ class TestUtils(unittest.TestCase):
             ),
         ):
             assert utils.get_os_info() == {"$os": "Mac OS X", "$os_version": "14.4"}
+
+        with mock.patch.object(
+            utils.platform, "mac_ver", return_value=("", ("", "", ""), "")
+        ):
+            assert utils._get_macos_info() == ("Mac OS X", "", "")
+
+        with mock.patch.object(utils.platform, "mac_ver", create=True):
+            delattr(utils.platform, "mac_ver")
+            assert utils._get_macos_info() == ("Mac OS X", "", "")
 
         with (
             mock.patch.object(utils.sys, "platform", "linux"),
@@ -316,6 +329,12 @@ class TestUtils(unittest.TestCase):
             }
 
         with (
+            mock.patch.object(utils.distro, "info", return_value={"version": ""}),
+            mock.patch.object(utils.distro, "name", return_value=""),
+        ):
+            assert utils._get_linux_os_info() == ("Linux", "", "")
+
+        with (
             mock.patch.object(utils.sys, "platform", "freebsd13"),
             mock.patch.object(utils.platform, "release", return_value="13.2"),
         ):
@@ -326,6 +345,10 @@ class TestUtils(unittest.TestCase):
             mock.patch.object(utils.platform, "release", return_value="5.11"),
         ):
             assert utils.get_os_info() == {"$os": "sunos", "$os_version": "5.11"}
+
+        with mock.patch.object(utils.platform, "release", create=True):
+            delattr(utils.platform, "release")
+            assert utils._platform_release() == ""
 
     def test_system_context(self):
         with (
@@ -494,6 +517,15 @@ class TestFlagCache(unittest.TestCase):
         self.cache.cache["user123"] = {}
 
         assert self.cache.get_cached_flag("user123", "missing-flag", 1) is None
+
+    def test_remove_missing_user_does_not_raise(self):
+        self.cache.cache["existing-user"] = {}
+        self.cache.access_times["existing-user"] = 123
+
+        self.cache._remove_user("missing-user")
+
+        assert self.cache.cache == {"existing-user": {}}
+        assert self.cache.access_times == {"existing-user": 123}
 
     def test_stale_cache_misses(self):
         assert self.cache.get_stale_cached_flag("missing-user", "test-flag") is None
@@ -680,6 +712,16 @@ class TestRedisFlagCache(unittest.TestCase):
         failing_cache.set_cached_flag("user123", "beta", True, 1)
         failing_cache.invalidate_version(1)
         failing_cache.clear()
+
+    def test_redis_cache_key_helpers(self):
+        key = self.cache._get_cache_key("user123", "missing")
+        invalid_key = self.cache._get_cache_key("user123", "invalid")
+        self.redis.store[invalid_key] = "not json"
+
+        assert self.cache._redis_key_to_string(key) == key
+        assert self.cache._key_has_version(key, 1) is False
+        assert self.cache._key_has_version(invalid_key, 1) is False
+        assert invalid_key not in self.redis.store
 
     def test_invalidate_version(self):
         old_key = self.cache._get_cache_key("user123", "old")
