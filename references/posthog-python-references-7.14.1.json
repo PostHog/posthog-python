@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.14.2",
+    "version": "7.14.1",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
