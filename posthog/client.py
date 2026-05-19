@@ -211,9 +211,59 @@ class Client(object):
         Initialize a new PostHog client instance.
 
         Args:
-            project_api_key: The project API key.
-            host: The host to use for the client.
-            debug: Whether to enable debug mode.
+            project_api_key: PostHog project API key/token.
+            host: PostHog host. Defaults to the US ingestion endpoint when not
+                set. App hosts such as ``https://us.posthog.com`` are mapped to
+                the corresponding ingestion host.
+            debug: Enable verbose SDK logging and re-raise errors from public
+                API methods.
+            max_queue_size: Maximum number of events buffered before upload.
+            send: If False, queueing succeeds but events are not sent.
+            on_error: Optional callback invoked by background consumers when an
+                upload fails.
+            flush_at: Number of queued events that triggers a batch upload.
+            flush_interval: Maximum seconds a background consumer waits before
+                flushing a partial batch.
+            gzip: Whether to gzip event upload payloads.
+            max_retries: Number of upload retries for background consumers.
+            sync_mode: If True, send each event synchronously instead of using
+                background worker threads.
+            timeout: HTTP request timeout in seconds for event uploads.
+            thread: Number of background consumer threads.
+            poll_interval: Seconds between local feature flag definition refreshes.
+            personal_api_key: Personal API key used for local feature flag
+                evaluation and remote config payloads.
+            disabled: If True, disable captures and API requests. Useful in tests.
+            disable_geoip: Whether to disable server-side GeoIP enrichment.
+                Defaults to True.
+            historical_migration: Mark events as historical migration imports.
+            feature_flags_request_timeout_seconds: Timeout in seconds for feature
+                flag and remote config requests.
+            super_properties: Properties merged into every captured event.
+            enable_exception_autocapture: Automatically capture uncaught
+                exceptions.
+            log_captured_exceptions: Also log exceptions captured by error
+                tracking.
+            project_root: Root path used to determine in-app stack frames for
+                captured exceptions. Defaults to the current working directory.
+            privacy_mode: For AI observability, capture usage metadata without
+                prompt inputs or outputs.
+            before_send: Optional callback that can modify or drop events before
+                upload. Return ``None`` to drop an event.
+            flag_fallback_cache_url: Optional feature flag fallback cache URL,
+                such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
+            enable_local_evaluation: Whether to poll feature flag definitions for
+                local evaluation when a personal API key is configured.
+            flag_definition_cache_provider: Optional external cache provider for
+                sharing feature flag definitions across workers.
+            capture_exception_code_variables: Capture local variable values on
+                exception stack frames.
+            code_variables_mask_patterns: Variable-name patterns to mask when
+                capturing code variables.
+            code_variables_ignore_patterns: Variable-name patterns to omit when
+                capturing code variables.
+            in_app_modules: Module/package prefixes treated as in-app frames in
+                captured exceptions.
 
         Examples:
             ```python
@@ -608,7 +658,12 @@ class Client(object):
             timestamp: The timestamp of the event.
             uuid: A unique identifier for the event.
             groups: A dictionary of group information.
-            send_feature_flags: Whether to send feature flags with the event.
+            flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
+                exact values from the snapshot are attached with no extra /flags
+                request.
+            send_feature_flags: Deprecated. Prefer flags=... from
+                evaluate_flags(). When truthy, evaluates flags during capture and
+                attaches them to the event.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -2186,6 +2241,24 @@ class Client(object):
         reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
+        """
+        Get the payload for a remote config feature flag.
+
+        Args:
+            key: The remote config feature flag key.
+
+        Returns:
+            The payload associated with the feature flag, or ``None`` if the
+            client is disabled, no personal API key is configured, or the request
+            fails. Encrypted payloads are decrypted by PostHog before being
+            returned.
+
+        Note:
+            Requires ``personal_api_key`` for authentication.
+
+        Category:
+            Feature flags
+        """
         if self.disabled:
             return None
 
@@ -2717,6 +2790,16 @@ class Client(object):
             return None
 
     def feature_flag_definitions(self):
+        """
+        Return feature flag definitions loaded for local evaluation.
+
+        Returns:
+            The currently loaded feature flag definitions, or ``None`` before
+            local evaluation has loaded definitions.
+
+        Category:
+            Feature flags
+        """
         return self.feature_flags
 
     def _add_local_person_and_group_properties(

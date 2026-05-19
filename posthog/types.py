@@ -11,16 +11,24 @@ BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 
 # Type alias for the send_feature_flags parameter
 class SendFeatureFlagsOptions(TypedDict, total=False):
-    """Options for sending feature flags with capture events.
+    """Options for deprecated ``capture(send_feature_flags=...)`` behavior.
+
+    Prefer passing ``flags=posthog.evaluate_flags(...)`` to ``capture()`` for new
+    code.
 
     Args:
-        only_evaluate_locally: Whether to only use local evaluation for feature flags.
-            If True, only flags that can be evaluated locally will be included.
-            If False, remote evaluation via /flags API will be used when needed.
-        person_properties: Properties to use for feature flag evaluation specific to this event.
-            These properties will be merged with any existing person properties.
-        group_properties: Group properties to use for feature flag evaluation specific to this event.
-            Format: { group_type_name: { group_properties } }
+        should_send: Whether feature flags should be evaluated and attached to
+            the event.
+        only_evaluate_locally: Whether to only use local evaluation for feature
+            flags. If True, only flags that can be evaluated locally will be
+            included. If False, remote evaluation via /flags API will be used
+            when needed.
+        person_properties: Properties to use for feature flag evaluation specific
+            to this event. These properties will be merged with any existing
+            person properties.
+        group_properties: Group properties to use for feature flag evaluation
+            specific to this event. Format: { group_type_name: { group_properties } }
+        flag_keys_filter: Optional list of flag keys to evaluate and attach.
     """
 
     should_send: bool
@@ -32,6 +40,14 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class FlagReason:
+    """Reason metadata returned by the feature flag API.
+
+    Attributes:
+        code: Machine-readable reason code.
+        condition_index: Matching condition index, when available.
+        description: Human-readable reason description.
+    """
+
     code: str
     condition_index: Optional[int]
     description: str
@@ -49,11 +65,22 @@ class FlagReason:
 
 @dataclass(frozen=True)
 class LegacyFlagMetadata:
+    """Legacy feature flag metadata containing only a payload."""
+
     payload: Any
 
 
 @dataclass(frozen=True)
 class FlagMetadata:
+    """Feature flag metadata returned by the feature flag API.
+
+    Attributes:
+        id: Numeric feature flag ID.
+        payload: Payload configured for the matched flag value, if any.
+        version: Feature flag version.
+        description: Feature flag description.
+    """
+
     id: int
     payload: Optional[str]
     version: int
@@ -73,6 +100,16 @@ class FlagMetadata:
 
 @dataclass(frozen=True)
 class FeatureFlag:
+    """Detailed feature flag evaluation returned by the flags API.
+
+    Attributes:
+        key: Feature flag key.
+        enabled: Whether the flag is enabled for the evaluated user or group.
+        variant: Variant key for multivariate flags, otherwise ``None``.
+        reason: Optional reason metadata explaining the result.
+        metadata: Payload and other metadata returned by the API.
+    """
+
     key: str
     enabled: bool
     variant: Optional[str]
@@ -119,6 +156,8 @@ class FeatureFlag:
 
 
 class FlagsResponse(TypedDict, total=False):
+    """Normalized response from the PostHog feature flags API."""
+
     flags: dict[str, FeatureFlag]
     errorsWhileComputingFlags: bool
     requestId: str
@@ -127,6 +166,8 @@ class FlagsResponse(TypedDict, total=False):
 
 
 class FlagsAndPayloads(TypedDict, total=True):
+    """Feature flag values and payloads keyed by feature flag key."""
+
     featureFlags: Optional[dict[str, FlagValue]]
     featureFlagPayloads: Optional[dict[str, Any]]
 

@@ -410,6 +410,23 @@ class Models:
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        """
+        Stream content from Gemini while tracking usage in PostHog.
+
+        Args:
+            model: The Gemini model to use.
+            contents: Input content for generation.
+            posthog_distinct_id: Optional distinct ID, overriding the client default.
+            posthog_trace_id: Optional trace ID. Generated automatically when omitted.
+            posthog_properties: Additional properties merged with client defaults.
+            posthog_privacy_mode: Whether to redact captured input and output,
+                overriding the client default.
+            posthog_groups: Optional PostHog groups, overriding the client default.
+            **kwargs: Arguments passed to Gemini's ``generate_content_stream`` API.
+
+        Returns:
+            A streaming iterator yielding Gemini chunks.
+        """
         # Merge PostHog parameters
         distinct_id, trace_id, properties, privacy_mode, groups = (
             self._merge_posthog_params(

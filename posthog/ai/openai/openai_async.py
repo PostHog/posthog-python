@@ -40,10 +40,10 @@ class AsyncOpenAI(openai.AsyncOpenAI):
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
-            api_key: OpenAI API key.
-            posthog_client: If provided, events will be captured via this client instead
-                            of the global posthog.
-            **openai_config: Any additional keyword args to set on openai (e.g. organization="xxx").
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``openai.AsyncOpenAI`` such as
+                ``api_key`` or ``organization``.
         """
 
         super().__init__(**kwargs)
@@ -90,6 +90,20 @@ class WrappedResponses:
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        """
+        Create an OpenAI Responses API response while tracking usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional distinct ID to associate with the usage event.
+            posthog_trace_id: Optional trace ID. Generated automatically when omitted.
+            posthog_properties: Additional properties to include with the usage event.
+            posthog_privacy_mode: Whether to redact captured input and output.
+            posthog_groups: Optional PostHog groups to associate with the event.
+            **kwargs: Arguments passed to OpenAI's async ``responses.create`` API.
+
+        Returns:
+            The OpenAI response, or an async streaming iterator when ``stream=True``.
+        """
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
@@ -318,6 +332,7 @@ class WrappedChat:
 
     @property
     def completions(self):
+        """Access async chat completions with PostHog usage tracking."""
         return WrappedCompletions(self._client, self._original.completions)
 
 
@@ -341,6 +356,20 @@ class WrappedCompletions:
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        """
+        Create an OpenAI chat completion while tracking usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional distinct ID to associate with the usage event.
+            posthog_trace_id: Optional trace ID. Generated automatically when omitted.
+            posthog_properties: Additional properties to include with the usage event.
+            posthog_privacy_mode: Whether to redact captured input and output.
+            posthog_groups: Optional PostHog groups to associate with the event.
+            **kwargs: Arguments passed to OpenAI's async ``chat.completions.create`` API.
+
+        Returns:
+            The OpenAI chat completion, or an async streaming iterator when ``stream=True``.
+        """
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
@@ -636,6 +665,7 @@ class WrappedBeta:
 
     @property
     def chat(self):
+        """Access async beta chat APIs with PostHog usage tracking."""
         return WrappedBetaChat(self._client, self._original.chat)
 
 
@@ -653,6 +683,7 @@ class WrappedBetaChat:
 
     @property
     def completions(self):
+        """Access async beta chat completions with PostHog usage tracking."""
         return WrappedBetaCompletions(self._client, self._original.completions)
 
 
@@ -677,6 +708,20 @@ class WrappedBetaCompletions:
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        """
+        Parse an OpenAI beta chat completion while tracking usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional distinct ID to associate with the usage event.
+            posthog_trace_id: Optional trace ID. Generated automatically when omitted.
+            posthog_properties: Additional properties to include with the usage event.
+            posthog_privacy_mode: Whether to redact captured input and output.
+            posthog_groups: Optional PostHog groups to associate with the event.
+            **kwargs: Arguments passed to OpenAI's async beta ``chat.completions.parse`` API.
+
+        Returns:
+            The parsed response from OpenAI.
+        """
         return await call_llm_and_track_usage_async(
             posthog_distinct_id,
             self._client._ph_client,

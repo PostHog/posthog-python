@@ -21,6 +21,12 @@ class AnthropicBedrock(anthropic.AnthropicBedrock):
     _ph_client: PostHogClient
 
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+        """
+        Args:
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``anthropic.AnthropicBedrock``.
+        """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
         self.messages = WrappedMessages(self)
@@ -34,6 +40,12 @@ class AsyncAnthropicBedrock(anthropic.AsyncAnthropicBedrock):
     _ph_client: PostHogClient
 
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+        """
+        Args:
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``anthropic.AsyncAnthropicBedrock``.
+        """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
         self.messages = AsyncWrappedMessages(self)
@@ -47,6 +59,12 @@ class AnthropicVertex(anthropic.AnthropicVertex):
     _ph_client: PostHogClient
 
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+        """
+        Args:
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``anthropic.AnthropicVertex``.
+        """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
         self.messages = WrappedMessages(self)
@@ -60,6 +78,12 @@ class AsyncAnthropicVertex(anthropic.AsyncAnthropicVertex):
     _ph_client: PostHogClient
 
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+        """
+        Args:
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``anthropic.AsyncAnthropicVertex``.
+        """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
         self.messages = AsyncWrappedMessages(self)

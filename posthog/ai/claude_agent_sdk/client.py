@@ -59,6 +59,22 @@ class PostHogClaudeSDKClient:
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
     ):
+        """
+        Initialize a stateful Claude Agent SDK client with PostHog instrumentation.
+
+        Args:
+            options: Claude Agent SDK options. ``include_partial_messages`` is
+                enabled automatically so generations can be tracked.
+            transport: Optional transport passed to ``ClaudeSDKClient``.
+            posthog_client: Optional PostHog client. Uses the default client when omitted.
+            posthog_distinct_id: Optional distinct ID, or a callable that resolves
+                one from a ``ResultMessage``.
+            posthog_trace_id: Optional trace ID shared across the conversation.
+                Generated automatically when omitted.
+            posthog_properties: Additional properties included on emitted AI events.
+            posthog_privacy_mode: Whether to redact captured inputs, outputs, and tool data.
+            posthog_groups: Optional PostHog groups to associate with emitted events.
+        """
         from dataclasses import replace as dc_replace
 
         # Ensure partial messages for per-generation tracking
@@ -91,9 +107,22 @@ class PostHogClaudeSDKClient:
         self._query_start = time.time()
 
     async def connect(self, prompt: Any = None) -> None:
+        """
+        Connect the underlying Claude SDK client.
+
+        Args:
+            prompt: Optional initial prompt passed to ``ClaudeSDKClient.connect``.
+        """
         await self._client.connect(prompt)
 
     async def query(self, prompt: str, session_id: str = "default") -> None:
+        """
+        Send a prompt to the Claude Agent SDK conversation.
+
+        Args:
+            prompt: User prompt to send.
+            session_id: Claude Agent SDK session ID. Defaults to ``"default"``.
+        """
         # Track the prompt as input for the next generation
         self._current_input = [{"role": "user", "content": prompt}]
         await self._client.query(prompt, session_id)
@@ -203,6 +232,9 @@ class PostHogClaudeSDKClient:
             yield message
 
     async def disconnect(self) -> None:
+        """
+        Disconnect the underlying client and emit the final PostHog trace event.
+        """
         # Emit the trace event covering the entire session
         try:
             latency = time.time() - self._query_start
@@ -241,12 +273,25 @@ class PostHogClaudeSDKClient:
 
     # Delegate other methods
     async def interrupt(self) -> None:
+        """Interrupt the current Claude Agent SDK operation."""
         await self._client.interrupt()
 
     async def set_permission_mode(self, mode: str) -> None:
+        """
+        Set the Claude Agent SDK permission mode.
+
+        Args:
+            mode: Permission mode to pass to the underlying client.
+        """
         await self._client.set_permission_mode(mode)
 
     async def set_model(self, model: Optional[str] = None) -> None:
+        """
+        Set the model used by the Claude Agent SDK client.
+
+        Args:
+            model: Model name, or ``None`` to use the SDK default.
+        """
         await self._client.set_model(model)
 
     async def __aenter__(self) -> "PostHogClaudeSDKClient":

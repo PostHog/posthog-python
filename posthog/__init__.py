@@ -185,21 +185,42 @@ def identify_context(distinct_id: str):
 
 def set_capture_exception_code_variables_context(enabled: bool):
     """
-    Set whether code variables are captured for the current context.
+    Override code-variable capture for exceptions in the current context.
+
+    Args:
+        enabled: Whether exceptions captured in this context should include local
+            variable values from stack frames.
+
+    Category:
+        Contexts
     """
     return inner_set_capture_exception_code_variables_context(enabled)
 
 
 def set_code_variables_mask_patterns_context(mask_patterns: list):
     """
-    Variable names matching these patterns will be masked with *** when capturing code variables.
+    Override code-variable mask patterns for exceptions in the current context.
+
+    Args:
+        mask_patterns: Variable-name patterns whose values should be replaced
+            with ``***`` when code variables are captured.
+
+    Category:
+        Contexts
     """
     return inner_set_code_variables_mask_patterns_context(mask_patterns)
 
 
 def set_code_variables_ignore_patterns_context(ignore_patterns: list):
     """
-    Variable names matching these patterns will be ignored completely when capturing code variables.
+    Override code-variable ignore patterns for exceptions in the current context.
+
+    Args:
+        ignore_patterns: Variable-name patterns that should be omitted entirely
+            when code variables are captured.
+
+    Category:
+        Contexts
     """
     return inner_set_code_variables_ignore_patterns_context(ignore_patterns)
 
@@ -237,7 +258,50 @@ def get_tags() -> Dict[str, Any]:
     return inner_get_tags()
 
 
-"""Settings."""
+"""Settings.
+
+These module-level settings configure the legacy global PostHog client used by
+functions such as ``posthog.capture()``. Set them before your first SDK call.
+For new code, prefer creating an explicit ``Posthog``/``Client`` instance with
+the corresponding constructor arguments.
+
+Attributes:
+    api_key: Project API key/token used by the global client. Required before
+        calling any global capture or feature flag API.
+    host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
+        set.
+    on_error: Optional callback invoked by background consumers when event upload
+        fails.
+    debug: Enable verbose SDK logging and re-raise errors from public APIs.
+    send: If False, queueing succeeds but events are not sent to PostHog.
+    sync_mode: If True, send events synchronously instead of using background
+        worker threads.
+    disabled: If True, disable captures and API requests. Useful in tests.
+    personal_api_key: Personal API key used for local feature flag evaluation
+        and remote config payloads.
+    poll_interval: Seconds between local feature flag definition refreshes.
+    disable_geoip: Whether to disable server-side GeoIP enrichment. Defaults to
+        True.
+    feature_flags_request_timeout_seconds: Timeout in seconds for feature flag
+        and remote config requests.
+    super_properties: Properties merged into every captured event.
+    enable_exception_autocapture: Automatically capture uncaught exceptions.
+    log_captured_exceptions: Also log exceptions captured by error tracking.
+    before_send: Optional callback that can modify or drop events before upload.
+        Return ``None`` to drop an event.
+    enable_local_evaluation: Whether to poll feature flag definitions for local
+        evaluation when a personal API key is configured.
+    flag_definition_cache_provider: Optional external cache provider for sharing
+        feature flag definitions across workers.
+    capture_exception_code_variables: Capture local variable values on exception
+        stack frames.
+    code_variables_mask_patterns: Variable-name patterns to mask when capturing
+        code variables.
+    code_variables_ignore_patterns: Variable-name patterns to omit when capturing
+        code variables.
+    in_app_modules: Module/package prefixes treated as in-app frames in captured
+        exceptions.
+"""
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
 on_error = None  # type: Optional[Callable]
@@ -286,7 +350,15 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
             distinct_id: Unique identifier for the user
             properties: Dict of event properties
             timestamp: When the event occurred
+            uuid: Unique identifier for this event. If omitted, one is generated
+                and returned.
             groups: Dict of group types and IDs
+            flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
+                exact values from the snapshot are attached with no extra /flags
+                request.
+            send_feature_flags: Deprecated. Prefer flags=... from
+                evaluate_flags(). When truthy, evaluates flags during capture and
+                attaches them to the event.
             disable_geoip: Whether to disable GeoIP lookup
 
     Details:
@@ -343,21 +415,24 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record.
 
+    Args:
+        **kwargs: Optional arguments including:
+            distinct_id: Unique identifier for the user. Falls back to the
+                context distinct ID; if none exists, this call does nothing.
+            properties: Dict of person properties to set.
+            timestamp: When the properties were set.
+            uuid: Unique identifier for this operation. If omitted, one is
+                generated and returned.
+            disable_geoip: Whether to disable GeoIP lookup.
+
     Details:
         This will overwrite previous people property values. Generally operates similar to `capture`, with distinct_id being an optional argument, defaulting to the current context's distinct ID. If there is no context-level distinct ID, and no override distinct_id is passed, this function will do nothing. Context tags are folded into $set properties, so tagging the current context and then calling `set` will cause those tags to be set on the user (unlike capture, which causes them to just be set on the event).
 
     Examples:
         ```python
         # Set person properties
-        from posthog import capture
-        capture(
-            'distinct_id',
-            event='event_name',
-            properties={
-                '$set': {'name': 'Max Hedgehog'},
-                '$set_once': {'initial_url': '/blog'}
-            }
-        )
+        from posthog import set
+        set(distinct_id='distinct_id', properties={'name': 'Max Hedgehog'})
         ```
     Category:
         Identification
@@ -370,21 +445,24 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record, only if they do not yet exist.
 
+    Args:
+        **kwargs: Optional arguments including:
+            distinct_id: Unique identifier for the user. Falls back to the
+                context distinct ID; if none exists, this call does nothing.
+            properties: Dict of person properties to set only once.
+            timestamp: When the properties were set.
+            uuid: Unique identifier for this operation. If omitted, one is
+                generated and returned.
+            disable_geoip: Whether to disable GeoIP lookup.
+
     Details:
         This will not overwrite previous people property values, unlike `set`. Otherwise, operates in an identical manner to `set`.
 
     Examples:
         ```python
         # Set property once
-        from posthog import capture
-        capture(
-            'distinct_id',
-            event='event_name',
-            properties={
-                '$set': {'name': 'Max Hedgehog'},
-                '$set_once': {'initial_url': '/blog'}
-            }
-        )
+        from posthog import set_once
+        set_once(distinct_id='distinct_id', properties={'initial_url': '/blog'})
 
         ```
     Category:
@@ -490,6 +568,8 @@ def capture_exception(
 
     Args:
         exception: The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
+        **kwargs: Optional capture arguments including distinct_id, properties,
+            timestamp, uuid, groups, flags, send_feature_flags, and disable_geoip.
 
     Details:
         Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog. This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception, if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context boundary (e.g. by existing a `with posthog.new_context():` block already). If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised and the point at which it is captured (the "traceback"). If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace captured will be the full stack trace at the moment the exception was captured. Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently, which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason. `capture_exception` takes the same set of optional arguments as `capture`.
@@ -534,6 +614,7 @@ def feature_enabled(
         only_evaluate_locally: Whether to evaluate only locally
         send_feature_flag_events: Whether to send feature flag events
         disable_geoip: Whether to disable GeoIP lookup
+        device_id: Optional device ID override for experience-continuity flags
 
     Details:
         You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
@@ -586,6 +667,7 @@ def get_feature_flag(
         only_evaluate_locally: Whether to evaluate only locally
         send_feature_flag_events: Whether to send feature flag events
         disable_geoip: Whether to disable GeoIP lookup
+        device_id: Optional device ID override for experience-continuity flags
 
     Details:
         `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5", you would pass groups={"organization": "5"}. `group_properties` take the format: { group_type_name: { group_properties } }. So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count, you'll send these as: group_properties={"organization": {"name": "PostHog", "employees": 11}}.
@@ -635,6 +717,7 @@ def get_all_flags(
         group_properties: Group properties
         only_evaluate_locally: Whether to evaluate only locally
         disable_geoip: Whether to disable GeoIP lookup
+        device_id: Optional device ID override for experience-continuity flags
         flag_keys_to_evaluate: Optional list of flag keys to evaluate (evaluates all if None)
 
     Details:
@@ -684,6 +767,17 @@ def get_feature_flag_result(
     - key: The flag key
     - reason: Why the flag was enabled/disabled
 
+    Args:
+        key: The feature flag key.
+        distinct_id: The user's distinct ID.
+        groups: Mapping of group type to group key.
+        person_properties: Person properties to use for evaluation.
+        group_properties: Group properties keyed by group type.
+        only_evaluate_locally: Whether to evaluate only locally.
+        send_feature_flag_events: Whether to send a $feature_flag_called event.
+        disable_geoip: Whether to disable GeoIP lookup.
+        device_id: Optional device ID override for experience-continuity flags.
+
     Example:
     ```python
     result = posthog.get_feature_flag_result('beta-feature', 'distinct_id')
@@ -719,6 +813,27 @@ def get_feature_flag_payload(
     disable_geoip=None,  # type: Optional[bool]
     device_id=None,  # type: Optional[str]
 ) -> Optional[str]:
+    """
+    Get the payload associated with a feature flag value.
+
+    Deprecated for new code. Prefer ``evaluate_flags()`` and
+    ``flags.get_flag_payload(key)`` so flag evaluation happens once per request.
+
+    Args:
+        key: The feature flag key.
+        distinct_id: The user's distinct ID.
+        match_value: Optional flag value to use when selecting a payload.
+        groups: Mapping of group type to group key.
+        person_properties: Person properties to use for evaluation.
+        group_properties: Group properties keyed by group type.
+        only_evaluate_locally: Whether to evaluate only locally.
+        send_feature_flag_events: Whether to send a $feature_flag_called event.
+        disable_geoip: Whether to disable GeoIP lookup.
+        device_id: Optional device ID override for experience-continuity flags.
+
+    Category:
+        Feature flags
+    """
     return _proxy(
         "get_feature_flag_payload",
         key=key,
@@ -743,7 +858,7 @@ def get_remote_config_payload(
         key: The key of the feature flag
 
     Returns:
-        The payload associated with the feature flag. If payload is encrypted, the return value will decrypted
+        The payload associated with the feature flag. If payload is encrypted, the return value will be decrypted
 
     Note:
         Requires personal_api_key to be set for authentication
@@ -764,6 +879,26 @@ def get_all_flags_and_payloads(
     device_id=None,  # type: Optional[str]
     flag_keys_to_evaluate=None,  # type: Optional[list[str]]
 ) -> FlagsAndPayloads:
+    """
+    Get all feature flag values and payloads for a user.
+
+    Args:
+        distinct_id: The user's distinct ID.
+        groups: Mapping of group type to group key.
+        person_properties: Person properties to use for evaluation.
+        group_properties: Group properties keyed by group type.
+        only_evaluate_locally: Whether to evaluate only locally.
+        disable_geoip: Whether to disable GeoIP lookup.
+        device_id: Optional device ID override for experience-continuity flags.
+        flag_keys_to_evaluate: Optional list of flag keys to evaluate. Evaluates
+            all flags when omitted.
+
+    Returns:
+        A dict with ``featureFlags`` and ``featureFlagPayloads`` entries.
+
+    Category:
+        Feature flags
+    """
     return _proxy(
         "get_all_flags_and_payloads",
         distinct_id=distinct_id,
@@ -922,6 +1057,22 @@ def shutdown():
 
 
 def setup() -> Client:
+    """
+    Create or return the global PostHog client configured by module settings.
+
+    Most applications should either instantiate ``Posthog`` directly or set
+    ``posthog.api_key``/other module settings before calling top-level helpers.
+    ``setup()`` is called automatically by global APIs such as ``capture()``.
+
+    Returns:
+        The global ``Client`` instance.
+
+    Raises:
+        ValueError: If ``api_key`` has not been configured.
+
+    Category:
+        Initialization
+    """
     global default_client
     if not default_client:
         if not api_key:
@@ -971,4 +1122,12 @@ def _proxy(method, *args, **kwargs):
 
 
 class Posthog(Client):
+    """
+    Public PostHog SDK client.
+
+    ``Posthog`` is the customer-facing alias for ``Client`` and accepts the same
+    constructor arguments. Use it to create an explicit SDK instance instead of
+    relying on module-level global configuration.
+    """
+
     pass
