@@ -143,6 +143,17 @@ class PostHogClaudeAgentProcessor:
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
     ):
+        """
+        Initialize a Claude Agent SDK query processor.
+
+        Args:
+            client: Optional PostHog client. Uses the default client when omitted.
+            distinct_id: Optional distinct ID for emitted events, or a callable
+                that receives a ``ResultMessage`` and returns one.
+            privacy_mode: Whether to redact captured inputs, outputs, and tool data.
+            groups: Optional PostHog groups to associate with emitted events.
+            properties: Additional properties included on emitted AI events.
+        """
         self._client = client or setup()
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode

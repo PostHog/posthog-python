@@ -55,11 +55,15 @@ def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
 class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
-    This middleware wraps all calls with a posthog context. It attempts to extract the following from the request headers:
+    This middleware wraps all calls with a posthog context. It attempts to extract the following from the request:
     - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
-    - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`)
-    - Request URL as $current_url
-    - Request Method as $request_method
+    - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`, falling back to the authenticated request user ID)
+    - Authenticated user email as `email`
+    - Request URL as `$current_url`
+    - Request method as `$request_method`
+    - Request path as `$request_path`
+    - Forwarded IP address as `$ip`
+    - User agent as `$user_agent`
 
     The context will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
     `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings. The exceptions are captured using the
@@ -88,6 +92,13 @@ class PosthogContextMiddleware:
 
     def __init__(self, get_response):
         # type: (Union[Callable[[HttpRequest], HttpResponse], Callable[[HttpRequest], Awaitable[HttpResponse]]]) -> None
+        """
+        Initialize the middleware with Django's next handler.
+
+        Args:
+            get_response: The next middleware or view handler in Django's
+                middleware chain. May be synchronous or asynchronous.
+        """
         self.get_response = get_response
         self._is_coroutine = iscoroutinefunction(get_response)
 

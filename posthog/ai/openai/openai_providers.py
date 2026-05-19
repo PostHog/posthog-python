@@ -31,10 +31,10 @@ class AzureOpenAI(openai.AzureOpenAI):
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
-            api_key: Azure OpenAI API key.
-            posthog_client: If provided, events will be captured via this client instead
-                            of the global posthog.
-            **openai_config: Any additional keyword args to set on Azure OpenAI (e.g. azure_endpoint="xxx").
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``openai.AzureOpenAI`` such as
+                ``api_key``, ``azure_endpoint``, or ``api_version``.
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
@@ -69,10 +69,10 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
-            api_key: Azure OpenAI API key.
-            posthog_client: If provided, events will be captured via this client instead
-                            of the global posthog.
-            **openai_config: Any additional keyword args to set on Azure OpenAI (e.g. azure_endpoint="xxx").
+            posthog_client: If provided, events will be captured via this client
+                instead of the global ``posthog`` client.
+            **kwargs: Arguments passed to ``openai.AsyncAzureOpenAI`` such as
+                ``api_key``, ``azure_endpoint``, or ``api_version``.
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
