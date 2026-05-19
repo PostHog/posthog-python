@@ -393,8 +393,12 @@ class PosthogCeleryIntegration:
     def _extract_propagated_tags(self, request: Any) -> dict[str, Any]:
         headers = self._extract_headers(request)
 
+        raw_tags = headers.get(CONTEXT_TAGS_HEADER)
+        if not isinstance(raw_tags, (str, bytes, bytearray)):
+            return {}
+
         try:
-            parsed = json.loads(headers.get(CONTEXT_TAGS_HEADER))
+            parsed = json.loads(raw_tags)
         except Exception:
             return {}
 

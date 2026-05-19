@@ -248,7 +248,7 @@ class Client(object):
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
         )
-        self.poller = None
+        self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
