@@ -1,5 +1,11 @@
 # posthog
 
+## 7.15.0 — 2026-05-19
+
+### Minor changes
+
+- [52cd20e](https://github.com/posthog/posthog-python/commit/52cd20e1237c6dd7be7364b744bd16565794c8ab) feat: add Celery integration and improve PostHog client fork safety — Thanks @parinporecha!
+
 ## 7.14.2 — 2026-05-13
 
 ### Patch changes
