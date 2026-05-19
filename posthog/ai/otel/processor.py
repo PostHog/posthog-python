@@ -82,6 +82,9 @@ class PostHogSpanProcessor(SpanProcessor):
 
         Args:
             timeout_millis: Optional flush timeout in milliseconds.
+
+        Returns:
+            True if the flush succeeded within the timeout, False otherwise.
         """
         if timeout_millis is not None:
             return self._processor.force_flush(timeout_millis)
