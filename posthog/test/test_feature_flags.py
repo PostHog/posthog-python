@@ -4567,56 +4567,49 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             match_property(prop_bad, {"version": "1.2.3"})
 
-    def test_match_properties_semver_rejects_leading_zeros(self):
-        """Semver 2.0.0 §2: numeric identifiers MUST NOT include leading zeros."""
+    # Semver 2.0.0 §2: numeric identifiers MUST NOT include leading zeros.
+    @parameterized.expand(
+        [
+            ("major", "01.2.3"),
+            ("minor", "1.02.3"),
+            ("patch", "1.2.03"),
+            ("all_components", "01.02.03"),
+            ("two_digit_minor", "1.07.3"),
+            ("triple_zero_major", "001.2.3"),
+        ]
+    )
+    def test_match_properties_semver_rejects_leading_zero_override_value(
+        self, _name, bad_value
+    ):
         prop = self.property(key="version", value="1.2.3", operator="semver_eq")
-
-        # Leading zero in any numeric component is invalid
-        for bad_value in [
-            "01.2.3",
-            "1.02.3",
-            "1.2.03",
-            "01.02.03",
-            "1.07.3",
-            "001.2.3",
-        ]:
-            with self.assertRaises(InconclusiveMatchError):
-                match_property(prop, {"version": bad_value})
-
-        # A literal "0" component is fine
-        prop_zero = self.property(key="version", value="0.1.0", operator="semver_eq")
-        self.assertTrue(match_property(prop_zero, {"version": "0.1.0"}))
-
-        prop_zero_patch = self.property(
-            key="version", value="1.0.0", operator="semver_eq"
-        )
-        self.assertTrue(match_property(prop_zero_patch, {"version": "1.0.0"}))
-
-        # Leading zeros in the flag value also raise (flag values are also validated)
-        prop_bad_flag = self.property(
-            key="version", value="01.2.3", operator="semver_gt"
-        )
         with self.assertRaises(InconclusiveMatchError):
-            match_property(prop_bad_flag, {"version": "2.0.0"})
+            match_property(prop, {"version": bad_value})
 
-        # Range operators reject leading-zero flag values
-        prop_caret = self.property(
-            key="version", value="1.07.0", operator="semver_caret"
-        )
-        with self.assertRaises(InconclusiveMatchError):
-            match_property(prop_caret, {"version": "1.2.0"})
+    @parameterized.expand(
+        [
+            ("zero_major", "0.1.0"),
+            ("zero_patch", "1.0.0"),
+            ("all_zero", "0.0.0"),
+        ]
+    )
+    def test_match_properties_semver_literal_zero_components_match(self, _name, value):
+        prop = self.property(key="version", value=value, operator="semver_eq")
+        self.assertTrue(match_property(prop, {"version": value}))
 
-        prop_tilde = self.property(
-            key="version", value="1.07.0", operator="semver_tilde"
-        )
+    @parameterized.expand(
+        [
+            ("semver_gt", "01.2.3"),
+            ("semver_caret", "1.07.0"),
+            ("semver_tilde", "1.07.0"),
+            ("semver_wildcard", "01.*"),
+        ]
+    )
+    def test_match_properties_semver_rejects_leading_zero_flag_value(
+        self, operator, flag_value
+    ):
+        prop = self.property(key="version", value=flag_value, operator=operator)
         with self.assertRaises(InconclusiveMatchError):
-            match_property(prop_tilde, {"version": "1.2.0"})
-
-        prop_wild = self.property(
-            key="version", value="01.*", operator="semver_wildcard"
-        )
-        with self.assertRaises(InconclusiveMatchError):
-            match_property(prop_wild, {"version": "1.2.0"})
+            match_property(prop, {"version": "1.2.0"})
 
     def test_unknown_operator(self):
         property_a = self.property(key="key", value="2022-05-01", operator="is_unknown")
