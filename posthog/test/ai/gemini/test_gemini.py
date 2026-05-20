@@ -1170,8 +1170,11 @@ def test_empty_array_grounding_metadata_no_web_search(
     assert props["$ai_output_tokens"] == 12
 
 
-def test_none_candidates_no_web_search(mock_client, mock_google_genai_client):
-    """Test that response with candidates=None does not crash web search extraction."""
+@pytest.mark.parametrize("candidates_value", [None, []])
+def test_falsy_candidates_no_web_search(
+    mock_client, mock_google_genai_client, candidates_value
+):
+    """Test that response with falsy candidates does not crash web search extraction."""
 
     mock_response = MagicMock()
 
@@ -1183,8 +1186,8 @@ def test_none_candidates_no_web_search(mock_client, mock_google_genai_client):
     mock_usage.thoughts_token_count = 0
     mock_response.usage_metadata = mock_usage
 
-    # candidates attribute exists but is None
-    mock_response.candidates = None
+    # candidates attribute exists but is falsy
+    mock_response.candidates = candidates_value
     mock_response.text = "Hello!"
 
     mock_google_genai_client.models.generate_content.return_value = mock_response
