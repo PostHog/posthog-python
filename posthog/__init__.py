@@ -315,7 +315,6 @@ poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 super_properties = None  # type: Optional[Dict]
-# Currently alpha, use at your own risk
 enable_exception_autocapture = False  # type: bool
 log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
