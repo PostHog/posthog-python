@@ -840,12 +840,22 @@ def relative_date_parse_for_feature_flag_matching(
         return None
 
 
+def _semver_numeric_identifier(part: str) -> int:
+    # Semver 2.0.0 §2: numeric identifiers MUST NOT include leading zeros.
+    if not part or not part.isdigit():
+        raise ValueError(f"Invalid semver numeric identifier: '{part}'")
+    if len(part) > 1 and part[0] == "0":
+        raise ValueError(f"Semver numeric identifier has leading zero: '{part}'")
+    return int(part)
+
+
 def parse_semver(value: str) -> tuple:
     """Parse a semver string into a comparable (major, minor, patch) integer tuple.
 
     Matches the behavior of the sortableSemver HogQL function:
     - Handles v-prefix, whitespace, pre-release suffixes
     - Defaults missing components to 0 (e.g., 1.2 -> 1.2.0)
+    - Rejects numeric identifiers with leading zeros per semver 2.0.0 §2
     Raises ValueError if parsing fails.
     """
     text = str(value).strip().lstrip("vV")
@@ -856,9 +866,9 @@ def parse_semver(value: str) -> tuple:
     if not parts or not parts[0]:
         raise ValueError("Invalid semver format")
 
-    major = int(parts[0])
-    minor = int(parts[1]) if len(parts) > 1 and parts[1] else 0
-    patch = int(parts[2]) if len(parts) > 2 and parts[2] else 0
+    major = _semver_numeric_identifier(parts[0])
+    minor = _semver_numeric_identifier(parts[1]) if len(parts) > 1 and parts[1] else 0
+    patch = _semver_numeric_identifier(parts[2]) if len(parts) > 2 and parts[2] else 0
 
     return (major, minor, patch)
 
@@ -902,11 +912,16 @@ def _wildcard_bounds(value: str) -> tuple:
         raise ValueError("Invalid wildcard pattern")
 
     if len(parts) == 1:
-        major = int(parts[0])
+        major = _semver_numeric_identifier(parts[0])
         return (major, 0, 0), (major + 1, 0, 0)
     elif len(parts) == 2:
-        major, minor = int(parts[0]), int(parts[1])
+        major, minor = (
+            _semver_numeric_identifier(parts[0]),
+            _semver_numeric_identifier(parts[1]),
+        )
         return (major, minor, 0), (major, minor + 1, 0)
     else:
-        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+        major = _semver_numeric_identifier(parts[0])
+        minor = _semver_numeric_identifier(parts[1])
+        patch = _semver_numeric_identifier(parts[2])
         return (major, minor, patch), (major, minor, patch + 1)
