@@ -1,1 +1,2 @@
 exclude-newer = "7 days"
+prerelease = "allow"
