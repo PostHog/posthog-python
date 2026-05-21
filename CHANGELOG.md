@@ -1,5 +1,11 @@
 # posthog
 
+## 7.15.1 — 2026-05-21
+
+### Patch changes
+
+- [a098aa7](https://github.com/posthog/posthog-python/commit/a098aa71860138ca94109f6c72fa732fafb302a1) Fix Gemini web search extraction when response candidates are null. — Thanks @marandaneto!
+
 ## 7.15.0 — 2026-05-19
 
 ### Minor changes
