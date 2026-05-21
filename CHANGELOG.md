@@ -1,5 +1,11 @@
 # posthog
 
+## 7.15.2 — 2026-05-21
+
+### Patch changes
+
+- [1574b1b](https://github.com/posthog/posthog-python/commit/1574b1be68202b831b9de28fa86e5f67dcf7b728) Fix OpenAI usage parsing when token detail fields are null — Thanks @michael-ciridae!
+
 ## 7.15.1 — 2026-05-21
 
 ### Patch changes

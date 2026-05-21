@@ -2037,7 +2037,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.15.1"
+version = "7.15.2"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
