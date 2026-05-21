@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-05-14T13:56:39.227229Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -2057,7 +2057,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.15.2"
+version = "7.15.3"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
