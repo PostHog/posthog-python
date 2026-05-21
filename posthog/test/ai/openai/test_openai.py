@@ -222,6 +222,33 @@ def mock_openai_response_with_cached_tokens():
 
 
 @pytest.fixture
+def mock_openai_response_with_null_token_details():
+    return ChatCompletion(
+        id="test",
+        model="gpt-4",
+        object="chat.completion",
+        created=int(time.time()),
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=CompletionUsage(
+            completion_tokens=10,
+            prompt_tokens=20,
+            total_tokens=30,
+            prompt_tokens_details={"cached_tokens": None},
+            completion_tokens_details={"reasoning_tokens": None},
+        ),
+    )
+
+
+@pytest.fixture
 def streaming_tool_call_chunks():
     return [
         ChatCompletionChunk(
@@ -661,6 +688,32 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_null_token_details_do_not_crash(
+    mock_client, mock_openai_response_with_null_token_details
+):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response_with_null_token_details,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        assert response == mock_openai_response_with_null_token_details
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert "$ai_cache_read_input_tokens" not in props
+        assert "$ai_reasoning_tokens" not in props
 
 
 def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
