@@ -4495,7 +4495,7 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(prop_pre, {"version": "1.2.2"}))
 
     def test_match_properties_semver_edge_cases(self):
-        """Test semver parsing handles v-prefix, whitespace, leading zeros, and other common formats."""
+        """Test semver parsing handles v-prefix, whitespace, and other common formats."""
         prop = self.property(key="version", value="1.2.3", operator="semver_eq")
 
         # v-prefix: "v1.2.3" -> extracts "1.2.3"
@@ -4506,9 +4506,6 @@ class TestMatchProperties(unittest.TestCase):
 
         # Trailing space: "1.2.3 " -> extracts "1.2.3"
         self.assertTrue(match_property(prop, {"version": "1.2.3 "}))
-
-        # Leading zeros: "01.02.03" -> int("01")=1, int("02")=2, int("03")=3
-        self.assertTrue(match_property(prop, {"version": "01.02.03"}))
 
         # Flag value with v-prefix
         prop_v = self.property(key="version", value="v1.2.3", operator="semver_eq")
@@ -4569,6 +4566,50 @@ class TestMatchProperties(unittest.TestCase):
         prop_bad = self.property(key="version", value="not-valid", operator="semver_gt")
         with self.assertRaises(InconclusiveMatchError):
             match_property(prop_bad, {"version": "1.2.3"})
+
+    # Semver 2.0.0 §2: numeric identifiers MUST NOT include leading zeros.
+    @parameterized.expand(
+        [
+            ("major", "01.2.3"),
+            ("minor", "1.02.3"),
+            ("patch", "1.2.03"),
+            ("all_components", "01.02.03"),
+            ("two_digit_minor", "1.07.3"),
+            ("triple_zero_major", "001.2.3"),
+        ]
+    )
+    def test_match_properties_semver_rejects_leading_zero_override_value(
+        self, _name, bad_value
+    ):
+        prop = self.property(key="version", value="1.2.3", operator="semver_eq")
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"version": bad_value})
+
+    @parameterized.expand(
+        [
+            ("zero_major", "0.1.0"),
+            ("zero_patch", "1.0.0"),
+            ("all_zero", "0.0.0"),
+        ]
+    )
+    def test_match_properties_semver_literal_zero_components_match(self, _name, value):
+        prop = self.property(key="version", value=value, operator="semver_eq")
+        self.assertTrue(match_property(prop, {"version": value}))
+
+    @parameterized.expand(
+        [
+            ("semver_gt", "01.2.3"),
+            ("semver_caret", "1.07.0"),
+            ("semver_tilde", "1.07.0"),
+            ("semver_wildcard", "01.*"),
+        ]
+    )
+    def test_match_properties_semver_rejects_leading_zero_flag_value(
+        self, operator, flag_value
+    ):
+        prop = self.property(key="version", value=flag_value, operator=operator)
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(prop, {"version": "1.2.0"})
 
     def test_unknown_operator(self):
         property_a = self.property(key="key", value="2022-05-01", operator="is_unknown")
