@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from unittest.mock import AsyncMock, patch
@@ -1110,6 +1111,97 @@ def test_responses_parse(mock_client, mock_parsed_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_chat_completions_parse(mock_client, mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.parse",
+        return_value=mock_openai_response,
+    ) as mock_parse:
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.parse(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            response_format={"type": "json_object"},
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_openai_response
+        assert mock_parse.call_count == 1
+        assert "posthog_distinct_id" not in mock_parse.call_args.kwargs
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4"
+        assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
+        ]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.asyncio
+async def test_async_chat_completions_parse(mock_client, mock_openai_response):
+    mock_parse = AsyncMock(return_value=mock_openai_response)
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.parse", new=mock_parse
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+        response = await client.chat.completions.parse(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            response_format={"type": "json_object"},
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+        )
+
+        assert response == mock_openai_response
+        mock_parse.assert_awaited_once()
+        assert "posthog_distinct_id" not in mock_parse.call_args.kwargs
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert call_args["distinct_id"] == "test-id"
+        assert call_args["event"] == "$ai_generation"
+        assert props["$ai_provider"] == "openai"
+        assert props["$ai_model"] == "gpt-4"
+        assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
+        assert props["$ai_output_choices"] == [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Test response"}],
+            }
+        ]
+        assert props["$ai_input_tokens"] == 20
+        assert props["$ai_output_tokens"] == 10
+        assert props["foo"] == "bar"
+        assert isinstance(props["$ai_latency"], float)
+
+
+def test_fallback_logs_warning(mock_client, caplog):
+    client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        with pytest.raises(AttributeError):
+            client.chat.posthog_unwrapped_test_attribute
+
+    assert "Falling back to unwrapped OpenAI API" in caplog.text
+    assert "WrappedChat.posthog_unwrapped_test_attribute" in caplog.text
 
 
 def test_responses_api_streaming_with_tokens(mock_client):
