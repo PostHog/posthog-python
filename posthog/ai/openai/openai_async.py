@@ -1,8 +1,9 @@
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from posthog.ai.types import TokenUsage
+from posthog.ai.stream import AsyncStreamWrapper
 
 try:
     import openai
@@ -206,7 +207,7 @@ class WrappedResponses:
                     stop_reason=stop_reason,
                 )
 
-        return async_generator()
+        return AsyncStreamWrapper(async_generator())
 
     async def _capture_streaming_event(
         self,
@@ -486,7 +487,7 @@ class WrappedCompletions:
                     stop_reason=stop_reason,
                 )
 
-        return async_generator()
+        return AsyncStreamWrapper(async_generator())
 
     async def _capture_streaming_event(
         self,
