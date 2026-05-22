@@ -5,6 +5,10 @@ log = logging.getLogger("posthog")
 _fallback_warnings: set[tuple[str, str]] = set()
 
 
+def reset_fallback_warnings() -> None:
+    _fallback_warnings.clear()
+
+
 def warn_on_fallback(wrapper_name: str, name: str) -> None:
     key = (wrapper_name, name)
     if key in _fallback_warnings:

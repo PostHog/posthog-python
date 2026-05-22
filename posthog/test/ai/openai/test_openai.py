@@ -38,6 +38,7 @@ try:
 
     from posthog.ai.openai import OpenAI
     from posthog.ai.openai.openai_async import AsyncOpenAI
+    from posthog.ai.openai.wrapper_utils import reset_fallback_warnings
 
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -1193,15 +1194,47 @@ async def test_async_chat_completions_parse(mock_client, mock_openai_response):
         assert isinstance(props["$ai_latency"], float)
 
 
-def test_fallback_logs_warning(mock_client, caplog):
-    client = OpenAI(api_key="test-key", posthog_client=mock_client)
+@pytest.mark.parametrize(
+    "client_factory, wrapper_accessor, wrapper_name",
+    [
+        (OpenAI, lambda client: client.responses, "WrappedResponses"),
+        (OpenAI, lambda client: client.chat, "WrappedChat"),
+        (OpenAI, lambda client: client.chat.completions, "WrappedCompletions"),
+        (OpenAI, lambda client: client.embeddings, "WrappedEmbeddings"),
+        (OpenAI, lambda client: client.beta, "WrappedBeta"),
+        (OpenAI, lambda client: client.beta.chat, "WrappedBetaChat"),
+        (
+            OpenAI,
+            lambda client: client.beta.chat.completions,
+            "WrappedBetaCompletions",
+        ),
+        (AsyncOpenAI, lambda client: client.responses, "WrappedResponses"),
+        (AsyncOpenAI, lambda client: client.chat, "WrappedChat"),
+        (AsyncOpenAI, lambda client: client.chat.completions, "WrappedCompletions"),
+        (AsyncOpenAI, lambda client: client.embeddings, "WrappedEmbeddings"),
+        (AsyncOpenAI, lambda client: client.beta, "WrappedBeta"),
+        (AsyncOpenAI, lambda client: client.beta.chat, "WrappedBetaChat"),
+        (
+            AsyncOpenAI,
+            lambda client: client.beta.chat.completions,
+            "WrappedBetaCompletions",
+        ),
+    ],
+)
+def test_fallback_logs_warning(
+    mock_client, caplog, client_factory, wrapper_accessor, wrapper_name
+):
+    reset_fallback_warnings()
+    caplog.clear()
+    client = client_factory(api_key="test-key", posthog_client=mock_client)
+    wrapper = wrapper_accessor(client)
 
     with caplog.at_level(logging.WARNING, logger="posthog"):
         with pytest.raises(AttributeError):
-            client.chat.posthog_unwrapped_test_attribute
+            wrapper.posthog_unwrapped_test_attribute
 
     assert "Falling back to unwrapped OpenAI API" in caplog.text
-    assert "WrappedChat.posthog_unwrapped_test_attribute" in caplog.text
+    assert f"{wrapper_name}.posthog_unwrapped_test_attribute" in caplog.text
 
 
 def test_responses_api_streaming_with_tokens(mock_client):
