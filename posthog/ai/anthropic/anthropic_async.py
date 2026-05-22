@@ -8,6 +8,7 @@ except ImportError:
 
 import time
 import uuid
+from posthog.ai.stream import AsyncStreamWrapper
 from typing import Any, Dict, List, Optional
 
 from posthog import setup
@@ -225,7 +226,7 @@ class AsyncWrappedMessages(AsyncMessages):
                     stop_reason=stop_reason,
                 )
 
-        return generator()
+        return AsyncStreamWrapper(generator())
 
     async def _capture_streaming_event(
         self,
