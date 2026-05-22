@@ -69,6 +69,22 @@ class SDKState:
 
     def reset(self):
         """Reset all state"""
+        client_to_shutdown = None
+        with self.lock:
+            client_to_shutdown = self.client
+            self.client = None
+
+        if client_to_shutdown:
+            # Flush and shutdown the existing client outside state.lock.
+            # The patched transport records successful flush requests through
+            # SDKState.record_request(), which also needs state.lock. Holding the
+            # lock while shutdown() waits for the queue to drain can deadlock when
+            # a pending background event is being flushed during test reset.
+            try:
+                client_to_shutdown.shutdown()
+            except Exception as e:
+                logger.warning(f"Error shutting down client: {e}")
+
         with self.lock:
             self.pending_events = 0
             self.total_events_captured = 0
@@ -77,13 +93,6 @@ class SDKState:
             self.last_error = None
             self.requests_made = []
             self.retry_attempts = {}
-            if self.client:
-                # Flush and shutdown existing client
-                try:
-                    self.client.shutdown()
-                except Exception as e:
-                    logger.warning(f"Error shutting down client: {e}")
-                self.client = None
 
     def increment_captured(self):
         """Increment total events captured"""
@@ -235,6 +244,10 @@ def init():
             gzip=enable_compression,
             max_retries=max_retries,
             debug=True,
+            # Compliance tests assert the request-level default when callers omit
+            # disable_geoip. Configure the adapter to exercise geoip-enabled
+            # /flags requests by default while still allowing per-call overrides.
+            disable_geoip=False,
         )
 
         state.client = client
@@ -392,6 +405,12 @@ def get_feature_flag():
             disable_geoip=disable_geoip,
             only_evaluate_locally=not force_remote,
         )
+
+        # Ensure the SDK's side-effect $feature_flag_called event is sent before
+        # the adapter action returns. Otherwise the harness may reset mock-server
+        # state for the next test while the background consumer is still flushing,
+        # leaking the previous test's event into the next test.
+        state.client.flush()
 
         logger.info(f"Feature flag {key} for {distinct_id}: {value}")
 
