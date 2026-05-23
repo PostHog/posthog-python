@@ -26,6 +26,7 @@ from posthog.ai.openai.openai_converter import (
 from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
 from posthog import setup
+from posthog.ai.openai.wrapper_utils import warn_on_fallback
 
 
 class OpenAI(openai.OpenAI):
@@ -67,6 +68,29 @@ class OpenAI(openai.OpenAI):
             self.responses = WrappedResponses(self, self._original_responses)
 
 
+def _parse_and_track(
+    wrapper,
+    posthog_distinct_id: Optional[str],
+    posthog_trace_id: Optional[str],
+    posthog_properties: Optional[Dict[str, Any]],
+    posthog_privacy_mode: bool,
+    posthog_groups: Optional[Dict[str, Any]],
+    **kwargs: Any,
+):
+    return call_llm_and_track_usage(
+        posthog_distinct_id,
+        wrapper._client._ph_client,
+        "openai",
+        posthog_trace_id,
+        posthog_properties,
+        posthog_privacy_mode,
+        posthog_groups,
+        wrapper._client.base_url,
+        wrapper._original.parse,
+        **kwargs,
+    )
+
+
 class WrappedResponses:
     """Wrapper for OpenAI responses that tracks usage in PostHog."""
 
@@ -76,6 +100,7 @@ class WrappedResponses:
 
     def __getattr__(self, name):
         """Fallback to original responses object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
 
     def create(
@@ -276,16 +301,13 @@ class WrappedResponses:
         Returns:
             The response from OpenAI's responses.parse call.
         """
-        return call_llm_and_track_usage(
+        return _parse_and_track(
+            self,
             posthog_distinct_id,
-            self._client._ph_client,
-            "openai",
             posthog_trace_id,
             posthog_properties,
             posthog_privacy_mode,
             posthog_groups,
-            self._client.base_url,
-            self._original.parse,
             **kwargs,
         )
 
@@ -299,6 +321,7 @@ class WrappedChat:
 
     def __getattr__(self, name):
         """Fallback to original chat object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
 
     @property
@@ -316,7 +339,41 @@ class WrappedCompletions:
 
     def __getattr__(self, name):
         """Fallback to original completions object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
+
+    def parse(
+        self,
+        posthog_distinct_id: Optional[str] = None,
+        posthog_trace_id: Optional[str] = None,
+        posthog_properties: Optional[Dict[str, Any]] = None,
+        posthog_privacy_mode: bool = False,
+        posthog_groups: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Parse an OpenAI chat completion while tracking usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional distinct ID to associate with the usage event.
+            posthog_trace_id: Optional trace ID. Generated automatically when omitted.
+            posthog_properties: Additional properties to include with the usage event.
+            posthog_privacy_mode: Whether to redact captured input and output.
+            posthog_groups: Optional PostHog groups to associate with the event.
+            **kwargs: Arguments passed to OpenAI's ``chat.completions.parse`` API.
+
+        Returns:
+            The parsed response from OpenAI.
+        """
+        return _parse_and_track(
+            self,
+            posthog_distinct_id,
+            posthog_trace_id,
+            posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
+            **kwargs,
+        )
 
     def create(
         self,
@@ -518,6 +575,7 @@ class WrappedEmbeddings:
 
     def __getattr__(self, name):
         """Fallback to original embeddings object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
 
     def create(
@@ -602,6 +660,7 @@ class WrappedBeta:
 
     def __getattr__(self, name):
         """Fallback to original beta object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
 
     @property
@@ -619,6 +678,7 @@ class WrappedBetaChat:
 
     def __getattr__(self, name):
         """Fallback to original beta chat object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
 
     @property
@@ -636,6 +696,7 @@ class WrappedBetaCompletions:
 
     def __getattr__(self, name):
         """Fallback to original beta completions object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
         return getattr(self._original, name)
 
     def parse(
@@ -661,15 +722,12 @@ class WrappedBetaCompletions:
         Returns:
             The parsed response from OpenAI.
         """
-        return call_llm_and_track_usage(
+        return _parse_and_track(
+            self,
             posthog_distinct_id,
-            self._client._ph_client,
-            "openai",
             posthog_trace_id,
             posthog_properties,
             posthog_privacy_mode,
             posthog_groups,
-            self._client.base_url,
-            self._original.parse,
             **kwargs,
         )
