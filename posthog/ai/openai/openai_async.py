@@ -28,7 +28,7 @@ from posthog.ai.openai.openai_converter import (
 )
 from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
-from posthog.ai.openai.wrapper_utils import warn_on_fallback
+from posthog.ai.openai.wrapper_utils import OpenAIWrapperResource
 
 
 class AsyncOpenAI(openai.AsyncOpenAI):
@@ -93,17 +93,8 @@ async def _parse_and_track(
     )
 
 
-class WrappedResponses:
+class WrappedResponses(OpenAIWrapperResource):
     """Async wrapper for OpenAI responses that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_responses):
-        self._client = client
-        self._original = original_responses
-
-    def __getattr__(self, name):
-        """Fallback to original responses object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     async def create(
         self,
@@ -340,17 +331,8 @@ class WrappedResponses:
         )
 
 
-class WrappedChat:
+class WrappedChat(OpenAIWrapperResource):
     """Async wrapper for OpenAI chat that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_chat):
-        self._client = client
-        self._original = original_chat
-
-    def __getattr__(self, name):
-        """Fallback to original chat object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     @property
     def completions(self):
@@ -358,17 +340,8 @@ class WrappedChat:
         return WrappedCompletions(self._client, self._original.completions)
 
 
-class WrappedCompletions:
+class WrappedCompletions(OpenAIWrapperResource):
     """Async wrapper for OpenAI chat completions that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_completions):
-        self._client = client
-        self._original = original_completions
-
-    def __getattr__(self, name):
-        """Fallback to original completions object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     async def parse(
         self,
@@ -621,17 +594,8 @@ class WrappedCompletions:
             )
 
 
-class WrappedEmbeddings:
+class WrappedEmbeddings(OpenAIWrapperResource):
     """Async wrapper for OpenAI embeddings that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_embeddings):
-        self._client = client
-        self._original = original_embeddings
-
-    def __getattr__(self, name):
-        """Fallback to original embeddings object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     async def create(
         self,
@@ -707,17 +671,8 @@ class WrappedEmbeddings:
         return response
 
 
-class WrappedBeta:
+class WrappedBeta(OpenAIWrapperResource):
     """Async wrapper for OpenAI beta features that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_beta):
-        self._client = client
-        self._original = original_beta
-
-    def __getattr__(self, name):
-        """Fallback to original beta object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     @property
     def chat(self):
@@ -725,17 +680,8 @@ class WrappedBeta:
         return WrappedBetaChat(self._client, self._original.chat)
 
 
-class WrappedBetaChat:
+class WrappedBetaChat(OpenAIWrapperResource):
     """Async wrapper for OpenAI beta chat that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_beta_chat):
-        self._client = client
-        self._original = original_beta_chat
-
-    def __getattr__(self, name):
-        """Fallback to original beta chat object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     @property
     def completions(self):
@@ -743,17 +689,8 @@ class WrappedBetaChat:
         return WrappedBetaCompletions(self._client, self._original.completions)
 
 
-class WrappedBetaCompletions:
+class WrappedBetaCompletions(OpenAIWrapperResource):
     """Async wrapper for OpenAI beta chat completions that tracks usage in PostHog."""
-
-    def __init__(self, client: AsyncOpenAI, original_beta_completions):
-        self._client = client
-        self._original = original_beta_completions
-
-    def __getattr__(self, name):
-        """Fallback to original beta completions object for any methods we don't explicitly handle."""
-        warn_on_fallback(self.__class__.__name__, name)
-        return getattr(self._original, name)
 
     async def parse(
         self,
