@@ -1,5 +1,11 @@
 # posthog
 
+## 7.15.4 — 2026-05-25
+
+### Patch changes
+
+- [0207088](https://github.com/posthog/posthog-python/commit/0207088decedb404abfe44ebc0c4b9f1723687c9) Track OpenAI chat completions parse calls — Thanks @marandaneto!
+
 ## 7.15.3 — 2026-05-21
 
 ### Patch changes
