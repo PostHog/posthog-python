@@ -5273,6 +5273,107 @@ class TestCaptureCalls(unittest.TestCase):
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
+    def test_capture_fires_per_group_context(self, patch_flags, patch_capture):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Group flag",
+                "key": "group-scoped-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+
+        # Same user, same flag, same response — but two different group contexts.
+        client.get_feature_flag(
+            "group-scoped-flag", "user-1", groups={"company": "org-a"}
+        )
+        client.get_feature_flag(
+            "group-scoped-flag", "user-1", groups={"company": "org-b"}
+        )
+
+        flag_called_groups = [
+            call.kwargs.get("groups")
+            for call in patch_capture.call_args_list
+            if call.args and call.args[0] == "$feature_flag_called"
+        ]
+        self.assertEqual(len(flag_called_groups), 2)
+        self.assertIn({"company": "org-a"}, flag_called_groups)
+        self.assertIn({"company": "org-b"}, flag_called_groups)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_capture_dedupes_repeated_calls_under_same_group_context(
+        self, patch_flags, patch_capture
+    ):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Group flag",
+                "key": "group-scoped-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+
+        client.get_feature_flag(
+            "group-scoped-flag", "user-1", groups={"company": "org-a"}
+        )
+        client.get_feature_flag(
+            "group-scoped-flag", "user-1", groups={"company": "org-a"}
+        )
+
+        flag_called_count = sum(
+            1
+            for call in patch_capture.call_args_list
+            if call.args and call.args[0] == "$feature_flag_called"
+        )
+        self.assertEqual(flag_called_count, 1)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_capture_dedupes_when_groups_passed_in_different_key_order(
+        self, patch_flags, patch_capture
+    ):
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Group flag",
+                "key": "group-scoped-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+
+        client.get_feature_flag(
+            "group-scoped-flag",
+            "user-1",
+            groups={"company": "org-a", "team": "red"},
+        )
+        client.get_feature_flag(
+            "group-scoped-flag",
+            "user-1",
+            groups={"team": "red", "company": "org-a"},
+        )
+
+        flag_called_count = sum(
+            1
+            for call in patch_capture.call_args_list
+            if call.args and call.args[0] == "$feature_flag_called"
+        )
+        self.assertEqual(flag_called_count, 1)
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
     def test_capture_multiple_users_doesnt_out_of_memory(
         self, patch_flags, patch_capture
     ):

@@ -2214,14 +2214,19 @@ class Client(object):
         groups: Optional[Dict[str, str]] = None,
         disable_geoip: Optional[bool] = None,
     ) -> None:
-        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response)
-        triple hasn't already been reported on this client. Shared by the single-flag
-        evaluation path and ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so
-        both paths dedupe identically.
+        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
+        groups) tuple hasn't already been reported on this client. Group context is
+        included so that group-scoped flags fire a separate event for each group a
+        user is evaluated under. Shared by the single-flag evaluation path and
+        ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
+        identically.
         """
-        feature_flag_reported_key = (
-            f"{key}_{'::null::' if response is None else str(response)}"
-        )
+        response_repr = "::null::" if response is None else str(response)
+        if groups:
+            groups_repr = json.dumps(sorted(groups.items()), separators=(",", ":"))
+            feature_flag_reported_key = f"{key}_{response_repr}_{groups_repr}"
+        else:
+            feature_flag_reported_key = f"{key}_{response_repr}"
 
         reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
         if reported_flags is None:
