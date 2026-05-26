@@ -157,6 +157,7 @@ class CallbackHandler(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        """Record the start of a LangChain chain run for trace/span tracking."""
         self._log_debug_event("on_chain_start", run_id, parent_run_id, inputs=inputs)
         self._set_parent_of_run(run_id, parent_run_id)
         self._set_trace_or_span_metadata(
@@ -171,6 +172,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
+        """Capture a completed LangChain chain run as a trace or span."""
         self._log_debug_event("on_chain_end", run_id, parent_run_id, outputs=outputs)
         self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, outputs)
 
@@ -182,6 +184,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
+        """Capture a failed LangChain chain run as a trace or span."""
         self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
         self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
@@ -194,6 +197,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs,
     ):
+        """Record the start of a chat model run for generation tracking."""
         self._log_debug_event(
             "on_chat_model_start", run_id, parent_run_id, messages=messages
         )
@@ -212,6 +216,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
+        """Record the start of an LLM run for generation tracking."""
         self._log_debug_event("on_llm_start", run_id, parent_run_id, prompts=prompts)
         self._set_parent_of_run(run_id, parent_run_id)
         self._set_llm_metadata(serialized, run_id, prompts, **kwargs)
@@ -251,6 +256,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
+        """Capture a failed LLM run as a PostHog AI generation event."""
         self._log_debug_event("on_llm_error", run_id, parent_run_id, error=error)
         self._pop_run_and_capture_generation(run_id, parent_run_id, error)
 
@@ -264,6 +270,7 @@ class CallbackHandler(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
+        """Record the start of a LangChain tool run for span tracking."""
         self._log_debug_event(
             "on_tool_start", run_id, parent_run_id, input_str=input_str
         )
@@ -280,6 +287,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
+        """Capture a completed LangChain tool run as a span."""
         self._log_debug_event("on_tool_end", run_id, parent_run_id, output=output)
         self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, output)
 
@@ -292,6 +300,7 @@ class CallbackHandler(BaseCallbackHandler):
         tags: Optional[list[str]] = None,
         **kwargs: Any,
     ) -> Any:
+        """Capture a failed LangChain tool run as a span."""
         self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
         self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
 
@@ -305,6 +314,7 @@ class CallbackHandler(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Any:
+        """Record the start of a LangChain retriever run for span tracking."""
         self._log_debug_event("on_retriever_start", run_id, parent_run_id, query=query)
         self._set_parent_of_run(run_id, parent_run_id)
         self._set_trace_or_span_metadata(
@@ -319,6 +329,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ):
+        """Capture a completed LangChain retriever run as a span."""
         self._log_debug_event(
             "on_retriever_end", run_id, parent_run_id, documents=documents
         )
@@ -358,6 +369,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> Any:
+        """Capture a completed LangChain agent action as a span."""
         self._log_debug_event("on_agent_finish", run_id, parent_run_id, finish=finish)
         self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, finish)
 

@@ -131,9 +131,30 @@ def _get_flags_session() -> requests.Session:
     return _build_flags_session(_socket_options)
 
 
+def reset_sessions() -> None:
+    """
+    Reset the global sessions. This should be called after a fork to ensure
+    that the child process does not use the parent's connection pool.
+    """
+    global _session, _flags_session
+    if _session:
+        _session.close()
+    if _flags_session:
+        _flags_session.close()
+    _session = _build_session(_socket_options)
+    _flags_session = _build_flags_session(_socket_options)
+
+
 def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
     """
-    Configure socket options for all HTTP connections.
+    Configure socket options for all SDK HTTP connections.
+
+    Call this during initialization, before making API requests. Pass ``None``
+    to reset to the default socket behavior.
+
+    Args:
+        socket_options: A list of ``(level, option, value)`` tuples accepted by
+            urllib3/``socket.setsockopt()``, or ``None`` to reset defaults.
 
     Example:
         from posthog import set_socket_options
@@ -148,12 +169,23 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
 
 
 def enable_keep_alive() -> None:
-    """Enable TCP keepalive to prevent idle connections from being dropped."""
+    """
+    Enable TCP keepalive for SDK HTTP connections.
+
+    This helps prevent idle pooled connections from being dropped by network
+    infrastructure. Call during initialization, before making API requests.
+    """
     set_socket_options(KEEP_ALIVE_SOCKET_OPTIONS)
 
 
 def disable_connection_reuse() -> None:
-    """Disable connection reuse, creating a fresh connection for each request."""
+    """
+    Disable HTTP connection reuse for SDK requests.
+
+    Each request will create a fresh connection. This can avoid issues with
+    environments that terminate pooled connections, but adds per-request
+    overhead. Call during initialization, before making API requests.
+    """
     global _pooling_enabled
     _pooling_enabled = False
 

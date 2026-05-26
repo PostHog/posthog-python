@@ -104,6 +104,20 @@ class WrappedMessages(Messages):
         posthog_groups: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
+        """
+        Stream an Anthropic message while tracking usage in PostHog.
+
+        Args:
+            posthog_distinct_id: Optional distinct ID to associate with the usage event.
+            posthog_trace_id: Optional trace ID. Generated automatically when omitted.
+            posthog_properties: Additional properties to include with the usage event.
+            posthog_privacy_mode: Whether to redact captured input and output.
+            posthog_groups: Optional PostHog groups to associate with the event.
+            **kwargs: Arguments passed to Anthropic's ``messages.create`` API.
+
+        Returns:
+            A streaming iterator yielding Anthropic events.
+        """
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 

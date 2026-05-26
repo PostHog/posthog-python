@@ -53,15 +53,34 @@ class PostHogTraceExporter(SpanExporter):
         )
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """
+        Export AI-related spans to PostHog and drop non-AI spans.
+
+        Args:
+            spans: Readable OpenTelemetry spans to filter and export.
+
+        Returns:
+            The OpenTelemetry export result.
+        """
         ai_spans = [span for span in spans if is_ai_span(span)]
         if not ai_spans:
             return SpanExportResult.SUCCESS
         return self._exporter.export(ai_spans)
 
     def shutdown(self) -> None:
+        """Shut down the underlying OTLP exporter."""
         self._exporter.shutdown()
 
     def force_flush(self, timeout_millis: Optional[int] = None) -> bool:
+        """
+        Flush pending spans from the underlying OTLP exporter.
+
+        Args:
+            timeout_millis: Optional flush timeout in milliseconds.
+
+        Returns:
+            True if the flush succeeded within the timeout, False otherwise.
+        """
         if timeout_millis is not None:
             return self._exporter.force_flush(timeout_millis)
         return self._exporter.force_flush()

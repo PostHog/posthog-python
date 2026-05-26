@@ -2,6 +2,7 @@ import json
 import sys
 import time
 import unittest
+from contextlib import ExitStack
 from unittest import mock
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -279,76 +280,167 @@ class TestUtils(unittest.TestCase):
         assert utils.str_iequals("Hello World", "hello world") is True
         assert utils.str_iequals("Hello World", "hello") is False
 
-    def test_get_os_info_branches(self):
-        with (
-            mock.patch.object(utils.sys, "platform", "win32"),
-            mock.patch.object(
-                utils.platform, "win32_ver", return_value=("11", "", "", "")
+    @parameterized.expand(
+        [
+            (
+                "win32 with version",
+                "win32",
+                {"$os": "Windows", "$os_version": "11"},
+                ("11", "", "", ""),
             ),
-        ):
-            assert utils.get_os_info() == {"$os": "Windows", "$os_version": "11"}
-
-        with (
-            mock.patch.object(utils.sys, "platform", "win32"),
-            mock.patch.object(
-                utils.platform, "win32_ver", return_value=("", "", "", "")
+            (
+                "win32 without version",
+                "win32",
+                {"$os": "Windows", "$os_version": ""},
+                ("", "", "", ""),
             ),
-        ):
-            assert utils.get_os_info() == {"$os": "Windows", "$os_version": ""}
-
-        with mock.patch.object(utils.platform, "win32_ver", create=True):
-            delattr(utils.platform, "win32_ver")
-            assert utils._get_windows_os_info() == ("Windows", "", "")
-
-        with (
-            mock.patch.object(utils.sys, "platform", "darwin"),
-            mock.patch.object(
-                utils.platform, "mac_ver", return_value=("14.4", ("", "", ""), "")
+            (
+                "darwin",
+                "darwin",
+                {"$os": "Mac OS X", "$os_version": "14.4"},
+                None,
+                ("14.4", ("", "", ""), ""),
             ),
-        ):
-            assert utils.get_os_info() == {"$os": "Mac OS X", "$os_version": "14.4"}
+            (
+                "linux",
+                "linux",
+                {
+                    "$os": "Linux",
+                    "$os_version": "24.04",
+                    "$os_distro": "Ubuntu",
+                },
+                None,
+                None,
+                {"version": "24.04"},
+                "Ubuntu",
+            ),
+            (
+                "freebsd",
+                "freebsd13",
+                {"$os": "FreeBSD", "$os_version": "13.2"},
+                None,
+                None,
+                None,
+                None,
+                "13.2",
+            ),
+            (
+                "generic fallback",
+                "sunos",
+                {"$os": "sunos", "$os_version": "5.11"},
+                None,
+                None,
+                None,
+                None,
+                "5.11",
+            ),
+        ]
+    )
+    def test_get_os_info_branches(
+        self,
+        _name,
+        sys_platform,
+        expected,
+        win32_ver=None,
+        mac_ver=None,
+        distro_info=None,
+        distro_name=None,
+        release=None,
+    ):
+        patches = [mock.patch.object(utils.sys, "platform", sys_platform)]
+        if win32_ver is not None:
+            patches.append(
+                mock.patch.object(utils.platform, "win32_ver", return_value=win32_ver)
+            )
+        if mac_ver is not None:
+            patches.append(
+                mock.patch.object(utils.platform, "mac_ver", return_value=mac_ver)
+            )
+        if distro_info is not None:
+            patches.append(
+                mock.patch.object(utils.distro, "info", return_value=distro_info)
+            )
+        if distro_name is not None:
+            patches.append(
+                mock.patch.object(utils.distro, "name", return_value=distro_name)
+            )
+        if release is not None:
+            patches.append(
+                mock.patch.object(utils.platform, "release", return_value=release)
+            )
 
-        with mock.patch.object(
-            utils.platform, "mac_ver", return_value=("", ("", "", ""), "")
-        ):
-            assert utils._get_macos_info() == ("Mac OS X", "", "")
+        with ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            assert utils.get_os_info() == expected
 
-        with mock.patch.object(utils.platform, "mac_ver", create=True):
-            delattr(utils.platform, "mac_ver")
-            assert utils._get_macos_info() == ("Mac OS X", "", "")
+    @parameterized.expand(
+        [
+            ("version", ("11", "", "", ""), ("Windows", "11", "")),
+            ("empty_version", ("", "", "", ""), ("Windows", "", "")),
+            ("missing_win32_ver", None, ("Windows", "", "")),
+        ]
+    )
+    def test_get_windows_os_info(self, _name, win32_ver, expected):
+        if win32_ver is None:
+            with mock.patch.object(utils.platform, "win32_ver", create=True):
+                delattr(utils.platform, "win32_ver")
+                assert utils._get_windows_os_info() == expected
+            return
 
+        with mock.patch.object(utils.platform, "win32_ver", return_value=win32_ver):
+            assert utils._get_windows_os_info() == expected
+
+    @parameterized.expand(
+        [
+            ("version", ("14.4", ("", "", ""), ""), ("Mac OS X", "14.4", "")),
+            ("empty_version", ("", ("", "", ""), ""), ("Mac OS X", "", "")),
+            ("missing_mac_ver", None, ("Mac OS X", "", "")),
+        ]
+    )
+    def test_get_macos_info(self, _name, mac_ver, expected):
+        if mac_ver is None:
+            with mock.patch.object(utils.platform, "mac_ver", create=True):
+                delattr(utils.platform, "mac_ver")
+                assert utils._get_macos_info() == expected
+            return
+
+        with mock.patch.object(utils.platform, "mac_ver", return_value=mac_ver):
+            assert utils._get_macos_info() == expected
+
+    @parameterized.expand(
+        [
+            (
+                "version_and_distro",
+                {"version": "24.04"},
+                "Ubuntu",
+                ("Linux", "24.04", "Ubuntu"),
+            ),
+            ("empty_version_and_distro", {"version": ""}, "", ("Linux", "", "")),
+        ]
+    )
+    def test_get_linux_os_info(self, _name, distro_info, distro_name, expected):
         with (
-            mock.patch.object(utils.sys, "platform", "linux"),
-            mock.patch.object(utils.distro, "info", return_value={"version": "24.04"}),
-            mock.patch.object(utils.distro, "name", return_value="Ubuntu"),
+            mock.patch.object(utils.distro, "info", return_value=distro_info),
+            mock.patch.object(utils.distro, "name", return_value=distro_name),
         ):
-            assert utils.get_os_info() == {
-                "$os": "Linux",
-                "$os_version": "24.04",
-                "$os_distro": "Ubuntu",
-            }
+            assert utils._get_linux_os_info() == expected
 
-        with (
-            mock.patch.object(utils.distro, "info", return_value={"version": ""}),
-            mock.patch.object(utils.distro, "name", return_value=""),
-        ):
-            assert utils._get_linux_os_info() == ("Linux", "", "")
+    @parameterized.expand(
+        [
+            ("release", "13.2", "13.2"),
+            ("missing_release", None, ""),
+        ]
+    )
+    def test_platform_release(self, _name, release, expected):
+        if release is None:
+            with mock.patch.object(utils.platform, "release", create=True):
+                delattr(utils.platform, "release")
+                assert utils._platform_release() == expected
+            return
 
-        with (
-            mock.patch.object(utils.sys, "platform", "freebsd13"),
-            mock.patch.object(utils.platform, "release", return_value="13.2"),
-        ):
-            assert utils.get_os_info() == {"$os": "FreeBSD", "$os_version": "13.2"}
-
-        with (
-            mock.patch.object(utils.sys, "platform", "sunos"),
-            mock.patch.object(utils.platform, "release", return_value="5.11"),
-        ):
-            assert utils.get_os_info() == {"$os": "sunos", "$os_version": "5.11"}
-
-        with mock.patch.object(utils.platform, "release", create=True):
-            delattr(utils.platform, "release")
-            assert utils._platform_release() == ""
+        with mock.patch.object(utils.platform, "release", return_value=release):
+            assert utils._platform_release() == expected
 
     def test_system_context(self):
         with (
@@ -713,14 +805,46 @@ class TestRedisFlagCache(unittest.TestCase):
         failing_cache.invalidate_version(1)
         failing_cache.clear()
 
-    def test_redis_cache_key_helpers(self):
+    @parameterized.expand(
+        [
+            ("string", "test:flags:user123:beta", "test:flags:user123:beta"),
+            ("bytes", b"test:flags:user123:beta", "test:flags:user123:beta"),
+        ]
+    )
+    def test_redis_key_to_string(self, _name, key, expected):
+        assert self.cache._redis_key_to_string(key) == expected
+
+    def test_key_has_version_returns_false_when_missing(self):
         key = self.cache._get_cache_key("user123", "missing")
+
+        assert self.cache._key_has_version(key, 1) is False
+
+    @parameterized.expand(
+        [
+            ("matching_version", 1, True),
+            ("different_version", 2, False),
+        ]
+    )
+    def test_key_has_version_checks_flag_version(self, _name, old_version, expected):
+        key = self.cache._get_cache_key("user123", "beta")
+        self.redis.store[key] = self.cache._serialize_entry(True, 1, timestamp=100)
+
+        assert self.cache._key_has_version(key, old_version) is expected
+
+    def test_key_has_version_does_not_delete_corrupt_json(self):
         invalid_key = self.cache._get_cache_key("user123", "invalid")
         self.redis.store[invalid_key] = "not json"
 
-        assert self.cache._redis_key_to_string(key) == key
-        assert self.cache._key_has_version(key, 1) is False
-        assert self.cache._key_has_version(invalid_key, 1) is False
+        with self.assertRaises(json.JSONDecodeError):
+            self.cache._key_has_version(invalid_key, 1)
+        assert invalid_key in self.redis.store
+
+    def test_delete_keys_with_version_deletes_corrupt_json(self):
+        invalid_key = self.cache._get_cache_key("user123", "invalid")
+        self.redis.store[invalid_key] = "not json"
+
+        self.cache._delete_keys_with_version([invalid_key], 1)
+
         assert invalid_key not in self.redis.store
 
     def test_invalidate_version(self):
