@@ -401,7 +401,11 @@ class RedisFlagCache:
         for key in keys:
             if self._is_version_key(key):
                 continue
-            if self._key_has_version(key, old_version):
+            try:
+                if self._key_has_version(key, old_version):
+                    self.redis.delete(key)
+            except (json.JSONDecodeError, KeyError):
+                # If we can't parse the entry, delete it to be safe
                 self.redis.delete(key)
 
     def _is_version_key(self, key):
@@ -413,15 +417,10 @@ class RedisFlagCache:
         return key
 
     def _key_has_version(self, key, old_version):
-        try:
-            data = self.redis.get(key)
-            if not data:
-                return False
-            return json.loads(data).get("flag_version") == old_version
-        except (json.JSONDecodeError, KeyError):
-            # If we can't parse the entry, delete it to be safe
-            self.redis.delete(key)
+        data = self.redis.get(key)
+        if not data:
             return False
+        return json.loads(data).get("flag_version") == old_version
 
     def clear(self):
         try:
