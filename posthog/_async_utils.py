@@ -12,15 +12,13 @@ class _BackgroundEventLoopRunner:
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
         self._lock = threading.Lock()
-        self._run_lock = threading.Lock()
 
     def run(self, awaitable: Awaitable[Any]) -> Any:
-        with self._run_lock:
-            loop = self._ensure_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                self._await_result(awaitable), loop
-            )
-            return future.result()
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(
+            self._await_result(awaitable), loop
+        )
+        return future.result()
 
     def close(self) -> None:
         with self._lock:
