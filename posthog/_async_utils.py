@@ -15,9 +15,7 @@ class _BackgroundEventLoopRunner:
 
     def run(self, awaitable: Awaitable[Any]) -> Any:
         loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._await_result(awaitable), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._await_result(awaitable), loop)
         return future.result()
 
     def close(self) -> None:
