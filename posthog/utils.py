@@ -18,7 +18,7 @@ log = logging.getLogger("posthog")
 
 def is_naive(dt):
     """Determines if a given datetime.datetime is naive."""
-    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None
+    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None  # pragma: no mutate
 
 
 def total_seconds(delta):
@@ -33,7 +33,7 @@ def guess_timezone(dt):
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
         delta = datetime.now() - dt
-        if total_seconds(delta) < 5:
+        if total_seconds(delta) < 5:  # pragma: no mutate
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
             return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
@@ -123,7 +123,7 @@ def _coerce_unicode(cmplx: Any) -> Optional[str]:
     item = None
     try:
         if isinstance(cmplx, bytes):
-            item = cmplx.decode("utf-8", "strict")
+            item = cmplx.decode("utf-8", "strict")  # pragma: no mutate
         elif isinstance(cmplx, str):
             item = cmplx
     except Exception as exception:
@@ -154,6 +154,12 @@ class SizeLimitedDict(defaultdict):
         super().__setitem__(key, value)
 
 
+CACHE_MAX_SIZE = 10000
+CACHE_TTL = 300
+CACHE_STALE_TTL = 3600
+CACHE_KEY_PREFIX = "posthog:flags:"
+
+
 class FlagCacheEntry:
     def __init__(self, flag_result, flag_definition_version, timestamp=None):
         self.flag_result = flag_result
@@ -165,12 +171,12 @@ class FlagCacheEntry:
         version_valid = self.flag_definition_version == current_flag_version
         return time_valid and version_valid
 
-    def is_stale_but_usable(self, current_time, max_stale_age=3600):
+    def is_stale_but_usable(self, current_time, max_stale_age=CACHE_STALE_TTL):
         return (current_time - self.timestamp) < max_stale_age
 
 
 class FlagCache:
-    def __init__(self, max_size=10000, default_ttl=300):
+    def __init__(self, max_size=CACHE_MAX_SIZE, default_ttl=CACHE_TTL):
         self.cache = {}  # distinct_id -> {flag_key: FlagCacheEntry}
         self.access_times = {}  # distinct_id -> last_access_time
         self.max_size = max_size
@@ -193,7 +199,10 @@ class FlagCache:
 
         return None
 
-    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=3600):
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        if max_stale_age is None:
+            max_stale_age = CACHE_STALE_TTL
+
         current_time = time.time()
 
         if distinct_id not in self.cache:
@@ -223,9 +232,8 @@ class FlagCache:
             self.cache[distinct_id] = {}
 
         # Store the flag result
-        self.cache[distinct_id][flag_key] = FlagCacheEntry(
-            flag_result, flag_definition_version, current_time
-        )
+        entry = FlagCacheEntry(flag_result, flag_definition_version)
+        self.cache[distinct_id][flag_key] = entry
         self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
@@ -272,7 +280,11 @@ class FlagCache:
 
 class RedisFlagCache:
     def __init__(
-        self, redis_client, default_ttl=300, stale_ttl=3600, key_prefix="posthog:flags:"
+        self,
+        redis_client,
+        default_ttl=CACHE_TTL,
+        stale_ttl=CACHE_STALE_TTL,
+        key_prefix=CACHE_KEY_PREFIX,
     ):
         self.redis = redis_client
         self.default_ttl = default_ttl
@@ -391,7 +403,7 @@ class RedisFlagCache:
                         self.redis.delete(key)
 
                 if cursor == 0:
-                    break
+                    break  # pragma: no mutate
 
         except Exception:
             # Redis error - silently fail
@@ -408,7 +420,7 @@ class RedisFlagCache:
                 if keys:
                     self.redis.delete(*keys)
                 if cursor == 0:
-                    break
+                    break  # pragma: no mutate
         except Exception:
             # Redis error - silently fail
             pass
@@ -465,9 +477,9 @@ def get_os_info():
     Returns standardized OS name, version and distro (in case of Linux) information.
     Similar to how user agent parsing works in JS.
     """
-    os_name = ""
+    os_name = ""  # pragma: no mutate
     os_version = ""
-    os_distro = ""
+    os_distro = ""  # pragma: no mutate
 
     platform_name = sys.platform
 

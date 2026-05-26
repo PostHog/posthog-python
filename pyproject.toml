@@ -112,6 +112,13 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["posthog/test"]
 norecursedirs = ["integration_tests"]
 
+[tool.mutmut]
+paths_to_mutate = ["posthog/utils.py"]
+do_not_mutate = ["posthog/test/*"]
+tests_dir = ["posthog/test/test_utils.py", "posthog/test/test_size_limited_dict.py"]
+also_copy = ["posthog"]
+pytest_add_cli_args = ["--timeout=30"]
+
 [dependency-groups]
 dev = [
     "claude-agent-sdk>=0.1.50",
