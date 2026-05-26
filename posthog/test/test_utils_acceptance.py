@@ -1,11 +1,12 @@
 import json
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 from unittest import mock
 
-from pytest_bdd import given, scenarios, then, when
+from pytest_bdd import given, parsers, scenarios, then, when
 
 from posthog import utils
 from posthog.types import FeatureFlagResult
@@ -19,21 +20,26 @@ class AcceptancePayloadMetadata:
     sample_rate: Decimal
 
 
-@given("an SDK event payload with Python-specific values", target_fixture="payload")
-def sdk_event_payload():
+PAYLOAD_VALUE_FACTORIES = {
+    "uuid": lambda: UUID("12345678123456781234567812345678"),
+    "decimal": lambda: Decimal("12.34"),
+    "dataclass": lambda: AcceptancePayloadMetadata(
+        source="checkout",
+        sample_rate=Decimal("0.5"),
+    ),
+    "tuple": lambda: ("paid", "beta"),
+    "bytes": lambda: b"hello",
+    "unsupported": lambda: lambda: None,
+}
+
+
+@given(
+    parsers.parse("an SDK payload value of type {value_type}"), target_fixture="payload"
+)
+def sdk_event_payload(value_type):
     return {
         "event": "plan upgraded",
-        "distinct_id": UUID("12345678123456781234567812345678"),
-        "properties": {
-            "price": Decimal("12.34"),
-            "metadata": AcceptancePayloadMetadata(
-                source="checkout",
-                sample_rate=Decimal("0.5"),
-            ),
-            "labels": ("paid", "beta"),
-            "raw_bytes": b"hello",
-            "unsupported": lambda: None,
-        },
+        "properties": {"value": PAYLOAD_VALUE_FACTORIES[value_type]()},
     }
 
 
@@ -42,22 +48,10 @@ def clean_event_payload(payload):
     return utils.clean(payload)
 
 
-@then("transformed values are safe for SDK serialization")
-def transformed_values_are_safe_for_sdk_serialization(cleaned_payload):
-    assert cleaned_payload["distinct_id"] == "12345678-1234-5678-1234-567812345678"
-    assert cleaned_payload["properties"]["price"] == 12.34
-    assert cleaned_payload["properties"]["metadata"] == {
-        "source": "checkout",
-        "sample_rate": 0.5,
-    }
-    assert cleaned_payload["properties"]["labels"] == ["paid", "beta"]
-    assert cleaned_payload["properties"]["raw_bytes"] == "hello"
+@then(parsers.parse("the cleaned payload value equals {expected_json}"))
+def cleaned_payload_value_equals(cleaned_payload, expected_json):
+    assert cleaned_payload["properties"]["value"] == json.loads(expected_json)
     json.dumps(cleaned_payload)
-
-
-@then("unsupported payload values are dropped to null")
-def unsupported_payload_values_are_dropped_to_null(cleaned_payload):
-    assert cleaned_payload["properties"]["unsupported"] is None
 
 
 @given("a cached feature flag evaluation for a user", target_fixture="flag_cache_state")
@@ -135,11 +129,10 @@ def linux_host_with_distribution_metadata():
         mock.patch.object(utils.distro, "info", return_value={"version": "24.04"}),
         mock.patch.object(utils.distro, "name", return_value="Ubuntu"),
     ]
-    for patch in patches:
-        patch.start()
-    yield
-    for patch in reversed(patches):
-        patch.stop()
+    with ExitStack() as stack:
+        for patch in patches:
+            stack.enter_context(patch)
+        yield
 
 
 @when("the SDK builds system context", target_fixture="system_context")

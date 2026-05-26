@@ -2,11 +2,19 @@ Feature: SDK utility behavior
   The SDK utility module prepares user data, cache entries, and runtime metadata
   for higher-level SDK flows.
 
-  Scenario: Clean SDK payload values before capture
-    Given an SDK event payload with Python-specific values
+  Scenario Outline: Clean SDK payload values before capture
+    Given an SDK payload value of type <value_type>
     When the SDK cleans the event payload
-    Then transformed values are safe for SDK serialization
-    And unsupported payload values are dropped to null
+    Then the cleaned payload value equals <expected_json>
+
+    Examples:
+      | value_type  | expected_json                                  |
+      | uuid        | "12345678-1234-5678-1234-567812345678"       |
+      | decimal     | 12.34                                          |
+      | dataclass   | {"source":"checkout","sample_rate":0.5}    |
+      | tuple       | ["paid","beta"]                              |
+      | bytes       | "hello"                                       |
+      | unsupported | null                                           |
 
   Scenario: Reuse cached feature flag evaluations safely
     Given a cached feature flag evaluation for a user
