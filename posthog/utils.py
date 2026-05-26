@@ -59,22 +59,29 @@ def clean(item):
         return item
     if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
-    # Pydantic model
-    try:
-        # v2+
-        if hasattr(item, "model_dump") and callable(item.model_dump):
-            item = item.model_dump()
-        # v1
-        elif hasattr(item, "dict") and callable(item.dict):
-            item = item.dict()
-    except TypeError as e:
-        log.debug(f"Could not serialize Pydantic-like model: {e}")
-        pass
+
+    item = _clean_pydantic_model(item)
     if isinstance(item, dict):
         return _clean_dict(item)
     if is_dataclass(item) and not isinstance(item, type):
         return _clean_dataclass(item)
     return _coerce_unicode(item)
+
+
+def _clean_pydantic_model(item):
+    # Pydantic model
+    try:
+        # v2+
+        model_dump = getattr(item, "model_dump", None)
+        if callable(model_dump):
+            return model_dump()
+        # v1
+        dict_method = getattr(item, "dict", None)
+        if callable(dict_method):
+            return dict_method()
+    except TypeError as e:
+        log.debug(f"Could not serialize Pydantic-like model: {e}")
+    return item
 
 
 def _clean_list(list_):
@@ -237,27 +244,33 @@ class FlagCache:
         self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
-        users_to_remove = []
-
-        for distinct_id, user_flags in self.cache.items():
-            flags_to_remove = []
-            for flag_key, entry in user_flags.items():
-                if entry.flag_definition_version == old_version:
-                    flags_to_remove.append(flag_key)
-
-            # Remove invalidated flags
-            for flag_key in flags_to_remove:
-                del user_flags[flag_key]
-
-            # Remove user entirely if no flags remain
-            if not user_flags:
-                users_to_remove.append(distinct_id)
+        users_to_remove = [
+            distinct_id
+            for distinct_id, user_flags in self.cache.items()
+            if self._remove_flags_with_version(user_flags, old_version)
+        ]
 
         # Clean up empty users
         for distinct_id in users_to_remove:
-            del self.cache[distinct_id]
-            if distinct_id in self.access_times:
-                del self.access_times[distinct_id]
+            self._remove_user(distinct_id)
+
+    def _remove_flags_with_version(self, user_flags, old_version):
+        flags_to_remove = [
+            flag_key
+            for flag_key, entry in user_flags.items()
+            if entry.flag_definition_version == old_version
+        ]
+
+        # Remove invalidated flags
+        for flag_key in flags_to_remove:
+            del user_flags[flag_key]
+
+        # Remove user entirely if no flags remain
+        return not user_flags
+
+    def _remove_user(self, distinct_id):
+        self.cache.pop(distinct_id, None)
+        self.access_times.pop(distinct_id, None)
 
     def _evict_lru(self):
         if not self.access_times:
@@ -378,29 +391,14 @@ class RedisFlagCache:
 
     def invalidate_version(self, old_version):
         try:
-            # For Redis, we use a simple approach: scan for keys with old version
-            # and delete them. This could be expensive with many keys, but it's
-            # necessary for correctness.
-
+            # For Redis, scan for keys with old version and delete them. This could
+            # be expensive with many keys, but it's necessary for correctness.
             cursor = 0
             pattern = f"{self.key_prefix}*"
 
             while True:
                 cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
-
-                for key in keys:
-                    if key.decode() == self.version_key:
-                        continue
-
-                    try:
-                        data = self.redis.get(key)
-                        if data:
-                            entry_dict = json.loads(data)
-                            if entry_dict.get("flag_version") == old_version:
-                                self.redis.delete(key)
-                    except (json.JSONDecodeError, KeyError):
-                        # If we can't parse the entry, delete it to be safe
-                        self.redis.delete(key)
+                self._delete_keys_with_version(keys, old_version)
 
                 if cursor == 0:
                     break  # pragma: no mutate
@@ -408,6 +406,31 @@ class RedisFlagCache:
         except Exception:
             # Redis error - silently fail
             pass
+
+    def _delete_keys_with_version(self, keys, old_version):
+        for key in keys:
+            if self._is_version_key(key):
+                continue
+            try:
+                if self._key_has_version(key, old_version):
+                    self.redis.delete(key)
+            except (json.JSONDecodeError, KeyError):
+                # If we can't parse the entry, delete it to be safe
+                self.redis.delete(key)
+
+    def _is_version_key(self, key):
+        return self._redis_key_to_string(key) == self.version_key
+
+    def _redis_key_to_string(self, key):
+        if isinstance(key, bytes):
+            return key.decode()
+        return key
+
+    def _key_has_version(self, key, old_version):
+        data = self.redis.get(key)
+        if not data:
+            return False
+        return json.loads(data).get("flag_version") == old_version
 
     def clear(self):
         try:
@@ -472,49 +495,50 @@ def str_iequals(value, comparand):
     return str(value).casefold() == str(comparand).casefold()
 
 
+def _platform_release():
+    release = getattr(platform, "release", None)
+    if callable(release):
+        return release()
+    return ""
+
+
+def _get_windows_os_info():
+    win32_ver = getattr(platform, "win32_ver", None)
+    if callable(win32_ver):
+        return "Windows", win32_ver()[0] or "", ""
+    return "Windows", "", ""
+
+
+def _get_macos_info():
+    mac_ver = getattr(platform, "mac_ver", None)
+    if callable(mac_ver):
+        return "Mac OS X", mac_ver()[0] or "", ""
+    return "Mac OS X", "", ""
+
+
+def _get_linux_os_info():
+    linux_info = distro.info()
+    return "Linux", linux_info["version"] or "", distro.name() or ""
+
+
+def _get_platform_os_info(platform_name):
+    if platform_name.startswith("win"):
+        return _get_windows_os_info()
+    if platform_name == "darwin":
+        return _get_macos_info()
+    if platform_name.startswith("linux"):
+        return _get_linux_os_info()
+    if platform_name.startswith("freebsd"):
+        return "FreeBSD", _platform_release(), ""
+    return platform_name, _platform_release(), ""
+
+
 def get_os_info():
     """
     Returns standardized OS name, version and distro (in case of Linux) information.
     Similar to how user agent parsing works in JS.
     """
-    os_name = ""  # pragma: no mutate
-    os_version = ""
-    os_distro = ""  # pragma: no mutate
-
-    platform_name = sys.platform
-
-    if platform_name.startswith("win"):
-        os_name = "Windows"
-        if hasattr(platform, "win32_ver"):
-            win_version = platform.win32_ver()[0]
-            if win_version:
-                os_version = win_version
-
-    elif platform_name == "darwin":
-        os_name = "Mac OS X"
-        if hasattr(platform, "mac_ver"):
-            mac_version = platform.mac_ver()[0]
-            if mac_version:
-                os_version = mac_version
-
-    elif platform_name.startswith("linux"):
-        os_name = "Linux"
-        linux_info = distro.info()
-        if linux_info["version"]:
-            os_version = linux_info["version"]
-        linux_distro = distro.name()
-        if linux_distro:
-            os_distro = linux_distro
-
-    elif platform_name.startswith("freebsd"):
-        os_name = "FreeBSD"
-        if hasattr(platform, "release"):
-            os_version = platform.release()
-
-    else:
-        os_name = platform_name
-        if hasattr(platform, "release"):
-            os_version = platform.release()
+    os_name, os_version, os_distro = _get_platform_os_info(sys.platform)
 
     info = {
         "$os": os_name,

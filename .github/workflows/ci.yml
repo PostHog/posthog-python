@@ -126,10 +126,18 @@ jobs:
               with:
                   enable-cache: true
 
+            - name: Check utils CRAP score
+              if: steps.changes.outputs.changed == 'true'
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest posthog/test/test_utils.py posthog/test/test_size_limited_dict.py --timeout=30 --cov=posthog.utils --crap --crap-threshold=10 --crap-top-n=40 -q
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov python .github/scripts/check_crap_threshold.py posthog/utils.py --max-crap 10
+
             - name: Restore mutmut cache
               id: mutmut-cache
               if: steps.changes.outputs.changed == 'true'
-              uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+              uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
               with:
                   path: mutants
                   key: mutmut-${{ runner.os }}-py311-${{ hashFiles('posthog/utils.py', 'posthog/test/test_utils.py', 'posthog/test/test_size_limited_dict.py') }}
