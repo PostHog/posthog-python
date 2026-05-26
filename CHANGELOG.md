@@ -1,5 +1,35 @@
 # posthog
 
+## 7.15.4 — 2026-05-25
+
+### Patch changes
+
+- [0207088](https://github.com/posthog/posthog-python/commit/0207088decedb404abfe44ebc0c4b9f1723687c9) Track OpenAI chat completions parse calls — Thanks @marandaneto!
+
+## 7.15.3 — 2026-05-21
+
+### Patch changes
+
+- [be9b78b](https://github.com/posthog/posthog-python/commit/be9b78be370fcaabeda568a50c0d72fba752dcbe) Reject semver values with leading zeros in local flag evaluation. Per semver 2.0.0 §2, numeric identifiers must not include leading zeros — values like `1.07.3` are not valid semver and should not match targeting conditions. Both override values and flag values are now validated; invalid inputs raise `InconclusiveMatchError` so the condition does not match. — Thanks @dmarticus!
+
+## 7.15.2 — 2026-05-21
+
+### Patch changes
+
+- [1574b1b](https://github.com/posthog/posthog-python/commit/1574b1be68202b831b9de28fa86e5f67dcf7b728) Fix OpenAI usage parsing when token detail fields are null — Thanks @michael-ciridae!
+
+## 7.15.1 — 2026-05-21
+
+### Patch changes
+
+- [a098aa7](https://github.com/posthog/posthog-python/commit/a098aa71860138ca94109f6c72fa732fafb302a1) Fix Gemini web search extraction when response candidates are null. — Thanks @marandaneto!
+
+## 7.15.0 — 2026-05-19
+
+### Minor changes
+
+- [52cd20e](https://github.com/posthog/posthog-python/commit/52cd20e1237c6dd7be7364b744bd16565794c8ab) feat: add Celery integration and improve PostHog client fork safety — Thanks @parinporecha!
+
 ## 7.14.2 — 2026-05-13
 
 ### Patch changes
