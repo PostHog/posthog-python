@@ -69,10 +69,13 @@ def clean(item):
 
 
 def _clean_pydantic_model(item):
+    # Pydantic model
     try:
+        # v2+
         model_dump = getattr(item, "model_dump", None)
         if callable(model_dump):
             return model_dump()
+        # v1
         dict_method = getattr(item, "dict", None)
         if callable(dict_method):
             return dict_method()
@@ -247,6 +250,7 @@ class FlagCache:
             if self._remove_flags_with_version(user_flags, old_version)
         ]
 
+        # Clean up empty users
         for distinct_id in users_to_remove:
             self._remove_user(distinct_id)
 
@@ -256,8 +260,12 @@ class FlagCache:
             for flag_key, entry in user_flags.items()
             if entry.flag_definition_version == old_version
         ]
+
+        # Remove invalidated flags
         for flag_key in flags_to_remove:
             del user_flags[flag_key]
+
+        # Remove user entirely if no flags remain
         return not user_flags
 
     def _remove_user(self, distinct_id):
@@ -383,6 +391,8 @@ class RedisFlagCache:
 
     def invalidate_version(self, old_version):
         try:
+            # For Redis, scan for keys with old version and delete them. This could
+            # be expensive with many keys, but it's necessary for correctness.
             cursor = 0
             pattern = f"{self.key_prefix}*"
 
