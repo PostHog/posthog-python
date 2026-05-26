@@ -24,7 +24,7 @@ jobs:
       has-changesets: ${{ steps.check.outputs.has-changesets }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: main
           fetch-depth: 0
@@ -45,7 +45,7 @@ jobs:
     name: Notify Slack - Approval Needed
     needs: check-changesets
     if: needs.check-changesets.outputs.has-changesets == 'true'
-    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@main
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@b6cef416551ce8e557d57e1bb4f6766da7389b4e
     with:
       slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
       slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
@@ -67,7 +67,7 @@ jobs:
     steps:
       - name: Notify Slack - Approved
         if: needs.notify-approval-needed.outputs.slack_ts != ''
-        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        uses: posthog/.github/.github/actions/slack-thread-reply@b6cef416551ce8e557d57e1bb4f6766da7389b4e
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
@@ -77,20 +77,20 @@ jobs:
 
       - name: Get GitHub App token
         id: releaser
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_APP_ID }}
           private-key: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_PRIVATE_KEY }}
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: main
           fetch-depth: 0
           token: ${{ steps.releaser.outputs.token }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: 3.11.11
 
@@ -107,7 +107,7 @@ jobs:
 
       - name: Cache Sampo CLI
         id: cache-sampo
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cargo/bin/sampo
           key: sampo-${{ runner.os }}-${{ runner.arch }}
@@ -230,7 +230,7 @@ jobs:
       # Notify in case of a failure
       - name: Send failure event to PostHog
         if: ${{ failure() }}
-        uses: PostHog/posthog-github-action@v1
+        uses: PostHog/posthog-github-action@58dea254b598fb5d469c0699c98af8288a7f7650 # v1.2.0
         with:
           posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
           event: "posthog-python-github-release-workflow-failure"
@@ -244,7 +244,7 @@ jobs:
 
       - name: Notify Slack - Failed
         if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
-        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        uses: posthog/.github/.github/actions/slack-thread-reply@b6cef416551ce8e557d57e1bb4f6766da7389b4e
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
@@ -259,10 +259,10 @@ jobs:
     if: always() && needs.release.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Notify Slack - Released
-        uses: posthog/.github/.github/actions/slack-thread-reply@main
+        uses: posthog/.github/.github/actions/slack-thread-reply@b6cef416551ce8e557d57e1bb4f6766da7389b4e
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}

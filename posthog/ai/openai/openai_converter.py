@@ -432,9 +432,9 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
         output_tokens=output_tokens,
     )
 
-    if cached_tokens > 0:
+    if cached_tokens is not None and cached_tokens > 0:
         result["cache_read_input_tokens"] = cached_tokens
-    if reasoning_tokens > 0:
+    if reasoning_tokens is not None and reasoning_tokens > 0:
         result["reasoning_tokens"] = reasoning_tokens
 
     web_search_count = extract_openai_web_search_count(response)
@@ -488,17 +488,17 @@ def extract_openai_usage_from_chunk(
         if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
             chunk.usage.prompt_tokens_details, "cached_tokens"
         ):
-            usage["cache_read_input_tokens"] = (
-                chunk.usage.prompt_tokens_details.cached_tokens
-            )
+            cached = chunk.usage.prompt_tokens_details.cached_tokens
+            if cached is not None:
+                usage["cache_read_input_tokens"] = cached
 
         # Handle reasoning tokens
         if hasattr(chunk.usage, "completion_tokens_details") and hasattr(
             chunk.usage.completion_tokens_details, "reasoning_tokens"
         ):
-            usage["reasoning_tokens"] = (
-                chunk.usage.completion_tokens_details.reasoning_tokens
-            )
+            reasoning = chunk.usage.completion_tokens_details.reasoning_tokens
+            if reasoning is not None:
+                usage["reasoning_tokens"] = reasoning
 
         # Capture raw usage metadata for backend processing
         # Serialize to dict here in the converter (not in utils)
@@ -522,17 +522,17 @@ def extract_openai_usage_from_chunk(
                 if hasattr(response_usage, "input_tokens_details") and hasattr(
                     response_usage.input_tokens_details, "cached_tokens"
                 ):
-                    usage["cache_read_input_tokens"] = (
-                        response_usage.input_tokens_details.cached_tokens
-                    )
+                    cached = response_usage.input_tokens_details.cached_tokens
+                    if cached is not None:
+                        usage["cache_read_input_tokens"] = cached
 
                 # Handle reasoning tokens
                 if hasattr(response_usage, "output_tokens_details") and hasattr(
                     response_usage.output_tokens_details, "reasoning_tokens"
                 ):
-                    usage["reasoning_tokens"] = (
-                        response_usage.output_tokens_details.reasoning_tokens
-                    )
+                    reasoning = response_usage.output_tokens_details.reasoning_tokens
+                    if reasoning is not None:
+                        usage["reasoning_tokens"] = reasoning
 
                 # Extract web search count from the complete response
                 if hasattr(chunk, "response"):

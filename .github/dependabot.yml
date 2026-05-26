@@ -1,5 +1,33 @@
 version: 2
 updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "UTC"
+    exclude-paths:
+      - "examples/**"
+      - "integration_tests/**"
+    groups:
+      ai-providers:
+        patterns:
+          - "openai"
+          - "anthropic"
+          - "google-genai"
+          - "langchain*"
+          - "langgraph"
+    allow:
+      - dependency-name: "openai"
+      - dependency-name: "anthropic"
+      - dependency-name: "google-genai"
+      - dependency-name: "langchain*"
+      - dependency-name: "langgraph"
+    open-pull-requests-limit: 1
+    reviewers:
+      - "PostHog/team-llm-analytics"
+
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -9,6 +37,7 @@ updates:
       timezone: "UTC"
     exclude-paths:
       - "examples/**"
+      - "integration_tests/**"
     groups:
       ai-providers:
         patterns:

@@ -53,17 +53,39 @@ class PostHogSpanProcessor(SpanProcessor):
         self._processor = BatchSpanProcessor(exporter)
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
+        """
+        Handle span start notifications.
+
+        This processor does not need to do work at span start; filtering happens
+        in ``on_end``.
+        """
         pass
 
     def on_end(self, span: ReadableSpan) -> None:
+        """
+        Export an ended span if it is AI-related.
+
+        Args:
+            span: The ended OpenTelemetry span.
+        """
         if not is_ai_span(span):
             return
         self._processor.on_end(span)
 
     def shutdown(self) -> None:
+        """Shut down the underlying batch span processor."""
         self._processor.shutdown()
 
     def force_flush(self, timeout_millis: Optional[int] = None) -> bool:
+        """
+        Flush pending spans from the underlying batch span processor.
+
+        Args:
+            timeout_millis: Optional flush timeout in milliseconds.
+
+        Returns:
+            True if the flush succeeded within the timeout, False otherwise.
+        """
         if timeout_millis is not None:
             return self._processor.force_flush(timeout_millis)
         return self._processor.force_flush()
