@@ -4,6 +4,7 @@ Tests for FlagDefinitionCacheProvider functionality.
 These tests follow the patterns from the TypeScript implementation in posthog-js/packages/node.
 """
 
+import asyncio
 import threading
 import unittest
 from typing import Optional
@@ -55,6 +56,36 @@ class MockCacheProvider:
         self.shutdown_call_count += 1
         if self.shutdown_error:
             raise self.shutdown_error
+
+
+class AsyncMockCacheProvider(MockCacheProvider):
+    """An async implementation of FlagDefinitionCacheProvider for testing."""
+
+    def __init__(self):
+        super().__init__()
+        self.loop_ids = []
+        self.thread_ids = []
+
+    async def _record_async_call(self):
+        self.loop_ids.append(id(asyncio.get_running_loop()))
+        self.thread_ids.append(threading.get_ident())
+        await asyncio.sleep(0)
+
+    async def get_flag_definitions(self) -> Optional[FlagDefinitionCacheData]:
+        await self._record_async_call()
+        return super().get_flag_definitions()
+
+    async def should_fetch_flag_definitions(self) -> bool:
+        await self._record_async_call()
+        return super().should_fetch_flag_definitions()
+
+    async def on_flag_definitions_received(self, data: FlagDefinitionCacheData) -> None:
+        await self._record_async_call()
+        super().on_flag_definitions_received(data)
+
+    async def shutdown(self) -> None:
+        await self._record_async_call()
+        super().shutdown()
 
 
 class TestFlagDefinitionCacheProvider(unittest.TestCase):
@@ -369,6 +400,155 @@ class TestErrorHandling(TestFlagDefinitionCacheProvider):
         self.assertEqual(self.cache_provider.shutdown_call_count, 1)
 
 
+class TestAsyncCacheProvider(TestFlagDefinitionCacheProvider):
+    """Tests for async FlagDefinitionCacheProvider implementations."""
+
+    def setUp(self):
+        super().setUp()
+        self.cache_provider = AsyncMockCacheProvider()
+
+    @mock.patch("posthog.client.get")
+    def test_awaits_async_provider_for_cached_data(self, mock_get):
+        """Async providers can serve cached data without an API fetch."""
+        self.cache_provider.should_fetch_return_value = False
+        self.cache_provider.stored_data = self.sample_flags_data
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+
+        mock_get.assert_not_called()
+        self.assertEqual(self.cache_provider.should_fetch_call_count, 1)
+        self.assertEqual(self.cache_provider.get_call_count, 1)
+        self.assertEqual(len(client.feature_flags), 2)
+        self.assertEqual(client.feature_flags[0]["key"], "test-flag")
+        self.assertEqual(len(set(self.cache_provider.loop_ids)), 1)
+
+        client.join()
+
+    @mock.patch("posthog.client.get")
+    def test_awaits_async_provider_when_fetching_from_api(self, mock_get):
+        """Async should_fetch and on_received methods are awaited."""
+        self.cache_provider.should_fetch_return_value = True
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+
+        mock_get.assert_called_once()
+        self.assertEqual(self.cache_provider.should_fetch_call_count, 1)
+        self.assertEqual(self.cache_provider.get_call_count, 0)
+        self.assertEqual(self.cache_provider.on_received_call_count, 1)
+        self.assertEqual(self.cache_provider.stored_data, self.sample_flags_data)
+        self.assertEqual(len(set(self.cache_provider.loop_ids)), 1)
+
+        client.join()
+
+    @mock.patch("posthog.client.get")
+    def test_reuses_async_provider_loop_across_polls_and_shutdown(self, mock_get):
+        """All async cache provider methods run on one reusable event loop."""
+        self.cache_provider.should_fetch_return_value = True
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+        client._load_feature_flags()
+        client.join()
+
+        self.assertEqual(self.cache_provider.should_fetch_call_count, 2)
+        self.assertEqual(self.cache_provider.on_received_call_count, 2)
+        self.assertEqual(self.cache_provider.shutdown_call_count, 1)
+        self.assertEqual(len(set(self.cache_provider.loop_ids)), 1)
+        self.assertEqual(len(set(self.cache_provider.thread_ids)), 1)
+
+    @mock.patch("posthog.client.get")
+    def test_async_provider_can_load_while_caller_loop_is_running(self, mock_get):
+        """Async providers work even when called from an async app context."""
+        self.cache_provider.should_fetch_return_value = True
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+
+        async def load_flags():
+            client._load_feature_flags()
+
+        asyncio.run(load_flags())
+
+        self.assertEqual(len(client.feature_flags), 2)
+        self.assertEqual(self.cache_provider.on_received_call_count, 1)
+
+        client.join()
+
+    @mock.patch("posthog.client.get")
+    def test_async_should_fetch_error_defaults_to_fetching(self, mock_get):
+        """Async should_fetch errors fail open to an API fetch."""
+        self.cache_provider.should_fetch_error = Exception("Lock acquisition failed")
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+
+        mock_get.assert_called_once()
+        self.assertEqual(len(client.feature_flags), 2)
+
+        client.join()
+
+    @mock.patch("posthog.client.get")
+    def test_async_get_error_falls_back_to_api_fetch(self, mock_get):
+        """Async get_flag_definitions errors fail open to an API fetch."""
+        self.cache_provider.should_fetch_return_value = False
+        self.cache_provider.get_error = Exception("Cache read failed")
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+
+        mock_get.assert_called_once()
+        self.assertEqual(len(client.feature_flags), 2)
+
+        client.join()
+
+    @mock.patch("posthog.client.get")
+    def test_async_on_received_error_keeps_flags_in_memory(self, mock_get):
+        """Async store errors do not discard freshly fetched flag definitions."""
+        self.cache_provider.should_fetch_return_value = True
+        self.cache_provider.on_received_error = Exception("Cache write failed")
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+
+        self.assertEqual(len(client.feature_flags), 2)
+        self.assertEqual(client.feature_flags[0]["key"], "test-flag")
+
+        client.join()
+
+    @mock.patch("posthog.client.get")
+    def test_async_shutdown_error_is_logged_but_continues(self, mock_get):
+        """Async shutdown errors are logged and do not escape join()."""
+        self.cache_provider.shutdown_error = Exception("Async lock release failed")
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        client._load_feature_flags()
+        client.join()
+
+        self.assertEqual(self.cache_provider.shutdown_call_count, 1)
+
+
 class TestShutdownLifecycle(TestFlagDefinitionCacheProvider):
     """Tests for shutdown lifecycle."""
 
@@ -588,6 +768,38 @@ class TestConcurrency(TestFlagDefinitionCacheProvider):
 
         client.join()
 
+    @mock.patch("posthog.client.get")
+    def test_concurrent_async_load_feature_flags_uses_single_runner(self, mock_get):
+        """Concurrent async provider calls share one runner loop and shut down cleanly."""
+        self.cache_provider = AsyncMockCacheProvider()
+        mock_get.return_value = GetResponse(
+            data=self.sample_flags_data, etag="test-etag", not_modified=False
+        )
+
+        client = self._create_client_with_cache()
+        errors = []
+        barrier = threading.Barrier(10)
+
+        def load_flags():
+            try:
+                barrier.wait()
+                client._load_feature_flags()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=load_flags) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(errors), 0, f"Unexpected errors: {errors}")
+        self.assertEqual(len(client.feature_flags), 2)
+        self.assertEqual(len(set(self.cache_provider.loop_ids)), 1)
+        self.assertEqual(len(set(self.cache_provider.thread_ids)), 1)
+
+        client.join()
+
 
 class TestProtocolCompliance(unittest.TestCase):
     """Tests for Protocol compliance."""
@@ -595,6 +807,11 @@ class TestProtocolCompliance(unittest.TestCase):
     def test_mock_provider_is_protocol_instance(self):
         """MockCacheProvider satisfies FlagDefinitionCacheProvider protocol."""
         provider = MockCacheProvider()
+        self.assertIsInstance(provider, FlagDefinitionCacheProvider)
+
+    def test_async_mock_provider_is_protocol_instance(self):
+        """AsyncMockCacheProvider satisfies FlagDefinitionCacheProvider protocol."""
+        provider = AsyncMockCacheProvider()
         self.assertIsInstance(provider, FlagDefinitionCacheProvider)
 
     def test_incomplete_provider_is_not_protocol_instance(self):
