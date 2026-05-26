@@ -2,6 +2,7 @@ import json
 import sys
 import time
 import unittest
+from contextlib import ExitStack
 from unittest import mock
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -279,53 +280,99 @@ class TestUtils(unittest.TestCase):
         assert utils.str_iequals("Hello World", "hello world") is True
         assert utils.str_iequals("Hello World", "hello") is False
 
-    def test_get_os_info_branches(self):
-        with (
-            mock.patch.object(utils.sys, "platform", "win32"),
-            mock.patch.object(
-                utils.platform, "win32_ver", return_value=("11", "", "", "")
+    @parameterized.expand(
+        [
+            (
+                "win32 with version",
+                "win32",
+                {"$os": "Windows", "$os_version": "11"},
+                ("11", "", "", ""),
             ),
-        ):
-            assert utils.get_os_info() == {"$os": "Windows", "$os_version": "11"}
-
-        with (
-            mock.patch.object(utils.sys, "platform", "win32"),
-            mock.patch.object(
-                utils.platform, "win32_ver", return_value=("", "", "", "")
+            (
+                "win32 without version",
+                "win32",
+                {"$os": "Windows", "$os_version": ""},
+                ("", "", "", ""),
             ),
-        ):
-            assert utils.get_os_info() == {"$os": "Windows", "$os_version": ""}
-
-        with (
-            mock.patch.object(utils.sys, "platform", "darwin"),
-            mock.patch.object(
-                utils.platform, "mac_ver", return_value=("14.4", ("", "", ""), "")
+            (
+                "darwin",
+                "darwin",
+                {"$os": "Mac OS X", "$os_version": "14.4"},
+                None,
+                ("14.4", ("", "", ""), ""),
             ),
-        ):
-            assert utils.get_os_info() == {"$os": "Mac OS X", "$os_version": "14.4"}
+            (
+                "linux",
+                "linux",
+                {
+                    "$os": "Linux",
+                    "$os_version": "24.04",
+                    "$os_distro": "Ubuntu",
+                },
+                None,
+                None,
+                {"version": "24.04"},
+                "Ubuntu",
+            ),
+            (
+                "freebsd",
+                "freebsd13",
+                {"$os": "FreeBSD", "$os_version": "13.2"},
+                None,
+                None,
+                None,
+                None,
+                "13.2",
+            ),
+            (
+                "generic fallback",
+                "sunos",
+                {"$os": "sunos", "$os_version": "5.11"},
+                None,
+                None,
+                None,
+                None,
+                "5.11",
+            ),
+        ]
+    )
+    def test_get_os_info_branches(
+        self,
+        _name,
+        sys_platform,
+        expected,
+        win32_ver=None,
+        mac_ver=None,
+        distro_info=None,
+        distro_name=None,
+        release=None,
+    ):
+        patches = [mock.patch.object(utils.sys, "platform", sys_platform)]
+        if win32_ver is not None:
+            patches.append(
+                mock.patch.object(utils.platform, "win32_ver", return_value=win32_ver)
+            )
+        if mac_ver is not None:
+            patches.append(
+                mock.patch.object(utils.platform, "mac_ver", return_value=mac_ver)
+            )
+        if distro_info is not None:
+            patches.append(
+                mock.patch.object(utils.distro, "info", return_value=distro_info)
+            )
+        if distro_name is not None:
+            patches.append(
+                mock.patch.object(utils.distro, "name", return_value=distro_name)
+            )
+        if release is not None:
+            patches.append(
+                mock.patch.object(utils.platform, "release", return_value=release)
+            )
 
-        with (
-            mock.patch.object(utils.sys, "platform", "linux"),
-            mock.patch.object(utils.distro, "info", return_value={"version": "24.04"}),
-            mock.patch.object(utils.distro, "name", return_value="Ubuntu"),
-        ):
-            assert utils.get_os_info() == {
-                "$os": "Linux",
-                "$os_version": "24.04",
-                "$os_distro": "Ubuntu",
-            }
-
-        with (
-            mock.patch.object(utils.sys, "platform", "freebsd13"),
-            mock.patch.object(utils.platform, "release", return_value="13.2"),
-        ):
-            assert utils.get_os_info() == {"$os": "FreeBSD", "$os_version": "13.2"}
-
-        with (
-            mock.patch.object(utils.sys, "platform", "sunos"),
-            mock.patch.object(utils.platform, "release", return_value="5.11"),
-        ):
-            assert utils.get_os_info() == {"$os": "sunos", "$os_version": "5.11"}
+        with ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            assert utils.get_os_info() == expected
 
     def test_system_context(self):
         with (
