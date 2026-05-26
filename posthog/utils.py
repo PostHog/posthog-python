@@ -203,9 +203,10 @@ class FlagCache:
 
         return None
 
-    # fmt: off
-    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=CACHE_STALE_TTL):
-    # fmt: on
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        if max_stale_age is None:
+            max_stale_age = CACHE_STALE_TTL
+
         current_time = time.time()
 
         if distinct_id not in self.cache:
@@ -235,9 +236,8 @@ class FlagCache:
             self.cache[distinct_id] = {}
 
         # Store the flag result
-        # fmt: off
-        self.cache[distinct_id][flag_key] = FlagCacheEntry(flag_result, flag_definition_version)
-        # fmt: on
+        entry = FlagCacheEntry(flag_result, flag_definition_version)
+        self.cache[distinct_id][flag_key] = entry
         self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
