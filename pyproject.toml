@@ -81,6 +81,7 @@ test = [
     "claude-agent-sdk",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "pytest-bdd>=8.1.0",
 ]
 
 [tool.setuptools]
