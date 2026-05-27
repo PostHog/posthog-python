@@ -1,8 +1,6 @@
 """
 Flag Definition Cache Provider interface for multi-worker environments.
 
-EXPERIMENTAL: This API may change in future minor version bumps.
-
 This module provides an interface for external caching of feature flag definitions,
 enabling multi-worker environments (Kubernetes, load-balanced servers, serverless
 functions) to share flag definitions and reduce API calls.
@@ -56,8 +54,6 @@ class FlagDefinitionCacheProvider(Protocol):
 
     Enables multi-worker environments to share flag definitions, reducing API
     calls while ensuring all workers have consistent data.
-
-    EXPERIMENTAL: This API may change in future minor version bumps.
 
     Methods may be implemented as either synchronous functions or async
     functions. If a method returns an awaitable, the SDK runs it to completion
