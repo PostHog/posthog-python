@@ -1,5 +1,11 @@
 # posthog
 
+## 7.16.1 — 2026-05-27
+
+### Patch changes
+
+- [8f6d6c8](https://github.com/posthog/posthog-python/commit/8f6d6c8ba4be612ae39273c5bd47acfc31396145) Include group context in the `$feature_flag_called` dedupe key so group-scoped flags fire a separate event for each group a user is evaluated under, instead of being dedup-ed against the first group context the same `(distinct_id, flag, response)` was seen under. — Thanks @gustavohstrassburger!
+
 ## 7.16.0 — 2026-05-27
 
 ### Minor changes
