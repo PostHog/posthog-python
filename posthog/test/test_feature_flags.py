@@ -5304,10 +5304,24 @@ class TestCaptureCalls(unittest.TestCase):
         self.assertIn({"company": "org-a"}, flag_called_groups)
         self.assertIn({"company": "org-b"}, flag_called_groups)
 
+    @parameterized.expand(
+        [
+            (
+                "same_context",
+                {"company": "org-a"},
+                {"company": "org-a"},
+            ),
+            (
+                "different_key_order",
+                {"company": "org-a", "team": "red"},
+                {"team": "red", "company": "org-a"},
+            ),
+        ]
+    )
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_capture_dedupes_repeated_calls_under_same_group_context(
-        self, patch_flags, patch_capture
+        self, _name, first_groups, second_groups, patch_flags, patch_capture
     ):
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
@@ -5322,48 +5336,8 @@ class TestCaptureCalls(unittest.TestCase):
             }
         ]
 
-        client.get_feature_flag(
-            "group-scoped-flag", "user-1", groups={"company": "org-a"}
-        )
-        client.get_feature_flag(
-            "group-scoped-flag", "user-1", groups={"company": "org-a"}
-        )
-
-        flag_called_count = sum(
-            1
-            for call in patch_capture.call_args_list
-            if call.args and call.args[0] == "$feature_flag_called"
-        )
-        self.assertEqual(flag_called_count, 1)
-
-    @mock.patch.object(Client, "capture")
-    @mock.patch("posthog.client.flags")
-    def test_capture_dedupes_when_groups_passed_in_different_key_order(
-        self, patch_flags, patch_capture
-    ):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
-        client.feature_flags = [
-            {
-                "id": 1,
-                "name": "Group flag",
-                "key": "group-scoped-flag",
-                "active": True,
-                "filters": {
-                    "groups": [{"properties": [], "rollout_percentage": 100}],
-                },
-            }
-        ]
-
-        client.get_feature_flag(
-            "group-scoped-flag",
-            "user-1",
-            groups={"company": "org-a", "team": "red"},
-        )
-        client.get_feature_flag(
-            "group-scoped-flag",
-            "user-1",
-            groups={"team": "red", "company": "org-a"},
-        )
+        client.get_feature_flag("group-scoped-flag", "user-1", groups=first_groups)
+        client.get_feature_flag("group-scoped-flag", "user-1", groups=second_groups)
 
         flag_called_count = sum(
             1

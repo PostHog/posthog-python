@@ -2221,12 +2221,8 @@ class Client(object):
         ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
         identically.
         """
-        response_repr = "::null::" if response is None else str(response)
-        if groups:
-            groups_repr = json.dumps(sorted(groups.items()), separators=(",", ":"))
-            feature_flag_reported_key = f"{key}_{response_repr}_{groups_repr}"
-        else:
-            feature_flag_reported_key = f"{key}_{response_repr}"
+        groups_key = tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
+        feature_flag_reported_key = (key, response, groups_key)
 
         reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
         if reported_flags is None:
