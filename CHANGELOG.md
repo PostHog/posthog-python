@@ -1,5 +1,11 @@
 # posthog
 
+## 7.16.0 — 2026-05-27
+
+### Minor changes
+
+- [a44e0be](https://github.com/posthog/posthog-python/commit/a44e0bebb0220ed41d4d16620b9864f6c0732055) Add async flag definition cache providers — Thanks @dustinbyrne!
+
 ## 7.15.4 — 2026-05-25
 
 ### Patch changes
