@@ -20,7 +20,16 @@ Usage:
     )
 """
 
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Awaitable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 
 from typing_extensions import Required, TypedDict
 
@@ -50,6 +59,10 @@ class FlagDefinitionCacheProvider(Protocol):
 
     EXPERIMENTAL: This API may change in future minor version bumps.
 
+    Methods may be implemented as either synchronous functions or async
+    functions. If a method returns an awaitable, the SDK runs it to completion
+    before continuing.
+
     The four methods handle the complete lifecycle of flag definition caching:
 
     1. `should_fetch_flag_definitions()` - Called before each poll to determine
@@ -75,18 +88,23 @@ class FlagDefinitionCacheProvider(Protocol):
         - `shutdown()` errors are logged but shutdown continues
     """
 
-    def get_flag_definitions(self) -> Optional[FlagDefinitionCacheData]:
+    def get_flag_definitions(
+        self,
+    ) -> Union[
+        Optional[FlagDefinitionCacheData], Awaitable[Optional[FlagDefinitionCacheData]]
+    ]:
         """
         Retrieve cached flag definitions.
 
         Returns:
             Cached flag definitions if available and valid, None otherwise.
-            Returning None will trigger a fetch from the API if this worker
-            has no flags loaded yet.
+            May return an awaitable resolving to the same value. Returning None
+            will trigger a fetch from the API if this worker has no flags loaded
+            yet.
         """
         ...
 
-    def should_fetch_flag_definitions(self) -> bool:
+    def should_fetch_flag_definitions(self) -> Union[bool, Awaitable[bool]]:
         """
         Determine whether this instance should fetch new flag definitions.
 
@@ -97,12 +115,15 @@ class FlagDefinitionCacheProvider(Protocol):
 
         Returns:
             True if this instance should fetch from the API, False otherwise.
-            When False, the client will call `get_flag_definitions()` to
-            retrieve cached data instead.
+            May return an awaitable resolving to the same value. When False, the
+            client will call `get_flag_definitions()` to retrieve cached data
+            instead.
         """
         ...
 
-    def on_flag_definitions_received(self, data: FlagDefinitionCacheData) -> None:
+    def on_flag_definitions_received(
+        self, data: FlagDefinitionCacheData
+    ) -> Optional[Awaitable[None]]:
         """
         Called after successfully receiving new flag definitions from PostHog.
 
@@ -115,7 +136,7 @@ class FlagDefinitionCacheProvider(Protocol):
         """
         ...
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> Optional[Awaitable[None]]:
         """
         Called when the PostHog client shuts down.
 
