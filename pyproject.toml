@@ -107,7 +107,7 @@ packages = [
 ]
 
 [tool.uv]
-exclude-newer = "7 days"
+exclude-newer = "2026-05-20T00:00:00Z"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

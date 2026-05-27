@@ -5,7 +5,7 @@ requires-python = ">=3.9"
 dependencies = ["fastapi>=0.104.0", "uvicorn[standard]>=0.24.0", "posthog"]
 
 [tool.uv]
-exclude-newer = "7 days"
+exclude-newer = "2026-05-20T00:00:00Z"
 
 [tool.uv.sources]
 posthog = { path = "../..", editable = true }
