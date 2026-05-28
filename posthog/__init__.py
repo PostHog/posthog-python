@@ -1064,18 +1064,17 @@ def setup() -> Client:
     ``setup()`` is called automatically by global APIs such as ``capture()``.
 
     Returns:
-        The global ``Client`` instance.
-
-    If ``api_key`` is missing or blank, the returned client is disabled and
-    module-level calls become no-ops.
+        The global ``Client`` instance. If ``api_key`` is missing or blank,
+        the client is disabled and module-level calls become no-ops.
 
     Category:
         Initialization
     """
     global default_client
     if not default_client:
+        configured_api_key = api_key.strip() if api_key else ""
         default_client = Client(
-            api_key or "",
+            configured_api_key,
             host=host,
             debug=debug,
             on_error=on_error,
