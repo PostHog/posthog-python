@@ -1,8 +1,10 @@
 import atexit
+import inspect
 import json
 import logging
 import os
 import sys
+import threading
 import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
@@ -11,6 +13,7 @@ from uuid import uuid4
 
 from typing_extensions import Unpack
 
+from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.consumer import Consumer
 from posthog.contexts import (
@@ -305,6 +308,10 @@ class Client(object):
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
         self._flag_definition_cache_provider = flag_definition_cache_provider
+        self._flag_definition_cache_provider_async_runner: Optional[
+            _BackgroundEventLoopRunner
+        ] = None
+        self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
         self.disabled = disabled or not self.api_key
         self.disable_geoip = disable_geoip
         self.historical_migration = historical_migration
@@ -1246,6 +1253,10 @@ class Client(object):
         else:
             self.poller = None
 
+        # Async runner threads do not survive fork(); recreate lazily on next async cache call.
+        self._flag_definition_cache_provider_async_runner = None
+        self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
+
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
         if isinstance(self.flag_cache, RedisFlagCache):
@@ -1373,11 +1384,7 @@ class Client(object):
             self.poller.stop()
 
         # Shutdown the cache provider (release locks, cleanup)
-        if self._flag_definition_cache_provider:
-            try:
-                self._flag_definition_cache_provider.shutdown()
-            except Exception as e:
-                self.log.error(f"[FEATURE FLAGS] Cache provider shutdown error: {e}")
+        self._shutdown_flag_definition_cache_provider()
 
     def shutdown(self):
         """
@@ -1393,6 +1400,33 @@ class Client(object):
 
         if self.exception_capture:
             self.exception_capture.close()
+
+    def _resolve_flag_definition_cache_provider_result(self, result):
+        if not inspect.isawaitable(result):
+            return result
+
+        with self._flag_definition_cache_provider_async_runner_lock:
+            if self._flag_definition_cache_provider_async_runner is None:
+                self._flag_definition_cache_provider_async_runner = (
+                    _BackgroundEventLoopRunner()
+                )
+            return self._flag_definition_cache_provider_async_runner.run(result)
+
+    def _shutdown_flag_definition_cache_provider(self):
+        if not self._flag_definition_cache_provider:
+            return
+
+        try:
+            self._resolve_flag_definition_cache_provider_result(
+                self._flag_definition_cache_provider.shutdown()
+            )
+        except Exception as e:
+            self.log.error(f"[FEATURE FLAGS] Cache provider shutdown error: {e}")
+        finally:
+            with self._flag_definition_cache_provider_async_runner_lock:
+                if self._flag_definition_cache_provider_async_runner:
+                    self._flag_definition_cache_provider_async_runner.close()
+                    self._flag_definition_cache_provider_async_runner = None
 
     def _update_flag_state(
         self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
@@ -1416,7 +1450,7 @@ class Client(object):
         should_fetch = True
         if self._flag_definition_cache_provider:
             try:
-                should_fetch = (
+                should_fetch = self._resolve_flag_definition_cache_provider_result(
                     self._flag_definition_cache_provider.should_fetch_flag_definitions()
                 )
             except Exception as e:
@@ -1429,7 +1463,7 @@ class Client(object):
         # If not fetching, try to get from cache
         if not should_fetch and self._flag_definition_cache_provider:
             try:
-                cached_data = (
+                cached_data = self._resolve_flag_definition_cache_provider_result(
                     self._flag_definition_cache_provider.get_flag_definitions()
                 )
                 if cached_data:
@@ -1500,12 +1534,14 @@ class Client(object):
             # Store in external cache if provider is configured
             if self._flag_definition_cache_provider:
                 try:
-                    self._flag_definition_cache_provider.on_flag_definitions_received(
-                        {
-                            "flags": self.feature_flags or [],
-                            "group_type_mapping": self.group_type_mapping or {},
-                            "cohorts": self.cohorts or {},
-                        }
+                    self._resolve_flag_definition_cache_provider_result(
+                        self._flag_definition_cache_provider.on_flag_definitions_received(
+                            {
+                                "flags": self.feature_flags or [],
+                                "group_type_mapping": self.group_type_mapping or {},
+                                "cohorts": self.cohorts or {},
+                            }
+                        )
                     )
                 except Exception as e:
                     self.log.error(f"[FEATURE FLAGS] Cache provider store error: {e}")
@@ -2214,14 +2250,17 @@ class Client(object):
         groups: Optional[Dict[str, str]] = None,
         disable_geoip: Optional[bool] = None,
     ) -> None:
-        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response)
-        triple hasn't already been reported on this client. Shared by the single-flag
-        evaluation path and ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so
-        both paths dedupe identically.
+        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
+        groups) tuple hasn't already been reported on this client. Group context is
+        included so that group-scoped flags fire a separate event for each group a
+        user is evaluated under. Shared by the single-flag evaluation path and
+        ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
+        identically.
         """
-        feature_flag_reported_key = (
-            f"{key}_{'::null::' if response is None else str(response)}"
+        groups_key = (
+            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
         )
+        feature_flag_reported_key = (key, response, groups_key)
 
         reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
         if reported_flags is None:

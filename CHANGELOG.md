@@ -1,5 +1,23 @@
 # posthog
 
+## 7.16.1 — 2026-05-27
+
+### Patch changes
+
+- [8f6d6c8](https://github.com/posthog/posthog-python/commit/8f6d6c8ba4be612ae39273c5bd47acfc31396145) Include group context in the `$feature_flag_called` dedupe key so group-scoped flags fire a separate event for each group a user is evaluated under, instead of being dedup-ed against the first group context the same `(distinct_id, flag, response)` was seen under. — Thanks @gustavohstrassburger!
+
+## 7.16.0 — 2026-05-27
+
+### Minor changes
+
+- [a44e0be](https://github.com/posthog/posthog-python/commit/a44e0bebb0220ed41d4d16620b9864f6c0732055) Add async flag definition cache providers — Thanks @dustinbyrne!
+
+## 7.15.4 — 2026-05-25
+
+### Patch changes
+
+- [0207088](https://github.com/posthog/posthog-python/commit/0207088decedb404abfe44ebc0c4b9f1723687c9) Track OpenAI chat completions parse calls — Thanks @marandaneto!
+
 ## 7.15.3 — 2026-05-21
 
 ### Patch changes

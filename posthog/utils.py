@@ -18,7 +18,7 @@ log = logging.getLogger("posthog")
 
 def is_naive(dt):
     """Determines if a given datetime.datetime is naive."""
-    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None
+    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None  # pragma: no mutate
 
 
 def total_seconds(delta):
@@ -33,7 +33,7 @@ def guess_timezone(dt):
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
         delta = datetime.now() - dt
-        if total_seconds(delta) < 5:
+        if total_seconds(delta) < 5:  # pragma: no mutate
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
             return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
@@ -59,22 +59,29 @@ def clean(item):
         return item
     if isinstance(item, (set, list, tuple)):
         return _clean_list(item)
-    # Pydantic model
-    try:
-        # v2+
-        if hasattr(item, "model_dump") and callable(item.model_dump):
-            item = item.model_dump()
-        # v1
-        elif hasattr(item, "dict") and callable(item.dict):
-            item = item.dict()
-    except TypeError as e:
-        log.debug(f"Could not serialize Pydantic-like model: {e}")
-        pass
+
+    item = _clean_pydantic_model(item)
     if isinstance(item, dict):
         return _clean_dict(item)
     if is_dataclass(item) and not isinstance(item, type):
         return _clean_dataclass(item)
     return _coerce_unicode(item)
+
+
+def _clean_pydantic_model(item):
+    # Pydantic model
+    try:
+        # v2+
+        model_dump = getattr(item, "model_dump", None)
+        if callable(model_dump):
+            return model_dump()
+        # v1
+        dict_method = getattr(item, "dict", None)
+        if callable(dict_method):
+            return dict_method()
+    except TypeError as e:
+        log.debug(f"Could not serialize Pydantic-like model: {e}")
+    return item
 
 
 def _clean_list(list_):
@@ -123,7 +130,7 @@ def _coerce_unicode(cmplx: Any) -> Optional[str]:
     item = None
     try:
         if isinstance(cmplx, bytes):
-            item = cmplx.decode("utf-8", "strict")
+            item = cmplx.decode("utf-8", "strict")  # pragma: no mutate
         elif isinstance(cmplx, str):
             item = cmplx
     except Exception as exception:
@@ -154,6 +161,12 @@ class SizeLimitedDict(defaultdict):
         super().__setitem__(key, value)
 
 
+CACHE_MAX_SIZE = 10000
+CACHE_TTL = 300
+CACHE_STALE_TTL = 3600
+CACHE_KEY_PREFIX = "posthog:flags:"
+
+
 class FlagCacheEntry:
     def __init__(self, flag_result, flag_definition_version, timestamp=None):
         self.flag_result = flag_result
@@ -165,12 +178,12 @@ class FlagCacheEntry:
         version_valid = self.flag_definition_version == current_flag_version
         return time_valid and version_valid
 
-    def is_stale_but_usable(self, current_time, max_stale_age=3600):
+    def is_stale_but_usable(self, current_time, max_stale_age=CACHE_STALE_TTL):
         return (current_time - self.timestamp) < max_stale_age
 
 
 class FlagCache:
-    def __init__(self, max_size=10000, default_ttl=300):
+    def __init__(self, max_size=CACHE_MAX_SIZE, default_ttl=CACHE_TTL):
         self.cache = {}  # distinct_id -> {flag_key: FlagCacheEntry}
         self.access_times = {}  # distinct_id -> last_access_time
         self.max_size = max_size
@@ -193,7 +206,10 @@ class FlagCache:
 
         return None
 
-    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=3600):
+    def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        if max_stale_age is None:
+            max_stale_age = CACHE_STALE_TTL
+
         current_time = time.time()
 
         if distinct_id not in self.cache:
@@ -223,33 +239,38 @@ class FlagCache:
             self.cache[distinct_id] = {}
 
         # Store the flag result
-        self.cache[distinct_id][flag_key] = FlagCacheEntry(
-            flag_result, flag_definition_version, current_time
-        )
+        entry = FlagCacheEntry(flag_result, flag_definition_version)
+        self.cache[distinct_id][flag_key] = entry
         self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
-        users_to_remove = []
-
-        for distinct_id, user_flags in self.cache.items():
-            flags_to_remove = []
-            for flag_key, entry in user_flags.items():
-                if entry.flag_definition_version == old_version:
-                    flags_to_remove.append(flag_key)
-
-            # Remove invalidated flags
-            for flag_key in flags_to_remove:
-                del user_flags[flag_key]
-
-            # Remove user entirely if no flags remain
-            if not user_flags:
-                users_to_remove.append(distinct_id)
+        users_to_remove = [
+            distinct_id
+            for distinct_id, user_flags in self.cache.items()
+            if self._remove_flags_with_version(user_flags, old_version)
+        ]
 
         # Clean up empty users
         for distinct_id in users_to_remove:
-            del self.cache[distinct_id]
-            if distinct_id in self.access_times:
-                del self.access_times[distinct_id]
+            self._remove_user(distinct_id)
+
+    def _remove_flags_with_version(self, user_flags, old_version):
+        flags_to_remove = [
+            flag_key
+            for flag_key, entry in user_flags.items()
+            if entry.flag_definition_version == old_version
+        ]
+
+        # Remove invalidated flags
+        for flag_key in flags_to_remove:
+            del user_flags[flag_key]
+
+        # Remove user entirely if no flags remain
+        return not user_flags
+
+    def _remove_user(self, distinct_id):
+        self.cache.pop(distinct_id, None)
+        self.access_times.pop(distinct_id, None)
 
     def _evict_lru(self):
         if not self.access_times:
@@ -272,7 +293,11 @@ class FlagCache:
 
 class RedisFlagCache:
     def __init__(
-        self, redis_client, default_ttl=300, stale_ttl=3600, key_prefix="posthog:flags:"
+        self,
+        redis_client,
+        default_ttl=CACHE_TTL,
+        stale_ttl=CACHE_STALE_TTL,
+        key_prefix=CACHE_KEY_PREFIX,
     ):
         self.redis = redis_client
         self.default_ttl = default_ttl
@@ -366,36 +391,46 @@ class RedisFlagCache:
 
     def invalidate_version(self, old_version):
         try:
-            # For Redis, we use a simple approach: scan for keys with old version
-            # and delete them. This could be expensive with many keys, but it's
-            # necessary for correctness.
-
+            # For Redis, scan for keys with old version and delete them. This could
+            # be expensive with many keys, but it's necessary for correctness.
             cursor = 0
             pattern = f"{self.key_prefix}*"
 
             while True:
                 cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
-
-                for key in keys:
-                    if key.decode() == self.version_key:
-                        continue
-
-                    try:
-                        data = self.redis.get(key)
-                        if data:
-                            entry_dict = json.loads(data)
-                            if entry_dict.get("flag_version") == old_version:
-                                self.redis.delete(key)
-                    except (json.JSONDecodeError, KeyError):
-                        # If we can't parse the entry, delete it to be safe
-                        self.redis.delete(key)
+                self._delete_keys_with_version(keys, old_version)
 
                 if cursor == 0:
-                    break
+                    break  # pragma: no mutate
 
         except Exception:
             # Redis error - silently fail
             pass
+
+    def _delete_keys_with_version(self, keys, old_version):
+        for key in keys:
+            if self._is_version_key(key):
+                continue
+            try:
+                if self._key_has_version(key, old_version):
+                    self.redis.delete(key)
+            except (json.JSONDecodeError, KeyError):
+                # If we can't parse the entry, delete it to be safe
+                self.redis.delete(key)
+
+    def _is_version_key(self, key):
+        return self._redis_key_to_string(key) == self.version_key
+
+    def _redis_key_to_string(self, key):
+        if isinstance(key, bytes):
+            return key.decode()
+        return key
+
+    def _key_has_version(self, key, old_version):
+        data = self.redis.get(key)
+        if not data:
+            return False
+        return json.loads(data).get("flag_version") == old_version
 
     def clear(self):
         try:
@@ -408,7 +443,7 @@ class RedisFlagCache:
                 if keys:
                     self.redis.delete(*keys)
                 if cursor == 0:
-                    break
+                    break  # pragma: no mutate
         except Exception:
             # Redis error - silently fail
             pass
@@ -460,49 +495,50 @@ def str_iequals(value, comparand):
     return str(value).casefold() == str(comparand).casefold()
 
 
+def _platform_release():
+    release = getattr(platform, "release", None)
+    if callable(release):
+        return release()
+    return ""
+
+
+def _get_windows_os_info():
+    win32_ver = getattr(platform, "win32_ver", None)
+    if callable(win32_ver):
+        return "Windows", win32_ver()[0] or "", ""
+    return "Windows", "", ""
+
+
+def _get_macos_info():
+    mac_ver = getattr(platform, "mac_ver", None)
+    if callable(mac_ver):
+        return "Mac OS X", mac_ver()[0] or "", ""
+    return "Mac OS X", "", ""
+
+
+def _get_linux_os_info():
+    linux_info = distro.info()
+    return "Linux", linux_info["version"] or "", distro.name() or ""
+
+
+def _get_platform_os_info(platform_name):
+    if platform_name.startswith("win"):
+        return _get_windows_os_info()
+    if platform_name == "darwin":
+        return _get_macos_info()
+    if platform_name.startswith("linux"):
+        return _get_linux_os_info()
+    if platform_name.startswith("freebsd"):
+        return "FreeBSD", _platform_release(), ""
+    return platform_name, _platform_release(), ""
+
+
 def get_os_info():
     """
     Returns standardized OS name, version and distro (in case of Linux) information.
     Similar to how user agent parsing works in JS.
     """
-    os_name = ""
-    os_version = ""
-    os_distro = ""
-
-    platform_name = sys.platform
-
-    if platform_name.startswith("win"):
-        os_name = "Windows"
-        if hasattr(platform, "win32_ver"):
-            win_version = platform.win32_ver()[0]
-            if win_version:
-                os_version = win_version
-
-    elif platform_name == "darwin":
-        os_name = "Mac OS X"
-        if hasattr(platform, "mac_ver"):
-            mac_version = platform.mac_ver()[0]
-            if mac_version:
-                os_version = mac_version
-
-    elif platform_name.startswith("linux"):
-        os_name = "Linux"
-        linux_info = distro.info()
-        if linux_info["version"]:
-            os_version = linux_info["version"]
-        linux_distro = distro.name()
-        if linux_distro:
-            os_distro = linux_distro
-
-    elif platform_name.startswith("freebsd"):
-        os_name = "FreeBSD"
-        if hasattr(platform, "release"):
-            os_version = platform.release()
-
-    else:
-        os_name = platform_name
-        if hasattr(platform, "release"):
-            os_version = platform.release()
+    os_name, os_version, os_distro = _get_platform_os_info(sys.platform)
 
     info = {
         "$os": os_name,

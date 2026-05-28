@@ -22,3 +22,13 @@ class TestSizeLimitedDict(unittest.TestCase):
                 self.assertIsNone(values.get(i - 3))
                 self.assertIsNone(values.get(i - 5))
                 self.assertIsNone(values.get(i - 9))
+
+    def test_size_limited_dict_forwards_defaultdict_args_and_kwargs(self) -> None:
+        values = utils.SizeLimitedDict(
+            3, lambda: "missing", {"existing": "value"}, other="item"
+        )
+
+        assert values["missing"] == "missing"
+        assert values["existing"] == "value"
+        assert values["other"] == "item"
+        assert values.max_size == 3
