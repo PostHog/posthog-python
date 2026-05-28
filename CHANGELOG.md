@@ -1,5 +1,11 @@
 # posthog
 
+## 7.16.2 — 2026-05-28
+
+### Patch changes
+
+- [034dce2](https://github.com/posthog/posthog-python/commit/034dce2fcad5276bcaacd4cc7b635b91c6920353) Make module-level setup no-op when API key is blank — Thanks @marandaneto!
+
 ## 7.16.1 — 2026-05-27
 
 ### Patch changes
