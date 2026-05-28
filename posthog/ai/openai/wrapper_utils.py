@@ -21,3 +21,14 @@ def warn_on_fallback(wrapper_name: str, name: str) -> None:
         wrapper_name,
         name,
     )
+
+
+class _OpenAIWrapperResource:
+    def __init__(self, client, original):
+        self._client = client
+        self._original = original
+
+    def __getattr__(self, name):
+        """Fallback to original OpenAI object for any methods we don't explicitly handle."""
+        warn_on_fallback(self.__class__.__name__, name)
+        return getattr(self._original, name)

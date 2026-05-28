@@ -173,8 +173,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         """Capture a completed LangChain chain run as a trace or span."""
-        self._log_debug_event("on_chain_end", run_id, parent_run_id, outputs=outputs)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, outputs)
+        self._capture_trace_or_span_run(
+            "on_chain_end", "outputs", outputs, run_id, parent_run_id
+        )
 
     def on_chain_error(
         self,
@@ -185,8 +186,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         """Capture a failed LangChain chain run as a trace or span."""
-        self._log_debug_event("on_chain_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
+        self._capture_trace_or_span_run(
+            "on_chain_error", "error", error, run_id, parent_run_id
+        )
 
     def on_chat_model_start(
         self,
@@ -243,10 +245,9 @@ class CallbackHandler(BaseCallbackHandler):
         """
         The callback works for both streaming and non-streaming runs. For streaming runs, the chain must set `stream_usage=True` in the LLM.
         """
-        self._log_debug_event(
-            "on_llm_end", run_id, parent_run_id, response=response, kwargs=kwargs
+        self._capture_generation_run(
+            "on_llm_end", "response", response, run_id, parent_run_id, kwargs=kwargs
         )
-        self._pop_run_and_capture_generation(run_id, parent_run_id, response)
 
     def on_llm_error(
         self,
@@ -257,8 +258,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         """Capture a failed LLM run as a PostHog AI generation event."""
-        self._log_debug_event("on_llm_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_generation(run_id, parent_run_id, error)
+        self._capture_generation_run(
+            "on_llm_error", "error", error, run_id, parent_run_id
+        )
 
     def on_tool_start(
         self,
@@ -288,8 +290,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Capture a completed LangChain tool run as a span."""
-        self._log_debug_event("on_tool_end", run_id, parent_run_id, output=output)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, output)
+        self._capture_trace_or_span_run(
+            "on_tool_end", "output", output, run_id, parent_run_id
+        )
 
     def on_tool_error(
         self,
@@ -301,8 +304,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Capture a failed LangChain tool run as a span."""
-        self._log_debug_event("on_tool_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
+        self._capture_trace_or_span_run(
+            "on_tool_error", "error", error, run_id, parent_run_id
+        )
 
     def on_retriever_start(
         self,
@@ -330,10 +334,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ):
         """Capture a completed LangChain retriever run as a span."""
-        self._log_debug_event(
-            "on_retriever_end", run_id, parent_run_id, documents=documents
+        self._capture_trace_or_span_run(
+            "on_retriever_end", "documents", documents, run_id, parent_run_id
         )
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, documents)
 
     def on_retriever_error(
         self,
@@ -345,8 +348,9 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Run when Retriever errors."""
-        self._log_debug_event("on_retriever_error", run_id, parent_run_id, error=error)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, error)
+        self._capture_trace_or_span_run(
+            "on_retriever_error", "error", error, run_id, parent_run_id
+        )
 
     def on_agent_action(
         self,
@@ -370,8 +374,36 @@ class CallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         """Capture a completed LangChain agent action as a span."""
-        self._log_debug_event("on_agent_finish", run_id, parent_run_id, finish=finish)
-        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, finish)
+        self._capture_trace_or_span_run(
+            "on_agent_finish", "finish", finish, run_id, parent_run_id
+        )
+
+    def _capture_trace_or_span_run(
+        self,
+        event_name: str,
+        payload_name: str,
+        payload: Any,
+        run_id: UUID,
+        parent_run_id: Optional[UUID],
+    ):
+        self._log_debug_event(
+            event_name, run_id, parent_run_id, **{payload_name: payload}
+        )
+        self._pop_run_and_capture_trace_or_span(run_id, parent_run_id, payload)
+
+    def _capture_generation_run(
+        self,
+        event_name: str,
+        payload_name: str,
+        payload: Any,
+        run_id: UUID,
+        parent_run_id: Optional[UUID],
+        **extra: Any,
+    ):
+        self._log_debug_event(
+            event_name, run_id, parent_run_id, **{payload_name: payload}, **extra
+        )
+        self._pop_run_and_capture_generation(run_id, parent_run_id, payload)
 
     def _set_parent_of_run(self, run_id: UUID, parent_run_id: Optional[UUID] = None):
         """
