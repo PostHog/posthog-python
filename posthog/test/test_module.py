@@ -43,7 +43,6 @@ class TestModuleLevelSetup(unittest.TestCase):
         self._original_disabled = posthog.disabled
         self._original_send = posthog.send
         posthog.default_client = None
-        posthog.api_key = " \n\t "
         posthog.disabled = False
         posthog.send = False
 
@@ -53,12 +52,24 @@ class TestModuleLevelSetup(unittest.TestCase):
         posthog.disabled = self._original_disabled
         posthog.send = self._original_send
 
-    def test_setup_preserves_client_disabled_when_trimmed_api_key_is_empty(self):
-        posthog.setup()
+    @parameterized.expand(
+        [
+            ("unset", None),
+            ("empty", ""),
+            ("whitespace", " \n\t "),
+        ]
+    )
+    def test_setup_configures_disabled_client_when_api_key_is_blank(
+        self, _name, api_key
+    ):
+        posthog.api_key = api_key
 
-        self.assertIsNotNone(posthog.default_client)
-        self.assertEqual(posthog.default_client.api_key, "")
-        self.assertTrue(posthog.default_client.disabled)
+        client = posthog.setup()
+
+        self.assertIs(client, posthog.default_client)
+        self.assertEqual(client.api_key, "")
+        self.assertTrue(client.disabled)
+        self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
 
 
 class TestModuleLevelWrappers(unittest.TestCase):

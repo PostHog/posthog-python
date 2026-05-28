@@ -266,8 +266,8 @@ For new code, prefer creating an explicit ``Posthog``/``Client`` instance with
 the corresponding constructor arguments.
 
 Attributes:
-    api_key: Project API key/token used by the global client. Required before
-        calling any global capture or feature flag API.
+    api_key: Project API key/token used by the global client. Missing or blank
+        values create a disabled no-op global client.
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
     on_error: Optional callback invoked by background consumers when event upload
@@ -1064,20 +1064,17 @@ def setup() -> Client:
     ``setup()`` is called automatically by global APIs such as ``capture()``.
 
     Returns:
-        The global ``Client`` instance.
-
-    Raises:
-        ValueError: If ``api_key`` has not been configured.
+        The global ``Client`` instance. If ``api_key`` is missing or blank,
+        the client is disabled and module-level calls become no-ops.
 
     Category:
         Initialization
     """
     global default_client
     if not default_client:
-        if not api_key:
-            raise ValueError("API key is required")
+        configured_api_key = api_key.strip() if api_key else ""
         default_client = Client(
-            api_key,
+            configured_api_key,
             host=host,
             debug=debug,
             on_error=on_error,
