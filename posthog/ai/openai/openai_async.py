@@ -28,7 +28,7 @@ from posthog.ai.openai.openai_converter import (
 )
 from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
-from posthog.ai.openai.wrapper_utils import OpenAIWrapperResource
+from posthog.ai.openai.wrapper_utils import _OpenAIWrapperResource
 
 
 class AsyncOpenAI(openai.AsyncOpenAI):
@@ -93,7 +93,7 @@ async def _parse_and_track(
     )
 
 
-class WrappedResponses(OpenAIWrapperResource):
+class WrappedResponses(_OpenAIWrapperResource):
     """Async wrapper for OpenAI responses that tracks usage in PostHog."""
 
     async def create(
@@ -331,7 +331,7 @@ class WrappedResponses(OpenAIWrapperResource):
         )
 
 
-class WrappedChat(OpenAIWrapperResource):
+class WrappedChat(_OpenAIWrapperResource):
     """Async wrapper for OpenAI chat that tracks usage in PostHog."""
 
     @property
@@ -340,7 +340,7 @@ class WrappedChat(OpenAIWrapperResource):
         return WrappedCompletions(self._client, self._original.completions)
 
 
-class WrappedCompletions(OpenAIWrapperResource):
+class WrappedCompletions(_OpenAIWrapperResource):
     """Async wrapper for OpenAI chat completions that tracks usage in PostHog."""
 
     async def parse(
@@ -594,7 +594,7 @@ class WrappedCompletions(OpenAIWrapperResource):
             )
 
 
-class WrappedEmbeddings(OpenAIWrapperResource):
+class WrappedEmbeddings(_OpenAIWrapperResource):
     """Async wrapper for OpenAI embeddings that tracks usage in PostHog."""
 
     async def create(
@@ -671,7 +671,7 @@ class WrappedEmbeddings(OpenAIWrapperResource):
         return response
 
 
-class WrappedBeta(OpenAIWrapperResource):
+class WrappedBeta(_OpenAIWrapperResource):
     """Async wrapper for OpenAI beta features that tracks usage in PostHog."""
 
     @property
@@ -680,7 +680,7 @@ class WrappedBeta(OpenAIWrapperResource):
         return WrappedBetaChat(self._client, self._original.chat)
 
 
-class WrappedBetaChat(OpenAIWrapperResource):
+class WrappedBetaChat(_OpenAIWrapperResource):
     """Async wrapper for OpenAI beta chat that tracks usage in PostHog."""
 
     @property
@@ -689,7 +689,7 @@ class WrappedBetaChat(OpenAIWrapperResource):
         return WrappedBetaCompletions(self._client, self._original.completions)
 
 
-class WrappedBetaCompletions(OpenAIWrapperResource):
+class WrappedBetaCompletions(_OpenAIWrapperResource):
     """Async wrapper for OpenAI beta chat completions that tracks usage in PostHog."""
 
     async def parse(

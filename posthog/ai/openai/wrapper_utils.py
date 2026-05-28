@@ -23,7 +23,7 @@ def warn_on_fallback(wrapper_name: str, name: str) -> None:
     )
 
 
-class OpenAIWrapperResource:
+class _OpenAIWrapperResource:
     def __init__(self, client, original):
         self._client = client
         self._original = original
