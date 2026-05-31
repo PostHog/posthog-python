@@ -642,12 +642,16 @@ class Client(object):
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
 
-        resp_data = flags(
-            self.api_key,
-            self.host,
-            timeout=self.feature_flags_request_timeout_seconds,
-            **request_data,
-        )
+        try:
+            resp_data = flags(
+                self.api_key,
+                self.host,
+                timeout=self.feature_flags_request_timeout_seconds,
+                **request_data,
+            )
+        except Exception as err:
+            self.log.exception("Unable to get feature flags: %s", err)
+            return normalize_flags_response({})
 
         return normalize_flags_response(resp_data)
 
