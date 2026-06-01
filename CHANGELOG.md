@@ -1,5 +1,11 @@
 # posthog
 
+## 7.16.3 — 2026-06-01
+
+### Patch changes
+
+- [643a810](https://github.com/posthog/posthog-python/commit/643a810851719cfdbbdee7d76d1fb87e6ade45aa) Return empty flag defaults from Client flag helpers when the flags API fails. — Thanks @marandaneto!
+
 ## 7.16.2 — 2026-05-28
 
 ### Patch changes
