@@ -611,6 +611,30 @@ class Client(object):
         Category:
             Feature flags
         """
+        try:
+            return self._get_flags_decision(
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties,
+                disable_geoip,
+                flag_keys_to_evaluate,
+                device_id=device_id,
+            )
+        except Exception as err:
+            self.log.exception("Unable to get feature flags: %s", err)
+            return normalize_flags_response({})
+
+    def _get_flags_decision(
+        self,
+        distinct_id: Optional[ID_TYPES] = None,
+        groups: Optional[dict] = None,
+        person_properties=None,
+        group_properties=None,
+        disable_geoip=None,
+        flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FlagsResponse:
         if self.disabled:
             return normalize_flags_response({})
 
@@ -2175,7 +2199,7 @@ class Client(object):
         Calls /flags and returns the flag details, request id, evaluated at timestamp,
         and whether there were errors while computing flags.
         """
-        resp_data = self.get_flags_decision(
+        resp_data = self._get_flags_decision(
             distinct_id,
             groups,
             person_properties,
@@ -2447,7 +2471,7 @@ class Client(object):
 
         if fallback_to_flags and not only_evaluate_locally:
             try:
-                decide_response = self.get_flags_decision(
+                decide_response = self._get_flags_decision(
                     distinct_id,
                     groups=groups,
                     person_properties=person_properties,
@@ -2584,11 +2608,11 @@ class Client(object):
             locally_evaluated_keys.add(key)
 
         # Fall back to remote evaluation for any flags the poller couldn't resolve locally.
-        # Use ``get_flags_decision`` directly so the resulting records carry id/version/reason
+        # Use the flags decision path directly so the resulting records carry id/version/reason
         # and fired ``$feature_flag_called`` events match what ``get_feature_flag()`` emits.
         if fallback_to_server and not only_evaluate_locally:
             try:
-                response = self.get_flags_decision(
+                response = self._get_flags_decision(
                     distinct_id,
                     groups=groups,
                     person_properties=person_properties,

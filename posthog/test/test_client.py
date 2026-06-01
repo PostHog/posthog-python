@@ -106,6 +106,38 @@ class TestClient(unittest.TestCase):
         )
         patch_flags.assert_not_called()
 
+    @mock.patch("posthog.client.flags")
+    def test_client_flag_helpers_return_defaults_on_api_error(self, patch_flags):
+        patch_flags.side_effect = APIError(401, "Unauthorized")
+        client = Client(FAKE_TEST_API_KEY, send=False)
+
+        test_cases = [
+            (
+                "get_flags_decision",
+                lambda: client.get_flags_decision("distinct_id")["flags"],
+                {},
+            ),
+            (
+                "get_feature_variants",
+                lambda: client.get_feature_variants("distinct_id"),
+                {},
+            ),
+            (
+                "get_feature_payloads",
+                lambda: client.get_feature_payloads("distinct_id"),
+                {},
+            ),
+            (
+                "get_feature_flags_and_payloads",
+                lambda: client.get_feature_flags_and_payloads("distinct_id"),
+                {"featureFlags": {}, "featureFlagPayloads": {}},
+            ),
+        ]
+
+        for method_name, call_helper, expected in test_cases:
+            with self.subTest(method=method_name):
+                self.assertEqual(call_helper(), expected)
+
     def test_empty_flush(self):
         self.client.flush()
 
