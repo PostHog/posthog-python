@@ -111,13 +111,32 @@ class TestClient(unittest.TestCase):
         patch_flags.side_effect = APIError(401, "Unauthorized")
         client = Client(FAKE_TEST_API_KEY, send=False)
 
-        self.assertEqual(client.get_flags_decision("distinct_id")["flags"], {})
-        self.assertEqual(client.get_feature_variants("distinct_id"), {})
-        self.assertEqual(client.get_feature_payloads("distinct_id"), {})
-        self.assertEqual(
-            client.get_feature_flags_and_payloads("distinct_id"),
-            {"featureFlags": {}, "featureFlagPayloads": {}},
-        )
+        test_cases = [
+            (
+                "get_flags_decision",
+                lambda: client.get_flags_decision("distinct_id")["flags"],
+                {},
+            ),
+            (
+                "get_feature_variants",
+                lambda: client.get_feature_variants("distinct_id"),
+                {},
+            ),
+            (
+                "get_feature_payloads",
+                lambda: client.get_feature_payloads("distinct_id"),
+                {},
+            ),
+            (
+                "get_feature_flags_and_payloads",
+                lambda: client.get_feature_flags_and_payloads("distinct_id"),
+                {"featureFlags": {}, "featureFlagPayloads": {}},
+            ),
+        ]
+
+        for method_name, call_helper, expected in test_cases:
+            with self.subTest(method=method_name):
+                self.assertEqual(call_helper(), expected)
 
     def test_empty_flush(self):
         self.client.flush()
