@@ -159,6 +159,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(msg["properties"]["$is_server"], True)
             # these will change between platforms so just asssert on presence here
             assert msg["properties"]["$python_runtime"] == mock.ANY
             assert msg["properties"]["$python_version"] == mock.ANY

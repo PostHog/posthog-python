@@ -1318,6 +1318,7 @@ class Client(object):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
         msg["properties"]["$lib_version"] = VERSION
+        msg["properties"]["$is_server"] = True
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
