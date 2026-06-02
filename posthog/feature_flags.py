@@ -538,7 +538,7 @@ def match_property(property, property_values) -> bool:
 
         parsed_value = None
         try:
-            parsed_value = float(value)  # type: ignore
+            parsed_value = float(value)
         except Exception:
             pass
 
