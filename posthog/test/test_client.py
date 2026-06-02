@@ -1421,6 +1421,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertTrue(isinstance(msg["timestamp"], str))
@@ -1450,6 +1451,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertTrue(isinstance(msg["timestamp"], str))
@@ -1483,6 +1485,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
@@ -1518,6 +1521,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
