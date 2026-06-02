@@ -181,6 +181,20 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertNotIn("$is_server", msg["properties"])
 
+    def test_is_server_not_overridden_by_super_properties(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                sync_mode=True,
+                super_properties={"$is_server": False},
+            )
+            client.capture("python test event", distinct_id="distinct_id")
+            self.assertFalse(self.failed)
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["properties"]["$is_server"], True)
+
     def test_basic_capture_with_uuid(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)

@@ -1320,8 +1320,6 @@ class Client(object):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
         msg["properties"]["$lib_version"] = VERSION
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
@@ -1331,6 +1329,11 @@ class Client(object):
 
         if self.super_properties:
             msg["properties"] = {**msg["properties"], **self.super_properties}
+
+        # Set after the super_properties merge so this SDK's server classification
+        # can't be silently overridden by a user-provided super property.
+        if self.is_server:
+            msg["properties"]["$is_server"] = True
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
