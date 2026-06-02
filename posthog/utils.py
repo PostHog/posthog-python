@@ -22,7 +22,7 @@ def is_naive(dt: datetime) -> bool:
 
 
 def total_seconds(delta: timedelta) -> float:
-    """Determines total seconds with python < 2.7 compat."""
+    """Return the total number of seconds contained in the duration."""
     # http://stackoverflow.com/questions/3694835/python-2-6-5-divide-timedelta-with-timedelta
     return (delta.microseconds + (delta.seconds + delta.days * 24 * 3600) * 1e6) / 1e6
 
