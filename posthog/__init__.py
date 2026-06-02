@@ -313,6 +313,7 @@ personal_api_key = None  # type: Optional[str]
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
+is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 super_properties = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
@@ -1084,6 +1085,7 @@ def setup() -> Client:
             poll_interval=poll_interval,
             disabled=disabled,
             disable_geoip=disable_geoip,
+            is_server=is_server,
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
             super_properties=super_properties,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)

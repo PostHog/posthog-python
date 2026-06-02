@@ -194,6 +194,7 @@ class Client(object):
         personal_api_key=None,
         disabled=False,
         disable_geoip=True,
+        is_server=True,
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
         super_properties=None,
@@ -314,6 +315,7 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
         self.disabled = disabled or not self.api_key
         self.disable_geoip = disable_geoip
+        self.is_server = is_server
         self.historical_migration = historical_migration
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
@@ -1318,7 +1320,8 @@ class Client(object):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
         msg["properties"]["$lib_version"] = VERSION
-        msg["properties"]["$is_server"] = True
+        if self.is_server:
+            msg["properties"]["$is_server"] = True
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip

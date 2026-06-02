@@ -166,6 +166,21 @@ class TestClient(unittest.TestCase):
             assert msg["properties"]["$os"] == mock.ANY
             assert msg["properties"]["$os_version"] == mock.ANY
 
+    def test_capture_omits_is_server_when_disabled(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                sync_mode=True,
+                is_server=False,
+            )
+            client.capture("python test event", distinct_id="distinct_id")
+            self.assertFalse(self.failed)
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertNotIn("$is_server", msg["properties"])
+
     def test_basic_capture_with_uuid(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
