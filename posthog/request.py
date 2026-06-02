@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union
 
 import requests
-from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
+from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
@@ -219,7 +219,7 @@ def determine_server_host(host: Optional[str]) -> str:
 def post(
     api_key: str,
     host: Optional[str] = None,
-    path=None,
+    path: str = "",
     gzip: bool = False,
     timeout: int = 15,
     session: Optional[requests.Session] = None,
@@ -235,6 +235,7 @@ def post(
     data = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+    payload: str | bytes = data
     if gzip:
         headers["Content-Encoding"] = "gzip"
         buf = BytesIO()
@@ -242,10 +243,10 @@ def post(
             # 'data' was produced by json.dumps(),
             # whose default encoding is utf-8.
             gz.write(data.encode("utf-8"))
-        data = buf.getvalue()
+        payload = buf.getvalue()
 
     res = (session or _get_session()).post(
-        url, data=data, headers=headers, timeout=timeout
+        url, data=payload, headers=headers, timeout=timeout
     )
 
     if res.status_code == 200:
