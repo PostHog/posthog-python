@@ -5,7 +5,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
@@ -16,18 +16,18 @@ import distro  # For Linux OS detection
 log = logging.getLogger("posthog")
 
 
-def is_naive(dt):
+def is_naive(dt: datetime) -> bool:
     """Determines if a given datetime.datetime is naive."""
     return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None  # pragma: no mutate
 
 
-def total_seconds(delta):
+def total_seconds(delta: timedelta) -> float:
     """Determines total seconds with python < 2.7 compat."""
     # http://stackoverflow.com/questions/3694835/python-2-6-5-divide-timedelta-with-timedelta
     return (delta.microseconds + (delta.seconds + delta.days * 24 * 3600) * 1e6) / 1e6
 
 
-def guess_timezone(dt):
+def guess_timezone(dt: datetime) -> datetime:
     """Attempts to convert a naive datetime to an aware datetime."""
     if is_naive(dt):
         # attempts to guess the datetime.datetime.now() local timezone
@@ -44,7 +44,7 @@ def guess_timezone(dt):
     return dt
 
 
-def remove_trailing_slash(host):
+def remove_trailing_slash(host: str) -> str:
     if host.endswith("/"):
         return host[:-1]
     return host
