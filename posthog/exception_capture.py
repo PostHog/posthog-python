@@ -1,4 +1,4 @@
-# Portions of this file are derived from getsentry/sentry-javascript by Software, Inc. dba Sentry
+# Portions of this file are derived from getsentry/sentry-python by Software, Inc. dba Sentry
 # Licensed under the MIT License
 
 # 💖open source (under MIT License)
