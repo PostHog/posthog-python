@@ -10,6 +10,7 @@ try:
     from anthropic.types import Message, Usage
 
     from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+    from posthog.test.ai.utils import RecordingAsyncStream
 
     ANTHROPIC_AVAILABLE = True
 except ImportError:
@@ -1423,26 +1424,6 @@ def test_integration_stop_reason(mock_client):
     assert props["$ai_input_tokens"] > 0
 
 
-class _RecordingAnthropicStream:
-    """Mock Anthropic async stream that is iterable and records when closed."""
-
-    def __init__(self, events):
-        self._events = list(events)
-        self.closed = False
-        self.response = "provider-response"
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._events:
-            raise StopAsyncIteration
-        return self._events.pop(0)
-
-    async def close(self):
-        self.closed = True
-
-
 def _anthropic_stream_events():
     final = MockStreamEvent("message_delta")
     final.usage = MockUsage(
@@ -1464,7 +1445,7 @@ async def test_async_messages_create_streaming_supports_async_with(mock_client):
     `async with`."""
 
     async def mock_async_create(**kwargs):
-        return _RecordingAnthropicStream(_anthropic_stream_events())
+        return RecordingAsyncStream(_anthropic_stream_events())
 
     with patch(
         "anthropic.resources.messages.AsyncMessages.create",
@@ -1489,7 +1470,7 @@ async def test_async_messages_create_streaming_supports_async_with(mock_client):
 async def test_async_messages_streaming_early_exit_closes_provider_stream(mock_client):
     """Breaking out early must close the underlying Anthropic stream and still
     capture the event."""
-    source = _RecordingAnthropicStream(_anthropic_stream_events())
+    source = RecordingAsyncStream(_anthropic_stream_events())
 
     async def mock_async_create(**kwargs):
         return source
@@ -1508,7 +1489,7 @@ async def test_async_messages_streaming_early_exit_closes_provider_stream(mock_c
 
         async with response as stream:
             async for _ in stream:
-                break  # early exit
+                break
 
     assert source.closed is True
     assert mock_client.capture.call_count == 1

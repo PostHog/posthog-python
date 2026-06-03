@@ -3,26 +3,7 @@
 import pytest
 
 from posthog.ai.stream import AsyncStreamWrapper
-
-
-class RecordingStream:
-    """Minimal async-iterable provider stream that records when it is closed."""
-
-    def __init__(self, items):
-        self._items = list(items)
-        self.closed = False
-        self.response = "provider-response"  # provider-specific metadata
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._items:
-            raise StopAsyncIteration
-        return self._items.pop(0)
-
-    async def close(self):
-        self.closed = True
+from posthog.test.ai.utils import RecordingAsyncStream
 
 
 @pytest.mark.asyncio
@@ -73,7 +54,7 @@ async def test_finally_block_runs_on_exit(consume_all):
 
 @pytest.mark.asyncio
 async def test_exit_closes_underlying_provider_stream():
-    source = RecordingStream([1, 2, 3])
+    source = RecordingAsyncStream([1, 2, 3])
 
     async def gen():
         async for item in source:
@@ -81,19 +62,18 @@ async def test_exit_closes_underlying_provider_stream():
 
     async with AsyncStreamWrapper(gen(), source) as stream:
         async for _ in stream:
-            break  # early exit
+            break
 
     assert source.closed is True
 
 
 @pytest.mark.asyncio
 async def test_getattr_proxies_to_provider_stream():
-    source = RecordingStream([])
+    source = RecordingAsyncStream([])
 
     async def gen():
         if False:
             yield  # make this an async generator
 
     wrapper = AsyncStreamWrapper(gen(), source)
-    # `.response` lives on the provider stream, not the generator.
     assert wrapper.response == "provider-response"

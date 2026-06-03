@@ -39,6 +39,7 @@ try:
     from posthog.ai.openai import OpenAI
     from posthog.ai.openai.openai_async import AsyncOpenAI
     from posthog.ai.openai.wrapper_utils import reset_fallback_warnings
+    from posthog.test.ai.utils import RecordingAsyncStream
 
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -2354,30 +2355,6 @@ def test_integration_stop_reason(mock_client):
     assert props["$ai_input_tokens"] > 0
 
 
-class _RecordingAsyncStream:
-    """Mock OpenAI async stream that is iterable and records when closed.
-
-    Mirrors the real ``openai.AsyncStream``: it supports ``async for`` and
-    exposes an async ``close()`` plus a ``response`` attribute.
-    """
-
-    def __init__(self, chunks):
-        self._chunks = list(chunks)
-        self.closed = False
-        self.response = "provider-response"
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if not self._chunks:
-            raise StopAsyncIteration
-        return self._chunks.pop(0)
-
-    async def close(self):
-        self.closed = True
-
-
 @pytest.mark.asyncio
 async def test_async_chat_streaming_supports_async_with(
     mock_client, streaming_tool_call_chunks
@@ -2386,7 +2363,7 @@ async def test_async_chat_streaming_supports_async_with(
     `async with` (the protocol pydantic-ai relies on)."""
 
     async def mock_create(self, **kwargs):
-        return _RecordingAsyncStream(streaming_tool_call_chunks)
+        return RecordingAsyncStream(streaming_tool_call_chunks)
 
     with patch(
         "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
@@ -2420,7 +2397,7 @@ async def test_async_responses_streaming_supports_async_with(mock_client):
     chunk.text = "hello"
 
     async def mock_create(self, **kwargs):
-        return _RecordingAsyncStream([chunk])
+        return RecordingAsyncStream([chunk])
 
     with patch("openai.resources.responses.AsyncResponses.create", new=mock_create):
         client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
@@ -2445,7 +2422,7 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
 ):
     """Breaking out of the stream early must close the underlying provider
     stream (release the HTTP connection) and still capture the event."""
-    source = _RecordingAsyncStream(streaming_tool_call_chunks)
+    source = RecordingAsyncStream(streaming_tool_call_chunks)
 
     async def mock_create(self, **kwargs):
         return source
@@ -2464,7 +2441,7 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
 
         async with response as stream:
             async for _ in stream:
-                break  # early exit
+                break
 
     assert source.closed is True
     assert mock_client.capture.call_count == 1
