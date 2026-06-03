@@ -240,6 +240,9 @@ class Client(object):
             disabled: If True, disable captures and API requests. Useful in tests.
             disable_geoip: Whether to disable server-side GeoIP enrichment.
                 Defaults to True.
+            is_server: Whether events are emitted from a server-side runtime.
+                Defaults to True; set to False when using the SDK as a client/CLI
+                so the device OS is attributed to the person normally.
             historical_migration: Mark events as historical migration imports.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
