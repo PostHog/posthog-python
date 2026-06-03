@@ -34,9 +34,8 @@ class AsyncStreamWrapper(Generic[T]):
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
-        # Close the tracking generator first so its `finally` block captures the
-        # PostHog event, even on early exit. try/finally guarantees the provider
-        # stream is still closed if that capture raises.
+        # Close the generator first so its `finally` captures the event, even on
+        # early exit. try/finally still closes the provider stream if that raises.
         try:
             await self._generator.aclose()
         finally:
@@ -49,17 +48,12 @@ class AsyncStreamWrapper(Generic[T]):
 
         return False
 
-    # Async-generator protocol methods belong to the tracking generator, not
-    # the provider stream (provider AsyncStreams expose `close()`, not these).
-    # Forwarding `aclose()` to the generator preserves the pre-wrapper behaviour
-    # where `await response.aclose()` runs the generator's `finally` (firing the
-    # PostHog event) instead of raising AttributeError.
+    # aclose/asend/athrow belong to the generator; provider streams expose
+    # close(), not these. Forwarding aclose() keeps it firing the event.
     _GENERATOR_METHODS = ("aclose", "asend", "athrow")
 
     def __getattr__(self, name: str) -> Any:
-        # Only proxy public attributes (e.g. `.response`). Private/dunder names
-        # are not forwarded — this avoids infinite recursion if `_stream` isn't
-        # set yet and stops `hasattr`/copy probes leaking to the provider stream.
+        # Proxy only public attributes (e.g. `.response`) to the provider stream.
         if name.startswith("_"):
             raise AttributeError(name)
         if name in self._GENERATOR_METHODS:
