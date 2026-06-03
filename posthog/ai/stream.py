@@ -1,11 +1,11 @@
 """Shared async streaming utilities for PostHog AI wrappers."""
 
-from typing import Any, AsyncGenerator, Optional, TypeVar
+from typing import Any, AsyncGenerator, Generic, Optional, TypeVar
 
 T = TypeVar("T")
 
 
-class AsyncStreamWrapper:
+class AsyncStreamWrapper(Generic[T]):
     """Wraps an async generator so it also implements the async context manager protocol.
 
     The OpenAI and Anthropic SDKs return stream objects that support both
@@ -42,7 +42,7 @@ class AsyncStreamWrapper:
     # Async iterator protocol                                              #
     # ------------------------------------------------------------------ #
 
-    def __aiter__(self) -> "AsyncStreamWrapper":
+    def __aiter__(self) -> "AsyncStreamWrapper[T]":
         return self
 
     async def __anext__(self) -> T:
@@ -52,7 +52,7 @@ class AsyncStreamWrapper:
     # Async context manager protocol                                       #
     # ------------------------------------------------------------------ #
 
-    async def __aenter__(self) -> "AsyncStreamWrapper":
+    async def __aenter__(self) -> "AsyncStreamWrapper[T]":
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
