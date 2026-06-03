@@ -2384,6 +2384,11 @@ async def test_async_chat_streaming_supports_async_with(
 
     assert chunks == streaming_tool_call_chunks
     assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "gpt-4"
 
 
 @pytest.mark.asyncio

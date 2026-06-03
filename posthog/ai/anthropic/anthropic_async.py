@@ -226,7 +226,7 @@ class AsyncWrappedMessages(AsyncMessages):
                     stop_reason=stop_reason,
                 )
 
-        return AsyncStreamWrapper(generator(), response)
+        return AsyncStreamWrapper(generator(), stream=response)
 
     async def _capture_streaming_event(
         self,

@@ -3,6 +3,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
+from posthog.ai.stream import AsyncStreamWrapper
 from posthog.ai.types import TokenUsage, StreamingEventData
 from posthog.ai.utils import merge_system_prompt
 
@@ -354,7 +355,7 @@ class AsyncModels:
                     stop_reason=stop_reason,
                 )
 
-        return async_generator()
+        return AsyncStreamWrapper(async_generator(), stream=response)
 
     def _capture_streaming_event(
         self,

@@ -222,7 +222,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                     stop_reason=stop_reason,
                 )
 
-        return AsyncStreamWrapper(async_generator(), response)
+        return AsyncStreamWrapper(async_generator(), stream=response)
 
     async def _capture_streaming_event(
         self,
@@ -516,7 +516,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     stop_reason=stop_reason,
                 )
 
-        return AsyncStreamWrapper(async_generator(), response)
+        return AsyncStreamWrapper(async_generator(), stream=response)
 
     async def _capture_streaming_event(
         self,
