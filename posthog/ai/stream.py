@@ -50,5 +50,10 @@ class AsyncStreamWrapper(Generic[T]):
         return False
 
     def __getattr__(self, name: str) -> Any:
+        # Only proxy public attributes (e.g. `.response`). Private/dunder names
+        # are not forwarded — this avoids infinite recursion if `_stream` isn't
+        # set yet and stops `hasattr`/copy probes leaking to the provider stream.
+        if name.startswith("_"):
+            raise AttributeError(name)
         target = self._stream if self._stream is not None else self._generator
         return getattr(target, name)

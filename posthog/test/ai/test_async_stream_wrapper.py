@@ -77,3 +77,15 @@ async def test_getattr_proxies_to_provider_stream():
 
     wrapper = AsyncStreamWrapper(gen(), source)
     assert wrapper.response == "provider-response"
+
+
+@pytest.mark.asyncio
+async def test_getattr_does_not_proxy_private_names():
+    source = RecordingAsyncStream([])
+
+    async def gen():
+        if False:
+            yield
+
+    wrapper = AsyncStreamWrapper(gen(), source)
+    assert not hasattr(wrapper, "_nonexistent_private")
