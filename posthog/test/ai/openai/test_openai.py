@@ -2352,3 +2352,119 @@ def test_integration_stop_reason(mock_client):
     assert props["$ai_stop_reason"] in ("stop", "length")
     assert props["$ai_provider"] == "openai"
     assert props["$ai_input_tokens"] > 0
+
+
+class _RecordingAsyncStream:
+    """Mock OpenAI async stream that is iterable and records when closed.
+
+    Mirrors the real ``openai.AsyncStream``: it supports ``async for`` and
+    exposes an async ``close()`` plus a ``response`` attribute.
+    """
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.closed = False
+        self.response = "provider-response"
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_async_chat_streaming_supports_async_with(
+    mock_client, streaming_tool_call_chunks
+):
+    """Regression test for #393: chat completions stream=True must support
+    `async with` (the protocol pydantic-ai relies on)."""
+
+    async def mock_create(self, **kwargs):
+        return _RecordingAsyncStream(streaming_tool_call_chunks)
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        chunks = []
+        async with response as stream:
+            async for chunk in stream:
+                chunks.append(chunk)
+
+    assert chunks == streaming_tool_call_chunks
+    assert mock_client.capture.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_responses_streaming_supports_async_with(mock_client):
+    """Regression test for #393: responses stream=True must support
+    `async with`."""
+    from unittest.mock import MagicMock
+
+    chunk = MagicMock()
+    chunk.type = "response.text.delta"
+    chunk.text = "hello"
+
+    async def mock_create(self, **kwargs):
+        return _RecordingAsyncStream([chunk])
+
+    with patch("openai.resources.responses.AsyncResponses.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        async with response as stream:
+            received = [c async for c in stream]
+
+    assert received == [chunk]
+    assert mock_client.capture.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_chat_streaming_early_exit_closes_provider_stream(
+    mock_client, streaming_tool_call_chunks
+):
+    """Breaking out of the stream early must close the underlying provider
+    stream (release the HTTP connection) and still capture the event."""
+    source = _RecordingAsyncStream(streaming_tool_call_chunks)
+
+    async def mock_create(self, **kwargs):
+        return source
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        async with response as stream:
+            async for _ in stream:
+                break  # early exit
+
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1

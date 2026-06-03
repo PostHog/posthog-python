@@ -1421,3 +1421,94 @@ def test_integration_stop_reason(mock_client):
     assert props["$ai_stop_reason"] in ("end_turn", "max_tokens")
     assert props["$ai_provider"] == "anthropic"
     assert props["$ai_input_tokens"] > 0
+
+
+class _RecordingAnthropicStream:
+    """Mock Anthropic async stream that is iterable and records when closed."""
+
+    def __init__(self, events):
+        self._events = list(events)
+        self.closed = False
+        self.response = "provider-response"
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+    async def close(self):
+        self.closed = True
+
+
+def _anthropic_stream_events():
+    final = MockStreamEvent("message_delta")
+    final.usage = MockUsage(
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+    return [
+        MockStreamEvent("message_start"),
+        MockStreamEvent("content_block_delta", text="Hi"),
+        final,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_streaming_supports_async_with(mock_client):
+    """Regression test for #393: messages.create(stream=True) must support
+    `async with`."""
+
+    async def mock_async_create(**kwargs):
+        return _RecordingAnthropicStream(_anthropic_stream_events())
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Foo"}],
+            stream=True,
+            max_tokens=1,
+        )
+
+        async with response as stream:
+            events = [event async for event in stream]
+
+    assert len(events) == 3
+    assert mock_client.capture.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_messages_streaming_early_exit_closes_provider_stream(mock_client):
+    """Breaking out early must close the underlying Anthropic stream and still
+    capture the event."""
+    source = _RecordingAnthropicStream(_anthropic_stream_events())
+
+    async def mock_async_create(**kwargs):
+        return source
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Foo"}],
+            stream=True,
+            max_tokens=1,
+        )
+
+        async with response as stream:
+            async for _ in stream:
+                break  # early exit
+
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
