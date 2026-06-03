@@ -194,6 +194,7 @@ class Client(object):
         personal_api_key=None,
         disabled=False,
         disable_geoip=True,
+        is_server=True,
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
         super_properties=None,
@@ -239,6 +240,9 @@ class Client(object):
             disabled: If True, disable captures and API requests. Useful in tests.
             disable_geoip: Whether to disable server-side GeoIP enrichment.
                 Defaults to True.
+            is_server: Whether events are emitted from a server-side runtime.
+                Defaults to True; set to False when using the SDK as a client/CLI
+                so the device OS is attributed to the person normally.
             historical_migration: Mark events as historical migration imports.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
@@ -314,6 +318,7 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
         self.disabled = disabled or not self.api_key
         self.disable_geoip = disable_geoip
+        self.is_server = is_server
         self.historical_migration = historical_migration
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
@@ -1327,6 +1332,11 @@ class Client(object):
 
         if self.super_properties:
             msg["properties"] = {**msg["properties"], **self.super_properties}
+
+        # Set after the super_properties merge so this SDK's server classification
+        # can't be silently overridden by a user-provided super property.
+        if self.is_server:
+            msg["properties"]["$is_server"] = True
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 

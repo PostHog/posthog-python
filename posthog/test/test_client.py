@@ -159,11 +159,41 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+            self.assertEqual(msg["properties"]["$is_server"], True)
             # these will change between platforms so just asssert on presence here
             assert msg["properties"]["$python_runtime"] == mock.ANY
             assert msg["properties"]["$python_version"] == mock.ANY
             assert msg["properties"]["$os"] == mock.ANY
             assert msg["properties"]["$os_version"] == mock.ANY
+
+    def test_capture_omits_is_server_when_disabled(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                sync_mode=True,
+                is_server=False,
+            )
+            client.capture("python test event", distinct_id="distinct_id")
+            self.assertFalse(self.failed)
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["properties"]["$lib"], "posthog-python")
+            self.assertNotIn("$is_server", msg["properties"])
+
+    def test_is_server_not_overridden_by_super_properties(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                sync_mode=True,
+                super_properties={"$is_server": False},
+            )
+            client.capture("python test event", distinct_id="distinct_id")
+            self.assertFalse(self.failed)
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["properties"]["$is_server"], True)
 
     def test_basic_capture_with_uuid(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -1391,6 +1421,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertTrue(isinstance(msg["timestamp"], str))
@@ -1420,6 +1451,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertTrue(isinstance(msg["timestamp"], str))
@@ -1453,6 +1485,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
@@ -1488,6 +1521,7 @@ class TestClient(unittest.TestCase):
                     "$lib": "posthog-python",
                     "$lib_version": VERSION,
                     "$geoip_disable": True,
+                    "$is_server": True,
                 },
             )
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
