@@ -1110,3 +1110,43 @@ async def test_async_embed_content_integration_batch(mock_client):
 
     assert response.embeddings is not None
     assert len(response.embeddings) == len(inputs)
+
+
+async def test_async_client_streaming_supports_async_with(
+    mock_client, mock_google_genai_client
+):
+    """Regression test for #393: generate_content_stream must support `async with`."""
+
+    async def mock_streaming_response():
+        chunk = MagicMock()
+        chunk.text = "Hi"
+        usage = MagicMock()
+        usage.prompt_token_count = 5
+        usage.candidates_token_count = 3
+        usage.cached_content_token_count = 0
+        usage.thoughts_token_count = 0
+        chunk.usage_metadata = usage
+        yield chunk
+
+    mock_google_genai_client.aio.models.generate_content_stream = AsyncMock(
+        return_value=mock_streaming_response()
+    )
+
+    client = AsyncClient(api_key="test-key", posthog_client=mock_client)
+
+    response = await client.models.generate_content_stream(
+        model="gemini-2.0-flash",
+        contents=["Hi"],
+        posthog_distinct_id="test-id",
+    )
+
+    chunks = []
+    async with response as stream:
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    assert call_args["event"] == "$ai_generation"
+    assert call_args["properties"]["$ai_provider"] == "gemini"
