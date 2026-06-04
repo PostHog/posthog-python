@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import warnings
+from enum import Enum
 from typing import Optional
 
 from posthog import utils
@@ -15,6 +16,20 @@ __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 log = logging.getLogger("posthog")
 
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
+
+
+class ConditionMatch(Enum):
+    """Outcome of evaluating a single condition group.
+
+    OUT_OF_ROLLOUT_BOUND means the group's property filters matched (or there were none)
+    but the rollout percentage excluded the user — the only case that triggers a flag's
+    ``early_exit`` short-circuit. Mirrors the server-side (Rust) engine's match cases.
+    """
+
+    MATCH = "match"
+    NO_MATCH = "no_match"
+    OUT_OF_ROLLOUT_BOUND = "out_of_rollout_bound"
+
 
 # All operators supported by match_property, grouped by category.
 EQUALITY_OPERATORS = ("exact", "is_not", "is_set", "is_not_set")
@@ -307,6 +322,7 @@ def match_feature_flag_properties(
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
     flag_aggregation = flag_filters.get("aggregation_group_type_index")
+    early_exit_enabled = flag_filters.get("early_exit") or False
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
     groups = groups or {}
@@ -349,7 +365,7 @@ def match_feature_flag_properties(
                 effective_properties = properties
                 effective_bucketing = bucketing_value
 
-            if is_condition_match(
+            match_result = is_condition_match(
                 flag,
                 distinct_id,
                 condition,
@@ -359,13 +375,22 @@ def match_feature_flag_properties(
                 evaluation_cache,
                 bucketing_value=effective_bucketing,
                 device_id=device_id,
-            ):
+            )
+            if match_result == ConditionMatch.MATCH:
                 variant_override = condition.get("variant")
                 if variant_override and variant_override in valid_variant_keys:
                     variant = variant_override
                 else:
                     variant = get_matching_variant(flag, effective_bucketing)
                 return variant or True
+            elif (
+                early_exit_enabled
+                and match_result == ConditionMatch.OUT_OF_ROLLOUT_BOUND
+            ):
+                # The condition's property filters (if any) matched and only the rollout check
+                # failed, so re-evaluating later groups can't change the outcome. Return a
+                # deterministic False, mirroring the server-side engine.
+                return False
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
             raise
@@ -395,7 +420,7 @@ def is_condition_match(
     *,
     bucketing_value,
     device_id=None,
-) -> bool:
+) -> ConditionMatch:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
         for prop in condition.get("properties"):
@@ -423,17 +448,19 @@ def is_condition_match(
             else:
                 matches = match_property(prop, properties)
             if not matches:
-                return False
+                return ConditionMatch.NO_MATCH
 
         if rollout_percentage is None:
-            return True
+            return ConditionMatch.MATCH
 
+    # Property filters (if any) matched; only the rollout check remains. A failure here means
+    # the user was targeted but excluded by rollout — the server-side engine's OutOfRolloutBound.
     if rollout_percentage is not None and _hash(
         feature_flag["key"], bucketing_value
     ) > (rollout_percentage / 100):
-        return False
+        return ConditionMatch.OUT_OF_ROLLOUT_BOUND
 
-    return True
+    return ConditionMatch.MATCH
 
 
 def match_property(property, property_values) -> bool:

@@ -141,6 +141,133 @@ class TestLocalEvaluation(unittest.TestCase):
             )
         )
 
+    @parameterized.expand(
+        [
+            # (description, early_exit value, expected result)
+            ("enabled", True, False),
+            ("not set", None, True),
+            ("explicitly disabled", False, True),
+        ]
+    )
+    def test_early_exit(self, _name, early_exit, expected):
+        # First group's properties match but its rollout (0%) excludes everyone; the second
+        # group would otherwise match. Mirrors the server-side OutOfRolloutBound short-circuit.
+        filters = {
+            "groups": [
+                {
+                    "properties": [
+                        {
+                            "key": "region",
+                            "operator": "exact",
+                            "value": ["USA"],
+                            "type": "person",
+                        }
+                    ],
+                    "rollout_percentage": 0,
+                },
+                {
+                    "properties": [
+                        {
+                            "key": "region",
+                            "operator": "exact",
+                            "value": ["USA"],
+                            "type": "person",
+                        }
+                    ],
+                    "rollout_percentage": 100,
+                },
+            ],
+        }
+        if early_exit is not None:
+            filters["early_exit"] = early_exit
+
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Early Exit Feature",
+                "key": "early-exit-flag",
+                "active": True,
+                "filters": filters,
+            }
+        ]
+
+        self.assertEqual(
+            self.client.get_feature_flag(
+                "early-exit-flag",
+                "some-distinct-id",
+                person_properties={"region": "USA"},
+            ),
+            expected,
+        )
+
+    def test_early_exit_on_rollout_only_group_with_no_property_filters(self):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Early Exit Feature",
+                "key": "early-exit-flag",
+                "active": True,
+                "filters": {
+                    "early_exit": True,
+                    "groups": [
+                        {"rollout_percentage": 0},
+                        {"rollout_percentage": 100},
+                    ],
+                },
+            }
+        ]
+
+        self.assertFalse(
+            self.client.get_feature_flag("early-exit-flag", "some-distinct-id")
+        )
+
+    def test_early_exit_does_not_trigger_on_property_mismatch(self):
+        # First group fails on its property (region mismatch), not rollout — so even with
+        # early_exit enabled, evaluation must continue to the second group, which matches.
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Early Exit Feature",
+                "key": "early-exit-flag",
+                "active": True,
+                "filters": {
+                    "early_exit": True,
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["Canada"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 0,
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+
+        self.assertTrue(
+            self.client.get_feature_flag(
+                "early-exit-flag",
+                "some-distinct-id",
+                person_properties={"region": "USA"},
+            )
+        )
+
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
     def test_flag_group_properties(self, patch_get, patch_flags):
