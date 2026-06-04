@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.17.0",
+    "version": "7.16.4",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -451,12 +451,6 @@
             {
               "name": "disable_geoip",
               "description": "Whether to disable server-side GeoIP enrichment.         Defaults to True.",
-              "isOptional": false,
-              "type": "bool"
-            },
-            {
-              "name": "is_server",
-              "description": "Whether events are emitted from a server-side runtime.         Defaults to True; set to False when using the SDK as a client/CLI         so the device OS is attributed to the person normally.",
               "isOptional": false,
               "type": "bool"
             },

@@ -1,5 +1,17 @@
 # posthog
 
+## 7.17.0 — 2026-06-03
+
+### Minor changes
+
+- [3aed638](https://github.com/posthog/posthog-python/commit/3aed638ce1a256545f86cf05aa6338a1f2b62a89) Add a configurable `$is_server` event property (default `true`) so PostHog can identify server-side events. Set `is_server=False` when using posthog-python as a client/CLI so the device OS is attributed normally. — Thanks @turnipdabeets for your first contribution 🎉!
+
+## 7.16.4 — 2026-06-03
+
+### Patch changes
+
+- [44e6b14](https://github.com/posthog/posthog-python/commit/44e6b14affd235f523d5a719690cddcb98f0fdde) Fix async streaming responses from the AI wrappers (OpenAI, Anthropic, Gemini) so they support `async with` as well as `async for`. Previously, consuming a stream via `async with` (e.g. with pydantic-ai) raised `TypeError: 'async_generator' object does not support the asynchronous context manager protocol`. — Thanks @turnipdabeets for your first contribution 🎉!
+
 ## 7.16.3 — 2026-06-01
 
 ### Patch changes

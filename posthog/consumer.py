@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import logging
 import time
@@ -96,7 +97,7 @@ class Consumer(Thread):
     def next(self):
         """Return the next batch of items to upload."""
         queue = self.queue
-        items = []
+        items: list[Any] = []
 
         start_time = time.monotonic()
         total_size = 0

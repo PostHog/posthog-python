@@ -2,6 +2,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from posthog.ai.stream import AsyncStreamWrapper
 from posthog.ai.types import TokenUsage
 
 try:
@@ -221,7 +222,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                     stop_reason=stop_reason,
                 )
 
-        return async_generator()
+        return AsyncStreamWrapper(async_generator(), stream=response)
 
     async def _capture_streaming_event(
         self,
@@ -515,7 +516,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     stop_reason=stop_reason,
                 )
 
-        return async_generator()
+        return AsyncStreamWrapper(async_generator(), stream=response)
 
     async def _capture_streaming_event(
         self,

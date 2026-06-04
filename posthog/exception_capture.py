@@ -1,5 +1,6 @@
-# Portions of this file are derived from getsentry/sentry-javascript by Software, Inc. dba Sentry
-# Licensed under the MIT License
+# Portions of this file are derived from getsentry/sentry-python
+# Copyright (c) 2018 Functional Software, Inc. dba Sentry
+# Licensed under the MIT License: https://github.com/getsentry/sentry-python/blob/master/LICENSE
 
 # 💖open source (under MIT License)
 
