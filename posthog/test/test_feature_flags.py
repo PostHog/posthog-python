@@ -268,6 +268,57 @@ class TestLocalEvaluation(unittest.TestCase):
             )
         )
 
+    def test_early_exit_on_multivariate_flag(self):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Early Exit Multivariate",
+                "key": "early-exit-multivariate",
+                "active": True,
+                "filters": {
+                    "early_exit": True,
+                    "multivariate": {
+                        "variants": [
+                            {"key": "control", "rollout_percentage": 50},
+                            {"key": "test", "rollout_percentage": 50},
+                        ]
+                    },
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 0,
+                        },
+                        {
+                            "properties": [
+                                {
+                                    "key": "region",
+                                    "operator": "exact",
+                                    "value": ["USA"],
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                    ],
+                },
+            }
+        ]
+
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "early-exit-multivariate",
+                "some-distinct-id",
+                person_properties={"region": "USA"},
+            )
+        )
+
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
     def test_flag_group_properties(self, patch_get, patch_flags):

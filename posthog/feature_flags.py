@@ -322,7 +322,7 @@ def match_feature_flag_properties(
     flag_filters = flag.get("filters") or {}
     flag_conditions = flag_filters.get("groups") or []
     flag_aggregation = flag_filters.get("aggregation_group_type_index")
-    early_exit_enabled = flag_filters.get("early_exit") or False
+    early_exit_enabled = flag_filters.get("early_exit")
     is_inconclusive = False
     cohort_properties = cohort_properties or {}
     groups = groups or {}
