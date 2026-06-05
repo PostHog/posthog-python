@@ -219,7 +219,7 @@ def determine_server_host(host: Optional[str]) -> str:
 def post(
     api_key: str,
     host: Optional[str] = None,
-    path: str = "",
+    path: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
     session: Optional[requests.Session] = None,
@@ -230,7 +230,7 @@ def post(
     body = kwargs
     body["sentAt"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
-    url = trimmed_host + path
+    url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
     data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
