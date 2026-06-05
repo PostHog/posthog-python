@@ -1,5 +1,11 @@
 # posthog
 
+## 7.18.0 — 2026-06-05
+
+### Minor changes
+
+- [a2ce51e](https://github.com/posthog/posthog-python/commit/a2ce51e8a4aad82bb91f152ee8b4236ba5898472) feat(feature-flags): support the `early_exit` condition option in local evaluation. When a flag enables early exit, evaluation now stops and returns `False` as soon as a condition group's property filters match but the rollout percentage excludes the user, instead of falling through to later groups — matching the server-side evaluation behavior. — Thanks @gustavohstrassburger!
+
 ## 7.17.0 — 2026-06-03
 
 ### Minor changes
