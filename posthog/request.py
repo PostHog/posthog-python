@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from gzip import GzipFile
 from io import BytesIO
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, cast
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -232,21 +232,20 @@ def post(
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + path
     body["api_key"] = api_key
-    data = json.dumps(body, cls=DatetimeSerializer)
+    data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
-    payload: str | bytes = data
     if gzip:
         headers["Content-Encoding"] = "gzip"
         buf = BytesIO()
         with GzipFile(fileobj=buf, mode="w") as gz:
             # 'data' was produced by json.dumps(),
             # whose default encoding is utf-8.
-            gz.write(data.encode("utf-8"))
-        payload = buf.getvalue()
+            gz.write(cast(str, data).encode("utf-8"))
+        data = buf.getvalue()
 
     res = (session or _get_session()).post(
-        url, data=payload, headers=headers, timeout=timeout
+        url, data=data, headers=headers, timeout=timeout
     )
 
     if res.status_code == 200:
