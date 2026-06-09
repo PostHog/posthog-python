@@ -71,13 +71,3 @@ class ExceptionRateLimiter:
 
             # post-limit: capture every Nth event to keep occasional signal
             return self._count % self._post_every == 0
-
-    def _get_state_for_tests(self):
-        """Return internal state for testing/debugging only."""
-        return {
-            "max": self._max,
-            "window": self._window,
-            "post_every": self._post_every,
-            "count": self._count,
-            "window_start": self._window_start,
-        }
