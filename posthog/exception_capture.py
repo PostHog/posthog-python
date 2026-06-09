@@ -7,8 +7,8 @@
 import logging
 import sys
 import threading
-from typing import TYPE_CHECKING
 import random
+from typing import TYPE_CHECKING
 from posthog.rate_limiter import ExceptionRateLimiter
 
 if TYPE_CHECKING:
