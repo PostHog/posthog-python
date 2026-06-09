@@ -54,6 +54,8 @@ from posthog.flag_definition_cache import (
 )
 from posthog.poller import Poller
 from posthog.request import (
+    AI_EVENTS_ENDPOINT,
+    EVENTS_ENDPOINT,
     APIError,
     QuotaLimitError,
     RequestsConnectionError,
@@ -62,6 +64,7 @@ from posthog.request import (
     determine_server_host,
     flags,
     get,
+    is_ai_event,
     normalize_host,
     remote_config,
     reset_sessions,
@@ -210,6 +213,7 @@ class Client(object):
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         in_app_modules: list[str] | None = None,
+        _internal_dedicated_ai_endpoint=False,
     ):
         """
         Initialize a new PostHog client instance.
@@ -320,6 +324,9 @@ class Client(object):
         self.disable_geoip = disable_geoip
         self.is_server = is_server
         self.historical_migration = historical_migration
+        # Internal, not ready for use: routes `$ai_*` events to a dedicated
+        # capture-ai endpoint while the backend route + ingress roll out.
+        self._internal_dedicated_ai_endpoint = _internal_dedicated_ai_endpoint
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
@@ -397,6 +404,7 @@ class Client(object):
                     retries=max_retries,
                     timeout=timeout,
                     historical_migration=historical_migration,
+                    dedicated_ai_endpoint=self._internal_dedicated_ai_endpoint,
                 )
                 self.consumers.append(consumer)
 
@@ -1265,6 +1273,7 @@ class Client(object):
                     retries=old.retries,
                     timeout=old.timeout,
                     historical_migration=old.historical_migration,
+                    dedicated_ai_endpoint=old.dedicated_ai_endpoint,
                 )
                 new_consumers.append(consumer)
 
@@ -1361,6 +1370,11 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
+            path = (
+                AI_EVENTS_ENDPOINT
+                if self._internal_dedicated_ai_endpoint and is_ai_event(msg.get("event"))
+                else EVENTS_ENDPOINT
+            )
             batch_post(
                 self.api_key,
                 self.host,
@@ -1368,6 +1382,7 @@ class Client(object):
                 timeout=self.timeout,
                 batch=[msg],
                 historical_migration=self.historical_migration,
+                path=path,
             )
 
             return sent_uuid

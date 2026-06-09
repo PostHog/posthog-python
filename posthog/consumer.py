@@ -4,7 +4,14 @@ import logging
 import time
 from threading import Thread
 
-from posthog.request import APIError, DatetimeSerializer, batch_post
+from posthog.request import (
+    AI_EVENTS_ENDPOINT,
+    EVENTS_ENDPOINT,
+    APIError,
+    DatetimeSerializer,
+    batch_post,
+    is_ai_event,
+)
 
 try:
     from queue import Empty
@@ -36,6 +43,7 @@ class Consumer(Thread):
         retries=10,
         timeout=15,
         historical_migration=False,
+        dedicated_ai_endpoint=False,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -48,6 +56,7 @@ class Consumer(Thread):
         self.on_error = on_error
         self.queue = queue
         self.gzip = gzip
+        self.dedicated_ai_endpoint = dedicated_ai_endpoint
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
@@ -126,7 +135,24 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Attempt to upload the batch and retry before raising an error"""
+        """Upload the batch, routing `$ai_*` events to their own endpoint when enabled.
+
+        Each destination is sent (and retried) independently so a failure on one
+        does not re-send the other — the batch was already dequeued in `upload()`.
+        """
+        if not self.dedicated_ai_endpoint:
+            self._send(batch, EVENTS_ENDPOINT)
+            return
+
+        ai_events = [item for item in batch if is_ai_event(item.get("event"))]
+        analytics_events = [item for item in batch if not is_ai_event(item.get("event"))]
+        if analytics_events:
+            self._send(analytics_events, EVENTS_ENDPOINT)
+        if ai_events:
+            self._send(ai_events, AI_EVENTS_ENDPOINT)
+
+    def _send(self, batch, path):
+        """Attempt to upload a single batch to `path`, retrying before raising an error"""
 
         def is_retryable(exc):
             if isinstance(exc, APIError):
@@ -150,6 +176,7 @@ class Consumer(Thread):
                     timeout=self.timeout,
                     batch=batch,
                     historical_migration=self.historical_migration,
+                    path=path,
                 )
                 return
             except Exception as e:
