@@ -8,6 +8,8 @@ import logging
 import sys
 import threading
 from typing import TYPE_CHECKING
+import random
+from posthog.rate_limiter import ExceptionRateLimiter
 
 if TYPE_CHECKING:
     from posthog.client import Client
@@ -23,6 +25,22 @@ class ExceptionCapture:
         self.original_excepthook = sys.excepthook
         sys.excepthook = self.exception_handler
         threading.excepthook = self.thread_exception_handler
+
+        # client side rate limiting to prevent spamming the server with exceptions
+
+        # Pull configurations dynamically from user-facing Client setups
+        max_exceptions = getattr(client, "exception_capture_max_per_window", 100)
+        window_seconds = getattr(client, "exception_capture_window_seconds", 60.0)
+        post_limit_every = getattr(client, "exception_capture_post_limit_every", 10)
+
+        self._sample_rate = getattr(client, "exception_capture_sample_rate", 1.0)
+
+        # Initialize the rate limiter engine
+        self._rate_limiter = ExceptionRateLimiter(
+            max_exceptions=max_exceptions,
+            window_seconds=window_seconds,
+            post_limit_every=post_limit_every,
+        )
 
     def close(self):
         sys.excepthook = self.original_excepthook
@@ -43,6 +61,15 @@ class ExceptionCapture:
         self.capture_exception((exc_info[0], exc_info[1], exc_info[2]), metadata)
 
     def capture_exception(self, exception, metadata=None):
+        if not self._rate_limiter.should_capture():
+            self.log.debug(
+                "Exception capture rate limit reached, dropping exception payload"
+            )
+            return
+
+        if self._sample_rate < 1.0 and random.random() > self._sample_rate:
+            return
+
         try:
             distinct_id = metadata.get("distinct_id") if metadata else None
             self.client.capture_exception(exception, distinct_id=distinct_id)
