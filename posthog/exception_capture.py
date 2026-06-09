@@ -62,9 +62,6 @@ class ExceptionCapture:
 
     def capture_exception(self, exception, metadata=None):
         if not self._rate_limiter.should_capture():
-            self.log.debug(
-                "Exception capture rate limit reached, dropping exception payload"
-            )
             return
 
         if self._sample_rate < 1.0 and random.random() > self._sample_rate:
