@@ -79,19 +79,19 @@ def test_window_resets_counters_cleanly():
     assert rl.should_capture() is False, "Third event in fresh window should block"
 
 
-def test_invalid_parameters_raise_value_errors():
-    """Verify that the class initialization blocks dirty, negative, or zero configuration parameters."""
-    with pytest.raises(ValueError, match="max_exceptions must be >= 0"):
-        ExceptionRateLimiter(max_exceptions=-1)
-
-    with pytest.raises(ValueError, match="window_seconds must be > 0"):
-        ExceptionRateLimiter(window_seconds=0)
-
-    with pytest.raises(ValueError, match="window_seconds must be > 0"):
-        ExceptionRateLimiter(window_seconds=-5.5)
-
-    with pytest.raises(ValueError, match="post_limit_every must be > 0"):
-        ExceptionRateLimiter(post_limit_every=0)
+@pytest.mark.parametrize(
+    "kwargs, match_msg",
+    [
+        ({"max_exceptions": -2}, "max_exceptions must be >= -1"),
+        ({"window_seconds": 0}, "window_seconds must be > 0"),
+        ({"window_seconds": -5.5}, "window_seconds must be > 0"),
+        ({"post_limit_every": 0}, "post_limit_every must be > 0"),
+    ],
+)
+def test_invalid_parameters_raise_value_errors(kwargs, match_msg):
+    """Verify that the class initialization cleanly blocks invalid configuration parameter boundaries."""
+    with pytest.raises(ValueError, match=match_msg):
+        ExceptionRateLimiter(**kwargs)
 
 
 def test_post_every_one_allows_all_events_after_limit():
