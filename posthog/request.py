@@ -341,15 +341,24 @@ def remote_config(
     return response.data
 
 
+EVENTS_ENDPOINT = "/batch/"
+AI_EVENTS_ENDPOINT = "/i/v0/ai/batch/"
+
+
+def is_ai_event(event_name) -> bool:
+    return isinstance(event_name, str) and event_name.startswith("$ai_")
+
+
 def batch_post(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
+    path: str = EVENTS_ENDPOINT,
     **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the batch API endpoint for events"""
-    res = post(api_key, host, "/batch/", gzip, timeout, **kwargs)
+    res = post(api_key, host, path, gzip, timeout, **kwargs)
     return _process_response(
         res, success_message="data uploaded successfully", return_json=False
     )

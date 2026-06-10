@@ -4,7 +4,14 @@ import logging
 import time
 from threading import Thread
 
-from posthog.request import APIError, DatetimeSerializer, batch_post
+from posthog.request import (
+    AI_EVENTS_ENDPOINT,
+    EVENTS_ENDPOINT,
+    APIError,
+    DatetimeSerializer,
+    batch_post,
+    is_ai_event,
+)
 
 try:
     from queue import Empty
@@ -13,6 +20,11 @@ except ImportError:
 
 
 MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
+
+# `$ai_*` events carry LLM inputs/outputs and, when routed to the dedicated AI
+# endpoint, hit a pipeline that accepts larger messages than analytics ingestion,
+# so they get a higher per-event ceiling when that routing is enabled.
+AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per `$ai_*` event
 
 # The maximum request body size is currently 20MiB, let's be conservative
 # in case we want to lower it in the future.
@@ -36,6 +48,7 @@ class Consumer(Thread):
         retries=10,
         timeout=15,
         historical_migration=False,
+        dedicated_ai_endpoint=False,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -48,6 +61,7 @@ class Consumer(Thread):
         self.on_error = on_error
         self.queue = queue
         self.gzip = gzip
+        self.dedicated_ai_endpoint = dedicated_ai_endpoint
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
@@ -109,9 +123,12 @@ class Consumer(Thread):
             try:
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
-                if item_size > MAX_MSG_SIZE:
+                max_msg_size = self._max_msg_size(item)
+                if item_size > max_msg_size:
                     self.log.error(
-                        "Item exceeds 900kib limit, dropping. (%s)", str(item)
+                        "Item exceeds %dKiB limit, dropping. (%s)",
+                        max_msg_size // 1024,
+                        str(item),
                     )
                     queue.task_done()
                     continue
@@ -126,7 +143,44 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Attempt to upload the batch and retry before raising an error"""
+        """Upload the batch, routing `$ai_*` events to their own endpoint when enabled.
+
+        Each destination is attempted independently so a failure on one does not
+        skip the other. The first failure is raised (so `upload()` logs it and
+        invokes `on_error`); a second is logged here so it isn't silently lost.
+        The batch was already dequeued in `upload()`, so unsent events are dropped
+        after retries, same as the single-endpoint path.
+        """
+        if not self.dedicated_ai_endpoint:
+            self._send(batch, EVENTS_ENDPOINT)
+            return
+
+        ai_events: list[Any] = []
+        analytics_events: list[Any] = []
+        for item in batch:
+            target = ai_events if is_ai_event(item.get("event")) else analytics_events
+            target.append(item)
+
+        first_exc = None
+        for events, path in (
+            (analytics_events, EVENTS_ENDPOINT),
+            (ai_events, AI_EVENTS_ENDPOINT),
+        ):
+            if not events:
+                continue
+            try:
+                self._send(events, path)
+            except Exception as e:
+                if first_exc is None:
+                    first_exc = e
+                else:
+                    self.log.error("error uploading to %s: %s", path, e)
+
+        if first_exc is not None:
+            raise first_exc
+
+    def _send(self, batch, path):
+        """Attempt to upload a single batch to `path`, retrying before raising an error"""
 
         def is_retryable(exc):
             if isinstance(exc, APIError):
@@ -150,6 +204,7 @@ class Consumer(Thread):
                     timeout=self.timeout,
                     batch=batch,
                     historical_migration=self.historical_migration,
+                    path=path,
                 )
                 return
             except Exception as e:
@@ -166,3 +221,8 @@ class Consumer(Thread):
 
         if last_exc:
             raise last_exc
+
+    def _max_msg_size(self, item):
+        if self.dedicated_ai_endpoint and is_ai_event(item.get("event")):
+            return AI_MAX_MSG_SIZE
+        return MAX_MSG_SIZE
