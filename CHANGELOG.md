@@ -1,5 +1,11 @@
 # posthog
 
+## 7.18.1 — 2026-06-10
+
+### Patch changes
+
+- [00b2091](https://github.com/posthog/posthog-python/commit/00b2091ea661d3b4e87ccf11f4752f73a1e0d162) Add internal-only routing of `$ai_*` events to a dedicated capture endpoint in their own batch, gated behind the unstable `_dedicated_ai_endpoint` client option (off by default, not for general use). — Thanks @carlos-marchal-ph!
+
 ## 7.18.0 — 2026-06-05
 
 ### Minor changes
