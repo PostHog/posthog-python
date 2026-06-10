@@ -42,6 +42,7 @@ from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
 from posthog import setup
+from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import sanitize_langchain
 from posthog.ai.utils import get_model_params, with_privacy_mode
 from posthog.client import Client
@@ -621,6 +622,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_base_url": run.base_url,
             "$ai_framework": "langchain",
         }
+
+        warn_if_posthog_ai_gateway(run.base_url)
 
         if isinstance(run.posthog_properties, dict):
             event_properties.update(run.posthog_properties)

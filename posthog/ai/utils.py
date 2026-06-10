@@ -3,6 +3,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, cast
 
 from posthog import get_tags, identify_context, new_context, tag, contexts
+from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import (
     sanitize_anthropic,
     sanitize_gemini,
@@ -423,6 +424,7 @@ def call_llm_and_track_usage(
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
             tag("$ai_base_url", str(base_url))
+            warn_if_posthog_ai_gateway(base_url)
 
             available_tool_calls = extract_available_tool_calls(provider, kwargs)
 
@@ -572,6 +574,7 @@ async def call_llm_and_track_usage_async(
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
             tag("$ai_base_url", str(base_url))
+            warn_if_posthog_ai_gateway(base_url)
 
             available_tool_calls = extract_available_tool_calls(provider, kwargs)
 
@@ -705,6 +708,8 @@ def capture_streaming_event(
         "$ai_base_url": str(event_data["base_url"]),
         **(event_data.get("properties") or {}),
     }
+
+    warn_if_posthog_ai_gateway(event_data["base_url"])
 
     # Determine token source: SDK-computed vs externally overridden
     sdk_token_tags = {
