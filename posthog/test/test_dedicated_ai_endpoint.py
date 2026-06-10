@@ -1,6 +1,8 @@
 import unittest
 from unittest import mock
 
+from parameterized import parameterized
+
 from posthog.client import Client
 from posthog.consumer import Consumer
 from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT
@@ -17,7 +19,9 @@ class TestDedicatedAiEndpointConsumer(unittest.TestCase):
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.request([_event("$ai_generation"), _event("button_clicked")])
 
-        by_path = {c.kwargs["path"]: c.kwargs["batch"] for c in mock_post.call_args_list}
+        by_path = {
+            c.kwargs["path"]: c.kwargs["batch"] for c in mock_post.call_args_list
+        }
         self.assertEqual(set(by_path), {EVENTS_ENDPOINT, AI_EVENTS_ENDPOINT})
         self.assertEqual(
             [e["event"] for e in by_path[AI_EVENTS_ENDPOINT]], ["$ai_generation"]
@@ -44,30 +48,21 @@ class TestDedicatedAiEndpointConsumer(unittest.TestCase):
 
 
 class TestDedicatedAiEndpointSyncMode(unittest.TestCase):
-    def test_routes_ai_event_to_ai_endpoint(self) -> None:
-        client = Client(
-            TEST_API_KEY, sync_mode=True, _internal_dedicated_ai_endpoint=True
-        )
+    @parameterized.expand(
+        [
+            ("enabled_ai_event", True, "$ai_generation", AI_EVENTS_ENDPOINT),
+            ("enabled_normal_event", True, "button_clicked", EVENTS_ENDPOINT),
+            ("disabled_ai_event", False, "$ai_generation", EVENTS_ENDPOINT),
+        ]
+    )
+    def test_routes_event_to_expected_endpoint(
+        self, _name, enabled, event, expected_path
+    ) -> None:
+        client = Client(TEST_API_KEY, sync_mode=True, _dedicated_ai_endpoint=enabled)
         with mock.patch("posthog.client.batch_post") as mock_post:
-            client.capture("$ai_generation", distinct_id="distinct_id")
+            client.capture(event, distinct_id="distinct_id")
 
-        self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
-
-    def test_routes_normal_event_to_batch(self) -> None:
-        client = Client(
-            TEST_API_KEY, sync_mode=True, _internal_dedicated_ai_endpoint=True
-        )
-        with mock.patch("posthog.client.batch_post") as mock_post:
-            client.capture("button_clicked", distinct_id="distinct_id")
-
-        self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
-
-    def test_disabled_routes_ai_event_to_batch(self) -> None:
-        client = Client(TEST_API_KEY, sync_mode=True)
-        with mock.patch("posthog.client.batch_post") as mock_post:
-            client.capture("$ai_generation", distinct_id="distinct_id")
-
-        self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
+        self.assertEqual(mock_post.call_args.kwargs["path"], expected_path)
 
 
 if __name__ == "__main__":

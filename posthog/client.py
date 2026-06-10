@@ -213,7 +213,7 @@ class Client(object):
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         in_app_modules: list[str] | None = None,
-        _internal_dedicated_ai_endpoint=False,
+        _dedicated_ai_endpoint=False,
     ):
         """
         Initialize a new PostHog client instance.
@@ -326,7 +326,7 @@ class Client(object):
         self.historical_migration = historical_migration
         # Internal, not ready for use: routes `$ai_*` events to a dedicated
         # capture-ai endpoint while the backend route + ingress roll out.
-        self._internal_dedicated_ai_endpoint = _internal_dedicated_ai_endpoint
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
@@ -404,7 +404,7 @@ class Client(object):
                     retries=max_retries,
                     timeout=timeout,
                     historical_migration=historical_migration,
-                    dedicated_ai_endpoint=self._internal_dedicated_ai_endpoint,
+                    dedicated_ai_endpoint=self._dedicated_ai_endpoint,
                 )
                 self.consumers.append(consumer)
 
@@ -1372,7 +1372,7 @@ class Client(object):
             self.log.debug("enqueued with blocking %s.", msg["event"])
             path = (
                 AI_EVENTS_ENDPOINT
-                if self._internal_dedicated_ai_endpoint and is_ai_event(msg.get("event"))
+                if self._dedicated_ai_endpoint and is_ai_event(msg.get("event"))
                 else EVENTS_ENDPOINT
             )
             batch_post(

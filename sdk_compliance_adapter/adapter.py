@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from flask import Flask, jsonify, request
 
 from posthog import Client
+from posthog.request import EVENTS_ENDPOINT
 from posthog.request import batch_post as original_batch_post
 from posthog.version import VERSION
 
@@ -164,6 +165,7 @@ def patched_batch_post(
     host: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
+    path: str = EVENTS_ENDPOINT,
     **kwargs,
 ):
     """Patched version of batch_post that tracks requests"""
@@ -172,7 +174,7 @@ def patched_batch_post(
 
     try:
         # Call original batch_post
-        response = original_batch_post(api_key, host, gzip, timeout, **kwargs)
+        response = original_batch_post(api_key, host, gzip, timeout, path, **kwargs)
         # Record successful request
         state.record_request(200, batch, batch_id)
         return response

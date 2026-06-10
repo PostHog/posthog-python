@@ -137,19 +137,39 @@ class Consumer(Thread):
     def request(self, batch):
         """Upload the batch, routing `$ai_*` events to their own endpoint when enabled.
 
-        Each destination is sent (and retried) independently so a failure on one
-        does not re-send the other — the batch was already dequeued in `upload()`.
+        Each destination is attempted independently so a failure on one does not
+        skip the other. The first failure is raised (so `upload()` logs it and
+        invokes `on_error`); a second is logged here so it isn't silently lost.
+        The batch was already dequeued in `upload()`, so unsent events are dropped
+        after retries, same as the single-endpoint path.
         """
         if not self.dedicated_ai_endpoint:
             self._send(batch, EVENTS_ENDPOINT)
             return
 
-        ai_events = [item for item in batch if is_ai_event(item.get("event"))]
-        analytics_events = [item for item in batch if not is_ai_event(item.get("event"))]
-        if analytics_events:
-            self._send(analytics_events, EVENTS_ENDPOINT)
-        if ai_events:
-            self._send(ai_events, AI_EVENTS_ENDPOINT)
+        ai_events: list[Any] = []
+        analytics_events: list[Any] = []
+        for item in batch:
+            target = ai_events if is_ai_event(item.get("event")) else analytics_events
+            target.append(item)
+
+        first_exc = None
+        for events, path in (
+            (analytics_events, EVENTS_ENDPOINT),
+            (ai_events, AI_EVENTS_ENDPOINT),
+        ):
+            if not events:
+                continue
+            try:
+                self._send(events, path)
+            except Exception as e:
+                if first_exc is None:
+                    first_exc = e
+                else:
+                    self.log.error("error uploading to %s: %s", path, e)
+
+        if first_exc is not None:
+            raise first_exc
 
     def _send(self, batch, path):
         """Attempt to upload a single batch to `path`, retrying before raising an error"""
