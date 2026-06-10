@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
+from ..gateway import warn_if_posthog_ai_gateway_otel_attributes
 from .spans import DEFAULT_HOST, is_ai_span
 
 
@@ -70,6 +71,7 @@ class PostHogSpanProcessor(SpanProcessor):
         """
         if not is_ai_span(span):
             return
+        warn_if_posthog_ai_gateway_otel_attributes(span.attributes)
         self._processor.on_end(span)
 
     def shutdown(self) -> None:
