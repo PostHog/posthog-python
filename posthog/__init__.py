@@ -338,6 +338,13 @@ code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 in_app_modules = None  # type: Optional[list[str]]
 
+# Opt-in Ed25519 signing of $exception events. Set enable_exception_signing=True and provide an
+# Ed25519 private key (PEM) in exception_signing_private_key; register the matching public key in
+# your PostHog project so ingestion can stamp a trusted $exception_verified flag. Backend use only
+# (never ship a private key in a browser/mobile app). Requires the [exception-signing] extra.
+enable_exception_signing = False  # type: bool
+exception_signing_private_key = None  # type: Optional[str]
+
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
 # it impossible to write `posthog.capture(distinct-id, event-name)` - basically, to enforce
@@ -1103,6 +1110,8 @@ def setup() -> Client:
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
             in_app_modules=in_app_modules,
+            enable_exception_signing=enable_exception_signing,
+            exception_signing_private_key=exception_signing_private_key,
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state

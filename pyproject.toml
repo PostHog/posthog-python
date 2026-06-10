@@ -40,6 +40,9 @@ otel = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
 ]
+# Required to sign $exception events (enable_exception_signing). Optional so the base SDK
+# keeps a minimal dependency footprint.
+exception-signing = ["cryptography>=41.0.0"]
 dev = [
     "django-stubs",
     "lxml",

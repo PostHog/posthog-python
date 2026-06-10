@@ -213,6 +213,8 @@ class Client(object):
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         in_app_modules: list[str] | None = None,
+        enable_exception_signing=False,
+        exception_signing_private_key=None,
         _dedicated_ai_endpoint=False,
     ):
         """
@@ -375,6 +377,17 @@ class Client(object):
             )
 
         self._set_before_send(before_send)
+
+        # Opt-in Ed25519 signing of $exception events (parse the key once here).
+        self.enable_exception_signing = enable_exception_signing
+        self._exception_signer = None
+        if enable_exception_signing and exception_signing_private_key:
+            from posthog.exception_signing import make_signer
+
+            try:
+                self._exception_signer = make_signer(exception_signing_private_key)
+            except Exception as e:
+                self.log.error("Failed to initialise exception signing: %s", e)
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(self)
@@ -1361,6 +1374,15 @@ class Client(object):
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
                 # Continue with the original message if callback fails
+
+        # Sign $exception events last, so the signature covers the final content actually sent
+        # (after any before_send mutation) and a before_send callback can't strip it.
+        if self._exception_signer is not None and msg.get("event") == "$exception":
+            try:
+                self._exception_signer.sign_event(msg)
+            except Exception as e:
+                self.log.exception(f"Error signing exception event: {e}")
+                # Leave the event unsigned rather than dropping it.
 
         self.log.debug("queueing: %s", msg)
 
