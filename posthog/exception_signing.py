@@ -95,9 +95,13 @@ class ExceptionSigner:
                 "Install it with: pip install posthoganalytics[exception-signing]"
             ) from e
 
-        key = serialization.load_pem_private_key(private_key_pem.encode("utf-8"), password=None)
+        key = serialization.load_pem_private_key(
+            private_key_pem.encode("utf-8"), password=None
+        )
         if not isinstance(key, Ed25519PrivateKey):
-            raise ValueError("exception_signing_private_key must be an Ed25519 private key (PEM)")
+            raise ValueError(
+                "exception_signing_private_key must be an Ed25519 private key (PEM)"
+            )
 
         from cryptography.hazmat.primitives.serialization import (
             Encoding,

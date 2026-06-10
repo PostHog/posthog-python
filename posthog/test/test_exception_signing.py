@@ -31,9 +31,7 @@ CANONICAL_HEX = (
     "65732f7374726970652f736f757263652e707900000002343200000033706f7374686f672e74656d706f7261"
     "6c2e646174615f696d706f7274732e736f75726365732e7374726970652e736f75726365"
 )
-SIGNATURE_B64 = (
-    "Fyh19k2cC1k9M8cJr54TNH91MDdd67oaUnydyKm7E+QCPN3mK+h3N9Yp5nkM7xYtngD8km7ljqVXARGDmnfzAQ=="
-)
+SIGNATURE_B64 = "Fyh19k2cC1k9M8cJr54TNH91MDdd67oaUnydyKm7E+QCPN3mK+h3N9Yp5nkM7xYtngD8km7ljqVXARGDmnfzAQ=="
 
 PARITY_EXCEPTION_LIST = [
     {
@@ -76,7 +74,8 @@ class TestCanonical(unittest.TestCase):
 
     def test_canonical_is_deterministic(self):
         self.assertEqual(
-            build_canonical(PARITY_EXCEPTION_LIST), build_canonical(PARITY_EXCEPTION_LIST)
+            build_canonical(PARITY_EXCEPTION_LIST),
+            build_canonical(PARITY_EXCEPTION_LIST),
         )
 
     def test_excluded_fields_do_not_affect_canonical(self):
@@ -86,22 +85,31 @@ class TestCanonical(unittest.TestCase):
                 **PARITY_EXCEPTION_LIST[0],
                 "stacktrace": {
                     "frames": [
-                        {**f, "in_app": not f["in_app"], "abs_path": "/tmp/x", "context_line": "y"}
+                        {
+                            **f,
+                            "in_app": not f["in_app"],
+                            "abs_path": "/tmp/x",
+                            "context_line": "y",
+                        }
                         for f in PARITY_EXCEPTION_LIST[0]["stacktrace"]["frames"]
                     ]
                 },
             }
         ]
-        self.assertEqual(build_canonical(mutated), build_canonical(PARITY_EXCEPTION_LIST))
+        self.assertEqual(
+            build_canonical(mutated), build_canonical(PARITY_EXCEPTION_LIST)
+        )
 
     def test_changing_message_changes_canonical(self):
         mutated = [{**PARITY_EXCEPTION_LIST[0], "value": "different"}]
-        self.assertNotEqual(build_canonical(mutated), build_canonical(PARITY_EXCEPTION_LIST))
+        self.assertNotEqual(
+            build_canonical(mutated), build_canonical(PARITY_EXCEPTION_LIST)
+        )
 
     def test_tolerates_missing_and_malformed(self):
-        self.assertTrue(build_canonical([]).startswith(b"PHEXC1\n"))
-        self.assertTrue(build_canonical(None).startswith(b"PHEXC1\n"))
-        self.assertTrue(build_canonical([{}]).startswith(b"PHEXC1\n"))
+        for case in ([], None, [{}], [{"stacktrace": {}}], [{"value": "x"}]):
+            with self.subTest(case=case):
+                self.assertTrue(build_canonical(case).startswith(b"PHEXC1\n"))
 
 
 class TestSigning(unittest.TestCase):
@@ -114,7 +122,9 @@ class TestSigning(unittest.TestCase):
 
     def test_signature_matches_parity_vector(self):
         signer = ExceptionSigner(_private_key_pem())
-        self.assertEqual(signer.sign(build_canonical(PARITY_EXCEPTION_LIST)), SIGNATURE_B64)
+        self.assertEqual(
+            signer.sign(build_canonical(PARITY_EXCEPTION_LIST)), SIGNATURE_B64
+        )
 
     def test_signature_verifies_with_public_key(self):
         signer = ExceptionSigner(_private_key_pem())
@@ -138,14 +148,19 @@ class TestSigning(unittest.TestCase):
         with self.assertRaises(ValueError):
             ExceptionSigner(rsa_pem)
 
-    def test_sign_event_attaches_props_only_for_exceptions(self):
+    def test_sign_event_attaches_props_for_exceptions(self):
         signer = ExceptionSigner(_private_key_pem())
-        event = {"event": "$exception", "properties": {"$exception_list": PARITY_EXCEPTION_LIST}}
+        event = {
+            "event": "$exception",
+            "properties": {"$exception_list": PARITY_EXCEPTION_LIST},
+        }
         signer.sign_event(event)
         self.assertEqual(event["properties"][SIGNATURE_PROPERTY], SIGNATURE_B64)
         self.assertEqual(event["properties"][KEY_ID_PROPERTY], KEY_ID)
         self.assertEqual(event["properties"][VERSION_PROPERTY], 1)
 
+    def test_sign_event_passes_through_non_exceptions(self):
+        signer = ExceptionSigner(_private_key_pem())
         other = {"event": "$pageview", "properties": {}}
         signer.sign_event(other)
         self.assertNotIn(SIGNATURE_PROPERTY, other["properties"])
@@ -209,6 +224,15 @@ class TestClientIntegration(unittest.TestCase):
         self.assertIsNone(client._exception_signer)
         queued = self._enqueue_and_read(client)
         self.assertNotIn(SIGNATURE_PROPERTY, queued["properties"])
+
+    def test_enabled_without_key_warns_and_does_not_sign(self):
+        with mock.patch.object(Client, "log") as log:
+            client = Client(FAKE_TEST_API_KEY, enable_exception_signing=True)
+            self.assertIsNone(client._exception_signer)
+            self.assertTrue(
+                any("UNSIGNED" in str(c.args) for c in log.warning.call_args_list),
+                "expected a warning that events will be sent unsigned",
+            )
 
 
 if __name__ == "__main__":

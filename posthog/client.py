@@ -381,13 +381,21 @@ class Client(object):
         # Opt-in Ed25519 signing of $exception events (parse the key once here).
         self.enable_exception_signing = enable_exception_signing
         self._exception_signer = None
-        if enable_exception_signing and exception_signing_private_key:
-            from posthog.exception_signing import make_signer
+        if enable_exception_signing:
+            if not exception_signing_private_key:
+                # Opted into a security feature but gave us nothing to sign with — warn loudly
+                # rather than silently sending every $exception unsigned.
+                self.log.warning(
+                    "enable_exception_signing is True but no exception_signing_private_key was "
+                    "provided; $exception events will be sent UNSIGNED."
+                )
+            else:
+                from posthog.exception_signing import make_signer
 
-            try:
-                self._exception_signer = make_signer(exception_signing_private_key)
-            except Exception as e:
-                self.log.error("Failed to initialise exception signing: %s", e)
+                try:
+                    self._exception_signer = make_signer(exception_signing_private_key)
+                except Exception as e:
+                    self.log.error("Failed to initialise exception signing: %s", e)
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(self)
