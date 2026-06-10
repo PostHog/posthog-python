@@ -21,6 +21,11 @@ except ImportError:
 
 MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
 
+# `$ai_*` events carry LLM inputs/outputs and, when routed to the dedicated AI
+# endpoint, hit a pipeline that accepts larger messages than analytics ingestion,
+# so they get a higher per-event ceiling when that routing is enabled.
+AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per `$ai_*` event
+
 # The maximum request body size is currently 20MiB, let's be conservative
 # in case we want to lower it in the future.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
@@ -118,9 +123,12 @@ class Consumer(Thread):
             try:
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
-                if item_size > MAX_MSG_SIZE:
+                max_msg_size = self._max_msg_size(item)
+                if item_size > max_msg_size:
                     self.log.error(
-                        "Item exceeds 900kib limit, dropping. (%s)", str(item)
+                        "Item exceeds %dKiB limit, dropping. (%s)",
+                        max_msg_size // 1024,
+                        str(item),
                     )
                     queue.task_done()
                     continue
@@ -213,3 +221,8 @@ class Consumer(Thread):
 
         if last_exc:
             raise last_exc
+
+    def _max_msg_size(self, item):
+        if self.dedicated_ai_endpoint and is_ai_event(item.get("event")):
+            return AI_MAX_MSG_SIZE
+        return MAX_MSG_SIZE
