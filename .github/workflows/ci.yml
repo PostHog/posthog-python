@@ -9,9 +9,13 @@ on:
 permissions:
     contents: read
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
 jobs:
-    code-quality:
-        name: Code quality checks
+    ruff-format:
+        name: Ruff format
         runs-on: ubuntu-latest
 
         steps:
@@ -38,13 +42,85 @@ jobs:
               run: |
                   ruff format --check .
 
+    ruff-lint:
+        name: Ruff lint
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.11
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: 3.11.11
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+              with:
+                  enable-cache: true
+
+            - name: Install dev dependencies
+              shell: bash
+              run: |
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra dev
+
             - name: Lint with ruff
               run: |
                   ruff check .
 
+    mypy:
+        name: Mypy
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.11
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: 3.11.11
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+              with:
+                  enable-cache: true
+
+            - name: Install dev dependencies
+              shell: bash
+              run: |
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra dev
+
             - name: Check types with mypy
               run: |
                   mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
+
+    package-build:
+        name: Package build
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.11
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: 3.11.11
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+              with:
+                  enable-cache: true
+
+            - name: Build and verify distributions
+              run: |
+                  uv build
+                  uv run --with twine twine check dist/*
 
     tests:
         name: Python ${{ matrix.python-version }} tests
