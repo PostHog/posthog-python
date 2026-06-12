@@ -25,7 +25,8 @@ SDK usage examples and code snippets live in the official documentation so they 
 ## Documentation
 
 - [Python library docs](https://posthog.com/docs/libraries/python)
-- [AI observability installation docs](https://posthog.com/docs/ai-observability/installation)
+- [Django framework docs](https://posthog.com/docs/libraries/django)
+- [Flask framework docs](https://posthog.com/docs/libraries/flask)
 
 ## Contributing
 
