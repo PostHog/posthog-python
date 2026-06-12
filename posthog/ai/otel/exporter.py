@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
+from ..gateway import warn_if_posthog_ai_gateway_otel_attributes
 from .spans import DEFAULT_HOST, is_ai_span
 
 
@@ -65,6 +66,8 @@ class PostHogTraceExporter(SpanExporter):
         ai_spans = [span for span in spans if is_ai_span(span)]
         if not ai_spans:
             return SpanExportResult.SUCCESS
+        for span in ai_spans:
+            warn_if_posthog_ai_gateway_otel_attributes(span.attributes)
         return self._exporter.export(ai_spans)
 
     def shutdown(self) -> None:
