@@ -217,6 +217,18 @@ def test_thread_safety_allows_exactly_bucket_size_minus_one():
     assert len(allowed) == 49
 
 
+def test_exception_capture_default_configuration():
+    from posthog.exception_capture import ExceptionCapture
+
+    capture = ExceptionCapture(MagicMock())
+    try:
+        assert capture._rate_limiter._bucket_size == 50
+        assert capture._rate_limiter._refill_rate == 10
+        assert capture._rate_limiter._refill_interval == 10
+    finally:
+        capture.close()
+
+
 def test_exception_capture_rate_limiting_is_configurable():
     from posthog.exception_capture import ExceptionCapture
 
@@ -256,7 +268,7 @@ def test_exception_capture_rate_limits_per_exception_type():
     from posthog.exception_capture import ExceptionCapture
 
     client = MagicMock()
-    capture = ExceptionCapture(client)
+    capture = ExceptionCapture(client, bucket_size=10)
     try:
 
         def exc_info(error):

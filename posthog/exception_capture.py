@@ -18,12 +18,18 @@ if TYPE_CHECKING:
 class ExceptionCapture:
     log = logging.getLogger("posthog")
 
+    # more generous defaults than the browser SDK (10, 1, 10) because one
+    # server process aggregates exceptions across many users' requests
+    DEFAULT_BUCKET_SIZE = 50
+    DEFAULT_REFILL_RATE = 10
+    DEFAULT_REFILL_INTERVAL_SECONDS = 10
+
     def __init__(
         self,
         client: "Client",
-        bucket_size=10,
-        refill_rate=1,
-        refill_interval_seconds=10,
+        bucket_size=DEFAULT_BUCKET_SIZE,
+        refill_rate=DEFAULT_REFILL_RATE,
+        refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS,
     ):
         self.client = client
         self.original_excepthook = sys.excepthook

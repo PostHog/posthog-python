@@ -5,6 +5,7 @@ from typing_extensions import Unpack
 
 from posthog.args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.client import Client
+from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
     identify_context as inner_identify_context,
 )
@@ -343,9 +344,11 @@ capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 in_app_modules = None  # type: Optional[list[str]]
-exception_autocapture_bucket_size = 10  # type: int
-exception_autocapture_refill_rate = 1  # type: int
-exception_autocapture_refill_interval_seconds = 10  # type: float
+exception_autocapture_bucket_size = ExceptionCapture.DEFAULT_BUCKET_SIZE  # type: int
+exception_autocapture_refill_rate = ExceptionCapture.DEFAULT_REFILL_RATE  # type: int
+exception_autocapture_refill_interval_seconds = (
+    ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS
+)  # type: float
 
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
