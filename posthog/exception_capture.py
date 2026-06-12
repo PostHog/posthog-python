@@ -27,6 +27,7 @@ class ExceptionCapture:
     def __init__(
         self,
         client: "Client",
+        rate_limiting_enabled=False,
         bucket_size=DEFAULT_BUCKET_SIZE,
         refill_rate=DEFAULT_REFILL_RATE,
         refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS,
@@ -35,17 +36,20 @@ class ExceptionCapture:
         self.original_excepthook = sys.excepthook
         sys.excepthook = self.exception_handler
         threading.excepthook = self.thread_exception_handler
-        # client-side rate limiting: per exception type, allow a burst of
-        # captures, then refill over time
-        self._rate_limiter = BucketedRateLimiter(
-            bucket_size=bucket_size,
-            refill_rate=refill_rate,
-            refill_interval_seconds=refill_interval_seconds,
-        )
+        # opt-in client-side rate limiting: per exception type, allow a burst
+        # of captures, then refill over time
+        self._rate_limiter = None
+        if rate_limiting_enabled:
+            self._rate_limiter = BucketedRateLimiter(
+                bucket_size=bucket_size,
+                refill_rate=refill_rate,
+                refill_interval_seconds=refill_interval_seconds,
+            )
 
     def close(self):
         sys.excepthook = self.original_excepthook
-        self._rate_limiter.stop()
+        if self._rate_limiter is not None:
+            self._rate_limiter.stop()
 
     def exception_handler(self, exc_type, exc_value, exc_traceback):
         # don't affect default behaviour.
@@ -64,12 +68,13 @@ class ExceptionCapture:
 
     def capture_exception(self, exception, metadata=None):
         try:
-            exception_type = self._exception_type(exception)
-            if self._rate_limiter.consume_rate_limit(exception_type):
-                self.log.info(
-                    f"Skipping exception capture because of client rate limiting. exception={exception_type}"
-                )
-                return
+            if self._rate_limiter is not None:
+                exception_type = self._exception_type(exception)
+                if self._rate_limiter.consume_rate_limit(exception_type):
+                    self.log.info(
+                        f"Skipping exception capture because of client rate limiting. exception={exception_type}"
+                    )
+                    return
 
             distinct_id = metadata.get("distinct_id") if metadata else None
             self.client.capture_exception(exception, distinct_id=distinct_id)

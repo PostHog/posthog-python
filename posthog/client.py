@@ -211,6 +211,7 @@ class Client(object):
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         in_app_modules: list[str] | None = None,
+        enable_exception_autocapture_rate_limiting=False,
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
@@ -276,6 +277,9 @@ class Client(object):
                 capturing code variables.
             in_app_modules: Module/package prefixes treated as in-app frames in
                 captured exceptions.
+            enable_exception_autocapture_rate_limiting: Rate limit
+                autocaptured exceptions client-side with a token bucket per
+                exception type. Disabled by default.
             exception_autocapture_bucket_size: Maximum burst of autocaptured
                 exceptions allowed per exception type (token bucket size,
                 clamped to 0-100).
@@ -340,6 +344,9 @@ class Client(object):
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
+        self.enable_exception_autocapture_rate_limiting = (
+            enable_exception_autocapture_rate_limiting
+        )
         self.exception_autocapture_bucket_size = exception_autocapture_bucket_size
         self.exception_autocapture_refill_rate = exception_autocapture_refill_rate
         self.exception_autocapture_refill_interval_seconds = (
@@ -394,6 +401,7 @@ class Client(object):
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(
                 self,
+                rate_limiting_enabled=self.enable_exception_autocapture_rate_limiting,
                 bucket_size=self.exception_autocapture_bucket_size,
                 refill_rate=self.exception_autocapture_refill_rate,
                 refill_interval_seconds=self.exception_autocapture_refill_interval_seconds,

@@ -217,10 +217,25 @@ def test_thread_safety_allows_exactly_bucket_size_minus_one():
     assert len(allowed) == 49
 
 
-def test_exception_capture_default_configuration():
+def test_exception_capture_rate_limiting_is_disabled_by_default():
     from posthog.exception_capture import ExceptionCapture
 
-    capture = ExceptionCapture(MagicMock())
+    client = MagicMock()
+    capture = ExceptionCapture(client)
+    try:
+        assert capture._rate_limiter is None
+
+        for _ in range(100):
+            capture.capture_exception((ValueError, ValueError("boom"), None))
+        assert client.capture_exception.call_count == 100
+    finally:
+        capture.close()
+
+
+def test_exception_capture_default_configuration_when_enabled():
+    from posthog.exception_capture import ExceptionCapture
+
+    capture = ExceptionCapture(MagicMock(), rate_limiting_enabled=True)
     try:
         assert capture._rate_limiter._bucket_size == 50
         assert capture._rate_limiter._refill_rate == 10
@@ -233,7 +248,11 @@ def test_exception_capture_rate_limiting_is_configurable():
     from posthog.exception_capture import ExceptionCapture
 
     capture = ExceptionCapture(
-        MagicMock(), bucket_size=3, refill_rate=2, refill_interval_seconds=5
+        MagicMock(),
+        rate_limiting_enabled=True,
+        bucket_size=3,
+        refill_rate=2,
+        refill_interval_seconds=5,
     )
     try:
         assert capture._rate_limiter._bucket_size == 3
@@ -251,6 +270,7 @@ def test_client_passes_rate_limiter_configuration_through():
         sync_mode=True,
         disabled=True,
         enable_exception_autocapture=True,
+        enable_exception_autocapture_rate_limiting=True,
         exception_autocapture_bucket_size=3,
         exception_autocapture_refill_rate=2,
         exception_autocapture_refill_interval_seconds=5,
@@ -268,7 +288,7 @@ def test_exception_capture_rate_limits_per_exception_type():
     from posthog.exception_capture import ExceptionCapture
 
     client = MagicMock()
-    capture = ExceptionCapture(client, bucket_size=10)
+    capture = ExceptionCapture(client, rate_limiting_enabled=True, bucket_size=10)
     try:
 
         def exc_info(error):
