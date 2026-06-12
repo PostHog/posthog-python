@@ -1,5 +1,11 @@
 # posthog
 
+## 7.18.2 — 2026-06-12
+
+### Patch changes
+
+- [fe76fc9](https://github.com/posthog/posthog-python/commit/fe76fc9a874a3f2f8538ee0d1c4f8a6c66f11c03) Improve mypy coverage for core SDK modules without changing runtime behavior. — Thanks @Kshitijmishradev for your first contribution 🎉!
+
 ## 7.18.1 — 2026-06-10
 
 ### Patch changes

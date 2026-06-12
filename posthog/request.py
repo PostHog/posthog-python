@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from gzip import GzipFile
 from io import BytesIO
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, cast
 
 import requests
-from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
+from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
@@ -219,7 +219,7 @@ def determine_server_host(host: Optional[str]) -> str:
 def post(
     api_key: str,
     host: Optional[str] = None,
-    path=None,
+    path: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
     session: Optional[requests.Session] = None,
@@ -230,9 +230,9 @@ def post(
     body = kwargs
     body["sentAt"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
-    url = trimmed_host + path
+    url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
-    data = json.dumps(body, cls=DatetimeSerializer)
+    data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
@@ -241,7 +241,7 @@ def post(
         with GzipFile(fileobj=buf, mode="w") as gz:
             # 'data' was produced by json.dumps(),
             # whose default encoding is utf-8.
-            gz.write(data.encode("utf-8"))
+            gz.write(cast(str, data).encode("utf-8"))
         data = buf.getvalue()
 
     res = (session or _get_session()).post(
