@@ -44,10 +44,10 @@ class BucketedRateLimiter:
     intervals only, fractional elapsed time is carried over), capped at
     ``bucket_size``.
 
-    Matching the posthog-js implementation, the call that empties a bucket is
-    itself reported as rate limited — a burst over a fresh bucket lets
-    ``bucket_size - 1`` events through before limiting kicks in — and
-    ``on_bucket_rate_limited`` fires once each time a bucket is drained.
+    The call that empties a bucket is itself reported as rate limited — a
+    burst over a fresh bucket lets ``bucket_size - 1`` events through before
+    limiting kicks in — and ``on_bucket_rate_limited`` fires once each time a
+    bucket is drained.
 
     Thread-safe. ``clock`` must return seconds and is injectable for tests.
     """

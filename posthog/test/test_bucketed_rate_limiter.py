@@ -1,6 +1,3 @@
-# Ports the posthog-js spec for BucketedRateLimiter:
-# https://github.com/PostHog/posthog-js/blob/main/packages/core/src/utils/bucketed-rate-limiter.spec.ts
-
 import threading
 from unittest.mock import MagicMock
 
@@ -40,8 +37,8 @@ def test_not_rate_limited_by_default():
 def test_exhausts_bucket_after_bucket_size_consumptions(bucket_size):
     limiter = make_limiter(FakeClock(), bucket_size=bucket_size)
 
-    # like posthog-js, the call that drains the bucket is itself rate
-    # limited, so bucket_size - 1 events pass
+    # the call that drains the bucket is itself rate limited, so
+    # bucket_size - 1 events pass
     for _ in range(bucket_size - 1):
         assert limiter.consume_rate_limit("test") is False
 
@@ -218,6 +215,41 @@ def test_thread_safety_allows_exactly_bucket_size_minus_one():
         t.join()
 
     assert len(allowed) == 49
+
+
+def test_exception_capture_rate_limiting_is_configurable():
+    from posthog.exception_capture import ExceptionCapture
+
+    capture = ExceptionCapture(
+        MagicMock(), bucket_size=3, refill_rate=2, refill_interval_seconds=5
+    )
+    try:
+        assert capture._rate_limiter._bucket_size == 3
+        assert capture._rate_limiter._refill_rate == 2
+        assert capture._rate_limiter._refill_interval == 5
+    finally:
+        capture.close()
+
+
+def test_client_passes_rate_limiter_configuration_through():
+    from posthog.client import Client
+
+    client = Client(
+        "phc_test",
+        sync_mode=True,
+        disabled=True,
+        enable_exception_autocapture=True,
+        exception_autocapture_bucket_size=3,
+        exception_autocapture_refill_rate=2,
+        exception_autocapture_refill_interval_seconds=5,
+    )
+    try:
+        limiter = client.exception_capture._rate_limiter
+        assert limiter._bucket_size == 3
+        assert limiter._refill_rate == 2
+        assert limiter._refill_interval == 5
+    finally:
+        client.shutdown()
 
 
 def test_exception_capture_rate_limits_per_exception_type():

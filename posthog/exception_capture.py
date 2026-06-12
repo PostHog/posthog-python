@@ -18,17 +18,23 @@ if TYPE_CHECKING:
 class ExceptionCapture:
     log = logging.getLogger("posthog")
 
-    def __init__(self, client: "Client"):
+    def __init__(
+        self,
+        client: "Client",
+        bucket_size=10,
+        refill_rate=1,
+        refill_interval_seconds=10,
+    ):
         self.client = client
         self.original_excepthook = sys.excepthook
         sys.excepthook = self.exception_handler
         threading.excepthook = self.thread_exception_handler
-        # same client-side rate limiting as posthog-js exception autocapture:
-        # per exception type, a burst of captures, then one per ten seconds
+        # client-side rate limiting: per exception type, allow a burst of
+        # captures, then refill over time
         self._rate_limiter = BucketedRateLimiter(
-            bucket_size=10,
-            refill_rate=1,
-            refill_interval_seconds=10,
+            bucket_size=bucket_size,
+            refill_rate=refill_rate,
+            refill_interval_seconds=refill_interval_seconds,
         )
 
     def close(self):
@@ -52,8 +58,6 @@ class ExceptionCapture:
 
     def capture_exception(self, exception, metadata=None):
         try:
-            # rate limit per exception type, like posthog-js does on
-            # $exception_list[0].type
             exception_type = self._exception_type(exception)
             if self._rate_limiter.consume_rate_limit(exception_type):
                 self.log.info(
