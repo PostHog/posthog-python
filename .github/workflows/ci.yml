@@ -9,9 +9,61 @@ on:
 permissions:
     contents: read
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
 jobs:
-    code-quality:
-        name: Code quality checks
+    ruff-format:
+        name: Ruff format
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python dev environment
+              uses: ./.github/actions/setup-python-dev
+
+            - name: Check formatting with ruff
+              run: |
+                  ruff format --check .
+
+    ruff-lint:
+        name: Ruff lint
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python dev environment
+              uses: ./.github/actions/setup-python-dev
+
+            - name: Lint with ruff
+              run: |
+                  ruff check .
+
+    mypy:
+        name: Mypy
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python dev environment
+              uses: ./.github/actions/setup-python-dev
+
+            - name: Check types with mypy
+              run: |
+                  mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
+
+    package-build:
+        name: Package build
         runs-on: ubuntu-latest
 
         steps:
@@ -29,22 +81,10 @@ jobs:
               with:
                   enable-cache: true
 
-            - name: Install dev dependencies
-              shell: bash
+            - name: Build and verify distributions
               run: |
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra dev
-
-            - name: Check formatting with ruff
-              run: |
-                  ruff format --check .
-
-            - name: Lint with ruff
-              run: |
-                  ruff check .
-
-            - name: Check types with mypy
-              run: |
-                  mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
+                  uv build
+                  uv run --with twine twine check dist/*
 
     tests:
         name: Python ${{ matrix.python-version }} tests
