@@ -1,5 +1,11 @@
 # posthog
 
+## 7.18.3 — 2026-06-12
+
+### Patch changes
+
+- [ee6a3c8](https://github.com/posthog/posthog-python/commit/ee6a3c8c030cfaacc065765d95991a448d59ad08) Warn when an AI wrapper's `base_url` points at the PostHog AI Gateway. The gateway emits its own `$ai_generation`, so each call would be captured (and billed) twice. The wrapper only warns and never drops the event. Detection covers the wrapper funnels (OpenAI, Anthropic, LangChain) and the OTel span path. — Thanks @richardsolomou!
+
 ## 7.18.2 — 2026-06-12
 
 ### Patch changes
