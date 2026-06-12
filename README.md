@@ -10,19 +10,16 @@
   <img alt="GitHub closed issues" src="https://img.shields.io/github/issues-closed/posthog/posthog-python"/>
 </p>
 
-Please see the main [PostHog docs](https://posthog.com/docs).
+Please see the [Python integration docs](https://posthog.com/docs/integrations/python-integration) for details.
 
-SDK usage examples and code snippets live in the official documentation so they stay up to date.
+## Python Version Support
 
-## Documentation
-
-- [Python library docs](https://posthog.com/docs/libraries/python)
-- [AI observability installation docs](https://posthog.com/docs/ai-observability/installation)
+| SDK Version   | Python Versions Supported    | Notes                      |
+| ------------- | ---------------------------- | -------------------------- |
+| 7.3.1+        | 3.10, 3.11, 3.12, 3.13, 3.14 | Added Python 3.14 support  |
+| 7.0.0 - 7.0.1 | 3.10, 3.11, 3.12, 3.13       | Dropped Python 3.9 support |
+| 4.0.1 - 6.x   | 3.9, 3.10, 3.11, 3.12, 3.13  | Python 3.9+ required       |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and test instructions.
-
-## Releasing
-
-See [RELEASING.md](RELEASING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, test, and development workflow instructions.
