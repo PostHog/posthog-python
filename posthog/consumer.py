@@ -13,10 +13,7 @@ from posthog.request import (
     is_ai_event,
 )
 
-try:
-    from queue import Empty
-except ImportError:
-    from Queue import Empty
+from queue import Empty
 
 
 MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
@@ -187,9 +184,11 @@ class Consumer(Thread):
                 # retry on server errors and client errors
                 # with 408 (request timeout) or 429 (rate limited),
                 # don't retry on other client errors
-                if exc.status == "N/A":
-                    return False
-                return not ((400 <= exc.status < 500) and exc.status not in (408, 429))
+                if isinstance(exc.status, int):
+                    return not (
+                        (400 <= exc.status < 500) and exc.status not in (408, 429)
+                    )
+                return False
             else:
                 # retry on all other errors (eg. network)
                 return True

@@ -93,10 +93,8 @@ from posthog.utils import (
 )
 from posthog.version import VERSION
 
-try:
-    import queue
-except ImportError:
-    import Queue as queue
+
+from queue import Queue, Full
 
 
 MAX_DICT_SIZE = 50_000
@@ -287,7 +285,7 @@ class Client(object):
             Initialization
         """
         self._max_queue_size = max_queue_size
-        self.queue = queue.Queue(max_queue_size)
+        self.queue: Queue = Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
         self.api_key = (project_api_key or "").strip()
@@ -301,8 +299,10 @@ class Client(object):
         self.host = determine_server_host(host)
         self.gzip = gzip
         self.timeout = timeout
-        self._feature_flags = None  # private variable to store flags
-        self.feature_flags_by_key = None
+        self._feature_flags: Optional[list[Any]] = (
+            None  # private variable to store flags
+        )
+        self.feature_flags_by_key: Optional[dict[str, Any]] = None
         self.group_type_mapping: Optional[dict[str, str]] = None
         self.cohorts: Optional[dict[str, Any]] = None
         self.poll_interval = poll_interval
@@ -1258,7 +1258,7 @@ class Client(object):
         as they'll be handled by the parent process's consumers.
         """
         if self.consumers:
-            self.queue = queue.Queue(self._max_queue_size)
+            self.queue = Queue(self._max_queue_size)
 
             new_consumers = []
             for old in self.consumers:
@@ -1391,7 +1391,7 @@ class Client(object):
             self.queue.put(msg, block=False)
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
-        except queue.Full:
+        except Full:
             self.log.warning("analytics-python queue is full")
             return None
 
@@ -2820,10 +2820,7 @@ class Client(object):
         if not cache_url:
             return None
 
-        try:
-            from urllib.parse import parse_qs, urlparse
-        except ImportError:
-            from urlparse import parse_qs, urlparse
+        from urllib.parse import parse_qs, urlparse
 
         try:
             parsed = urlparse(cache_url)

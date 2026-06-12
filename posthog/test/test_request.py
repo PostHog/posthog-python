@@ -79,6 +79,58 @@ class TestRequests(unittest.TestCase):
             Exception, batch_post, "testsecret", "t.posthog.com/", batch=[]
         )
 
+    def test_post_without_path_preserves_type_error(self):
+        mock_session = mock.MagicMock()
+
+        with self.assertRaises(TypeError):
+            request_module.post(
+                TEST_API_KEY,
+                host="https://test.posthog.com",
+                session=mock_session,
+            )
+
+        mock_session.post.assert_not_called()
+
+    def test_post_sends_string_payload_without_gzip(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+
+        request_module.post(
+            TEST_API_KEY,
+            host="https://test.posthog.com",
+            path="/batch/",
+            session=mock_session,
+            batch=[],
+        )
+
+        mock_session.post.assert_called_once()
+        url = mock_session.post.call_args.args[0]
+        data = mock_session.post.call_args.kwargs["data"]
+        self.assertEqual(url, "https://test.posthog.com/batch/")
+        self.assertIsInstance(data, str)
+
+    def test_post_sends_bytes_payload_with_gzip(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+
+        request_module.post(
+            TEST_API_KEY,
+            host="https://test.posthog.com",
+            path="/batch/",
+            gzip=True,
+            session=mock_session,
+            batch=[],
+        )
+
+        data = mock_session.post.call_args.kwargs["data"]
+        headers = mock_session.post.call_args.kwargs["headers"]
+        self.assertIsInstance(data, bytes)
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+
     def test_datetime_serialization(self):
         data = {"created": datetime(2012, 3, 4, 5, 6, 7, 891011)}
         result = json.dumps(data, cls=DatetimeSerializer)
