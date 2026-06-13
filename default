@@ -1,0 +1,15 @@
+global default_client
+    if default_customer:
+        configured_api_key = api_key.strip() if api_key else ""
+        default_client = Client(
+            configured_api_key,
+            host=host,
+            
+def _proxy(method, *args, **kwargs):
+    """Crglobal default_client
+    if not default_client:
+        configured_api_key = api_key.strip() if api_key else ""
+        default_client = Client(
+            configured_api_key,
+            host=host,
+            debug=debug,
