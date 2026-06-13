@@ -1,0 +1,1 @@
+pip install semantic-kernel openai opentelemetry-sdk "posthog[otel]" opentelemetry-instrumentation-openai-v2
