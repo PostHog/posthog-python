@@ -1,5 +1,11 @@
 # posthog
 
+## 7.19.0 — 2026-06-15
+
+### Minor changes
+
+- [b9f3208](https://github.com/posthog/posthog-python/commit/b9f320808f44832fc3b4cdd6bcf0e0aad194b76d) Add opt-in client-side rate limiting for exception autocapture, using the same token bucket algorithm as the posthog-js and posthog-node SDKs: a bucket per exception type allows a burst of captures, then refills over time. Rate-limited exceptions are skipped before they reach the ingestion queue. Disabled by default; enable with the new `enable_exception_autocapture_rate_limiting` client option and tune via `exception_autocapture_bucket_size` (default 50), `exception_autocapture_refill_rate` (default 10), and `exception_autocapture_refill_interval_seconds` (default 10). — Thanks @hpouillot!
+
 ## 7.18.3 — 2026-06-12
 
 ### Patch changes
