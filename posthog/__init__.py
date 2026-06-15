@@ -71,6 +71,12 @@ from posthog.version import VERSION
 
 __version__ = VERSION
 
+
+def public_api_snapshot_probe() -> str:
+    """Temporary public API used to verify the snapshot CI check."""
+    return "public-api-snapshot-probe"
+
+
 """Context management."""
 
 
