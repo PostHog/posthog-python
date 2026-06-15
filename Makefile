@@ -9,7 +9,7 @@ public_api_snapshot:
 	python .github/scripts/check_public_api.py --write
 
 public_api_check:
-	python .github/scripts/check_public_api.py --check
+	python .github/scripts/check_public_api.py
 
 build_release:
 	rm -rf dist/*

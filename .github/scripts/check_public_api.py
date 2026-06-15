@@ -147,7 +147,7 @@ def _attribute_details(obj: object) -> str:
     return "".join(parts)
 
 
-def _record(obj: object) -> str | None:
+def _record(obj: object) -> str:
     if _is_alias(obj):
         return f"alias {_object_path(obj)} -> {_alias_target_path(obj)}"
 
@@ -214,9 +214,7 @@ def generate_snapshot() -> str:
         search_paths=[ROOT],
         submodules=True,
     )
-    records = sorted(
-        {record for obj in _iter_module_members(package) if (record := _record(obj))}
-    )
+    records = sorted(_record(obj) for obj in _iter_module_members(package))
     return HEADER + "\n".join(records) + "\n"
 
 
@@ -253,12 +251,7 @@ def main() -> int:
     parser.add_argument(
         "--write",
         action="store_true",
-        help="write the generated public API snapshot",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="check that the public API snapshot is current (default)",
+        help="write the generated public API snapshot (default: check)",
     )
     args = parser.parse_args()
 
