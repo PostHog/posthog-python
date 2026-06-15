@@ -62,6 +62,20 @@ jobs:
               run: |
                   mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
 
+    public-api:
+        name: Public API snapshot
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+
+            - name: Set up Python dev environment
+              uses: ./.github/actions/setup-python-dev
+
+            - name: Check public API snapshot
+              run: |
+                  make public_api_check
+
     package-build:
         name: Package build
         runs-on: ubuntu-latest
