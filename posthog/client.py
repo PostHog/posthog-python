@@ -211,6 +211,10 @@ class Client(object):
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         in_app_modules: list[str] | None = None,
+        enable_exception_autocapture_rate_limiting=False,
+        exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
+        exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
+        exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
         _dedicated_ai_endpoint=False,
     ):
         """
@@ -273,6 +277,16 @@ class Client(object):
                 capturing code variables.
             in_app_modules: Module/package prefixes treated as in-app frames in
                 captured exceptions.
+            enable_exception_autocapture_rate_limiting: Rate limit
+                autocaptured exceptions client-side with a token bucket per
+                exception type. Disabled by default.
+            exception_autocapture_bucket_size: Maximum burst of autocaptured
+                exceptions allowed per exception type (token bucket size,
+                clamped to 0-100).
+            exception_autocapture_refill_rate: Tokens restored per refill
+                interval for each exception type's bucket.
+            exception_autocapture_refill_interval_seconds: Seconds between
+                token refills for autocaptured exception rate limiting.
 
         Examples:
             ```python
@@ -330,6 +344,14 @@ class Client(object):
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
+        self.enable_exception_autocapture_rate_limiting = (
+            enable_exception_autocapture_rate_limiting
+        )
+        self.exception_autocapture_bucket_size = exception_autocapture_bucket_size
+        self.exception_autocapture_refill_rate = exception_autocapture_refill_rate
+        self.exception_autocapture_refill_interval_seconds = (
+            exception_autocapture_refill_interval_seconds
+        )
         self.exception_capture = None
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
@@ -377,7 +399,13 @@ class Client(object):
         self._set_before_send(before_send)
 
         if self.enable_exception_autocapture:
-            self.exception_capture = ExceptionCapture(self)
+            self.exception_capture = ExceptionCapture(
+                self,
+                rate_limiting_enabled=self.enable_exception_autocapture_rate_limiting,
+                bucket_size=self.exception_autocapture_bucket_size,
+                refill_rate=self.exception_autocapture_refill_rate,
+                refill_interval_seconds=self.exception_autocapture_refill_interval_seconds,
+            )
 
         if sync_mode:
             self.consumers = None

@@ -5,6 +5,7 @@ from typing_extensions import Unpack
 
 from posthog.args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.client import Client
+from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
     identify_context as inner_identify_context,
 )
@@ -304,6 +305,15 @@ Attributes:
         code variables.
     in_app_modules: Module/package prefixes treated as in-app frames in captured
         exceptions.
+    enable_exception_autocapture_rate_limiting: Rate limit autocaptured
+        exceptions client-side with a token bucket per exception type. Disabled
+        by default.
+    exception_autocapture_bucket_size: Maximum burst of autocaptured exceptions
+        allowed per exception type (token bucket size, clamped to 0-100).
+    exception_autocapture_refill_rate: Tokens restored per refill interval for
+        each exception type's bucket.
+    exception_autocapture_refill_interval_seconds: Seconds between token refills
+        for autocaptured exception rate limiting.
 """
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
@@ -337,6 +347,12 @@ capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 in_app_modules = None  # type: Optional[list[str]]
+enable_exception_autocapture_rate_limiting = False  # type: bool
+exception_autocapture_bucket_size = ExceptionCapture.DEFAULT_BUCKET_SIZE  # type: int
+exception_autocapture_refill_rate = ExceptionCapture.DEFAULT_REFILL_RATE  # type: int
+exception_autocapture_refill_interval_seconds = (
+    ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS
+)  # type: float
 
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
@@ -1103,6 +1119,10 @@ def setup() -> Client:
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
             in_app_modules=in_app_modules,
+            enable_exception_autocapture_rate_limiting=enable_exception_autocapture_rate_limiting,
+            exception_autocapture_bucket_size=exception_autocapture_bucket_size,
+            exception_autocapture_refill_rate=exception_autocapture_refill_rate,
+            exception_autocapture_refill_interval_seconds=exception_autocapture_refill_interval_seconds,
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state
