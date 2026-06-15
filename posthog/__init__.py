@@ -581,7 +581,7 @@ def alias(
 def capture_exception(
     exception: Optional[ExceptionArg] = None,
     **kwargs: Unpack[OptionalCaptureArgs],
-):
+) -> Optional[str]:
     """
     Capture exceptions that happen in your code.
 
@@ -1026,7 +1026,7 @@ def load_feature_flags():
     return _proxy("load_feature_flags")
 
 
-def flush():
+def flush() -> None:
     """
     Tell the client to flush all queued events.
 
@@ -1042,7 +1042,7 @@ def flush():
     _proxy("flush")
 
 
-def join():
+def join() -> None:
     """
     Block program until the client clears the queue. Used during program shutdown. You should use `shutdown()` directly in most cases.
 
@@ -1058,7 +1058,7 @@ def join():
     _proxy("join")
 
 
-def shutdown():
+def shutdown() -> None:
     """
     Flush all messages and cleanly shutdown the client.
 
