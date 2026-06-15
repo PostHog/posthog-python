@@ -1,5 +1,11 @@
 # posthog
 
+## 7.19.1 — 2026-06-15
+
+### Patch changes
+
+- [8d416ae](https://github.com/posthog/posthog-python/commit/8d416aef20f12c0c8c405baf7c7d08f3352f3632) Add missing return type annotations to improve typing coverage without changing runtime behavior. — Thanks @miachillgood for your first contribution 🎉!
+
 ## 7.19.0 — 2026-06-15
 
 ### Minor changes
