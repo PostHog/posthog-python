@@ -5,6 +5,12 @@ test:
 	coverage run -m pytest
 	coverage report
 
+public_api_snapshot:
+	python .github/scripts/check_public_api.py --write
+
+public_api_check:
+	python .github/scripts/check_public_api.py
+
 build_release:
 	rm -rf dist/*
 	python setup.py sdist bdist_wheel
@@ -67,4 +73,4 @@ prep_local:
 	@echo "Local copy created at ../posthog-python-local"
 	@echo "Install with: pip install -e ../posthog-python-local"
 
-.PHONY: test lint build_release build_release_analytics e2e_test prep_local
+.PHONY: test lint public_api_snapshot public_api_check build_release build_release_analytics e2e_test prep_local

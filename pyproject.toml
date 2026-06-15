@@ -42,6 +42,7 @@ otel = [
 ]
 dev = [
     "django-stubs",
+    "griffe",
     "lxml",
     "mypy",
     "mypy-baseline",
