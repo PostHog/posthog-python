@@ -185,7 +185,7 @@ class Client(object):
         send=True,
         on_error=None,
         flush_at=100,
-        flush_interval=0.5,
+        flush_interval=5.0,
         gzip=False,
         max_retries=3,
         sync_mode=False,
