@@ -225,7 +225,7 @@ def init():
         api_key = data.get("api_key")
         host = data.get("host")
         flush_at = data.get("flush_at", 100)
-        flush_interval_ms = data.get("flush_interval_ms", 500)
+        flush_interval_ms = data.get("flush_interval_ms", 5000)
         max_retries = data.get("max_retries", 3)
         enable_compression = data.get("enable_compression", False)
 

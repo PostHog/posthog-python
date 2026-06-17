@@ -40,7 +40,7 @@ class Consumer(Thread):
         flush_at=100,
         host=None,
         on_error=None,
-        flush_interval=0.5,
+        flush_interval=5.0,
         gzip=False,
         retries=10,
         timeout=15,
