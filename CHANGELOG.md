@@ -1,5 +1,11 @@
 # posthog
 
+## 7.19.2 — 2026-06-17
+
+### Patch changes
+
+- [98a305a](https://github.com/posthog/posthog-python/commit/98a305aec9601c84120b17c51ec467eab037aab3) Increase the default background flush interval to 5 seconds — Thanks @marandaneto!
+
 ## 7.19.1 — 2026-06-15
 
 ### Patch changes
