@@ -685,7 +685,7 @@ attribute posthog.utils.RedisFlagCache.stale_ttl = stale_ttl
 attribute posthog.utils.RedisFlagCache.version_key = f'{key_prefix}version'
 attribute posthog.utils.SizeLimitedDict.max_size = max_size
 attribute posthog.utils.log = logging.getLogger('posthog')
-attribute posthog.version.VERSION = '7.19.1'
+attribute posthog.version.VERSION = <version>
 class posthog.Posthog 
 class posthog.ai.anthropic.anthropic.Anthropic(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.anthropic.anthropic.WrappedMessages 
