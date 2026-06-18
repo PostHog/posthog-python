@@ -111,6 +111,24 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(url, "https://test.posthog.com/batch/")
         self.assertIsInstance(data, str)
 
+    def test_post_sends_snake_case_sent_at(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+
+        request_module.post(
+            TEST_API_KEY,
+            host="https://test.posthog.com",
+            path="/batch/",
+            session=mock_session,
+            batch=[],
+        )
+
+        data = json.loads(mock_session.post.call_args.kwargs["data"])
+        self.assertIn("sent_at", data)
+        self.assertNotIn("sentAt", data)
+
     def test_post_sends_bytes_payload_with_gzip(self):
         mock_response = requests.Response()
         mock_response.status_code = 200
