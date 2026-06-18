@@ -74,6 +74,7 @@ jobs:
 
             - name: Check public API snapshot
               run: |
+                  python .github/scripts/test_check_public_api.py
                   make public_api_check
 
     package-build:
