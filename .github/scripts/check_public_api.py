@@ -9,12 +9,6 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-try:
-    import griffe
-except ImportError:  # pragma: no cover - exercised only when dependencies are missing.
-    print("griffe is required; install dev dependencies first.", file=sys.stderr)
-    raise
-
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT_PATH = ROOT / "references" / "public_api_snapshot.txt"
 PUBLIC_SPECIAL_NAMES = {"__version__"}
@@ -209,7 +203,17 @@ def _iter_module_members(module: object) -> Iterable[object]:
             yield from _iter_class_members(member)
 
 
+def _load_griffe():
+    try:
+        import griffe
+    except ImportError:  # pragma: no cover
+        print("griffe is required; install dev dependencies first.", file=sys.stderr)
+        raise
+    return griffe
+
+
 def generate_snapshot() -> str:
+    griffe = _load_griffe()
     package = griffe.load(
         "posthog",
         allow_inspection=False,
