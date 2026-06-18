@@ -228,7 +228,7 @@ def post(
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
     body = kwargs
-    body["sentAt"] = datetime.now(tz=timezone.utc).isoformat()
+    body["sent_at"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
