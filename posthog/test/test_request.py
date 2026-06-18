@@ -59,6 +59,31 @@ def test_mask_tokens_in_url(url, expected):
     assert _mask_tokens_in_url(url) == expected
 
 
+@pytest.mark.parametrize(
+    "key, expected_present",
+    [
+        ("sent_at", True),
+        ("sentAt", False),
+    ],
+)
+def test_post_sends_snake_case_sent_at(key, expected_present):
+    mock_response = requests.Response()
+    mock_response.status_code = 200
+    mock_session = mock.MagicMock()
+    mock_session.post.return_value = mock_response
+
+    request_module.post(
+        TEST_API_KEY,
+        host="https://test.posthog.com",
+        path="/batch/",
+        session=mock_session,
+        batch=[],
+    )
+
+    data = json.loads(mock_session.post.call_args.kwargs["data"])
+    assert (key in data) is expected_present
+
+
 class TestRequests(unittest.TestCase):
     def test_valid_request(self):
         res = batch_post(
@@ -110,24 +135,6 @@ class TestRequests(unittest.TestCase):
         data = mock_session.post.call_args.kwargs["data"]
         self.assertEqual(url, "https://test.posthog.com/batch/")
         self.assertIsInstance(data, str)
-
-    def test_post_sends_snake_case_sent_at(self):
-        mock_response = requests.Response()
-        mock_response.status_code = 200
-        mock_session = mock.MagicMock()
-        mock_session.post.return_value = mock_response
-
-        request_module.post(
-            TEST_API_KEY,
-            host="https://test.posthog.com",
-            path="/batch/",
-            session=mock_session,
-            batch=[],
-        )
-
-        data = json.loads(mock_session.post.call_args.kwargs["data"])
-        self.assertIn("sent_at", data)
-        self.assertNotIn("sentAt", data)
 
     def test_post_sends_bytes_payload_with_gzip(self):
         mock_response = requests.Response()
