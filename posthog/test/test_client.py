@@ -142,7 +142,7 @@ class TestClient(unittest.TestCase):
         self.client.flush()
 
     def test_flush_timeout_returns_when_queue_does_not_drain(self):
-        client = Client(FAKE_TEST_API_KEY, send=False)
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
         client.queue.put({"event": "stuck"})
 
         start = time.monotonic()
@@ -152,6 +152,23 @@ class TestClient(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 1)
         self.assertFalse(client.queue.empty())
         self.assertIn("flush timed out", logs.output[0])
+
+        client.queue.get_nowait()
+        client.queue.task_done()
+
+    def test_flush_logs_and_returns_on_unexpected_error(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+        client.queue.put({"event": "stuck"})
+
+        with mock.patch.object(
+            client.queue.all_tasks_done,
+            "wait",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                client.flush(timeout_seconds=1)
+
+        self.assertIn("error flushing queue", logs.output[0])
 
         client.queue.get_nowait()
         client.queue.task_done()
@@ -1849,6 +1866,14 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client.queue.empty())
         for consumer in client.consumers:
             self.assertFalse(consumer.is_alive())
+
+    def test_shutdown_flushes_without_timeout(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+
+        with mock.patch.object(client, "flush") as mock_flush:
+            client.shutdown()
+
+        mock_flush.assert_called_once_with(timeout_seconds=None)
 
     def test_synchronous(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
