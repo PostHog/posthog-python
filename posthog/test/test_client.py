@@ -80,6 +80,57 @@ class TestClient(unittest.TestCase):
 
         self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
 
+    def test_warns_once_on_duplicate_async_client_same_key_and_host(self):
+        Client._client_registry.clear()
+        Client._duplicate_client_warnings.clear()
+
+        with (
+            mock.patch("posthog.client.atexit.register"),
+            mock.patch("posthog.client.Consumer.start"),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            first = Client(FAKE_TEST_API_KEY, host="https://us.i.posthog.com")
+            second = Client(FAKE_TEST_API_KEY, host="https://us.i.posthog.com")
+            third = Client(FAKE_TEST_API_KEY, host="https://us.i.posthog.com")
+
+        self.assertIsNot(first, second)
+        self.assertIsNot(second, third)
+        mock_warning.assert_called_once_with(
+            "Multiple active PostHog clients detected for the same project "
+            "API key and host. Reuse one Posthog instance per app or "
+            "process when possible to avoid competing background queues "
+            "and missed shutdown flushes. Multiple clients are supported "
+            "when intentional; pass warn_on_duplicate_clients=False to "
+            "suppress this warning."
+        )
+
+    def test_duplicate_client_warning_allows_intentional_multi_client_cases(self):
+        Client._client_registry.clear()
+        Client._duplicate_client_warnings.clear()
+
+        with (
+            mock.patch("posthog.client.atexit.register"),
+            mock.patch("posthog.client.Consumer.start"),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            first = Client(FAKE_TEST_API_KEY, host="https://one.example.com")
+            different_host = Client(FAKE_TEST_API_KEY, host="https://two.example.com")
+            sync_duplicate = Client(
+                FAKE_TEST_API_KEY,
+                host="https://one.example.com",
+                sync_mode=True,
+            )
+            opted_out_duplicate = Client(
+                FAKE_TEST_API_KEY,
+                host="https://one.example.com",
+                warn_on_duplicate_clients=False,
+            )
+
+        self.assertIsNot(first, different_host)
+        self.assertIsNot(first, sync_duplicate)
+        self.assertIsNot(first, opted_out_duplicate)
+        mock_warning.assert_not_called()
+
     @mock.patch("posthog.client.get")
     def test_disabled_client_does_not_load_feature_flags(self, patch_get):
         client = Client("", personal_api_key="test", send=False)

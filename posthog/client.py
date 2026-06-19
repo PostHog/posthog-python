@@ -164,6 +164,11 @@ class Client(object):
     You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django)
     guides to integrate PostHog into your project.
 
+    For long-running applications, create one client during application startup
+    and reuse it for the lifetime of the process. This keeps background queues
+    predictable and makes shutdown flushing straightforward. Multiple clients are
+    still supported for intentional multi-project or multi-host setups.
+
     Examples:
         ```python
         from posthog import Posthog
@@ -175,6 +180,9 @@ class Client(object):
     """
 
     log = logging.getLogger("posthog")
+    _client_registry_lock = threading.Lock()
+    _client_registry: dict[tuple[str, str], weakref.WeakSet] = {}
+    _duplicate_client_warnings: set[tuple[str, str]] = set()
 
     def __init__(
         self,
@@ -216,6 +224,7 @@ class Client(object):
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
         _dedicated_ai_endpoint=False,
+        warn_on_duplicate_clients=True,
     ):
         """
         Initialize a new PostHog client instance.
@@ -287,6 +296,9 @@ class Client(object):
                 interval for each exception type's bucket.
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
+            warn_on_duplicate_clients: If True, log a warning when multiple
+                async clients with the same project API key and host are active
+                in one process. Set to False for intentional duplicate clients.
 
         Examples:
             ```python
@@ -444,6 +456,45 @@ class Client(object):
             weak_self = weakref.ref(self)
             os.register_at_fork(
                 after_in_child=lambda: Client._reinit_after_fork_weak(weak_self)
+            )
+
+        self._warn_if_duplicate_async_client(warn_on_duplicate_clients)
+
+    def _warn_if_duplicate_async_client(self, warn_on_duplicate_clients):
+        if (
+            not warn_on_duplicate_clients
+            or self.disabled
+            or not self.send
+            or self.sync_mode
+            or not self.api_key
+        ):
+            return
+
+        registry_key = (self.api_key, self.host)
+        should_warn = False
+
+        with Client._client_registry_lock:
+            clients = Client._client_registry.setdefault(
+                registry_key, weakref.WeakSet()
+            )
+            has_existing_client = any(client is not self for client in clients)
+            clients.add(self)
+
+            if (
+                has_existing_client
+                and registry_key not in Client._duplicate_client_warnings
+            ):
+                Client._duplicate_client_warnings.add(registry_key)
+                should_warn = True
+
+        if should_warn:
+            self.log.warning(
+                "Multiple active PostHog clients detected for the same project "
+                "API key and host. Reuse one Posthog instance per app or "
+                "process when possible to avoid competing background queues "
+                "and missed shutdown flushes. Multiple clients are supported "
+                "when intentional; pass warn_on_duplicate_clients=False to "
+                "suppress this warning."
             )
 
     def _set_before_send(self, before_send):
