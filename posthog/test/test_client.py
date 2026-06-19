@@ -141,6 +141,21 @@ class TestClient(unittest.TestCase):
     def test_empty_flush(self):
         self.client.flush()
 
+    def test_flush_timeout_returns_when_queue_does_not_drain(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        client.queue.put({"event": "stuck"})
+
+        start = time.monotonic()
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            client.flush(timeout_seconds=0.01)
+
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertFalse(client.queue.empty())
+        self.assertIn("flush timed out", logs.output[0])
+
+        client.queue.get_nowait()
+        client.queue.task_done()
+
     def test_basic_capture(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)

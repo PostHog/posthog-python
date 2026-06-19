@@ -35,6 +35,12 @@ class TestModule(unittest.TestCase):
     def test_flush(self):
         self.posthog.flush()
 
+    def test_module_flush_forwards_timeout(self):
+        with mock.patch.object(posthog, "_proxy") as proxy:
+            posthog.flush(timeout_seconds=1.5)
+
+        proxy.assert_called_once_with("flush", timeout_seconds=1.5)
+
 
 class TestModuleLevelSetup(unittest.TestCase):
     def setUp(self):

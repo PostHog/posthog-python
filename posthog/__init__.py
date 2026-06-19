@@ -1026,9 +1026,13 @@ def load_feature_flags():
     return _proxy("load_feature_flags")
 
 
-def flush() -> None:
+def flush(timeout_seconds: Optional[float] = 10) -> None:
     """
     Tell the client to flush all queued events.
+
+    Args:
+        timeout_seconds: Maximum seconds to wait for the queue to flush.
+            Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
 
     Examples:
         ```python
@@ -1039,7 +1043,7 @@ def flush() -> None:
     Category:
         Client management
     """
-    _proxy("flush")
+    _proxy("flush", timeout_seconds=timeout_seconds)
 
 
 def join() -> None:
