@@ -1,5 +1,4 @@
 import time
-import uuid
 from typing import Any, Callable, Dict, List, Optional, cast
 
 from posthog import get_tags, identify_context, new_context, tag, contexts
@@ -12,6 +11,7 @@ from posthog.ai.sanitization import (
 )
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
+from posthog._uuid import uuid7
 
 
 _TOKEN_PROPERTY_KEYS = frozenset(
@@ -384,7 +384,7 @@ def call_llm_and_track_usage(
             latency = end_time - start_time
 
             if posthog_trace_id is None:
-                posthog_trace_id = str(uuid.uuid4())
+                posthog_trace_id = uuid7()
 
             # Check if we have a real user distinct_id (from param or outer context)
             has_person_distinct_id = (
@@ -534,7 +534,7 @@ async def call_llm_and_track_usage_async(
             latency = end_time - start_time
 
             if posthog_trace_id is None:
-                posthog_trace_id = str(uuid.uuid4())
+                posthog_trace_id = uuid7()
 
             # Check if we have a real user distinct_id (from param or outer context)
             has_person_distinct_id = (
@@ -683,7 +683,7 @@ def capture_streaming_event(
         ph_client: PostHog client instance
         event_data: Standardized streaming event data containing all necessary information
     """
-    trace_id = event_data.get("trace_id") or str(uuid.uuid4())
+    trace_id = event_data.get("trace_id") or uuid7()
 
     # Build base event properties
     event_properties = {

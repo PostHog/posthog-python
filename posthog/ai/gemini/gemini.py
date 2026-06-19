@@ -1,6 +1,5 @@
 import os
 import time
-import uuid
 from typing import Any, Dict, Optional
 
 from posthog.ai.types import TokenUsage, StreamingEventData
@@ -29,6 +28,7 @@ from posthog.ai.gemini.gemini_converter import (
 from posthog.ai.utils import with_privacy_mode
 from posthog.ai.sanitization import sanitize_gemini
 from posthog.client import Client as PostHogClient
+from posthog._uuid import uuid7
 
 
 class Client:
@@ -229,7 +229,7 @@ class Models:
             properties.update(call_properties)
 
         if call_trace_id is None:
-            call_trace_id = str(uuid.uuid4())
+            call_trace_id = uuid7()
 
         return distinct_id, call_trace_id, properties, privacy_mode, groups
 

@@ -9,8 +9,6 @@ import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
-from uuid import uuid4
-
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
@@ -92,6 +90,7 @@ from posthog.utils import (
     system_context,
 )
 from posthog.version import VERSION
+from posthog._uuid import uuid7
 
 
 from queue import Queue, Full
@@ -110,7 +109,7 @@ def get_identity_state(passed) -> tuple[str, bool]:
     if context_id:
         return (context_id, False)
 
-    return (str(uuid4()), True)
+    return (uuid7(), True)
 
 
 def add_context_tags(properties):
@@ -1353,7 +1352,7 @@ class Client(object):
 
         if "uuid" not in msg:
             # Always send a uuid, so we can always return one
-            msg["uuid"] = stringify_id(uuid4())
+            msg["uuid"] = uuid7()
 
         sent_uuid = msg["uuid"]
 

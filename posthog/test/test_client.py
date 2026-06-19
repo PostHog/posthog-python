@@ -1,7 +1,7 @@
 import time
 import unittest
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from unittest import mock
 from parameterized import parameterized
@@ -156,6 +156,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["event"], "python test event")
             self.assertTrue(isinstance(msg["timestamp"], str))
             self.assertIsNotNone(msg.get("uuid"))
+            self.assertEqual(UUID(msg["uuid"]).version, 7)
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -165,6 +166,16 @@ class TestClient(unittest.TestCase):
             assert msg["properties"]["$python_version"] == mock.ANY
             assert msg["properties"]["$os"] == mock.ANY
             assert msg["properties"]["$os_version"] == mock.ANY
+
+    def test_capture_without_distinct_id_generates_uuid_v7_personless_distinct_id(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture("personless event")
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(UUID(msg["uuid"]).version, 7)
+            self.assertEqual(UUID(msg["distinct_id"]).version, 7)
+            self.assertFalse(msg["properties"]["$process_person_profile"])
 
     def test_capture_omits_is_server_when_disabled(self):
         with mock.patch("posthog.client.batch_post") as mock_post:

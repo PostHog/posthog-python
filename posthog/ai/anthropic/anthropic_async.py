@@ -7,7 +7,6 @@ except ImportError:
     )
 
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
 from posthog import setup
@@ -26,6 +25,7 @@ from posthog.ai.anthropic.anthropic_converter import (
 )
 from posthog.ai.sanitization import sanitize_anthropic
 from posthog.client import Client as PostHogClient
+from posthog._uuid import uuid7
 
 
 class AsyncAnthropic(anthropic.AsyncAnthropic):
@@ -71,7 +71,7 @@ class AsyncWrappedMessages(AsyncMessages):
         """
 
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         if kwargs.get("stream", False):
             return await self._create_streaming(
@@ -120,7 +120,7 @@ class AsyncWrappedMessages(AsyncMessages):
             An async streaming iterator yielding Anthropic events.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         return await self._create_streaming(
             posthog_distinct_id,

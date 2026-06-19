@@ -6,7 +6,6 @@ $ai_span, and $ai_trace events to PostHog.
 
 import logging
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -26,6 +25,7 @@ except ImportError:
 
 from posthog import setup
 from posthog.client import Client
+from posthog._uuid import uuid7
 
 log = logging.getLogger("posthog")
 
@@ -41,7 +41,7 @@ class _GenerationData:
     cache_creation_input_tokens: int = 0
     start_time: float = 0.0
     end_time: float = 0.0
-    span_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    span_id: str = field(default_factory=lambda: uuid7())
     stop_reason: Optional[str] = None
 
 
@@ -240,7 +240,7 @@ class PostHogClaudeAgentProcessor:
 
         # Per-call overrides
         distinct_id_override = posthog_distinct_id or self._distinct_id
-        trace_id = posthog_trace_id or str(uuid.uuid4())
+        trace_id = posthog_trace_id or uuid7()
         extra_props = posthog_properties or {}
         privacy = (
             posthog_privacy_mode
@@ -480,7 +480,7 @@ class PostHogClaudeAgentProcessor:
 
         properties: Dict[str, Any] = {
             "$ai_trace_id": trace_id,
-            "$ai_span_id": str(uuid.uuid4()),
+            "$ai_span_id": uuid7(),
             "$ai_span_name": "generation_1",
             "$ai_provider": "anthropic",
             "$ai_framework": "claude-agent-sdk",
@@ -534,7 +534,7 @@ class PostHogClaudeAgentProcessor:
 
         properties: Dict[str, Any] = {
             "$ai_trace_id": trace_id,
-            "$ai_span_id": str(uuid.uuid4()),
+            "$ai_span_id": uuid7(),
             "$ai_parent_id": parent_span_id,
             "$ai_span_name": block.name,
             "$ai_span_type": "tool",
