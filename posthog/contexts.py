@@ -370,43 +370,7 @@ def get_code_variables_ignore_patterns_context() -> Optional[list]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(
-    fresh: bool = False,
-    capture_exceptions: bool = True,
-    client: Optional["Client"] = None,
-):
-    """
-    Decorator that creates a new context for the function. Simply wraps
-    the function in a with posthog.new_context(): block.
-
-    Args:
-        fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
-        client: Optional client instance to use for capturing exceptions (default: None)
-
-    Example:
-        @posthog.scoped()
-        def process_payment(payment_id):
-            posthog.tag("payment_id", payment_id)
-            posthog.tag("payment_method", "credit_card")
-
-            # This event will be captured with tags
-            posthog.capture("payment_started")
-            # If this raises an exception, it will be captured with tags
-            # and then re-raised
-            some_risky_function()
-
-        # When stacking decorators, the posthog.scoped decorator must be
-        # closest to the function. For example, with FastAPI middleware:
-        @app.middleware("http")
-        @posthog.scoped()
-        async def middleware(request, call_next):
-            return await call_next(request)
-
-    Category:
-        Contexts
-    """
-
+def _scoped(fresh: bool = False, capture_exceptions: bool = True, client=None):
     def decorator(func: F) -> F:
         from functools import wraps
         from inspect import iscoroutinefunction
@@ -432,3 +396,37 @@ def scoped(
         return cast(F, wrapper)
 
     return decorator
+
+
+def scoped(fresh: bool = False, capture_exceptions: bool = True):
+    """
+    Decorator that creates a new context for the function. Simply wraps
+    the function in a with posthog.new_context(): block.
+
+    Args:
+        fresh: Whether to start with a fresh context (default: False)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+
+    Example:
+        @posthog.scoped()
+        def process_payment(payment_id):
+            posthog.tag("payment_id", payment_id)
+            posthog.tag("payment_method", "credit_card")
+
+            # This event will be captured with tags
+            posthog.capture("payment_started")
+            # If this raises an exception, it will be captured with tags
+            # and then re-raised
+            some_risky_function()
+
+        # When stacking decorators, the posthog.scoped decorator must be
+        # closest to the function. For example, with FastAPI middleware:
+        @app.middleware("http")
+        @posthog.scoped()
+        async def middleware(request, call_next):
+            return await call_next(request)
+
+    Category:
+        Contexts
+    """
+    return _scoped(fresh=fresh, capture_exceptions=capture_exceptions)
