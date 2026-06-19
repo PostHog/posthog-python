@@ -9,7 +9,7 @@ import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
@@ -24,7 +24,13 @@ from posthog.contexts import (
     get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
+    get_tags as _context_get_tags,
+    identify_context as _context_identify_context,
+    _scoped as _context_scoped,
     new_context,
+    set_context_device_id as _context_set_context_device_id,
+    set_context_session as _context_set_context_session,
+    tag as _context_tag,
 )
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
@@ -114,6 +120,26 @@ def get_identity_state(passed) -> tuple[str, bool]:
         return (context_id, False)
 
     return (str(uuid4()), True)
+
+
+def _stringify_event_uuid(value) -> str:
+    if isinstance(value, UUID):
+        return str(value)
+
+    stringified = stringify_id(value)
+    if not stringified:
+        raise ValueError(
+            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
+        )
+
+    try:
+        UUID(stringified)
+    except ValueError:
+        raise ValueError(
+            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
+        ) from None
+
+    return stringified
 
 
 def add_context_tags(properties):
@@ -459,19 +485,19 @@ class Client(object):
         else:
             self.before_send = None
 
-    def new_context(self, fresh=False, capture_exceptions=True):
+    def new_context(self, fresh=False, capture_exceptions: Optional[bool] = None):
         """
         Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
 
         Args:
             fresh: Whether to create a fresh context that doesn't inherit from parent.
-            capture_exceptions: Whether to automatically capture exceptions in this context.
+            capture_exceptions: Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting.
 
         Examples:
             ```python
-            with posthog.new_context():
-                identify_context('<distinct_id>')
-                posthog.capture('event_name')
+            with client.new_context():
+                client.identify_context('<distinct_id>')
+                client.capture('event_name')
             ```
 
         Category:
@@ -480,6 +506,83 @@ class Client(object):
         return new_context(
             fresh=fresh, capture_exceptions=capture_exceptions, client=self
         )
+
+    def scoped(self, fresh=False, capture_exceptions: Optional[bool] = None):
+        """
+        Decorator that creates a new context for the wrapped function using this client.
+
+        Args:
+            fresh: Whether to create a fresh context that doesn't inherit from parent.
+            capture_exceptions: Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting.
+
+        Category:
+            Contexts
+        """
+
+        return _context_scoped(
+            fresh=fresh, capture_exceptions=capture_exceptions, client=self
+        )
+
+    def tag(self, name: str, value: Any) -> None:
+        """
+        Add a tag to the current context.
+
+        Args:
+            name: The tag key.
+            value: The tag value.
+
+        Category:
+            Contexts
+        """
+        _context_tag(name, value)
+
+    def get_tags(self) -> Dict[str, Any]:
+        """
+        Get all tags from the current context.
+
+        Returns:
+            Dict of all tags in the current context.
+
+        Category:
+            Contexts
+        """
+        return _context_get_tags()
+
+    def identify_context(self, distinct_id: str) -> None:
+        """
+        Identify the current context with a distinct ID.
+
+        Args:
+            distinct_id: The distinct ID to associate with the current context and its children.
+
+        Category:
+            Contexts
+        """
+        _context_identify_context(distinct_id)
+
+    def set_context_session(self, session_id: str) -> None:
+        """
+        Set the session ID for the current context.
+
+        Args:
+            session_id: The session ID to associate with the current context and its children.
+
+        Category:
+            Contexts
+        """
+        _context_set_context_session(session_id)
+
+    def set_context_device_id(self, device_id: str) -> None:
+        """
+        Set the device ID for the current context.
+
+        Args:
+            device_id: The device ID to associate with the current context and its children.
+
+        Category:
+            Contexts
+        """
+        _context_set_context_device_id(device_id)
 
     @property
     def feature_flags(self):
@@ -731,7 +834,9 @@ class Client(object):
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to include with the event.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             groups: A dictionary of group information.
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
@@ -944,7 +1049,9 @@ class Client(object):
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -992,7 +1099,9 @@ class Client(object):
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set once.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -1036,7 +1145,7 @@ class Client(object):
         group_key: str,
         properties: Optional[Dict[str, Any]] = None,
         timestamp: Optional[Union[datetime, str]] = None,
-        uuid: Optional[str] = None,
+        uuid: Optional[Union[str, UUID]] = None,
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
     ) -> Optional[str]:
@@ -1048,7 +1157,9 @@ class Client(object):
             group_key: The unique identifier for the group.
             properties: A dictionary of properties to set on the group.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             distinct_id: The distinct ID of the user performing the action.
 
@@ -1104,7 +1215,9 @@ class Client(object):
             previous_id: The previous distinct ID.
             distinct_id: The new distinct ID to alias to.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -1351,8 +1464,11 @@ class Client(object):
 
         if "uuid" in msg:
             uuid = msg.pop("uuid")
-            if uuid:
-                msg["uuid"] = stringify_id(uuid)
+            if uuid is not None:
+                try:
+                    msg["uuid"] = _stringify_event_uuid(uuid)
+                except ValueError as e:
+                    self.log.error("%s Falling back to a generated UUID.", e)
 
         if "uuid" not in msg:
             # Always send a uuid, so we can always return one

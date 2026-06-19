@@ -76,7 +76,7 @@ __version__ = VERSION
 
 def new_context(
     fresh: bool = False,
-    capture_exceptions: bool = True,
+    capture_exceptions: Optional[bool] = None,
     client: Optional[Client] = None,
 ):
     """
@@ -84,7 +84,7 @@ def new_context(
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture exceptions raised within the context (default: True)
+        capture_exceptions: Whether to capture exceptions raised within the context. If omitted, defaults to the relevant client's exception autocapture setting.
         client: Optional Posthog client instance to use for this context (default: None)
 
     Examples:
@@ -103,13 +103,13 @@ def new_context(
     )
 
 
-def scoped(fresh=False, capture_exceptions=True):
+def scoped(fresh=False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting.
 
     Examples:
         ```python
@@ -370,7 +370,9 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
             properties: Dict of event properties
             timestamp: When the event occurred
             uuid: Unique identifier for this event. If omitted, one is generated
-                and returned.
+                and returned. If provided, it must be a valid UUID string or
+                uuid.UUID instance; invalid values are ignored and replaced with
+                a newly generated UUID.
             groups: Dict of group types and IDs
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
@@ -441,7 +443,9 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             properties: Dict of person properties to set.
             timestamp: When the properties were set.
             uuid: Unique identifier for this operation. If omitted, one is
-                generated and returned.
+                generated and returned. If provided, it must be a valid UUID
+                string or uuid.UUID instance; invalid values are ignored and
+                replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP lookup.
 
     Details:
@@ -471,7 +475,9 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             properties: Dict of person properties to set only once.
             timestamp: When the properties were set.
             uuid: Unique identifier for this operation. If omitted, one is
-                generated and returned.
+                generated and returned. If provided, it must be a valid UUID
+                string or uuid.UUID instance; invalid values are ignored and
+                replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP lookup.
 
     Details:
