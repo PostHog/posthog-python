@@ -393,6 +393,38 @@ def get_code_variables_ignore_patterns_context() -> Optional[list]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _scoped(
+    fresh: bool = False,
+    capture_exceptions: Optional[bool] = None,
+    client: Optional["Client"] = None,
+):
+    def decorator(func: F) -> F:
+        from functools import wraps
+        from inspect import iscoroutinefunction
+
+        if iscoroutinefunction(func):
+
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with new_context(
+                    fresh=fresh, capture_exceptions=capture_exceptions, client=client
+                ):
+                    return await func(*args, **kwargs)
+
+            return cast(F, async_wrapper)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with new_context(
+                fresh=fresh, capture_exceptions=capture_exceptions, client=client
+            ):
+                return func(*args, **kwargs)
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
 def scoped(fresh: bool = False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function. Simply wraps
@@ -424,25 +456,4 @@ def scoped(fresh: bool = False, capture_exceptions: Optional[bool] = None):
     Category:
         Contexts
     """
-
-    def decorator(func: F) -> F:
-        from functools import wraps
-        from inspect import iscoroutinefunction
-
-        if iscoroutinefunction(func):
-
-            @wraps(func)
-            async def async_wrapper(*args, **kwargs):
-                with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
-                    return await func(*args, **kwargs)
-
-            return cast(F, async_wrapper)
-
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
-                return func(*args, **kwargs)
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _scoped(fresh=fresh, capture_exceptions=capture_exceptions)

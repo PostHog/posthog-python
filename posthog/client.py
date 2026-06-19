@@ -24,7 +24,13 @@ from posthog.contexts import (
     get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
+    get_tags as _context_get_tags,
+    identify_context as _context_identify_context,
+    _scoped as _context_scoped,
     new_context,
+    set_context_device_id as _context_set_context_device_id,
+    set_context_session as _context_set_context_session,
+    tag as _context_tag,
 )
 from posthog.exception_capture import ExceptionCapture
 from posthog.exception_utils import (
@@ -486,9 +492,9 @@ class Client(object):
 
         Examples:
             ```python
-            with posthog.new_context():
-                identify_context('<distinct_id>')
-                posthog.capture('event_name')
+            with client.new_context():
+                client.identify_context('<distinct_id>')
+                client.capture('event_name')
             ```
 
         Category:
@@ -497,6 +503,83 @@ class Client(object):
         return new_context(
             fresh=fresh, capture_exceptions=capture_exceptions, client=self
         )
+
+    def scoped(self, fresh=False, capture_exceptions: Optional[bool] = None):
+        """
+        Decorator that creates a new context for the wrapped function using this client.
+
+        Args:
+            fresh: Whether to create a fresh context that doesn't inherit from parent.
+            capture_exceptions: Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting.
+
+        Category:
+            Contexts
+        """
+
+        return _context_scoped(
+            fresh=fresh, capture_exceptions=capture_exceptions, client=self
+        )
+
+    def tag(self, name: str, value: Any) -> None:
+        """
+        Add a tag to the current context.
+
+        Args:
+            name: The tag key.
+            value: The tag value.
+
+        Category:
+            Contexts
+        """
+        _context_tag(name, value)
+
+    def get_tags(self) -> Dict[str, Any]:
+        """
+        Get all tags from the current context.
+
+        Returns:
+            Dict of all tags in the current context.
+
+        Category:
+            Contexts
+        """
+        return _context_get_tags()
+
+    def identify_context(self, distinct_id: str) -> None:
+        """
+        Identify the current context with a distinct ID.
+
+        Args:
+            distinct_id: The distinct ID to associate with the current context and its children.
+
+        Category:
+            Contexts
+        """
+        _context_identify_context(distinct_id)
+
+    def set_context_session(self, session_id: str) -> None:
+        """
+        Set the session ID for the current context.
+
+        Args:
+            session_id: The session ID to associate with the current context and its children.
+
+        Category:
+            Contexts
+        """
+        _context_set_context_session(session_id)
+
+    def set_context_device_id(self, device_id: str) -> None:
+        """
+        Set the device ID for the current context.
+
+        Args:
+            device_id: The device ID to associate with the current context and its children.
+
+        Category:
+            Contexts
+        """
+        _context_set_context_device_id(device_id)
 
     @property
     def feature_flags(self):

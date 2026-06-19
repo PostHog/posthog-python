@@ -1059,13 +1059,19 @@ method posthog.client.Client.get_feature_payloads(distinct_id, groups=None, pers
 method posthog.client.Client.get_feature_variants(distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> dict[str, Union[bool, str]]
 method posthog.client.Client.get_flags_decision(distinct_id: Optional[ID_TYPES] = None, groups: Optional[dict] = None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsResponse
 method posthog.client.Client.get_remote_config_payload(key: str)
+method posthog.client.Client.get_tags() -> Dict[str, Any]
 method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.client.Client.identify_context(distinct_id: str) -> None
 method posthog.client.Client.join() -> None
 method posthog.client.Client.load_feature_flags()
 method posthog.client.Client.new_context(fresh=False, capture_exceptions: Optional[bool] = None)
+method posthog.client.Client.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 method posthog.client.Client.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
+method posthog.client.Client.set_context_device_id(device_id: str) -> None
+method posthog.client.Client.set_context_session(session_id: str) -> None
 method posthog.client.Client.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.shutdown() -> None
+method posthog.client.Client.tag(name: str, value: Any) -> None
 method posthog.consumer.Consumer.next()
 method posthog.consumer.Consumer.pause()
 method posthog.consumer.Consumer.request(batch)
