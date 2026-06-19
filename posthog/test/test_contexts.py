@@ -161,24 +161,48 @@ class TestContexts(unittest.TestCase):
         mock_capture.assert_called_once_with(test_exception)
 
     @patch("posthog.capture_exception")
-    def test_new_context_defaults_to_global_exception_autocapture_disabled(
+    def test_new_context_respects_global_exception_autocapture_setting(
         self, mock_capture
     ):
-        original_default_client = posthog.default_client
-        original_enable_exception_autocapture = posthog.enable_exception_autocapture
-        posthog.default_client = None
-        posthog.enable_exception_autocapture = False
-        test_exception = RuntimeError("Context exception")
+        cases = [
+            (False, None, False),
+            (False, True, True),
+            (True, False, False),
+        ]
 
-        try:
-            with self.assertRaises(RuntimeError):
-                with posthog.new_context():
-                    raise test_exception
-        finally:
-            posthog.default_client = original_default_client
-            posthog.enable_exception_autocapture = original_enable_exception_autocapture
+        for global_setting, explicit_arg, expect_captured in cases:
+            with self.subTest(
+                global_setting=global_setting,
+                capture_exceptions=explicit_arg,
+                expect_captured=expect_captured,
+            ):
+                original_default_client = posthog.default_client
+                original_enable_exception_autocapture = (
+                    posthog.enable_exception_autocapture
+                )
+                posthog.default_client = None
+                posthog.enable_exception_autocapture = global_setting
+                test_exception = RuntimeError("Context exception")
 
-        mock_capture.assert_not_called()
+                try:
+                    with self.assertRaises(RuntimeError):
+                        kwargs = {}
+                        if explicit_arg is not None:
+                            kwargs["capture_exceptions"] = explicit_arg
+
+                        with posthog.new_context(**kwargs):
+                            raise test_exception
+                finally:
+                    posthog.default_client = original_default_client
+                    posthog.enable_exception_autocapture = (
+                        original_enable_exception_autocapture
+                    )
+
+                if expect_captured:
+                    mock_capture.assert_called_once_with(test_exception)
+                else:
+                    mock_capture.assert_not_called()
+                mock_capture.reset_mock()
 
     def test_new_context_defaults_to_custom_client_exception_autocapture_disabled(self):
         client = Client(
@@ -198,46 +222,6 @@ class TestContexts(unittest.TestCase):
             client.shutdown()
 
         client.capture_exception.assert_not_called()
-
-    @patch("posthog.capture_exception")
-    def test_new_context_explicit_true_captures_when_global_autocapture_disabled(
-        self, mock_capture
-    ):
-        original_default_client = posthog.default_client
-        original_enable_exception_autocapture = posthog.enable_exception_autocapture
-        posthog.default_client = None
-        posthog.enable_exception_autocapture = False
-        test_exception = RuntimeError("Context exception")
-
-        try:
-            with self.assertRaises(RuntimeError):
-                with posthog.new_context(capture_exceptions=True):
-                    raise test_exception
-        finally:
-            posthog.default_client = original_default_client
-            posthog.enable_exception_autocapture = original_enable_exception_autocapture
-
-        mock_capture.assert_called_once_with(test_exception)
-
-    @patch("posthog.capture_exception")
-    def test_new_context_explicit_false_skips_capture_when_global_autocapture_enabled(
-        self, mock_capture
-    ):
-        original_default_client = posthog.default_client
-        original_enable_exception_autocapture = posthog.enable_exception_autocapture
-        posthog.default_client = None
-        posthog.enable_exception_autocapture = True
-        test_exception = RuntimeError("Context exception")
-
-        try:
-            with self.assertRaises(RuntimeError):
-                with posthog.new_context(capture_exceptions=False):
-                    raise test_exception
-        finally:
-            posthog.default_client = original_default_client
-            posthog.enable_exception_autocapture = original_enable_exception_autocapture
-
-        mock_capture.assert_not_called()
 
     def test_identify_context(self):
         with new_context(fresh=True):
