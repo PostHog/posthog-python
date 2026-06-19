@@ -437,12 +437,12 @@ attribute posthog.args.OptionalCaptureArgs.groups: NotRequired[Optional[Dict[str
 attribute posthog.args.OptionalCaptureArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalCaptureArgs.send_feature_flags: NotRequired[Optional[Union[bool, SendFeatureFlagsOptions]]]
 attribute posthog.args.OptionalCaptureArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
-attribute posthog.args.OptionalCaptureArgs.uuid: NotRequired[Optional[str]]
+attribute posthog.args.OptionalCaptureArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.args.OptionalSetArgs.disable_geoip: NotRequired[Optional[bool]]
 attribute posthog.args.OptionalSetArgs.distinct_id: NotRequired[Optional[ID_TYPES]]
 attribute posthog.args.OptionalSetArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalSetArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
-attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[str]]
+attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.before_send = None
 attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
@@ -870,8 +870,8 @@ function posthog.contexts.get_context_distinct_id() -> Optional[str]
 function posthog.contexts.get_context_session_id() -> Optional[str]
 function posthog.contexts.get_tags() -> Dict[str, Any]
 function posthog.contexts.identify_context(distinct_id: str) -> None
-function posthog.contexts.new_context(fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
-function posthog.contexts.scoped(fresh: bool = False, capture_exceptions: bool = True)
+function posthog.contexts.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
+function posthog.contexts.scoped(fresh: bool = False, capture_exceptions: Optional[bool] = None)
 function posthog.contexts.set_capture_exception_code_variables_context(enabled: bool) -> None
 function posthog.contexts.set_code_variables_ignore_patterns_context(ignore_patterns: list) -> None
 function posthog.contexts.set_code_variables_mask_patterns_context(mask_patterns: list) -> None
@@ -939,7 +939,7 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.join() -> None
 function posthog.load_feature_flags()
-function posthog.new_context(fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
+function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
@@ -952,7 +952,7 @@ function posthog.request.post(api_key: str, host: Optional[str] = None, path: Op
 function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
 function posthog.request.reset_sessions() -> None
 function posthog.request.set_socket_options(socket_options: Optional[SocketOptions]) -> None
-function posthog.scoped(fresh=False, capture_exceptions=True)
+function posthog.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 function posthog.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 function posthog.set_capture_exception_code_variables_context(enabled: bool)
 function posthog.set_code_variables_ignore_patterns_context(ignore_patterns: list)
@@ -1060,12 +1060,12 @@ method posthog.client.Client.get_feature_variants(distinct_id, groups=None, pers
 method posthog.client.Client.get_flags_decision(distinct_id: Optional[ID_TYPES] = None, groups: Optional[dict] = None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsResponse
 method posthog.client.Client.get_remote_config_payload(key: str)
 method posthog.client.Client.get_tags() -> Dict[str, Any]
-method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
 method posthog.client.Client.identify_context(distinct_id: str) -> None
 method posthog.client.Client.join() -> None
 method posthog.client.Client.load_feature_flags()
-method posthog.client.Client.new_context(fresh=False, capture_exceptions=True)
-method posthog.client.Client.scoped(fresh=False, capture_exceptions=True)
+method posthog.client.Client.new_context(fresh=False, capture_exceptions: Optional[bool] = None)
+method posthog.client.Client.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 method posthog.client.Client.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.set_context_device_id(device_id: str) -> None
 method posthog.client.Client.set_context_session(session_id: str) -> None
