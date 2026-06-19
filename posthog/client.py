@@ -502,11 +502,11 @@ class Client(object):
 
     def get_feature_variants(
         self,
-        distinct_id,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        disable_geoip=None,
+        distinct_id: ID_TYPES,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> dict[str, Union[bool, str]]:
@@ -539,11 +539,11 @@ class Client(object):
 
     def get_feature_payloads(
         self,
-        distinct_id,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        disable_geoip=None,
+        distinct_id: ID_TYPES,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> dict[str, str]:
@@ -581,11 +581,11 @@ class Client(object):
 
     def get_feature_flags_and_payloads(
         self,
-        distinct_id,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        disable_geoip=None,
+        distinct_id: ID_TYPES,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> FlagsAndPayloads:
@@ -624,10 +624,10 @@ class Client(object):
     def get_flags_decision(
         self,
         distinct_id: Optional[ID_TYPES] = None,
-        groups: Optional[dict] = None,
-        person_properties=None,
-        group_properties=None,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> FlagsResponse:
@@ -669,10 +669,10 @@ class Client(object):
     def _get_flags_decision(
         self,
         distinct_id: Optional[ID_TYPES] = None,
-        groups: Optional[dict] = None,
-        person_properties=None,
-        group_properties=None,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> FlagsResponse:
@@ -695,7 +695,7 @@ class Client(object):
         if not groups:
             groups = {}
 
-        request_data = {
+        request_data: Dict[str, Any] = {
             "distinct_id": distinct_id,
             "groups": groups,
             "person_properties": person_properties,
@@ -1090,10 +1090,10 @@ class Client(object):
         self,
         previous_id: str,
         distinct_id: Optional[str],
-        timestamp=None,
-        uuid=None,
-        disable_geoip=None,
-    ):
+        timestamp: Optional[Union[datetime, str]] = None,
+        uuid: Optional[str] = None,
+        disable_geoip: Optional[bool] = None,
+    ) -> Optional[str]:
         """
         Create an alias between two distinct IDs.
 
@@ -1119,7 +1119,7 @@ class Client(object):
         if personless:
             return None  # Personless alias() does nothing - should this throw?
 
-        msg = {
+        msg: Dict[str, Any] = {
             "properties": {
                 "distinct_id": previous_id,
                 "alias": distinct_id,
@@ -1796,17 +1796,17 @@ class Client(object):
 
     def feature_enabled(
         self,
-        key,
-        distinct_id,
+        key: str,
+        distinct_id: ID_TYPES,
         *,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        send_feature_flag_events=True,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
-    ):
+    ) -> Optional[bool]:
         """
         Check if a feature flag is enabled for a user.
 
@@ -1880,11 +1880,11 @@ class Client(object):
         *,
         override_match_value: Optional[FlagValue] = None,
         groups: Optional[Dict[str, str]] = None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        send_feature_flag_events=True,
-        disable_geoip=None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
     ) -> Optional[FeatureFlagResult]:
         if self.disabled:
@@ -2014,15 +2014,15 @@ class Client(object):
 
     def get_feature_flag_result(
         self,
-        key,
-        distinct_id,
+        key: str,
+        distinct_id: ID_TYPES,
         *,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        send_feature_flag_events=True,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
     ) -> Optional[FeatureFlagResult]:
         """
@@ -2067,15 +2067,15 @@ class Client(object):
 
     def get_feature_flag(
         self,
-        key,
-        distinct_id,
+        key: str,
+        distinct_id: ID_TYPES,
         *,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        send_feature_flag_events=True,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
     ) -> Optional[FlagValue]:
         """
@@ -2133,7 +2133,7 @@ class Client(object):
         distinct_id: ID_TYPES,
         groups: dict[str, str],
         person_properties: dict[str, str],
-        group_properties: dict[str, str],
+        group_properties: dict[str, dict[str, Any]],
         device_id: Optional[str] = None,
     ) -> Optional[FlagValue]:
         if self.feature_flags is None and self.personal_api_key:
@@ -2169,18 +2169,18 @@ class Client(object):
 
     def get_feature_flag_payload(
         self,
-        key,
-        distinct_id,
+        key: str,
+        distinct_id: ID_TYPES,
         *,
         match_value: Optional[FlagValue] = None,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        send_feature_flag_events=False,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = False,
+        disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
-    ):
+    ) -> Optional[Any]:
         """
         Get the payload for a feature flag.
 
@@ -2245,7 +2245,7 @@ class Client(object):
         distinct_id: ID_TYPES,
         groups: dict[str, str],
         person_properties: dict[str, str],
-        group_properties: dict[str, str],
+        group_properties: dict[str, dict[str, Any]],
         disable_geoip: Optional[bool],
         device_id: Optional[str] = None,
     ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
@@ -2422,13 +2422,13 @@ class Client(object):
 
     def get_all_flags(
         self,
-        distinct_id,
+        distinct_id: ID_TYPES,
         *,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> Optional[dict[str, Union[bool, str]]]:
@@ -2469,13 +2469,13 @@ class Client(object):
 
     def get_all_flags_and_payloads(
         self,
-        distinct_id,
+        distinct_id: ID_TYPES,
         *,
-        groups=None,
-        person_properties=None,
-        group_properties=None,
-        only_evaluate_locally=False,
-        disable_geoip=None,
+        groups: Optional[Dict[str, str]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
     ) -> FlagsAndPayloads:
@@ -2513,6 +2513,8 @@ class Client(object):
         # Resolve device_id from context if not provided
         if device_id is None:
             device_id = get_context_device_id()
+
+        groups = groups or {}
 
         response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
@@ -2755,7 +2757,7 @@ class Client(object):
         self,
         distinct_id: ID_TYPES,
         *,
-        groups: Dict[str, Union[str, int]],
+        groups: Dict[str, str],
         person_properties=None,
         group_properties=None,
         warn_on_unknown_groups=False,
