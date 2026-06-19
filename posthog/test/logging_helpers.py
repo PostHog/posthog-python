@@ -3,10 +3,12 @@ import logging
 from contextlib import contextmanager
 from typing import Iterator
 
+from posthog._logging import _POSTHOG_LOGGER_NAME
+
 
 @contextmanager
 def capture_message_only_logs(level: int = logging.DEBUG) -> Iterator[io.StringIO]:
-    logger = logging.getLogger("posthog")
+    logger = logging.getLogger(_POSTHOG_LOGGER_NAME)
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(logging.Formatter("%(message)s"))
