@@ -14,7 +14,9 @@ alias posthog.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.Feature
 alias posthog.FeatureFlagResult -> posthog.types.FeatureFlagResult
 alias posthog.FlagDefinitionCacheData -> posthog.flag_definition_cache.FlagDefinitionCacheData
 alias posthog.FlagDefinitionCacheProvider -> posthog.flag_definition_cache.FlagDefinitionCacheProvider
+alias posthog.FlagValue -> posthog.types.FlagValue
 alias posthog.FlagsAndPayloads -> posthog.types.FlagsAndPayloads
+alias posthog.ID_TYPES -> posthog.args.ID_TYPES
 alias posthog.InconclusiveMatchError -> posthog.feature_flags.InconclusiveMatchError
 alias posthog.OptionalCaptureArgs -> posthog.args.OptionalCaptureArgs
 alias posthog.OptionalSetArgs -> posthog.args.OptionalSetArgs
@@ -855,7 +857,7 @@ function posthog.ai.utils.merge_usage_stats(target: TokenUsage, source: TokenUsa
 function posthog.ai.utils.sanitize_messages(data: Any, provider: str) -> Any
 function posthog.ai.utils.serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]
 function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any)
-function posthog.alias(previous_id, distinct_id, timestamp=None, uuid=None, disable_geoip=None)
+function posthog.alias(previous_id: str, distinct_id: str, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
 function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.client.add_context_tags(properties)
@@ -878,7 +880,7 @@ function posthog.contexts.set_code_variables_mask_patterns_context(mask_patterns
 function posthog.contexts.set_context_device_id(device_id: str) -> None
 function posthog.contexts.set_context_session(session_id: str) -> None
 function posthog.contexts.tag(key: str, value: Any) -> None
-function posthog.evaluate_flags(distinct_id=None, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, disable_geoip=None, flag_keys=None, device_id=None) -> FeatureFlagEvaluations
+function posthog.evaluate_flags(distinct_id: Optional[str] = None, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 function posthog.exception_utils.attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns)
 function posthog.exception_utils.construct_artificial_traceback(e)
 function posthog.exception_utils.event_hint_with_exc_info(exc_info=None)
@@ -911,7 +913,7 @@ function posthog.exception_utils.to_string(value)
 function posthog.exception_utils.to_timestamp(value)
 function posthog.exception_utils.try_attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns)
 function posthog.exception_utils.walk_exception_chain(exc_info)
-function posthog.feature_enabled(key, distinct_id, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id=None)
+function posthog.feature_enabled(key: str, distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 function posthog.feature_flag_definitions()
 function posthog.feature_flags.evaluate_flag_dependency(property, flags_by_key, evaluation_cache, distinct_id, properties, cohort_properties, device_id=None)
 function posthog.feature_flags.get_matching_variant(flag, bucketing_value)
@@ -927,14 +929,14 @@ function posthog.feature_flags.relative_date_parse_for_feature_flag_matching(val
 function posthog.feature_flags.resolve_bucketing_value(flag, distinct_id, device_id=None)
 function posthog.feature_flags.variant_lookup_table(feature_flag)
 function posthog.flush() -> None
-function posthog.get_all_flags(distinct_id, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, disable_geoip=None, device_id=None, flag_keys_to_evaluate=None) -> Optional[dict[str, FeatureFlag]]
-function posthog.get_all_flags_and_payloads(distinct_id, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, disable_geoip=None, device_id=None, flag_keys_to_evaluate=None) -> FlagsAndPayloads
-function posthog.get_feature_flag(key, distinct_id, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id=None) -> Optional[FeatureFlag]
-function posthog.get_feature_flag_payload(key, distinct_id, match_value=None, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id=None) -> Optional[str]
-function posthog.get_feature_flag_result(key, distinct_id, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id=None)
-function posthog.get_remote_config_payload(key)
+function posthog.get_all_flags(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> Optional[dict[str, FlagValue]]
+function posthog.get_all_flags_and_payloads(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> FlagsAndPayloads
+function posthog.get_feature_flag(key: str, distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
+function posthog.get_feature_flag_payload(key: str, distinct_id: ID_TYPES, match_value: Optional[FlagValue] = None, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[Any]
+function posthog.get_feature_flag_result(key: str, distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FeatureFlagResult]
+function posthog.get_remote_config_payload(key: str)
 function posthog.get_tags() -> Dict[str, Any]
-function posthog.group_identify(group_type, group_key, properties=None, timestamp=None, uuid=None, disable_geoip=None, distinct_id=None)
+function posthog.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
 function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.join() -> None
@@ -955,8 +957,8 @@ function posthog.request.set_socket_options(socket_options: Optional[SocketOptio
 function posthog.scoped(fresh=False, capture_exceptions=True)
 function posthog.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 function posthog.set_capture_exception_code_variables_context(enabled: bool)
-function posthog.set_code_variables_ignore_patterns_context(ignore_patterns: list)
-function posthog.set_code_variables_mask_patterns_context(mask_patterns: list)
+function posthog.set_code_variables_ignore_patterns_context(ignore_patterns: list[str])
+function posthog.set_code_variables_mask_patterns_context(mask_patterns: list[str])
 function posthog.set_context_device_id(device_id: str)
 function posthog.set_context_session(session_id: str)
 function posthog.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
@@ -1042,22 +1044,22 @@ method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariable
 method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None) -> Union[str, PromptResult]
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
-method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp=None, uuid=None, disable_geoip=None)
+method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
 method posthog.client.Client.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 method posthog.client.Client.capture_exception(exception: Optional[ExceptionArg], **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 method posthog.client.Client.evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[List[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
-method posthog.client.Client.feature_enabled(key, distinct_id, *, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id: Optional[str] = None)
+method posthog.client.Client.feature_enabled(key: str, distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 method posthog.client.Client.feature_flag_definitions()
 method posthog.client.Client.flush() -> None
-method posthog.client.Client.get_all_flags(distinct_id, *, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> Optional[dict[str, Union[bool, str]]]
-method posthog.client.Client.get_all_flags_and_payloads(distinct_id, *, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
-method posthog.client.Client.get_feature_flag(key, distinct_id, *, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id: Optional[str] = None) -> Optional[FlagValue]
-method posthog.client.Client.get_feature_flag_payload(key, distinct_id, *, match_value: Optional[FlagValue] = None, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=False, disable_geoip=None, device_id: Optional[str] = None)
-method posthog.client.Client.get_feature_flag_result(key, distinct_id, *, groups=None, person_properties=None, group_properties=None, only_evaluate_locally=False, send_feature_flag_events=True, disable_geoip=None, device_id: Optional[str] = None) -> Optional[FeatureFlagResult]
-method posthog.client.Client.get_feature_flags_and_payloads(distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
-method posthog.client.Client.get_feature_payloads(distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> dict[str, str]
-method posthog.client.Client.get_feature_variants(distinct_id, groups=None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> dict[str, Union[bool, str]]
-method posthog.client.Client.get_flags_decision(distinct_id: Optional[ID_TYPES] = None, groups: Optional[dict] = None, person_properties=None, group_properties=None, disable_geoip=None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsResponse
+method posthog.client.Client.get_all_flags(distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> Optional[dict[str, Union[bool, str]]]
+method posthog.client.Client.get_all_flags_and_payloads(distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
+method posthog.client.Client.get_feature_flag(key: str, distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
+method posthog.client.Client.get_feature_flag_payload(key: str, distinct_id: ID_TYPES, *, match_value: Optional[FlagValue] = None, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[Any]
+method posthog.client.Client.get_feature_flag_result(key: str, distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FeatureFlagResult]
+method posthog.client.Client.get_feature_flags_and_payloads(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
+method posthog.client.Client.get_feature_payloads(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> dict[str, str]
+method posthog.client.Client.get_feature_variants(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> dict[str, Union[bool, str]]
+method posthog.client.Client.get_flags_decision(distinct_id: Optional[ID_TYPES] = None, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsResponse
 method posthog.client.Client.get_remote_config_payload(key: str)
 method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
 method posthog.client.Client.join() -> None

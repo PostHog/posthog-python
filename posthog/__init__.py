@@ -62,7 +62,7 @@ from posthog.request import (
 from posthog.types import (
     BeforeSendCallback as BeforeSendCallback,
     FeatureFlag as FeatureFlag,
-    FlagValue,
+    FlagValue as FlagValue,
     FlagsAndPayloads,
 )
 from posthog.types import (

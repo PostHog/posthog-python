@@ -8,7 +8,7 @@ import threading
 import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 from uuid import uuid4
 
 from typing_extensions import Unpack
@@ -2757,7 +2757,7 @@ class Client(object):
         self,
         distinct_id: ID_TYPES,
         *,
-        groups: Dict[str, str],
+        groups: Mapping[str, Union[str, int]],
         person_properties=None,
         group_properties=None,
         warn_on_unknown_groups=False,
