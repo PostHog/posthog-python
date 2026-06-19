@@ -9,7 +9,7 @@ import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
@@ -111,6 +111,26 @@ def get_identity_state(passed) -> tuple[str, bool]:
         return (context_id, False)
 
     return (str(uuid4()), True)
+
+
+def _stringify_event_uuid(value) -> str:
+    if isinstance(value, UUID):
+        return str(value)
+
+    stringified = stringify_id(value)
+    if not stringified:
+        raise ValueError(
+            "Invalid event uuid. Expected a valid UUID string or uuid.UUID instance."
+        )
+
+    try:
+        UUID(stringified)
+    except ValueError:
+        raise ValueError(
+            f"Invalid event uuid {stringified!r}. Expected a valid UUID string or uuid.UUID instance."
+        ) from None
+
+    return stringified
 
 
 def add_context_tags(properties):
@@ -1033,7 +1053,7 @@ class Client(object):
         group_key: str,
         properties: Optional[Dict[str, Any]] = None,
         timestamp: Optional[Union[datetime, str]] = None,
-        uuid: Optional[str] = None,
+        uuid: Optional[Union[str, UUID]] = None,
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
     ) -> Optional[str]:
@@ -1348,8 +1368,8 @@ class Client(object):
 
         if "uuid" in msg:
             uuid = msg.pop("uuid")
-            if uuid:
-                msg["uuid"] = stringify_id(uuid)
+            if uuid is not None:
+                msg["uuid"] = _stringify_event_uuid(uuid)
 
         if "uuid" not in msg:
             # Always send a uuid, so we can always return one

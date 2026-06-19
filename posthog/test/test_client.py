@@ -1,7 +1,7 @@
 import time
 import unittest
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from unittest import mock
 from parameterized import parameterized
@@ -216,6 +216,51 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+    def test_basic_capture_with_uuid_object(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            uuid = UUID("00000000-0000-4000-8000-000000000002")
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", uuid=uuid
+            )
+            self.assertEqual(msg_uuid, str(uuid))
+            self.assertFalse(self.failed)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["uuid"], str(uuid))
+
+    def test_capture_with_invalid_uuid_logs_and_does_not_send(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid="not-a-uuid"
+                )
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertTrue(
+                any(
+                    "Invalid event uuid 'not-a-uuid'" in message
+                    and "Expected a valid UUID string or uuid.UUID instance" in message
+                    for message in logs.output
+                )
+            )
+
+    def test_capture_with_invalid_uuid_raises_in_debug(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
+            with self.assertRaisesRegex(
+                ValueError,
+                "Invalid event uuid 'not-a-uuid'.*Expected a valid UUID string",
+            ):
+                client.capture(
+                    "python test event", distinct_id="distinct_id", uuid="not-a-uuid"
+                )
+
+            mock_post.assert_not_called()
 
     def test_basic_capture_with_project_api_key(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -1271,10 +1316,10 @@ class TestClient(unittest.TestCase):
                 distinct_id="distinct_id",
                 properties={"property": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1286,7 +1331,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["event"], "python test event")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertTrue("$groups" not in msg["properties"])
 
@@ -1337,10 +1382,10 @@ class TestClient(unittest.TestCase):
                 distinct_id="distinct_id",
                 properties={"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1352,7 +1397,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
             self.assertTrue(isinstance(msg["timestamp"], str))
-            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_set_once(self):
@@ -1381,10 +1426,10 @@ class TestClient(unittest.TestCase):
                 distinct_id="distinct_id",
                 properties={"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1396,7 +1441,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
             self.assertTrue(isinstance(msg["timestamp"], str))
-            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_group_identify(self):
@@ -1465,10 +1510,10 @@ class TestClient(unittest.TestCase):
                 "id:5",
                 {"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1498,11 +1543,11 @@ class TestClient(unittest.TestCase):
                 "id:5",
                 {"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
                 distinct_id="distinct_id",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()

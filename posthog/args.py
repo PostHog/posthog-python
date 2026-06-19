@@ -40,7 +40,7 @@ class OptionalCaptureArgs(TypedDict):
     distinct_id: NotRequired[Optional[ID_TYPES]]
     properties: NotRequired[Optional[Dict[str, Any]]]
     timestamp: NotRequired[Optional[Union[datetime, str]]]
-    uuid: NotRequired[Optional[str]]
+    uuid: NotRequired[Optional[Union[str, UUID]]]
     groups: NotRequired[Optional[Dict[str, str]]]
     flags: NotRequired[Optional["FeatureFlagEvaluations"]]
     send_feature_flags: NotRequired[
@@ -68,7 +68,7 @@ class OptionalSetArgs(TypedDict):
     distinct_id: NotRequired[Optional[ID_TYPES]]
     properties: NotRequired[Optional[Dict[str, Any]]]
     timestamp: NotRequired[Optional[Union[datetime, str]]]
-    uuid: NotRequired[Optional[str]]
+    uuid: NotRequired[Optional[Union[str, UUID]]]
     disable_geoip: NotRequired[Optional[bool]]
 
 
