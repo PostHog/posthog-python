@@ -1103,7 +1103,7 @@ class Client(object):
         self,
         exception: Optional[ExceptionArg],
         **kwargs: Unpack[OptionalCaptureArgs],
-    ):
+    ) -> Optional[str]:
         """
         Capture an exception for error tracking.
 
@@ -1225,6 +1225,7 @@ class Client(object):
             return res
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
+            return None
 
     @staticmethod
     def _reinit_after_fork_weak(weak_self):
@@ -1380,7 +1381,7 @@ class Client(object):
             self.log.warning("analytics-python queue is full")
             return None
 
-    def flush(self):
+    def flush(self) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
 
@@ -1396,7 +1397,7 @@ class Client(object):
         # Note that this message may not be precise, because of threading.
         self.log.debug("successfully flushed about %s items.", size)
 
-    def join(self):
+    def join(self) -> None:
         """
         End the consumer thread once the queue is empty. Do not use directly, call `shutdown()` instead.
 
@@ -1420,7 +1421,7 @@ class Client(object):
         # Shutdown the cache provider (release locks, cleanup)
         self._shutdown_flag_definition_cache_provider()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """
         Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
 
