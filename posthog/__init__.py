@@ -370,7 +370,9 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
             properties: Dict of event properties
             timestamp: When the event occurred
             uuid: Unique identifier for this event. If omitted, one is generated
-                and returned.
+                and returned. If provided, it must be a valid UUID string or
+                uuid.UUID instance; invalid values are ignored and replaced with
+                a newly generated UUID.
             groups: Dict of group types and IDs
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
@@ -441,7 +443,9 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             properties: Dict of person properties to set.
             timestamp: When the properties were set.
             uuid: Unique identifier for this operation. If omitted, one is
-                generated and returned.
+                generated and returned. If provided, it must be a valid UUID
+                string or uuid.UUID instance; invalid values are ignored and
+                replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP lookup.
 
     Details:
@@ -471,7 +475,9 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             properties: Dict of person properties to set only once.
             timestamp: When the properties were set.
             uuid: Unique identifier for this operation. If omitted, one is
-                generated and returned.
+                generated and returned. If provided, it must be a valid UUID
+                string or uuid.UUID instance; invalid values are ignored and
+                replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP lookup.
 
     Details:
