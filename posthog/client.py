@@ -476,13 +476,13 @@ class Client(object):
         else:
             self.before_send = None
 
-    def new_context(self, fresh=False, capture_exceptions=True):
+    def new_context(self, fresh=False, capture_exceptions: Optional[bool] = None):
         """
         Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
 
         Args:
             fresh: Whether to create a fresh context that doesn't inherit from parent.
-            capture_exceptions: Whether to automatically capture exceptions in this context.
+            capture_exceptions: Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting.
 
         Examples:
             ```python
