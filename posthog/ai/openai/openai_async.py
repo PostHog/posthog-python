@@ -1,5 +1,4 @@
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
 from posthog.ai.stream import AsyncStreamWrapper
@@ -29,6 +28,7 @@ from posthog.ai.openai.openai_converter import (
 )
 from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
+from posthog._uuid import uuid7
 from posthog.ai.openai.wrapper_utils import _OpenAIWrapperResource
 
 
@@ -121,7 +121,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             The OpenAI response, or an async streaming iterator when ``stream=True``.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         if kwargs.get("stream", False):
             return await self._create_streaming(
@@ -240,7 +240,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         stop_reason: Optional[str] = None,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         # Use model from kwargs, fallback to model from response
         model = kwargs.get("model") or model_from_response or "unknown"
@@ -401,7 +401,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             The OpenAI chat completion, or an async streaming iterator when ``stream=True``.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         # If streaming, handle streaming specifically
         if kwargs.get("stream", False):
@@ -535,7 +535,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         stop_reason: Optional[str] = None,
     ):
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         # Use model from kwargs, fallback to model from response
         model = kwargs.get("model") or model_from_response or "unknown"
@@ -623,7 +623,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         """
 
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         start_time = time.time()
         response = await self._original.create(**kwargs)

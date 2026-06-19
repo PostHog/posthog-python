@@ -6,7 +6,6 @@ $ai_span, and $ai_trace events across multiple conversation turns.
 
 import logging
 import time
-import uuid
 from typing import Any, Callable, Dict, List, Optional, Union
 
 try:
@@ -28,6 +27,7 @@ from posthog.ai.claude_agent_sdk.processor import (
     _GenerationTracker,
 )
 from posthog.client import Client
+from posthog._uuid import uuid7
 
 log = logging.getLogger("posthog")
 
@@ -91,7 +91,7 @@ class PostHogClaudeSDKClient:
             groups=posthog_groups,
             properties=posthog_properties or {},
         )
-        self._trace_id = posthog_trace_id or str(uuid.uuid4())
+        self._trace_id = posthog_trace_id or uuid7()
         self._distinct_id = posthog_distinct_id
         self._extra_props = posthog_properties or {}
         self._privacy = posthog_privacy_mode

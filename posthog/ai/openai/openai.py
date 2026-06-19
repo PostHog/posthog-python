@@ -1,5 +1,4 @@
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
 from posthog.ai.types import TokenUsage
@@ -25,6 +24,7 @@ from posthog.ai.openai.openai_converter import (
 )
 from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
+from posthog._uuid import uuid7
 from posthog import setup
 from posthog.ai.openai.wrapper_utils import _OpenAIWrapperResource
 
@@ -118,7 +118,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             The OpenAI response, or a streaming iterator when ``stream=True``.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         if kwargs.get("stream", False):
             return self._create_streaming(
@@ -372,7 +372,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             The OpenAI chat completion, or a streaming iterator when ``stream=True``.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         if kwargs.get("stream", False):
             return self._create_streaming(
@@ -567,7 +567,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         """
 
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         start_time = time.time()
         response = self._original.create(**kwargs)

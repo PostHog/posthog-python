@@ -7,7 +7,6 @@ except ImportError:
     )
 
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
 from posthog.ai.types import StreamingContentBlock, TokenUsage, ToolInProgress
@@ -24,6 +23,7 @@ from posthog.ai.anthropic.anthropic_converter import (
 )
 from posthog.ai.sanitization import sanitize_anthropic
 from posthog.client import Client as PostHogClient
+from posthog._uuid import uuid7
 from posthog import setup
 
 
@@ -70,7 +70,7 @@ class WrappedMessages(Messages):
         """
 
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         if kwargs.get("stream", False):
             return self._create_streaming(
@@ -119,7 +119,7 @@ class WrappedMessages(Messages):
             A streaming iterator yielding Anthropic events.
         """
         if posthog_trace_id is None:
-            posthog_trace_id = str(uuid.uuid4())
+            posthog_trace_id = uuid7()
 
         return self._create_streaming(
             posthog_distinct_id,
