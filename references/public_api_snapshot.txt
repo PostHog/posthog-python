@@ -871,7 +871,7 @@ function posthog.contexts.get_context_session_id() -> Optional[str]
 function posthog.contexts.get_tags() -> Dict[str, Any]
 function posthog.contexts.identify_context(distinct_id: str) -> None
 function posthog.contexts.new_context(fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
-function posthog.contexts.scoped(fresh: bool = False, capture_exceptions: bool = True)
+function posthog.contexts.scoped(fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 function posthog.contexts.set_capture_exception_code_variables_context(enabled: bool) -> None
 function posthog.contexts.set_code_variables_ignore_patterns_context(ignore_patterns: list) -> None
 function posthog.contexts.set_code_variables_mask_patterns_context(mask_patterns: list) -> None

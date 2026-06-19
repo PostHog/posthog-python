@@ -370,7 +370,11 @@ def get_code_variables_ignore_patterns_context() -> Optional[list]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(fresh: bool = False, capture_exceptions: bool = True):
+def scoped(
+    fresh: bool = False,
+    capture_exceptions: bool = True,
+    client: Optional["Client"] = None,
+):
     """
     Decorator that creates a new context for the function. Simply wraps
     the function in a with posthog.new_context(): block.
@@ -378,6 +382,7 @@ def scoped(fresh: bool = False, capture_exceptions: bool = True):
     Args:
         fresh: Whether to start with a fresh context (default: False)
         capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+        client: Optional client instance to use for capturing exceptions (default: None)
 
     Example:
         @posthog.scoped()
@@ -410,14 +415,18 @@ def scoped(fresh: bool = False, capture_exceptions: bool = True):
 
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
-                with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
+                with new_context(
+                    fresh=fresh, capture_exceptions=capture_exceptions, client=client
+                ):
                     return await func(*args, **kwargs)
 
             return cast(F, async_wrapper)
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
+            with new_context(
+                fresh=fresh, capture_exceptions=capture_exceptions, client=client
+            ):
                 return func(*args, **kwargs)
 
         return cast(F, wrapper)

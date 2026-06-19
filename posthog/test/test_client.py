@@ -1,3 +1,4 @@
+import asyncio
 import time
 import unittest
 from datetime import datetime
@@ -2496,21 +2497,33 @@ class TestClient(unittest.TestCase):
                     msg["properties"]["$session_id"], "context-session-123"
                 )
 
-    def test_client_context_helpers_apply_to_capture(self):
+    @parameterized.expand([("new_context",), ("scoped",)])
+    def test_client_context_helpers_apply_to_capture(self, context_helper):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
-            with client.new_context(fresh=True):
+            def capture_in_context():
                 client.tag("client_tag", "tag-value")
                 client.identify_context("context-user")
                 client.set_context_session("context-session-123")
 
                 self.assertEqual(client.get_tags(), {"client_tag": "tag-value"})
 
-                msg_uuid = client.capture(
+                return client.capture(
                     "test_event",
                     properties={"custom_prop": "value"},
                 )
+
+            if context_helper == "new_context":
+                with client.new_context(fresh=True):
+                    msg_uuid = capture_in_context()
+            else:
+
+                @client.scoped(fresh=True)
+                def scoped_capture():
+                    return capture_in_context()
+
+                msg_uuid = scoped_capture()
 
             self.assertIsNotNone(msg_uuid)
             mock_post.assert_called_once()
@@ -2524,28 +2537,35 @@ class TestClient(unittest.TestCase):
             self.assertCountEqual(msg["properties"]["$context_tags"], ["client_tag"])
             self.assertEqual(client.get_tags(), {})
 
-    def test_client_scoped_context_helpers_apply_to_capture(self):
+    def test_client_scoped_context_helpers_apply_to_capture_async(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             @client.scoped(fresh=True)
-            def capture_in_client_scope():
-                client.tag("scoped_tag", "scoped-value")
-                client.identify_context("scoped-user")
-                client.set_context_session("scoped-session-123")
-                return client.capture("scoped_event")
+            async def scoped_capture():
+                client.tag("async_scoped_tag", "async-scoped-value")
+                client.identify_context("async-scoped-user")
+                client.set_context_session("async-scoped-session-123")
+                await asyncio.sleep(0)
+                return client.capture("async_scoped_event")
 
-            msg_uuid = capture_in_client_scope()
+            msg_uuid = asyncio.run(scoped_capture())
 
             self.assertIsNotNone(msg_uuid)
             mock_post.assert_called_once()
             batch_data = mock_post.call_args[1]["batch"]
             msg = batch_data[0]
 
-            self.assertEqual(msg["distinct_id"], "scoped-user")
-            self.assertEqual(msg["properties"]["scoped_tag"], "scoped-value")
-            self.assertEqual(msg["properties"]["$session_id"], "scoped-session-123")
-            self.assertCountEqual(msg["properties"]["$context_tags"], ["scoped_tag"])
+            self.assertEqual(msg["distinct_id"], "async-scoped-user")
+            self.assertEqual(
+                msg["properties"]["async_scoped_tag"], "async-scoped-value"
+            )
+            self.assertEqual(
+                msg["properties"]["$session_id"], "async-scoped-session-123"
+            )
+            self.assertCountEqual(
+                msg["properties"]["$context_tags"], ["async_scoped_tag"]
+            )
             self.assertEqual(client.get_tags(), {})
 
     def test_set_context_session_with_page_explicit_properties(self):

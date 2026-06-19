@@ -8,7 +8,7 @@ import threading
 import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, cast
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from typing_extensions import Unpack
@@ -27,6 +27,7 @@ from posthog.contexts import (
     get_tags as _context_get_tags,
     identify_context as _context_identify_context,
     new_context,
+    scoped as _context_scoped,
     set_context_device_id as _context_set_context_device_id,
     set_context_session as _context_set_context_session,
     tag as _context_tag,
@@ -103,8 +104,6 @@ from queue import Queue, Full
 
 
 MAX_DICT_SIZE = 50_000
-
-_F = TypeVar("_F", bound=Callable[..., Any])
 
 
 def get_identity_state(passed) -> tuple[str, bool]:
@@ -497,30 +496,9 @@ class Client(object):
             Contexts
         """
 
-        def decorator(func: _F) -> _F:
-            from functools import wraps
-
-            if inspect.iscoroutinefunction(func):
-
-                @wraps(func)
-                async def async_wrapper(*args, **kwargs):
-                    with self.new_context(
-                        fresh=fresh, capture_exceptions=capture_exceptions
-                    ):
-                        return await func(*args, **kwargs)
-
-                return cast(_F, async_wrapper)
-
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                with self.new_context(
-                    fresh=fresh, capture_exceptions=capture_exceptions
-                ):
-                    return func(*args, **kwargs)
-
-            return cast(_F, wrapper)
-
-        return decorator
+        return _context_scoped(
+            fresh=fresh, capture_exceptions=capture_exceptions, client=self
+        )
 
     def tag(self, name: str, value: Any) -> None:
         """
