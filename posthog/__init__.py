@@ -314,8 +314,6 @@ Attributes:
         each exception type's bucket.
     exception_autocapture_refill_interval_seconds: Seconds between token refills
         for autocaptured exception rate limiting.
-    warn_on_duplicate_clients: If True, log a warning when multiple async
-        clients with the same project API key and host are active in one process.
 """
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
@@ -355,7 +353,6 @@ exception_autocapture_refill_rate = ExceptionCapture.DEFAULT_REFILL_RATE  # type
 exception_autocapture_refill_interval_seconds = (
     ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS
 )  # type: float
-warn_on_duplicate_clients = True  # type: bool
 
 
 # NOTE - this and following functions take unpacked kwargs because we needed to make
@@ -1126,7 +1123,6 @@ def setup() -> Client:
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,
             exception_autocapture_refill_rate=exception_autocapture_refill_rate,
             exception_autocapture_refill_interval_seconds=exception_autocapture_refill_interval_seconds,
-            warn_on_duplicate_clients=warn_on_duplicate_clients,
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state

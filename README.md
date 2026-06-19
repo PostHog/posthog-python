@@ -36,8 +36,7 @@ clear where to call `shutdown()` during graceful shutdown.
 
 Multiple clients are still supported when you intentionally send to different
 projects or hosts. If the SDK detects multiple async clients with the same
-project API key and host, it logs a non-fatal warning. For intentional duplicate
-clients, pass `warn_on_duplicate_clients=False`.
+project API key and host, it logs a non-fatal warning.
 
 For short-lived jobs, serverless functions, and shutdown-sensitive workers,
 consider `sync_mode=True` or call `shutdown()` before the process exits so queued
