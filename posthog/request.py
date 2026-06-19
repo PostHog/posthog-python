@@ -13,6 +13,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
+from posthog._logging import _configure_posthog_logging
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
@@ -194,6 +195,9 @@ US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
 EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
 DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
+
+
+_configure_posthog_logging()
 
 
 def normalize_host(host: Optional[str]) -> str:

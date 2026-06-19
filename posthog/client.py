@@ -33,6 +33,7 @@ from posthog.contexts import (
     tag as _context_tag,
 )
 from posthog.exception_capture import ExceptionCapture
+from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
@@ -102,6 +103,8 @@ from posthog.version import VERSION
 
 from queue import Queue, Full
 
+
+_configure_posthog_logging()
 
 MAX_DICT_SIZE = 50_000
 

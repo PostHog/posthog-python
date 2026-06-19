@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import time
 import unittest
@@ -10,6 +11,7 @@ from parameterized import parameterized
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError, GetResponse
+from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
@@ -80,6 +82,24 @@ class TestClient(unittest.TestCase):
         client = Client("", send=False)
 
         self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
+
+    def test_message_only_info_logs_include_posthog_prefix(self):
+        self.client.flag_cache = mock.Mock()
+        self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()
+
+        with capture_message_only_logs(level=logging.INFO) as logs:
+            self.client._get_stale_flag_fallback("distinct_id", "flag-key")
+
+        self.assertEqual(
+            logs.getvalue().strip(),
+            "[PostHog] [FEATURE FLAGS] Using stale cached value for flag flag-key",
+        )
+
+    def test_message_only_logs_do_not_duplicate_existing_posthog_prefix(self):
+        with capture_message_only_logs(level=logging.ERROR) as logs:
+            self.client.log.error("[PostHog] already prefixed")
+
+        self.assertEqual(logs.getvalue().strip(), "[PostHog] already prefixed")
 
     @mock.patch("posthog.client.get")
     def test_disabled_client_does_not_load_feature_flags(self, patch_get):
@@ -454,7 +474,7 @@ class TestClient(unittest.TestCase):
                 self.assertFalse(patch_capture.called)
                 self.assertEqual(
                     logs.output[0],
-                    "WARNING:posthog:No exception information available",
+                    "WARNING:posthog:[PostHog] No exception information available",
                 )
 
     def test_capture_exception_logs_when_enabled(self):
@@ -464,7 +484,7 @@ class TestClient(unittest.TestCase):
                 Exception("test exception"), distinct_id="distinct_id"
             )
             self.assertEqual(
-                logs.output[0], "ERROR:posthog:test exception\nNoneType: None"
+                logs.output[0], "ERROR:posthog:[PostHog] test exception\nNoneType: None"
             )
 
     @mock.patch("posthog.client.flags")
