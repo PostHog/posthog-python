@@ -2294,6 +2294,35 @@ class TestClient(unittest.TestCase):
                 flag_keys_to_evaluate=["random_key"],
             )
 
+    @mock.patch("posthog.client.flags")
+    def test_client_set_context_device_id_is_used_in_flags_request(self, patch_flags):
+        patch_flags.return_value = {
+            "featureFlags": {
+                "beta-feature": "random-variant",
+            }
+        }
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+        )
+
+        with client.new_context():
+            client.set_context_device_id("client-context-device-id")
+            client.get_feature_flag("random_key", "some_id")
+
+        patch_flags.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            geoip_disable=True,
+            device_id="client-context-device-id",
+            flag_keys_to_evaluate=["random_key"],
+        )
+
     @parameterized.expand(
         [
             # name, sys_platform, version_info, expected_runtime, expected_version, expected_os, expected_os_version, expected_os_distro, platform_method, platform_return
@@ -2466,6 +2495,58 @@ class TestClient(unittest.TestCase):
                 self.assertEqual(
                     msg["properties"]["$session_id"], "context-session-123"
                 )
+
+    def test_client_context_helpers_apply_to_capture(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+
+            with client.new_context(fresh=True):
+                client.tag("client_tag", "tag-value")
+                client.identify_context("context-user")
+                client.set_context_session("context-session-123")
+
+                self.assertEqual(client.get_tags(), {"client_tag": "tag-value"})
+
+                msg_uuid = client.capture(
+                    "test_event",
+                    properties={"custom_prop": "value"},
+                )
+
+            self.assertIsNotNone(msg_uuid)
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["distinct_id"], "context-user")
+            self.assertEqual(msg["properties"]["client_tag"], "tag-value")
+            self.assertEqual(msg["properties"]["custom_prop"], "value")
+            self.assertEqual(msg["properties"]["$session_id"], "context-session-123")
+            self.assertCountEqual(msg["properties"]["$context_tags"], ["client_tag"])
+            self.assertEqual(client.get_tags(), {})
+
+    def test_client_scoped_context_helpers_apply_to_capture(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+
+            @client.scoped(fresh=True)
+            def capture_in_client_scope():
+                client.tag("scoped_tag", "scoped-value")
+                client.identify_context("scoped-user")
+                client.set_context_session("scoped-session-123")
+                return client.capture("scoped_event")
+
+            msg_uuid = capture_in_client_scope()
+
+            self.assertIsNotNone(msg_uuid)
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["distinct_id"], "scoped-user")
+            self.assertEqual(msg["properties"]["scoped_tag"], "scoped-value")
+            self.assertEqual(msg["properties"]["$session_id"], "scoped-session-123")
+            self.assertCountEqual(msg["properties"]["$context_tags"], ["scoped_tag"])
+            self.assertEqual(client.get_tags(), {})
 
     def test_set_context_session_with_page_explicit_properties(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
