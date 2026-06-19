@@ -80,9 +80,13 @@ class TestClient(unittest.TestCase):
 
         self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
 
-    def test_warns_once_on_duplicate_async_client_same_key_and_host(self):
+    def _reset_duplicate_client_registry(self):
         Client._client_registry.clear()
         Client._duplicate_client_warnings.clear()
+
+    def test_warns_once_on_duplicate_async_client_same_key_and_host(self):
+        self._reset_duplicate_client_registry()
+        self.addCleanup(self._reset_duplicate_client_registry)
         host = "https://us.i.posthog.com"
         registry_key = (FAKE_TEST_API_KEY, host)
 
@@ -120,9 +124,18 @@ class TestClient(unittest.TestCase):
             fourth.shutdown()
             fifth.shutdown()
 
-    def test_duplicate_client_warning_allows_intentional_multi_client_cases(self):
-        Client._client_registry.clear()
-        Client._duplicate_client_warnings.clear()
+    @parameterized.expand(
+        [
+            ("different_host", {"host": "https://two.example.com"}),
+            ("sync_mode", {"host": "https://one.example.com", "sync_mode": True}),
+            ("send_disabled", {"host": "https://one.example.com", "send": False}),
+        ]
+    )
+    def test_duplicate_client_warning_allows_intentional_multi_client_cases(
+        self, _, duplicate_kwargs
+    ):
+        self._reset_duplicate_client_registry()
+        self.addCleanup(self._reset_duplicate_client_registry)
 
         with (
             mock.patch("posthog.client.atexit.register"),
@@ -130,25 +143,13 @@ class TestClient(unittest.TestCase):
             mock.patch.object(Client.log, "warning") as mock_warning,
         ):
             first = Client(FAKE_TEST_API_KEY, host="https://one.example.com")
-            different_host = Client(FAKE_TEST_API_KEY, host="https://two.example.com")
-            sync_duplicate = Client(
-                FAKE_TEST_API_KEY,
-                host="https://one.example.com",
-                sync_mode=True,
-            )
-            send_disabled_duplicate = Client(
-                FAKE_TEST_API_KEY,
-                host="https://one.example.com",
-                send=False,
-            )
+            duplicate = Client(FAKE_TEST_API_KEY, **duplicate_kwargs)
 
-            self.assertIsNot(first, different_host)
-            self.assertIsNot(first, sync_duplicate)
-            self.assertIsNot(first, send_disabled_duplicate)
+            self.assertIsNot(first, duplicate)
             mock_warning.assert_not_called()
 
             first.shutdown()
-            different_host.shutdown()
+            duplicate.shutdown()
 
     @mock.patch("posthog.client.get")
     def test_disabled_client_does_not_load_feature_flags(self, patch_get):

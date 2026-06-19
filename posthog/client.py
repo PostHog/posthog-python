@@ -468,7 +468,7 @@ class Client(object):
             clients = Client._client_registry.setdefault(
                 registry_key, weakref.WeakSet()
             )
-            has_existing_client = any(client is not self for client in clients)
+            has_existing_client = len(clients) > 0
             clients.add(self)
             self._duplicate_client_registry_key = registry_key
 
