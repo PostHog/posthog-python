@@ -27,6 +27,30 @@ payload: object | None = client.get_feature_flag_payload("flag", "user")
 _ = (flag_value, all_flags, enabled, payload)
 PY
 
+"$tmp/.venv/bin/python" - <<'PY' > "$tmp/public_api_access.py"
+import inspect
+
+import posthog
+from posthog import Posthog
+
+print("# pyright: strict")
+print("import posthog")
+print("from posthog import Posthog")
+print('client = Posthog("phc_test")')
+
+for name, obj in inspect.getmembers(Posthog):
+    if name.startswith("_"):
+        continue
+    if inspect.isfunction(obj) or inspect.ismethoddescriptor(obj):
+        print(f"client_{name} = client.{name}")
+
+for name, obj in inspect.getmembers(posthog):
+    if name.startswith("_") or name.startswith("inner_"):
+        continue
+    if inspect.isfunction(obj):
+        print(f"module_{name} = posthog.{name}")
+PY
+
 cat > "$tmp/pyrightconfig.json" <<JSON
 {
   "typeCheckingMode": "strict",
@@ -42,4 +66,4 @@ cat > "$tmp/pyrightconfig.json" <<JSON
 JSON
 
 cd "$tmp"
-"$tmp/.venv/bin/python" -m pyright strict_posthog_types.py
+"$tmp/.venv/bin/python" -m pyright strict_posthog_types.py public_api_access.py
