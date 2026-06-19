@@ -24,7 +24,8 @@ class OptionalCaptureArgs(TypedDict):
         timestamp: When the event occurred (defaults to current time)
         uuid: Unique identifier for this specific event. If not provided, one is generated. The event
             UUID is returned, so you can correlate it with actions in your app (like showing users an
-            error ID if you capture an exception).
+            error ID if you capture an exception). If provided, it must be a valid UUID string or
+            uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID.
         groups: Group identifiers to associate with this event (format: {group_type: group_key})
         flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``. The exact flag
             values from the snapshot are attached to the event with no additional network call —
@@ -61,7 +62,9 @@ class OptionalSetArgs(TypedDict):
         properties: Dictionary of properties to set on the person
         timestamp: When the properties were set (defaults to current time)
         uuid: Unique identifier for this operation. If not provided, one is generated. This
-            UUID is returned, so you can correlate it with actions in your app.
+            UUID is returned, so you can correlate it with actions in your app. If provided,
+            it must be a valid UUID string or uuid.UUID instance; invalid values are ignored
+            and replaced with a newly generated UUID.
         disable_geoip: Whether to disable GeoIP lookup for this operation. Defaults to False.
     """
 

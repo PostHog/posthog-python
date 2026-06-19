@@ -748,7 +748,9 @@ class Client(object):
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to include with the event.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             groups: A dictionary of group information.
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
@@ -961,7 +963,9 @@ class Client(object):
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -1009,7 +1013,9 @@ class Client(object):
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set once.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:
@@ -1065,7 +1071,9 @@ class Client(object):
             group_key: The unique identifier for the group.
             properties: A dictionary of properties to set on the group.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             distinct_id: The distinct ID of the user performing the action.
 
@@ -1121,7 +1129,9 @@ class Client(object):
             previous_id: The previous distinct ID.
             distinct_id: The new distinct ID to alias to.
             timestamp: The timestamp of the event.
-            uuid: A unique identifier for the event.
+            uuid: A unique identifier for the event. If provided, it must be a
+                valid UUID string or uuid.UUID instance; invalid values are
+                ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
 
         Examples:

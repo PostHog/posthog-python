@@ -231,12 +231,14 @@ class TestClient(unittest.TestCase):
             msg = mock_post.call_args[1]["batch"][0]
             self.assertEqual(msg["uuid"], str(uuid))
 
-    @parameterized.expand([
-        ("empty string", ""),
-        ("invalid string", "not-a-uuid"),
-        ("short string", "1234"),
-        ("integer", 123),
-    ])
+    @parameterized.expand(
+        [
+            ("empty string", ""),
+            ("invalid string", "not-a-uuid"),
+            ("short string", "1234"),
+            ("integer", 123),
+        ]
+    )
     def test_capture_with_invalid_uuid_logs_and_falls_back_to_generated_uuid(
         self, _name, invalid_uuid
     ):
@@ -262,12 +264,14 @@ class TestClient(unittest.TestCase):
                 )
             )
 
-    @parameterized.expand([
-        ("empty string", ""),
-        ("invalid string", "not-a-uuid"),
-        ("short string", "1234"),
-        ("integer", 123),
-    ])
+    @parameterized.expand(
+        [
+            ("empty string", ""),
+            ("invalid string", "not-a-uuid"),
+            ("short string", "1234"),
+            ("integer", 123),
+        ]
+    )
     def test_capture_with_invalid_uuid_falls_back_in_debug(self, _name, invalid_uuid):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
