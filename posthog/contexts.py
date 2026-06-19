@@ -112,10 +112,25 @@ def _get_current_context() -> Optional[ContextScope]:
     return _context_stack.get()
 
 
+def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
+    if client is not None:
+        return client.enable_exception_autocapture
+
+    import posthog
+
+    default_client = getattr(posthog, "default_client", None)
+    if default_client is not None:
+        client_default = getattr(default_client, "enable_exception_autocapture", None)
+        if isinstance(client_default, bool):
+            return client_default
+
+    return posthog.enable_exception_autocapture
+
+
 @contextmanager
 def new_context(
     fresh: bool = False,
-    capture_exceptions: bool = True,
+    capture_exceptions: Optional[bool] = None,
     client: Optional["Client"] = None,
 ):
     """
@@ -127,7 +142,8 @@ def new_context(
         fresh: Whether to start with a fresh context (default: False).
                If False, inherits tags, identity and session id's from parent context.
                If True, starts with no state
-        capture_exceptions: Whether to capture exceptions raised within the context (default: True).
+        capture_exceptions: Whether to capture exceptions raised within the context.
+               If omitted, defaults to the relevant client's exception autocapture setting.
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
         client: Optional client instance to use for capturing exceptions (default: None).
@@ -162,7 +178,14 @@ def new_context(
     from posthog import capture_exception
 
     current_context = _get_current_context()
-    new_context = ContextScope(current_context, fresh, capture_exceptions, client)
+    resolved_capture_exceptions = (
+        capture_exceptions
+        if capture_exceptions is not None
+        else _default_capture_exceptions(client)
+    )
+    new_context = ContextScope(
+        current_context, fresh, resolved_capture_exceptions, client
+    )
     _context_stack.set(new_context)
 
     try:
@@ -370,14 +393,14 @@ def get_code_variables_ignore_patterns_context() -> Optional[list]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(fresh: bool = False, capture_exceptions: bool = True):
+def scoped(fresh: bool = False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function. Simply wraps
     the function in a with posthog.new_context(): block.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting.
 
     Example:
         @posthog.scoped()

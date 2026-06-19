@@ -76,7 +76,7 @@ __version__ = VERSION
 
 def new_context(
     fresh: bool = False,
-    capture_exceptions: bool = True,
+    capture_exceptions: Optional[bool] = None,
     client: Optional[Client] = None,
 ):
     """
@@ -84,7 +84,7 @@ def new_context(
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture exceptions raised within the context (default: True)
+        capture_exceptions: Whether to capture exceptions raised within the context. If omitted, defaults to the relevant client's exception autocapture setting.
         client: Optional Posthog client instance to use for this context (default: None)
 
     Examples:
@@ -103,13 +103,13 @@ def new_context(
     )
 
 
-def scoped(fresh=False, capture_exceptions=True):
+def scoped(fresh=False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting.
 
     Examples:
         ```python
