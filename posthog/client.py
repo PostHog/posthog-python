@@ -120,14 +120,14 @@ def _stringify_event_uuid(value) -> str:
     stringified = stringify_id(value)
     if not stringified:
         raise ValueError(
-            "Invalid event uuid. Expected a valid UUID string or uuid.UUID instance."
+            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
         )
 
     try:
         UUID(stringified)
     except ValueError:
         raise ValueError(
-            f"Invalid event uuid {stringified!r}. Expected a valid UUID string or uuid.UUID instance."
+            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
         ) from None
 
     return stringified
@@ -1369,7 +1369,10 @@ class Client(object):
         if "uuid" in msg:
             uuid = msg.pop("uuid")
             if uuid is not None:
-                msg["uuid"] = _stringify_event_uuid(uuid)
+                try:
+                    msg["uuid"] = _stringify_event_uuid(uuid)
+                except ValueError as e:
+                    self.log.error("%s Falling back to a generated UUID.", e)
 
         if "uuid" not in msg:
             # Always send a uuid, so we can always return one

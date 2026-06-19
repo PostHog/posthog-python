@@ -231,36 +231,54 @@ class TestClient(unittest.TestCase):
             msg = mock_post.call_args[1]["batch"][0]
             self.assertEqual(msg["uuid"], str(uuid))
 
-    def test_capture_with_invalid_uuid_logs_and_does_not_send(self):
+    @parameterized.expand([
+        ("empty string", ""),
+        ("invalid string", "not-a-uuid"),
+        ("short string", "1234"),
+        ("integer", 123),
+    ])
+    def test_capture_with_invalid_uuid_logs_and_falls_back_to_generated_uuid(
+        self, _name, invalid_uuid
+    ):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with self.assertLogs("posthog", level="ERROR") as logs:
                 msg_uuid = client.capture(
-                    "python test event", distinct_id="distinct_id", uuid="not-a-uuid"
+                    "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
 
-            self.assertIsNone(msg_uuid)
-            mock_post.assert_not_called()
+            self.assertIsNotNone(msg_uuid)
+            UUID(msg_uuid)
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["uuid"], msg_uuid)
+            self.assertNotEqual(msg["uuid"], str(invalid_uuid))
             self.assertTrue(
                 any(
-                    "Invalid event uuid 'not-a-uuid'" in message
+                    f"Invalid event uuid {invalid_uuid!r}" in message
                     and "Expected a valid UUID string or uuid.UUID instance" in message
+                    and "Falling back to a generated UUID" in message
                     for message in logs.output
                 )
             )
 
-    def test_capture_with_invalid_uuid_raises_in_debug(self):
+    @parameterized.expand([
+        ("empty string", ""),
+        ("invalid string", "not-a-uuid"),
+        ("short string", "1234"),
+        ("integer", 123),
+    ])
+    def test_capture_with_invalid_uuid_falls_back_in_debug(self, _name, invalid_uuid):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
-            with self.assertRaisesRegex(
-                ValueError,
-                "Invalid event uuid 'not-a-uuid'.*Expected a valid UUID string",
-            ):
-                client.capture(
-                    "python test event", distinct_id="distinct_id", uuid="not-a-uuid"
+            with self.assertLogs("posthog", level="ERROR"):
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
 
-            mock_post.assert_not_called()
+            self.assertIsNotNone(msg_uuid)
+            UUID(msg_uuid)
+            mock_post.assert_called_once()
 
     def test_basic_capture_with_project_api_key(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
