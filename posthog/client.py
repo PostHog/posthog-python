@@ -21,6 +21,7 @@ from posthog.contexts import (
     get_capture_exception_code_variables_context,
     get_code_variables_ignore_patterns_context,
     get_code_variables_mask_patterns_context,
+    get_code_variables_mask_url_credentials_context,
     get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
@@ -37,6 +38,7 @@ from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
+    DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
@@ -239,6 +241,7 @@ class Client(object):
         capture_exception_code_variables=False,
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
+        code_variables_mask_url_credentials=None,
         in_app_modules: list[str] | None = None,
         enable_exception_autocapture_rate_limiting=False,
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
@@ -304,6 +307,9 @@ class Client(object):
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
                 capturing code variables.
+            code_variables_mask_url_credentials: Scrub credentials embedded in
+                URLs/DSNs (e.g. ``user:pass@host``) from captured code variables,
+                regardless of the surrounding variable name. Defaults to True.
             in_app_modules: Module/package prefixes treated as in-app frames in
                 captured exceptions.
             enable_exception_autocapture_rate_limiting: Rate limit
@@ -395,6 +401,11 @@ class Client(object):
             code_variables_ignore_patterns
             if code_variables_ignore_patterns is not None
             else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+        )
+        self.code_variables_mask_url_credentials = (
+            code_variables_mask_url_credentials
+            if code_variables_mask_url_credentials is not None
+            else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
         )
         self.in_app_modules = in_app_modules
 
@@ -1327,6 +1338,9 @@ class Client(object):
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
             context_ignore = get_code_variables_ignore_patterns_context()
+            context_mask_url_credentials = (
+                get_code_variables_mask_url_credentials_context()
+            )
 
             enabled = (
                 context_enabled
@@ -1343,6 +1357,11 @@ class Client(object):
                 if context_ignore is not None
                 else self.code_variables_ignore_patterns
             )
+            mask_url_credentials = (
+                context_mask_url_credentials
+                if context_mask_url_credentials is not None
+                else self.code_variables_mask_url_credentials
+            )
 
             if enabled:
                 try_attach_code_variables_to_frames(
@@ -1350,6 +1369,7 @@ class Client(object):
                     exc_info,
                     mask_patterns=mask_patterns,
                     ignore_patterns=ignore_patterns,
+                    mask_url_credentials=mask_url_credentials,
                 )
 
             if self.log_captured_exceptions:
