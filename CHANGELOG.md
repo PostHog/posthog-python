@@ -1,5 +1,11 @@
 # posthog
 
+## 7.20.1 — 2026-06-22
+
+### Patch changes
+
+- [09c8fba](https://github.com/posthog/posthog-python/commit/09c8fba8096a1edf5dc125fe10fe3f447975fec9) Warn on duplicate async PostHog clients and document client lifecycle guidance — Thanks @marandaneto!
+
 ## 7.20.0 — 2026-06-22
 
 ### Minor changes
