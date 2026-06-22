@@ -36,6 +36,7 @@ Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
 langchain = ["langchain>=0.2.0"]
+mcp = ["mcp>=1.26.0"]
 otel = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
@@ -80,6 +81,7 @@ test = [
     "pydantic>=2.12.0",
     "parameterized>=0.8.1",
     "claude-agent-sdk",
+    "mcp>=1.26.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "pytest-bdd>=8.1.0",
@@ -96,11 +98,13 @@ packages = [
     "posthog.ai.gemini",
     "posthog.ai.claude_agent_sdk",
     "posthog.ai.otel",
+    "posthog.mcp",
     "posthog.test",
     "posthog.test.ai",
     "posthog.test.ai.openai_agents",
     "posthog.test.ai.claude_agent_sdk",
     "posthog.test.ai.otel",
+    "posthog.test.mcp",
     "posthog.integrations",
 ]
 
