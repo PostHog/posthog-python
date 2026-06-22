@@ -1,5 +1,12 @@
 # posthog
 
+## 7.20.2 — 2026-06-22
+
+### Patch changes
+
+- [c359f93](https://github.com/posthog/posthog-python/commit/c359f939e4ca6bf7d591f62400adf3750983c3b6) Mask sensitive data held inside objects and in URL/DSN credentials when capturing exception code variables. Custom objects are now traversed so fields like `password` are redacted by attribute name instead of leaking via `repr()`, and credentials embedded in connection strings are scrubbed. Adds the `code_variables_mask_url_credentials` option (default `True`). — Thanks @ablaszkiewicz!
+- [c359f93](https://github.com/posthog/posthog-python/commit/c359f939e4ca6bf7d591f62400adf3750983c3b6) Improve strict Pyright coverage for public PostHog APIs. — Thanks @ablaszkiewicz!
+
 ## 7.20.1 — 2026-06-22
 
 ### Patch changes
