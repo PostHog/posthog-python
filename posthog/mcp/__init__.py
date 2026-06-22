@@ -51,6 +51,7 @@ from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
 from .session import derive_session_id_from_mcp_session, new_session_id
 from .sink import McpEventSink
+from .tools import get_more_tools_result
 from .types import (
     CaptureEventData,
     MCPAnalyticsContextOptions,
@@ -69,6 +70,7 @@ __all__ = [
     "UserIdentity",
     "CaptureEventData",
     "PreparedToolCall",
+    "get_more_tools_result",
     "derive_session_id_from_mcp_session",
     "set_logger",
     "POSTHOG_MCP_ANALYTICS_SOURCE",

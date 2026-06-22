@@ -31,11 +31,18 @@ from .context_parameters import (
     get_context_description,
     is_context_enabled,
 )
+from .conversation_id import (
+    add_conversation_id_to_schema,
+    build_prompt_back,
+    resolve_conversation_id,
+)
 from .instrumentation import (
+    append_get_more_tools,
     build_tool_call_request,
     extract_tools,
     prepare_request,
     read_tool_category,
+    record_missing_capability,
     record_tool_call,
     record_tools_list,
     request_to_dict,
@@ -43,8 +50,12 @@ from .instrumentation import (
 from .internal import MCPAnalyticsData
 from .logger import log
 from .session import resolve_session_id
+from .tools import (
+    GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
+    get_more_tools_result_text,
+    resolve_missing_capability_tool_name,
+)
 
-_GET_MORE_TOOLS_NAME = "get_more_tools"
 _INJECTED_KEYS = ("context", "conversation_id")
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -93,6 +104,25 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             extra=extra,
         )
 
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        if data.options.report_missing and name == missing_name:
+            record_missing_capability(
+                data,
+                session_id,
+                tool_name=missing_name,
+                context=(arguments or {}).get("context"),
+                arguments=arguments,
+                client_name=client_name,
+                client_version=client_version,
+            )
+            return [
+                mcp_types.TextContent(type="text", text=get_more_tools_result_text())
+            ]
+
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
+        )
+
         call_arguments = arguments
         if isinstance(arguments, dict) and not _tool_owns_context(server, name):
             call_arguments = {
@@ -114,6 +144,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 duration_ms=(time.monotonic() - start) * 1000,
                 client_name=client_name,
                 client_version=client_version,
+                conversation_id=conversation_id,
                 extra=extra,
             )
             raise
@@ -127,8 +158,11 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             duration_ms=(time.monotonic() - start) * 1000,
             client_name=client_name,
             client_version=client_version,
+            conversation_id=conversation_id,
             extra=extra,
         )
+        if minted and conversation_id:
+            result = _inject_prompt_back(result, conversation_id)
         return result
 
     setattr(wrapped, _WRAPPED_FLAG, True)
@@ -165,23 +199,31 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             if category:
                 data.tool_categories[tool.name] = category
 
-        session_id = await resolve_session_id(data, None)
-        record_tools_list(data, session_id, names=names, request=request_to_dict(req))
-
-        if is_context_enabled(data.options.context):
-            description = get_context_description(data.options.context)
-            for tool in tools:
-                if tool.name == _GET_MORE_TOOLS_NAME or _tool_owns_context(
-                    server, tool.name
-                ):
-                    continue
-                new_schema = add_context_parameter_to_schema(
-                    getattr(tool, "inputSchema", None), tool.name, description
-                )
+        context_enabled = is_context_enabled(data.options.context)
+        description = get_context_description(data.options.context)
+        for tool in tools:
+            if tool.name == _GET_MORE_TOOLS_NAME:
+                continue
+            owns_context = _tool_owns_context(server, tool.name)
+            schema = getattr(tool, "inputSchema", None)
+            if context_enabled and not owns_context:
+                schema = add_context_parameter_to_schema(schema, tool.name, description)
+            if data.options.enable_conversation_id:
+                schema = add_conversation_id_to_schema(schema, tool.name)
+            if schema is not getattr(tool, "inputSchema", None):
                 try:
-                    tool.inputSchema = new_schema
+                    tool.inputSchema = schema
                 except Exception:  # noqa: BLE001 - some schema attrs may be read-only
                     log(f"WARN: could not set inputSchema on tool {tool.name}")
+
+        if data.options.report_missing:
+            missing_name = resolve_missing_capability_tool_name(data.options)
+            if not any(t.name == missing_name for t in tools):
+                append_get_more_tools(result, missing_name)
+                names.append(missing_name)
+
+        session_id = await resolve_session_id(data, None)
+        record_tools_list(data, session_id, names=names, request=request_to_dict(req))
 
         return result
 
@@ -190,6 +232,23 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
 
 # --- helpers -----------------------------------------------------------------
+
+
+def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
+    """Append the conversation_id prompt-back to a tool result so the agent echoes
+    it on later calls. Handles FastMCP's content-list results and dict results."""
+    block = mcp_types.TextContent(
+        type="text", text=build_prompt_back(conversation_id)["text"]
+    )
+    if isinstance(result, list):
+        return [*result, block]
+    if (
+        isinstance(result, dict)
+        and isinstance(result.get("content"), list)
+        and not result.get("isError")
+    ):
+        return {**result, "content": [*result["content"], block]}
+    return result
 
 
 def _tool_owns_context(server: Any, name: str) -> bool:

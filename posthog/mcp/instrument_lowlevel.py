@@ -24,11 +24,18 @@ from .context_parameters import (
     get_context_description,
     is_context_enabled,
 )
+from .conversation_id import (
+    add_conversation_id_to_schema,
+    build_prompt_back,
+    resolve_conversation_id,
+)
 from .instrumentation import (
+    append_get_more_tools,
     build_tool_call_request,
     extract_tools,
     prepare_request,
     read_tool_category,
+    record_missing_capability,
     record_tool_call,
     record_tools_list,
     request_to_dict,
@@ -36,8 +43,12 @@ from .instrumentation import (
 from .internal import MCPAnalyticsData
 from .logger import log
 from .session import resolve_session_id
+from .tools import (
+    GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
+    get_more_tools_result_text,
+    resolve_missing_capability_tool_name,
+)
 
-_GET_MORE_TOOLS_NAME = "get_more_tools"
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
 
@@ -71,10 +82,36 @@ def _wrap_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             extra=extra,
         )
 
-        # Note: `context` is injected as an *optional* schema property (see
-        # _wrap_list_tools), so we do NOT strip it here — the low-level handler
-        # validates inbound args against the same advertised schema, and the
-        # user's (name, arguments) handler harmlessly ignores the extra key.
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        if data.options.report_missing and name == missing_name:
+            record_missing_capability(
+                data,
+                session_id,
+                tool_name=missing_name,
+                context=arguments.get("context"),
+                arguments=arguments,
+                client_name=client_name,
+                client_version=client_version,
+            )
+            return mcp_types.ServerResult(
+                mcp_types.CallToolResult(
+                    content=[
+                        mcp_types.TextContent(
+                            type="text", text=get_more_tools_result_text()
+                        )
+                    ],
+                    isError=False,
+                )
+            )
+
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
+        )
+
+        # Note: `context`/`conversation_id` are injected as *optional* schema
+        # properties (see _wrap_list_tools), so we do NOT strip them here — the
+        # low-level handler validates inbound args against the same advertised
+        # schema, and the user's (name, arguments) handler ignores the extra keys.
         start = time.monotonic()
         result = await original(req)
         duration_ms = (time.monotonic() - start) * 1000
@@ -91,8 +128,17 @@ def _wrap_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             duration_ms=duration_ms,
             client_name=client_name,
             client_version=client_version,
+            conversation_id=conversation_id,
             extra=extra,
         )
+        if minted and conversation_id and not getattr(call_result, "isError", False):
+            content = getattr(call_result, "content", None)
+            if isinstance(content, list):
+                content.append(
+                    mcp_types.TextContent(
+                        type="text", text=build_prompt_back(conversation_id)["text"]
+                    )
+                )
         return result
 
     setattr(handler, _WRAPPED_FLAG, True)
@@ -118,6 +164,33 @@ def _wrap_list_tools(server: Any, data: MCPAnalyticsData) -> None:
             if category:
                 data.tool_categories[tool.name] = category
 
+        context_enabled = is_context_enabled(data.options.context)
+        description = get_context_description(data.options.context)
+        for tool in tools:
+            if tool.name == _GET_MORE_TOOLS_NAME:
+                continue
+            schema = getattr(tool, "inputSchema", None)
+            # Inject as OPTIONAL (required=False): the advertised schema is also
+            # the validation schema for low-level calls, so a call omitting these
+            # must still pass.
+            if context_enabled and not _schema_has_context(schema):
+                schema = add_context_parameter_to_schema(
+                    schema, tool.name, description, required=False
+                )
+            if data.options.enable_conversation_id:
+                schema = add_conversation_id_to_schema(schema, tool.name)
+            if schema is not getattr(tool, "inputSchema", None):
+                try:
+                    tool.inputSchema = schema
+                except Exception:  # noqa: BLE001
+                    log(f"WARN: could not set inputSchema on tool {tool.name}")
+
+        if data.options.report_missing:
+            missing_name = resolve_missing_capability_tool_name(data.options)
+            if not any(t.name == missing_name for t in tools):
+                append_get_more_tools(result, missing_name)
+                names.append(missing_name)
+
         client_name, client_version = _client_info(server)
         session_id = await resolve_session_id(data, _mcp_session_id(server))
         record_tools_list(
@@ -128,25 +201,6 @@ def _wrap_list_tools(server: Any, data: MCPAnalyticsData) -> None:
             client_name=client_name,
             client_version=client_version,
         )
-
-        if is_context_enabled(data.options.context):
-            description = get_context_description(data.options.context)
-            for tool in tools:
-                if tool.name == _GET_MORE_TOOLS_NAME:
-                    continue
-                schema = getattr(tool, "inputSchema", None)
-                if _schema_has_context(schema):
-                    continue  # tool already declares `context`; leave it alone
-                # Optional (required=False): the advertised schema is also the
-                # validation schema for low-level calls, so a call without
-                # `context` must still pass.
-                new_schema = add_context_parameter_to_schema(
-                    schema, tool.name, description, required=False
-                )
-                try:
-                    tool.inputSchema = new_schema
-                except Exception:  # noqa: BLE001
-                    log(f"WARN: could not set inputSchema on tool {tool.name}")
 
         return result
 

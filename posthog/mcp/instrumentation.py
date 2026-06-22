@@ -134,6 +134,7 @@ async def record_tool_call(
     duration_ms: Optional[float] = None,
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     request = build_tool_call_request(name, arguments)
@@ -147,6 +148,7 @@ async def record_tool_call(
         "duration": duration_ms,
         "client_name": client_name,
         "client_version": client_version,
+        "conversation_id": conversation_id,
         "is_error": False,
     }
     set_event_intent(event, await resolve_tool_call_intent(data, request, extra))
@@ -168,9 +170,29 @@ async def record_tool_call(
 
 
 def extract_tools(result: Any) -> list:
-    """Pull the tool list out of a ListTools ServerResult."""
+    """Pull the tool list out of a ListTools ServerResult (a copy — to MUTATE the
+    real list use ``append_get_more_tools``)."""
     root = getattr(result, "root", result)
     return list(getattr(root, "tools", []) or [])
+
+
+def append_get_more_tools(result: Any, name: str) -> None:
+    """Append the get_more_tools virtual tool to the real ListToolsResult.tools list."""
+    import mcp.types as mcp_types
+
+    from .tools import build_report_missing_descriptor
+
+    descriptor = build_report_missing_descriptor(name)
+    tool = mcp_types.Tool(
+        name=descriptor["name"],
+        description=descriptor["description"],
+        inputSchema=descriptor["inputSchema"],
+        annotations=descriptor["annotations"],
+    )
+    root = getattr(result, "root", result)
+    tools_list = getattr(root, "tools", None)
+    if isinstance(tools_list, list):
+        tools_list.append(tool)
 
 
 def read_tool_category(tool: Any) -> Optional[str]:
@@ -194,6 +216,33 @@ def request_to_dict(req: Any) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001
             params_dict = {}
     return {"method": method, "params": params_dict}
+
+
+def record_missing_capability(
+    data: MCPAnalyticsData,
+    session_id: str,
+    *,
+    tool_name: str,
+    context: Optional[str],
+    arguments: Optional[Dict[str, Any]],
+    client_name: Optional[str] = None,
+    client_version: Optional[str] = None,
+) -> None:
+    """Record a ``get_more_tools`` call as ``$mcp_missing_capability``, with the
+    agent's stated need as ``$mcp_intent``."""
+    request = build_tool_call_request(tool_name, arguments)
+    event: Dict[str, Any] = {
+        "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
+        "session_id": session_id,
+        "resource_name": tool_name,
+        "parameters": build_captured_mcp_parameters(request),
+        "client_name": client_name,
+        "client_version": client_version,
+    }
+    if isinstance(context, str) and context.strip():
+        event["user_intent"] = context.strip()
+        event["user_intent_source"] = "context_parameter"
+    fire_and_forget(capture_event(data, event))
 
 
 def record_tools_list(

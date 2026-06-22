@@ -25,6 +25,7 @@ from .event_types import MCPAnalyticsEventType
 from .exceptions import capture_exception
 from .instrumentation import fire_and_forget
 from .sink import McpCaptureOptions, McpEventSink
+from .tools import build_report_missing_descriptor
 from .types import (
     JsonRecord,
     MCPAnalyticsContextOptions,
@@ -202,14 +203,25 @@ class PostHogMCP(Client):
         self,
         tools: List[Any],
         context: Union[bool, MCPAnalyticsContextOptions] = True,
+        report_missing: bool = False,
     ) -> List[Any]:
         """Inject the ``context`` argument into every tool so agents state their
-        intent (captured as ``$mcp_intent``). Returns a new list; tools that are
-        dicts are copied, tool objects are mutated in place."""
-        if not is_context_enabled(context):
-            return list(tools)
-        description = get_context_description(context)
-        return [self._inject_context(tool, description) for tool in tools]
+        intent (captured as ``$mcp_intent``), and optionally append the
+        ``get_more_tools`` virtual tool (``report_missing=True``). Returns a new
+        list; dict tools are copied, tool objects are mutated in place."""
+        if is_context_enabled(context):
+            description = get_context_description(context)
+            prepared = [self._inject_context(tool, description) for tool in tools]
+        else:
+            prepared = list(tools)
+
+        if report_missing and not any(
+            _tool_name(t) == self._missing_capability_tool_name for t in prepared
+        ):
+            prepared.append(
+                build_report_missing_descriptor(self._missing_capability_tool_name)
+            )
+        return prepared
 
     def prepare_tool_call(
         self, name: str, args: Optional[JsonRecord] = None
@@ -296,3 +308,9 @@ def _strip_context(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
     if not args or "context" not in args:
         return args
     return {k: v for k, v in args.items() if k != "context"}
+
+
+def _tool_name(tool: Any) -> Optional[str]:
+    if isinstance(tool, dict):
+        return tool.get("name")
+    return getattr(tool, "name", None)
