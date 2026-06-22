@@ -49,17 +49,41 @@ from .tools import (
     resolve_missing_capability_tool_name,
 )
 
+_INJECTED_KEYS = ("context", "conversation_id")
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
 
 def instrument_low_level(server: Any, data: MCPAnalyticsData) -> None:
+    """Instrument a raw ``mcp.server.Server``. ``context`` is injected as an
+    optional schema property and NOT stripped — that schema is also the call's
+    validation schema, and a typical ``(name, arguments)`` handler ignores extra keys."""
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
-    _wrap_call_tool(server, data)
-    _wrap_list_tools(server, data)
+    _wrap_call_tool(server, data, strip_injected=False)
+    _wrap_list_tools(server, data, context_required=False)
 
 
-def _wrap_call_tool(server: Any, data: MCPAnalyticsData) -> None:
+def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
+    """Instrument jlowin's standalone ``fastmcp.FastMCP`` (FastMCP 2.0). It exposes a
+    ``_mcp_server`` (a subclass of the official low-level Server) with the same
+    ``request_handlers`` seam, but validates tool args against the function
+    signature and rejects unexpected kwargs — so we STRIP the injected
+    ``context``/``conversation_id`` before dispatch (like the official FastMCP path)."""
+    low_level = getattr(server, "_mcp_server", None)
+    if low_level is None:
+        log("Warning: fastmcp.FastMCP has no _mcp_server; cannot instrument.")
+        return
+    data.server_name = getattr(server, "name", None) or getattr(low_level, "name", None)
+    data.server_version = getattr(server, "version", None) or getattr(
+        low_level, "version", None
+    )
+    _wrap_call_tool(low_level, data, strip_injected=True)
+    _wrap_list_tools(low_level, data, context_required=True)
+
+
+def _wrap_call_tool(
+    server: Any, data: MCPAnalyticsData, *, strip_injected: bool
+) -> None:
     handlers = server.request_handlers
     original = handlers.get(mcp_types.CallToolRequest)
     if original is None or getattr(original, _WRAPPED_FLAG, False):
@@ -108,10 +132,14 @@ def _wrap_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             data.options.enable_conversation_id, arguments, name, missing_name
         )
 
-        # Note: `context`/`conversation_id` are injected as *optional* schema
-        # properties (see _wrap_list_tools), so we do NOT strip them here — the
-        # low-level handler validates inbound args against the same advertised
-        # schema, and the user's (name, arguments) handler ignores the extra keys.
+        # On raw low-level servers `context`/`conversation_id` are injected as
+        # *optional* schema properties and left in place (a (name, arguments)
+        # handler ignores extra keys). FastMCP 2.0 validates against the function
+        # signature and rejects unexpected kwargs, so strip them before dispatch.
+        if strip_injected and req.params.arguments:
+            for key in _INJECTED_KEYS:
+                req.params.arguments.pop(key, None)
+
         start = time.monotonic()
         result = await original(req)
         duration_ms = (time.monotonic() - start) * 1000
@@ -145,13 +173,20 @@ def _wrap_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     handlers[mcp_types.CallToolRequest] = handler
 
 
-def _wrap_list_tools(server: Any, data: MCPAnalyticsData) -> None:
+def _wrap_list_tools(
+    server: Any, data: MCPAnalyticsData, *, context_required: bool
+) -> None:
     handlers = server.request_handlers
     original = handlers.get(mcp_types.ListToolsRequest)
     if original is None or getattr(original, _WRAPPED_FLAG, False):
         return
 
     async def handler(req: Any) -> Any:
+        # The server calls the handler with None to populate its tool cache;
+        # don't capture or inject on that internal pass.
+        if req is None:
+            return await original(req)
+
         result = await original(req)
         tools = extract_tools(result)
 
@@ -170,12 +205,11 @@ def _wrap_list_tools(server: Any, data: MCPAnalyticsData) -> None:
             if tool.name == _GET_MORE_TOOLS_NAME:
                 continue
             schema = getattr(tool, "inputSchema", None)
-            # Inject as OPTIONAL (required=False): the advertised schema is also
-            # the validation schema for low-level calls, so a call omitting these
-            # must still pass.
+            # required follows the path: raw low-level validates the call against
+            # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
             if context_enabled and not _schema_has_context(schema):
                 schema = add_context_parameter_to_schema(
-                    schema, tool.name, description, required=False
+                    schema, tool.name, description, required=context_required
                 )
             if data.options.enable_conversation_id:
                 schema = add_conversation_id_to_schema(schema, tool.name)

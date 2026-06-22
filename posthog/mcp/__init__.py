@@ -33,7 +33,7 @@ except ImportError:
 from posthog.client import Client
 
 from .capture import capture_event
-from .compatibility import is_fastmcp, is_low_level_server
+from .compatibility import is_fastmcp, is_fastmcp_v2, is_low_level_server
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
     PostHogMCPAnalyticsEvent,
@@ -41,7 +41,7 @@ from .constants import (
 )
 from .event_types import MCPAnalyticsEventType
 from .instrument_fastmcp import instrument_fastmcp
-from .instrument_lowlevel import instrument_low_level
+from .instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
 from .internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
@@ -167,11 +167,14 @@ def instrument(
 
         if is_fastmcp(server):
             instrument_fastmcp(server, data)
+        elif is_fastmcp_v2(server):
+            instrument_fastmcp_v2(server, data)
         elif is_low_level_server(server):
             instrument_low_level(server, data)
         else:
             raise TypeError(
-                f"Unsupported server type: {type(server)!r}. Pass a FastMCP or low-level mcp.server.Server."
+                f"Unsupported server type: {type(server)!r}. Pass a FastMCP (official or jlowin's "
+                "fastmcp 2.0) or a low-level mcp.server.Server."
             )
 
         return McpAnalytics(server)
