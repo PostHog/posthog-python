@@ -2401,7 +2401,7 @@ class Client(object):
         send_feature_flag_events: bool = False,
         disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
-    ) -> Optional[Any]:
+    ) -> Optional[object]:
         """
         Get the payload for a feature flag.
 

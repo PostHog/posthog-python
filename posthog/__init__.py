@@ -3,7 +3,12 @@ from typing import Any, Callable, Dict, Optional  # noqa: F401
 
 from typing_extensions import Unpack
 
-from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.args import (
+    ID_TYPES as ID_TYPES,
+    ExceptionArg,
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+)
 from posthog.client import Client
 from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
@@ -67,7 +72,7 @@ from posthog.types import (
     BeforeSendCallback as BeforeSendCallback,
     FeatureFlag as FeatureFlag,
     FlagValue as FlagValue,
-    FlagsAndPayloads,
+    FlagsAndPayloads as FlagsAndPayloads,
 )
 from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
@@ -847,7 +852,7 @@ def get_feature_flag_payload(
     send_feature_flag_events: bool = True,
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
-) -> Optional[Any]:
+) -> Optional[object]:
     """
     Get the payload associated with a feature flag value.
 
