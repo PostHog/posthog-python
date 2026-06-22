@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import warnings
 import weakref
 from datetime import datetime, timedelta, timezone
@@ -1543,9 +1544,13 @@ class Client(object):
             self.log.warning("analytics-python queue is full")
             return None
 
-    def flush(self) -> None:
+    def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
+
+        Args:
+            timeout_seconds: Maximum seconds to wait for the queue to flush.
+                Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
 
         Examples:
             ```python
@@ -1555,7 +1560,26 @@ class Client(object):
         """
         queue = self.queue
         size = queue.qsize()
-        queue.join()
+        try:
+            if timeout_seconds is None:
+                queue.join()
+            else:
+                deadline = time.monotonic() + timeout_seconds
+                with queue.all_tasks_done:
+                    while queue.unfinished_tasks:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            self.log.warning(
+                                "flush timed out after %s seconds with %s items pending.",
+                                timeout_seconds,
+                                queue.unfinished_tasks,
+                            )
+                            return
+                        queue.all_tasks_done.wait(remaining)
+        except Exception as e:
+            self.log.exception("error flushing queue: %s", e)
+            return
+
         # Note that this message may not be precise, because of threading.
         self.log.debug("successfully flushed about %s items.", size)
 
@@ -1592,7 +1616,7 @@ class Client(object):
             posthog.shutdown()
             ```
         """
-        self.flush()
+        self.flush(timeout_seconds=None)
         self.join()
 
         if self.exception_capture:
