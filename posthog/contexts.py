@@ -26,6 +26,7 @@ class ContextScope:
         self.capture_exception_code_variables: Optional[bool] = None
         self.code_variables_mask_patterns: Optional[list] = None
         self.code_variables_ignore_patterns: Optional[list] = None
+        self.code_variables_mask_url_credentials: Optional[bool] = None
 
     def set_session_id(self, session_id: str):
         self.session_id = session_id
@@ -47,6 +48,9 @@ class ContextScope:
 
     def set_code_variables_ignore_patterns(self, ignore_patterns: list):
         self.code_variables_ignore_patterns = ignore_patterns
+
+    def set_code_variables_mask_url_credentials(self, enabled: bool):
+        self.code_variables_mask_url_credentials = enabled
 
     def get_parent(self):
         return self.parent
@@ -100,6 +104,13 @@ class ContextScope:
             return self.code_variables_ignore_patterns
         if self.parent is not None and not self.fresh:
             return self.parent.get_code_variables_ignore_patterns()
+        return None
+
+    def get_code_variables_mask_url_credentials(self) -> Optional[bool]:
+        if self.code_variables_mask_url_credentials is not None:
+            return self.code_variables_mask_url_credentials
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_code_variables_mask_url_credentials()
         return None
 
 
@@ -369,6 +380,16 @@ def set_code_variables_ignore_patterns_context(ignore_patterns: list) -> None:
         current_context.set_code_variables_ignore_patterns(ignore_patterns)
 
 
+def set_code_variables_mask_url_credentials_context(enabled: bool) -> None:
+    """
+    Whether to scrub credentials embedded in URLs/DSNs (e.g. user:pass@host) from
+    captured code variables for the current context.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_code_variables_mask_url_credentials(enabled)
+
+
 def get_capture_exception_code_variables_context() -> Optional[bool]:
     current_context = _get_current_context()
     if current_context:
@@ -387,6 +408,13 @@ def get_code_variables_ignore_patterns_context() -> Optional[list]:
     current_context = _get_current_context()
     if current_context:
         return current_context.get_code_variables_ignore_patterns()
+    return None
+
+
+def get_code_variables_mask_url_credentials_context() -> Optional[bool]:
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_code_variables_mask_url_credentials()
     return None
 
 

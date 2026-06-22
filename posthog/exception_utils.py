@@ -5,8 +5,11 @@
 # 💖open source (under MIT License)
 # We want to keep payloads as similar to Sentry as possible for easy interoperability
 
+import dataclasses
+import functools
 import json
 import linecache
+import math
 import os
 import re
 import sys
@@ -58,9 +61,16 @@ DEFAULT_CODE_VARIABLES_MASK_PATTERNS = [
     r"(?i)_pass",
     r"(?i)sk_",
     r"(?i)jwt",
+    r"(?i)connection_string",
+    r"(?i)connectionstring",
+    r"(?i)conn_str",
+    r"(?i)connstr",
+    r"(?i)dsn",
 ]
 
 DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
+
+DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS = True
 
 CODE_VARIABLES_REDACTED_VALUE = "$$_posthog_redacted_based_on_masking_rules_$$"
 CODE_VARIABLES_TOO_LONG_VALUE = "$$_posthog_value_too_long_$$"
@@ -68,6 +78,28 @@ CODE_VARIABLES_TOO_LONG_VALUE = "$$_posthog_value_too_long_$$"
 _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH = 5_000
 _MAX_COLLECTION_ITEMS_TO_SCAN = 100
 _REGEX_METACHARACTERS = frozenset(r"\.^$*+?{}[]|()")
+
+# Max recursion depth into nested structures while masking (cycles are guarded separately).
+_MAX_MASK_DEPTH = 25
+
+# Cap on total non-scalar nodes traversed per top-level value; the depth/collection caps
+# don't bound aggregate work, so this stops a wide-and-deep graph from fanning out.
+_MAX_TOTAL_NODES_TO_MASK = 200
+
+# Matches `user:pass` credentials in URLs/DSNs (e.g. `postgresql://user:pass@host`); the
+# bounded scheme length avoids catastrophic backtracking.
+_URL_CREDENTIALS_RE = re.compile(
+    r"([a-z][a-z0-9+.\-]{0,30}://)(?=[^/@\s]*:)[^/\s]*@", re.IGNORECASE
+)
+
+
+def _redact_url_credentials(value):
+    if "://" not in value:
+        return value
+    return _URL_CREDENTIALS_RE.sub(
+        r"\g<1>" + CODE_VARIABLES_REDACTED_VALUE + "@", value
+    )
+
 
 DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 20 * 1024
 
@@ -945,7 +977,7 @@ def _extract_plain_substring(pattern):
     return remainder.lower()
 
 
-def _compile_patterns(patterns):
+def _compile_patterns_impl(patterns):
     if not patterns:
         return None
     substrings = []
@@ -964,6 +996,20 @@ def _compile_patterns(patterns):
     return (substrings, regexes)
 
 
+@functools.lru_cache(maxsize=256)
+def _compile_patterns_cached(patterns_tuple):
+    return _compile_patterns_impl(patterns_tuple)
+
+
+def _compile_patterns(patterns):
+    # Cache by content so the default pattern set compiles once; fall back to an uncached
+    # compile for exotic, unhashable custom input.
+    try:
+        return _compile_patterns_cached(tuple(patterns))
+    except TypeError:
+        return _compile_patterns_impl(list(patterns))
+
+
 def _pattern_matches(name, patterns):
     if patterns is None:
         return False
@@ -979,179 +1025,420 @@ def _pattern_matches(name, patterns):
     return False
 
 
-def _mask_sensitive_data(value, compiled_mask, _seen=None):
-    if not compiled_mask:
-        return value
-
-    if isinstance(value, (dict, list, tuple)):
-        if _seen is None:
-            _seen = set()
-        obj_id = id(value)
-        if obj_id in _seen:
-            return "<circular ref>"
-        _seen.add(obj_id)
-
-    if isinstance(value, dict):
-        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
-            return CODE_VARIABLES_TOO_LONG_VALUE
-        result = {}
-        for k, v in value.items():
-            key_str = str(k) if not isinstance(k, str) else k
-            if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
-                result[k] = CODE_VARIABLES_TOO_LONG_VALUE
-            elif _pattern_matches(key_str, compiled_mask):
-                result[k] = CODE_VARIABLES_REDACTED_VALUE
-            else:
-                result[k] = _mask_sensitive_data(v, compiled_mask, _seen)
-        return result
-    elif isinstance(value, (list, tuple)):
-        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
-            return CODE_VARIABLES_TOO_LONG_VALUE
-        masked_items = [
-            _mask_sensitive_data(item, compiled_mask, _seen) for item in value
-        ]
-        return type(value)(masked_items)
-    elif isinstance(value, str):
-        if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
-            return CODE_VARIABLES_TOO_LONG_VALUE
-        if _pattern_matches(value, compiled_mask):
-            return CODE_VARIABLES_REDACTED_VALUE
-        return value
-    else:
-        return value
+def _build_matcher(compiled):
+    """Collapse a compiled ``(substrings, regexes)`` pair into a fast single-call matcher
+    by compiling the literal substrings into one alternation regex. Returns ``None`` when
+    there is nothing to match."""
+    if compiled is None:
+        return None
+    substrings, regexes = compiled
+    return (_compile_substring_alternation(tuple(substrings)), regexes)
 
 
-def _serialize_variable_value(value, limiter, max_length=1024, compiled_mask=None):
+@functools.lru_cache(maxsize=256)
+def _compile_substring_alternation(substrings):
+    # Substrings are already lowercased and matched against the lowercased name, so a
+    # case-sensitive alternation suffices and avoids IGNORECASE's per-character case-folding.
+    if not substrings:
+        return None
+    return re.compile("|".join(re.escape(s) for s in substrings))
+
+
+def _matcher_matches(name, matcher):
+    """Hot-path equivalent of ``_pattern_matches`` for a ``_build_matcher`` matcher."""
+    if matcher is None:
+        return False
+    substr_re, regexes = matcher
+    if substr_re is not None and substr_re.search(name.lower()):
+        return True
+    for pattern in regexes:
+        if pattern.search(name):
+            return True
+    return False
+
+
+@dataclasses.dataclass(frozen=True)
+class _MaskingConfig:
+    """Everything the masking pipeline needs, compiled once per capture and threaded
+    through instead of recompiling patterns per frame."""
+
+    mask: Optional[
+        Tuple[Optional[Pattern], List[Pattern]]
+    ]  # name/value redaction matcher
+    ignore: Optional[
+        Tuple[Optional[Pattern], List[Pattern]]
+    ]  # variable-name skip matcher
+    mask_url_credentials: bool
+    max_length: int = DEFAULT_MAX_VALUE_LENGTH
+
+    @classmethod
+    def build(
+        cls,
+        mask_patterns=None,
+        ignore_patterns=None,
+        mask_url_credentials=True,
+        max_length=DEFAULT_MAX_VALUE_LENGTH,
+    ):
+        # type: (...) -> _MaskingConfig
+        return cls(
+            mask=_build_matcher(_compile_patterns(mask_patterns or [])),
+            ignore=_build_matcher(_compile_patterns(ignore_patterns or [])),
+            mask_url_credentials=mask_url_credentials,
+            max_length=max_length,
+        )
+
+
+def _mask_string(value, config):
+    """Apply the string masking policy: over-length cap, name/value patterns, then
+    embedded URL credentials."""
+    if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
+        return CODE_VARIABLES_TOO_LONG_VALUE
+    if _matcher_matches(value, config.mask):
+        return CODE_VARIABLES_REDACTED_VALUE
+    if config.mask_url_credentials:
+        return _redact_url_credentials(value)
+    return value
+
+
+def _safe_type_name(value):
     try:
-        if value is None:
-            result = "None"
-        elif isinstance(value, bool):
-            result = str(value)
-        elif isinstance(value, (int, float)):
-            result_size = len(str(value))
-            if not limiter.can_add(result_size):
-                return None
-            limiter.add(result_size)
-            return value
-        elif isinstance(value, str):
-            if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
-                result = CODE_VARIABLES_TOO_LONG_VALUE
-            elif compiled_mask and _pattern_matches(value, compiled_mask):
-                result = CODE_VARIABLES_REDACTED_VALUE
-            else:
-                result = value
-        else:
-            masked_value = _mask_sensitive_data(value, compiled_mask)
-            result = json.dumps(masked_value)
-
-        if len(result) > max_length:
-            result = result[: max_length - 3] + "..."
-
-        result_size = len(result)
-        if not limiter.can_add(result_size):
-            return None
-        limiter.add(result_size)
-
-        return result
+        return type(value).__qualname__
     except Exception:
-        try:
-            result = repr(value)
-            if len(result) > max_length:
-                result = result[: max_length - 3] + "..."
+        return "unknown"
 
-            result_size = len(result)
+
+def _safe_repr(value, config):
+    """Last-resort serialization for values we can't structurally decompose. Renders
+    ``repr(value)`` but fails closed: redact entirely on any mask match, over-length
+    repr, or a raising ``__repr__``."""
+    try:
+        rendered = repr(value)
+    except Exception:
+        return "<" + _safe_type_name(value) + ">"
+
+    # Too long to scan, so we can't vouch for it -> redact it all.
+    if len(rendered) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
+        return CODE_VARIABLES_REDACTED_VALUE
+    if _matcher_matches(rendered, config.mask):
+        return CODE_VARIABLES_REDACTED_VALUE
+    if config.mask_url_credentials:
+        return _redact_url_credentials(rendered)
+    return rendered
+
+
+def _extract_object_attrs(value):
+    """Return a ``name -> value`` mapping of an object's attributes, or ``None`` for
+    values that should be treated as opaque leaves (built-ins, slotted objects, empty
+    ``__dict__``)."""
+    if isinstance(value, type):
+        # A class/type object itself, not an instance - nothing useful to traverse.
+        return None
+    try:
+        if dataclasses.is_dataclass(value):
+            return {f.name: getattr(value, f.name) for f in dataclasses.fields(value)}
+        instance_dict = getattr(value, "__dict__", None)
+    except Exception:
+        return None
+    if isinstance(instance_dict, dict) and instance_dict:
+        # Copy so we never mutate the live object; keys here are attribute names.
+        return dict(instance_dict)
+    return None
+
+
+# Method/function descriptor types excluded when scanning a class for sensitively-named
+# members, so an object isn't redacted merely for having e.g. an `authenticate()` method.
+_METHOD_MEMBER_TYPES = (
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    types.MethodType,
+    types.MethodDescriptorType,
+    types.WrapperDescriptorType,
+    types.MethodWrapperType,
+    types.ClassMethodDescriptorType,
+    classmethod,
+    staticmethod,
+)
+
+
+def _is_data_member(attr):
+    """True for a class member that holds or produces a value (class attribute,
+    ``@property``, descriptor) as opposed to a method or nested class."""
+    return not isinstance(attr, type) and not isinstance(attr, _METHOD_MEMBER_TYPES)
+
+
+def _masked_type_members(value, config):
+    """Redact sensitively-named members declared on the object's type (class attributes,
+    ``@property``, ``__slots__`` entries) which live on the class, not instance
+    ``__dict__``. Only member *names* are read, never the getters."""
+    if config.mask is None:
+        return {}
+    try:
+        mro = type(value).__mro__
+    except Exception:
+        return {}
+    masked = {}
+    for klass in mro:
+        for name, attr in klass.__dict__.items():
+            if (
+                isinstance(name, str)
+                and name not in masked
+                and _is_data_member(attr)
+                and _matcher_matches(name, config.mask)
+            ):
+                masked[name] = CODE_VARIABLES_REDACTED_VALUE
+    return masked
+
+
+def _mask_mapping(items, config, seen, depth):
+    """Mask a sequence of ``(key, value)`` pairs into a dict. A key matching the mask
+    redacts its value; surviving values recurse through ``_mask_value``. Keys are kept
+    JSON-serializable."""
+    result = {}
+    for key, value in items:
+        if type(key) is str:
+            out_key = key_str = key
+        else:
+            key_str = key if isinstance(key, str) else str(key)
+            # json.dumps only accepts str/int/float/bool/None keys; coerce anything else to
+            # its string form so one exotic key can't make json.dumps fail.
+            key_is_json_safe = (
+                key is None
+                or isinstance(key, (str, int))  # bool is an int subclass
+                or (isinstance(key, float) and math.isfinite(key))
+            )
+            out_key = key if key_is_json_safe else key_str
+        if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
+            result[out_key] = CODE_VARIABLES_TOO_LONG_VALUE
+        elif _matcher_matches(key_str, config.mask):
+            result[out_key] = CODE_VARIABLES_REDACTED_VALUE
+        else:
+            result[out_key] = _mask_value(value, config, seen, depth + 1)
+    return result
+
+
+def _mask_value(value, config, seen=None, depth=0):
+    """Turn any Python value into a JSON-safe, masked value. Single source of truth for
+    what gets redacted; the result contains only JSON-native types so it can be handed
+    straight to ``json.dumps``."""
+    # Name masking and URL scrubbing are independent toggles; skip only when both are off.
+    if config.mask is None and not config.mask_url_credentials:
+        return value
+
+    # Exact-type fast paths for plain scalars, avoiding the isinstance ladder below.
+    # Subclasses fall through to the isinstance checks, so output is unchanged.
+    t = type(value)
+    if t is str:
+        return _mask_string(value, config)
+    if t is int or t is bool:
+        return value
+    if t is float:
+        # Non-finite floats (NaN/Infinity) are invalid JSON, so render them as strings.
+        return value if math.isfinite(value) else str(value)
+    if value is None:
+        return value
+
+    if t is not dict and t is not list and t is not tuple:
+        # A scalar subclass (e.g. IntEnum, str subclass) - handle before traversing.
+        if isinstance(value, str):
+            return _mask_string(value, config)
+        if isinstance(value, float) and not math.isfinite(value):
+            return str(value)
+        if isinstance(value, (bool, int, float)):
+            return value
+
+    if depth >= _MAX_MASK_DEPTH:
+        # Too deep to keep traversing; fail closed rather than repr (which could leak).
+        return CODE_VARIABLES_TOO_LONG_VALUE
+
+    if seen is None:
+        seen = set()
+    obj_id = id(value)
+    if obj_id in seen:
+        return "<circular ref>"
+    seen.add(obj_id)
+
+    if len(seen) > _MAX_TOTAL_NODES_TO_MASK:
+        return CODE_VARIABLES_TOO_LONG_VALUE
+
+    if t is dict or isinstance(value, dict):
+        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
+        return _mask_mapping(value.items(), config, seen, depth)
+
+    # namedtuples are tuples but their fields have names: traverse like an object (so a
+    # field named `password` is caught) and emit a dict the encoder can serialize directly.
+    if isinstance(value, tuple) and hasattr(value, "_fields"):
+        fields = value._fields
+        if len(fields) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
+        masked = _mask_mapping(zip(fields, value), config, seen, depth)
+        masked["__class__"] = _safe_type_name(value)
+        return masked
+
+    if isinstance(value, (list, tuple)):
+        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
+        masked_items = [_mask_value(item, config, seen, depth + 1) for item in value]
+        try:
+            return type(value)(masked_items)
+        except Exception:
+            # A list/tuple subclass whose constructor rejects a single iterable; the items
+            # are already masked, so fall back to a plain list.
+            return masked_items
+
+    # Custom objects: traverse their real attributes so a field named e.g. `password` is
+    # caught by name, rather than repr-scanning (which a custom __repr__ could relabel).
+    attrs = _extract_object_attrs(value)
+    if attrs is not None:
+        if len(attrs) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+            return CODE_VARIABLES_TOO_LONG_VALUE
+        masked = _mask_mapping(attrs.items(), config, seen, depth)
+        masked["__class__"] = _safe_type_name(value)
+        return masked
+
+    # A custom __repr__ can expose secrets held on the *class* (class attribute, @property,
+    # __slots__ entry) that attribute traversal never sees; redact those by name first.
+    masked_members = _masked_type_members(value, config)
+    if masked_members:
+        masked_members["__class__"] = _safe_type_name(value)
+        return masked_members
+
+    # Opaque leaf (built-in/slotted/etc.): fall back to a fail-closed repr.
+    return _safe_repr(value, config)
+
+
+def _finalize(result, limiter, max_length):
+    """Truncate to ``max_length`` and charge against the size budget; ``None`` when spent."""
+    if len(result) > max_length:
+        result = result[: max_length - 3] + "..."
+    if not limiter.can_add(len(result)):
+        return None
+    limiter.add(len(result))
+    return result
+
+
+def _encode_variable(value, config, limiter):
+    """Format one already-masked variable for the wire: finite numbers stay raw JSON
+    numbers, everything else becomes a string. ``None`` when the size budget is spent."""
+    try:
+        safe = _mask_value(value, config)
+
+        if safe is None:
+            result = "None"
+        elif isinstance(safe, bool):
+            result = str(safe)
+        elif isinstance(safe, float) and not math.isfinite(safe):
+            # Only reachable when masking is disabled; keep NaN/Infinity out of the JSON.
+            result = str(safe)
+        elif isinstance(safe, (int, float)):
+            # Numbers are emitted as raw JSON numbers, so they skip string truncation.
+            result_size = len(str(safe))
             if not limiter.can_add(result_size):
                 return None
             limiter.add(result_size)
-            return result
+            return safe
+        elif isinstance(safe, str):
+            result = safe
+        else:
+            # `default` is a safety net for anything _mask_value left non-serializable.
+            result = json.dumps(
+                safe,
+                default=lambda o: _safe_repr(o, config),
+                allow_nan=False,
+            )
+
+        return _finalize(result, limiter, config.max_length)
+    except Exception:
+        # Fail closed: even if json.dumps chokes, re-render through the masking-aware repr.
+        try:
+            rendered = _safe_repr(value, config)
         except Exception:
-            try:
-                fallback = f"<{type(value).__name__}>"
-                fallback_size = len(fallback)
-                if not limiter.can_add(fallback_size):
-                    return None
-                limiter.add(fallback_size)
-                return fallback
-            except Exception:
-                fallback = "<unserializable object>"
-                fallback_size = len(fallback)
-                if not limiter.can_add(fallback_size):
-                    return None
-                limiter.add(fallback_size)
-                return fallback
+            rendered = f"<{_safe_type_name(value)}>"
+        return _finalize(rendered, limiter, config.max_length)
 
 
 def _is_simple_type(value):
     return isinstance(value, (type(None), bool, int, float, str))
 
 
-def serialize_code_variables(
-    frame, limiter, mask_patterns=None, ignore_patterns=None, max_length=1024
-):
-    if mask_patterns is None:
-        mask_patterns = []
-    if ignore_patterns is None:
-        ignore_patterns = []
+def _add_variable(result, name, value, config, limiter):
+    """Add one masked variable to ``result``; returns False when the budget is spent. A
+    variable whose *name* matches the mask is redacted whole, value unread."""
+    if _matcher_matches(name, config.mask):
+        if not limiter.can_add(len(CODE_VARIABLES_REDACTED_VALUE)):
+            return False
+        limiter.add(len(CODE_VARIABLES_REDACTED_VALUE))
+        result[name] = CODE_VARIABLES_REDACTED_VALUE
+        return True
 
-    compiled_mask = _compile_patterns(mask_patterns)
-    compiled_ignore = _compile_patterns(ignore_patterns)
+    encoded = _encode_variable(value, config, limiter)
+    if encoded is None:
+        return False
+    result[name] = encoded
+    return True
 
+
+def _serialize_frame_variables(frame, limiter, config):
+    """Serialize one frame's locals into a ``name -> wire value`` dict. Scalars are
+    emitted before complex values so the cheapest context survives a tight size budget."""
     try:
         local_vars = frame.f_locals.copy()
     except Exception:
         return {}
 
-    simple_vars = {}
-    complex_vars = {}
-
+    simple: Dict[str, Any] = {}
+    complex_: Dict[str, Any] = {}
     for name, value in local_vars.items():
-        if _pattern_matches(name, compiled_ignore):
+        if _matcher_matches(name, config.ignore):
             continue
+        (simple if _is_simple_type(value) else complex_)[name] = value
 
-        if _is_simple_type(value):
-            simple_vars[name] = value
-        else:
-            complex_vars[name] = value
-
-    result = {}
-
-    all_vars = {**simple_vars, **complex_vars}
-    ordered_names = list(sorted(simple_vars.keys())) + list(sorted(complex_vars.keys()))
-
-    for name in ordered_names:
-        value = all_vars[name]
-
-        if _pattern_matches(name, compiled_mask):
-            redacted_value = CODE_VARIABLES_REDACTED_VALUE
-            redacted_size = len(redacted_value)
-            if not limiter.can_add(redacted_size):
-                break
-            limiter.add(redacted_size)
-            result[name] = redacted_value
-        else:
-            serialized = _serialize_variable_value(
-                value, limiter, max_length, compiled_mask
-            )
-            if serialized is None:
-                break
-            result[name] = serialized
-
+    result: Dict[str, Any] = {}
+    for name in sorted(simple):
+        if not _add_variable(result, name, simple[name], config, limiter):
+            return result
+    for name in sorted(complex_):
+        if not _add_variable(result, name, complex_[name], config, limiter):
+            return result
     return result
 
 
+def serialize_code_variables(
+    frame,
+    limiter,
+    mask_patterns=None,
+    ignore_patterns=None,
+    max_length=1024,
+    mask_url_credentials=True,
+):
+    """Serialize a single frame's locals. Convenience wrapper that builds a one-off config;
+    the hot path builds the config once - see ``attach_code_variables_to_frames``."""
+    config = _MaskingConfig.build(
+        mask_patterns=mask_patterns,
+        ignore_patterns=ignore_patterns,
+        mask_url_credentials=mask_url_credentials,
+        max_length=max_length,
+    )
+    return _serialize_frame_variables(frame, limiter, config)
+
+
 def try_attach_code_variables_to_frames(
-    all_exceptions, exc_info, mask_patterns, ignore_patterns
+    all_exceptions, exc_info, mask_patterns, ignore_patterns, mask_url_credentials=True
 ):
     try:
         attach_code_variables_to_frames(
-            all_exceptions, exc_info, mask_patterns, ignore_patterns
+            all_exceptions,
+            exc_info,
+            mask_patterns,
+            ignore_patterns,
+            mask_url_credentials,
         )
     except Exception:
         pass
 
 
 def attach_code_variables_to_frames(
-    all_exceptions, exc_info, mask_patterns, ignore_patterns
+    all_exceptions, exc_info, mask_patterns, ignore_patterns, mask_url_credentials=True
 ):
     exc_type, exc_value, traceback = exc_info
 
@@ -1163,6 +1450,12 @@ def attach_code_variables_to_frames(
     if not tb_frames:
         return
 
+    # Compile patterns once for the whole capture and share one budget across all frames.
+    config = _MaskingConfig.build(
+        mask_patterns=mask_patterns,
+        ignore_patterns=ignore_patterns,
+        mask_url_credentials=mask_url_credentials,
+    )
     limiter = VariableSizeLimiter()
 
     for exception in all_exceptions:
@@ -1170,19 +1463,10 @@ def attach_code_variables_to_frames(
         if not stacktrace or "frames" not in stacktrace:
             continue
 
-        serialized_frames = stacktrace["frames"]
-
-        for serialized_frame, tb_item in zip(serialized_frames, tb_frames):
+        for serialized_frame, tb_item in zip(stacktrace["frames"], tb_frames):
             if not serialized_frame.get("in_app"):
                 continue
 
-            variables = serialize_code_variables(
-                tb_item.tb_frame,
-                limiter,
-                mask_patterns=mask_patterns,
-                ignore_patterns=ignore_patterns,
-                max_length=1024,
-            )
-
+            variables = _serialize_frame_variables(tb_item.tb_frame, limiter, config)
             if variables:
                 serialized_frame["code_variables"] = variables

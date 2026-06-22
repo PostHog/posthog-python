@@ -25,6 +25,9 @@ from posthog.contexts import (
     set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
 )
 from posthog.contexts import (
+    set_code_variables_mask_url_credentials_context as inner_set_code_variables_mask_url_credentials_context,
+)
+from posthog.contexts import (
     set_context_device_id as inner_set_context_device_id,
 )
 from posthog.contexts import (
@@ -39,6 +42,7 @@ from posthog.contexts import (
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
+    DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations as FeatureFlagEvaluations,
@@ -226,6 +230,14 @@ def set_code_variables_ignore_patterns_context(ignore_patterns: list):
     return inner_set_code_variables_ignore_patterns_context(ignore_patterns)
 
 
+def set_code_variables_mask_url_credentials_context(enabled: bool):
+    """
+    Whether to scrub credentials embedded in URLs/DSNs (e.g. user:pass@host) from
+    captured code variables for the current context.
+    """
+    return inner_set_code_variables_mask_url_credentials_context(enabled)
+
+
 def tag(name: str, value: Any):
     """
     Add a tag to the current context.
@@ -346,6 +358,7 @@ default_client = None  # type: Optional[Client]
 capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 in_app_modules = None  # type: Optional[list[str]]
 enable_exception_autocapture_rate_limiting = False  # type: bool
 exception_autocapture_bucket_size = ExceptionCapture.DEFAULT_BUCKET_SIZE  # type: int
@@ -1128,6 +1141,7 @@ def setup() -> Client:
             capture_exception_code_variables=capture_exception_code_variables,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
+            code_variables_mask_url_credentials=code_variables_mask_url_credentials,
             in_app_modules=in_app_modules,
             enable_exception_autocapture_rate_limiting=enable_exception_autocapture_rate_limiting,
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,
