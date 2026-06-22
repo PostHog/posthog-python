@@ -132,7 +132,7 @@ def _sanitize_content_block(block: Any) -> Any:
 
 def _sanitize_resource_block(block: Dict[str, Any]) -> Any:
     resource = block.get("resource")
-    if _is_record(resource) and "blob" in resource:
+    if isinstance(resource, dict) and "blob" in resource:
         return {
             "type": "text",
             "text": "[binary resource content redacted - not supported by PostHog MCP analytics]",

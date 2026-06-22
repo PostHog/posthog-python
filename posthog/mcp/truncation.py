@@ -94,7 +94,7 @@ def _visit(
         if remaining_depth <= 0:
             return "[Array]"
         memo.add(oid)
-        result = _visit_array(
+        result: Any = _visit_array(
             list(value), remaining_depth - 1, max_breadth, max_string_length, memo
         )
         memo.discard(oid)
