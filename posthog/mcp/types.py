@@ -112,6 +112,18 @@ class CaptureEventData:
 
 
 @dataclass
+class PreparedToolCall:
+    """Result of :meth:`PostHogMCP.prepare_tool_call`: the intent pulled off the
+    call, the arguments with the injected ``context`` stripped, and whether the
+    call targeted the ``get_more_tools`` virtual tool."""
+
+    args: Optional[JsonRecord] = None
+    intent: Optional[str] = None
+    intent_source: Optional[str] = None
+    is_missing_capability: bool = False
+
+
+@dataclass
 class SessionInfo:
     client_name: Optional[str] = None
     client_version: Optional[str] = None

@@ -32,10 +32,15 @@ def add_context_parameter_to_schema(
     input_schema: Optional[Dict[str, Any]],
     tool_name: str = "unknown",
     description_override: Optional[str] = None,
+    required: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Return a new JSON Schema dict with a required ``context`` string property
-    added. Returns the input unchanged (logging a warning) for schemas that
-    already define ``context`` or use ``oneOf``/``allOf``/``anyOf``."""
+    """Return a new JSON Schema dict with a ``context`` string property added.
+
+    Returns the input unchanged (logging a warning) for schemas that already
+    define ``context`` or use ``oneOf``/``allOf``/``anyOf``. ``required`` controls
+    whether ``context`` is added to the schema's ``required`` list — pass ``False``
+    where the advertised schema is also used to validate inbound calls (the
+    low-level server), so a call omitting ``context`` is not rejected."""
     schema = input_schema
 
     if (
@@ -73,11 +78,12 @@ def add_context_parameter_to_schema(
         "description": description_override or DEFAULT_CONTEXT_PARAMETER_DESCRIPTION,
     }
 
-    required = schema.get("required")
-    if isinstance(required, list):
-        if "context" not in required:
-            required.append("context")
-    else:
-        schema["required"] = ["context"]
+    if required:
+        required_list = schema.get("required")
+        if isinstance(required_list, list):
+            if "context" not in required_list:
+                required_list.append("context")
+        else:
+            schema["required"] = ["context"]
 
     return schema

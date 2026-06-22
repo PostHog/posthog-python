@@ -41,18 +41,21 @@ from .constants import (
 )
 from .event_types import MCPAnalyticsEventType
 from .instrument_fastmcp import instrument_fastmcp
+from .instrument_lowlevel import instrument_low_level
 from .internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
     set_server_tracking_data,
 )
 from .logger import log, set_logger
+from .posthog_mcp import PostHogMCP
 from .session import derive_session_id_from_mcp_session, new_session_id
 from .sink import McpEventSink
 from .types import (
     CaptureEventData,
     MCPAnalyticsContextOptions,
     MCPAnalyticsOptions,
+    PreparedToolCall,
     UserIdentity,
 )
 from .version import __version__
@@ -60,10 +63,12 @@ from .version import __version__
 __all__ = [
     "instrument",
     "McpAnalytics",
+    "PostHogMCP",
     "MCPAnalyticsOptions",
     "MCPAnalyticsContextOptions",
     "UserIdentity",
     "CaptureEventData",
+    "PreparedToolCall",
     "derive_session_id_from_mcp_session",
     "set_logger",
     "POSTHOG_MCP_ANALYTICS_SOURCE",
@@ -161,12 +166,10 @@ def instrument(
         if is_fastmcp(server):
             instrument_fastmcp(server, data)
         elif is_low_level_server(server):
-            raise NotImplementedError(
-                "Low-level mcp.server.Server support lands in a follow-up; pass a FastMCP server."
-            )
+            instrument_low_level(server, data)
         else:
             raise TypeError(
-                f"Unsupported server type: {type(server)!r}. Pass a FastMCP server."
+                f"Unsupported server type: {type(server)!r}. Pass a FastMCP or low-level mcp.server.Server."
             )
 
         return McpAnalytics(server)

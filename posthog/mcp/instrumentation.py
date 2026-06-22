@@ -167,6 +167,35 @@ async def record_tool_call(
     fire_and_forget(capture_event(data, event))
 
 
+def extract_tools(result: Any) -> list:
+    """Pull the tool list out of a ListTools ServerResult."""
+    root = getattr(result, "root", result)
+    return list(getattr(root, "tools", []) or [])
+
+
+def read_tool_category(tool: Any) -> Optional[str]:
+    """Read a tool's product category from its ``_meta.category``."""
+    meta = getattr(tool, "meta", None)
+    if isinstance(meta, dict):
+        category = meta.get("category")
+        if isinstance(category, str):
+            return category
+    return None
+
+
+def request_to_dict(req: Any) -> Dict[str, Any]:
+    """Shape a request object into the JSON-RPC-ish dict the sanitizer expects."""
+    method = getattr(req, "method", None) or "tools/list"
+    params = getattr(req, "params", None)
+    params_dict: Any = {}
+    if params is not None and hasattr(params, "model_dump"):
+        try:
+            params_dict = params.model_dump(mode="json")
+        except Exception:  # noqa: BLE001
+            params_dict = {}
+    return {"method": method, "params": params_dict}
+
+
 def record_tools_list(
     data: MCPAnalyticsData,
     session_id: str,

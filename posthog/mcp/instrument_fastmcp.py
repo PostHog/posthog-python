@@ -33,9 +33,12 @@ from .context_parameters import (
 )
 from .instrumentation import (
     build_tool_call_request,
+    extract_tools,
     prepare_request,
+    read_tool_category,
     record_tool_call,
     record_tools_list,
+    request_to_dict,
 )
 from .internal import MCPAnalyticsData
 from .logger import log
@@ -151,19 +154,19 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             return await original(req)
 
         result = await original(req)
-        tools = _extract_tools(result)
+        tools = extract_tools(result)
 
         names = []
         for tool in tools:
             names.append(tool.name)
             if getattr(tool, "description", None):
                 data.tool_descriptions[tool.name] = tool.description
-            category = _read_category(tool)
+            category = read_tool_category(tool)
             if category:
                 data.tool_categories[tool.name] = category
 
         session_id = await resolve_session_id(data, None)
-        record_tools_list(data, session_id, names=names, request=_request_to_dict(req))
+        record_tools_list(data, session_id, names=names, request=request_to_dict(req))
 
         if is_context_enabled(data.options.context):
             description = get_context_description(data.options.context)
@@ -187,32 +190,6 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
 
 # --- helpers -----------------------------------------------------------------
-
-
-def _extract_tools(result: Any) -> list:
-    root = getattr(result, "root", result)
-    return list(getattr(root, "tools", []) or [])
-
-
-def _read_category(tool: Any) -> Optional[str]:
-    meta = getattr(tool, "meta", None)
-    if isinstance(meta, dict):
-        category = meta.get("category")
-        if isinstance(category, str):
-            return category
-    return None
-
-
-def _request_to_dict(req: Any) -> Dict[str, Any]:
-    method = getattr(req, "method", None) or "tools/list"
-    params = getattr(req, "params", None)
-    params_dict: Any = {}
-    if params is not None and hasattr(params, "model_dump"):
-        try:
-            params_dict = params.model_dump(mode="json")
-        except Exception:  # noqa: BLE001
-            params_dict = {}
-    return {"method": method, "params": params_dict}
 
 
 def _tool_owns_context(server: Any, name: str) -> bool:
