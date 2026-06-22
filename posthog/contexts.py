@@ -26,6 +26,7 @@ class ContextScope:
         self.capture_exception_code_variables: Optional[bool] = None
         self.code_variables_mask_patterns: Optional[list] = None
         self.code_variables_ignore_patterns: Optional[list] = None
+        self.code_variables_mask_url_credentials: Optional[bool] = None
 
     def set_session_id(self, session_id: str):
         self.session_id = session_id
@@ -47,6 +48,9 @@ class ContextScope:
 
     def set_code_variables_ignore_patterns(self, ignore_patterns: list):
         self.code_variables_ignore_patterns = ignore_patterns
+
+    def set_code_variables_mask_url_credentials(self, enabled: bool):
+        self.code_variables_mask_url_credentials = enabled
 
     def get_parent(self):
         return self.parent
@@ -102,6 +106,13 @@ class ContextScope:
             return self.parent.get_code_variables_ignore_patterns()
         return None
 
+    def get_code_variables_mask_url_credentials(self) -> Optional[bool]:
+        if self.code_variables_mask_url_credentials is not None:
+            return self.code_variables_mask_url_credentials
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_code_variables_mask_url_credentials()
+        return None
+
 
 _context_stack: contextvars.ContextVar[Optional[ContextScope]] = contextvars.ContextVar(
     "posthog_context_stack", default=None
@@ -112,10 +123,25 @@ def _get_current_context() -> Optional[ContextScope]:
     return _context_stack.get()
 
 
+def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
+    if client is not None:
+        return client.enable_exception_autocapture
+
+    import posthog
+
+    default_client = getattr(posthog, "default_client", None)
+    if default_client is not None:
+        client_default = getattr(default_client, "enable_exception_autocapture", None)
+        if isinstance(client_default, bool):
+            return client_default
+
+    return posthog.enable_exception_autocapture
+
+
 @contextmanager
 def new_context(
     fresh: bool = False,
-    capture_exceptions: bool = True,
+    capture_exceptions: Optional[bool] = None,
     client: Optional["Client"] = None,
 ):
     """
@@ -127,7 +153,8 @@ def new_context(
         fresh: Whether to start with a fresh context (default: False).
                If False, inherits tags, identity and session id's from parent context.
                If True, starts with no state
-        capture_exceptions: Whether to capture exceptions raised within the context (default: True).
+        capture_exceptions: Whether to capture exceptions raised within the context.
+               If omitted, defaults to the relevant client's exception autocapture setting.
                If True, captures exceptions and tags them with the context tags before propagating them.
                If False, exceptions will propagate without being tagged or captured.
         client: Optional client instance to use for capturing exceptions (default: None).
@@ -162,7 +189,14 @@ def new_context(
     from posthog import capture_exception
 
     current_context = _get_current_context()
-    new_context = ContextScope(current_context, fresh, capture_exceptions, client)
+    resolved_capture_exceptions = (
+        capture_exceptions
+        if capture_exceptions is not None
+        else _default_capture_exceptions(client)
+    )
+    new_context = ContextScope(
+        current_context, fresh, resolved_capture_exceptions, client
+    )
     _context_stack.set(new_context)
 
     try:
@@ -346,6 +380,16 @@ def set_code_variables_ignore_patterns_context(ignore_patterns: list) -> None:
         current_context.set_code_variables_ignore_patterns(ignore_patterns)
 
 
+def set_code_variables_mask_url_credentials_context(enabled: bool) -> None:
+    """
+    Whether to scrub credentials embedded in URLs/DSNs (e.g. user:pass@host) from
+    captured code variables for the current context.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_code_variables_mask_url_credentials(enabled)
+
+
 def get_capture_exception_code_variables_context() -> Optional[bool]:
     current_context = _get_current_context()
     if current_context:
@@ -367,17 +411,56 @@ def get_code_variables_ignore_patterns_context() -> Optional[list]:
     return None
 
 
+def get_code_variables_mask_url_credentials_context() -> Optional[bool]:
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_code_variables_mask_url_credentials()
+    return None
+
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def scoped(fresh: bool = False, capture_exceptions: bool = True):
+def _scoped(
+    fresh: bool = False,
+    capture_exceptions: Optional[bool] = None,
+    client: Optional["Client"] = None,
+):
+    def decorator(func: F) -> F:
+        from functools import wraps
+        from inspect import iscoroutinefunction
+
+        if iscoroutinefunction(func):
+
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with new_context(
+                    fresh=fresh, capture_exceptions=capture_exceptions, client=client
+                ):
+                    return await func(*args, **kwargs)
+
+            return cast(F, async_wrapper)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with new_context(
+                fresh=fresh, capture_exceptions=capture_exceptions, client=client
+            ):
+                return func(*args, **kwargs)
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
+def scoped(fresh: bool = False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function. Simply wraps
     the function in a with posthog.new_context(): block.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting.
 
     Example:
         @posthog.scoped()
@@ -401,25 +484,4 @@ def scoped(fresh: bool = False, capture_exceptions: bool = True):
     Category:
         Contexts
     """
-
-    def decorator(func: F) -> F:
-        from functools import wraps
-        from inspect import iscoroutinefunction
-
-        if iscoroutinefunction(func):
-
-            @wraps(func)
-            async def async_wrapper(*args, **kwargs):
-                with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
-                    return await func(*args, **kwargs)
-
-            return cast(F, async_wrapper)
-
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            with new_context(fresh=fresh, capture_exceptions=capture_exceptions):
-                return func(*args, **kwargs)
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _scoped(fresh=fresh, capture_exceptions=capture_exceptions)

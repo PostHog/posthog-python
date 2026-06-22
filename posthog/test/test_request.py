@@ -7,6 +7,7 @@ import pytest
 import requests
 
 import posthog.request as request_module
+from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.request import (
     APIError,
     DatetimeSerializer,
@@ -82,6 +83,28 @@ def test_post_sends_snake_case_sent_at(key, expected_present):
 
     data = json.loads(mock_session.post.call_args.kwargs["data"])
     assert (key in data) is expected_present
+
+
+def test_message_only_debug_logs_include_posthog_prefix():
+    mock_response = requests.Response()
+    mock_response.status_code = 200
+    mock_session = mock.MagicMock()
+    mock_session.post.return_value = mock_response
+
+    with capture_message_only_logs() as logs:
+        request_module.post(
+            TEST_API_KEY,
+            host="https://test.posthog.com",
+            path="/batch/",
+            session=mock_session,
+            batch=[],
+        )
+
+    assert logs.getvalue().splitlines() == [
+        mock.ANY,
+        "[PostHog] data uploaded successfully",
+    ]
+    assert logs.getvalue().splitlines()[0].startswith("[PostHog] making request: ")
 
 
 class TestRequests(unittest.TestCase):

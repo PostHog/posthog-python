@@ -7,6 +7,7 @@ alias posthog.BeforeSendCallback -> posthog.types.BeforeSendCallback
 alias posthog.Client -> posthog.client.Client
 alias posthog.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 alias posthog.DEFAULT_CODE_VARIABLES_MASK_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+alias posthog.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 alias posthog.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.ExceptionCapture -> posthog.exception_capture.ExceptionCapture
 alias posthog.FeatureFlag -> posthog.types.FeatureFlag
@@ -217,6 +218,7 @@ alias posthog.client.APIError -> posthog.request.APIError
 alias posthog.client.Consumer -> posthog.consumer.Consumer
 alias posthog.client.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 alias posthog.client.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
 alias posthog.client.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.client.ExceptionCapture -> posthog.exception_capture.ExceptionCapture
@@ -255,6 +257,7 @@ alias posthog.client.get -> posthog.request.get
 alias posthog.client.get_capture_exception_code_variables_context -> posthog.contexts.get_capture_exception_code_variables_context
 alias posthog.client.get_code_variables_ignore_patterns_context -> posthog.contexts.get_code_variables_ignore_patterns_context
 alias posthog.client.get_code_variables_mask_patterns_context -> posthog.contexts.get_code_variables_mask_patterns_context
+alias posthog.client.get_code_variables_mask_url_credentials_context -> posthog.contexts.get_code_variables_mask_url_credentials_context
 alias posthog.client.get_context_device_id -> posthog.contexts.get_context_device_id
 alias posthog.client.get_context_distinct_id -> posthog.contexts.get_context_distinct_id
 alias posthog.client.get_context_session_id -> posthog.contexts.get_context_session_id
@@ -300,6 +303,7 @@ alias posthog.inner_scoped -> posthog.contexts.scoped
 alias posthog.inner_set_capture_exception_code_variables_context -> posthog.contexts.set_capture_exception_code_variables_context
 alias posthog.inner_set_code_variables_ignore_patterns_context -> posthog.contexts.set_code_variables_ignore_patterns_context
 alias posthog.inner_set_code_variables_mask_patterns_context -> posthog.contexts.set_code_variables_mask_patterns_context
+alias posthog.inner_set_code_variables_mask_url_credentials_context -> posthog.contexts.set_code_variables_mask_url_credentials_context
 alias posthog.inner_set_context_device_id -> posthog.contexts.set_context_device_id
 alias posthog.inner_set_context_session -> posthog.contexts.set_context_session
 alias posthog.inner_tag -> posthog.contexts.tag
@@ -439,12 +443,12 @@ attribute posthog.args.OptionalCaptureArgs.groups: NotRequired[Optional[Dict[str
 attribute posthog.args.OptionalCaptureArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalCaptureArgs.send_feature_flags: NotRequired[Optional[Union[bool, SendFeatureFlagsOptions]]]
 attribute posthog.args.OptionalCaptureArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
-attribute posthog.args.OptionalCaptureArgs.uuid: NotRequired[Optional[str]]
+attribute posthog.args.OptionalCaptureArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.args.OptionalSetArgs.disable_geoip: NotRequired[Optional[bool]]
 attribute posthog.args.OptionalSetArgs.distinct_id: NotRequired[Optional[ID_TYPES]]
 attribute posthog.args.OptionalSetArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalSetArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
-attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[str]]
+attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.before_send = None
 attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
@@ -454,6 +458,7 @@ attribute posthog.client.Client.api_key = (project_api_key or '').strip()
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
 attribute posthog.client.Client.code_variables_ignore_patterns = code_variables_ignore_patterns if code_variables_ignore_patterns is not None else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 attribute posthog.client.Client.code_variables_mask_patterns = code_variables_mask_patterns if code_variables_mask_patterns is not None else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+attribute posthog.client.Client.code_variables_mask_url_credentials = code_variables_mask_url_credentials if code_variables_mask_url_credentials is not None else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 attribute posthog.client.Client.cohorts: Optional[dict[str, Any]] = None
 attribute posthog.client.Client.consumers = None
 attribute posthog.client.Client.debug = debug
@@ -496,6 +501,7 @@ attribute posthog.client.Client.timeout = timeout
 attribute posthog.client.MAX_DICT_SIZE = 50000
 attribute posthog.code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 attribute posthog.code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+attribute posthog.code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 attribute posthog.consumer.AI_MAX_MSG_SIZE = 8 * 1024 * 1024
 attribute posthog.consumer.BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 attribute posthog.consumer.Consumer.api_key = api_key
@@ -518,6 +524,7 @@ attribute posthog.contexts.ContextScope.capture_exceptions = capture_exceptions
 attribute posthog.contexts.ContextScope.client: Optional[Client] = client
 attribute posthog.contexts.ContextScope.code_variables_ignore_patterns: Optional[list] = None
 attribute posthog.contexts.ContextScope.code_variables_mask_patterns: Optional[list] = None
+attribute posthog.contexts.ContextScope.code_variables_mask_url_credentials: Optional[bool] = None
 attribute posthog.contexts.ContextScope.device_id: Optional[str] = None
 attribute posthog.contexts.ContextScope.distinct_id: Optional[str] = None
 attribute posthog.contexts.ContextScope.fresh = fresh
@@ -548,7 +555,8 @@ attribute posthog.exception_utils.BASE64_ALPHABET = re.compile('^[a-zA-Z0-9/+=]*
 attribute posthog.exception_utils.CODE_VARIABLES_REDACTED_VALUE = '$$_posthog_redacted_based_on_masking_rules_$$'
 attribute posthog.exception_utils.CODE_VARIABLES_TOO_LONG_VALUE = '$$_posthog_value_too_long_$$'
 attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = ['^__.*']
-attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS = ['(?i)password', '(?i)secret', '(?i)passwd', '(?i)pwd', '(?i)api_key', '(?i)apikey', '(?i)auth', '(?i)credentials', '(?i)privatekey', '(?i)private_key', '(?i)token', '(?i)aws_access_key_id', '(?i)_pass', '(?i)sk_', '(?i)jwt']
+attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS = ['(?i)password', '(?i)secret', '(?i)passwd', '(?i)pwd', '(?i)api_key', '(?i)apikey', '(?i)auth', '(?i)credentials', '(?i)privatekey', '(?i)private_key', '(?i)token', '(?i)aws_access_key_id', '(?i)_pass', '(?i)sk_', '(?i)jwt', '(?i)connection_string', '(?i)connectionstring', '(?i)conn_str', '(?i)connstr', '(?i)dsn']
+attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS = True
 attribute posthog.exception_utils.DEFAULT_MAX_VALUE_LENGTH = 1024
 attribute posthog.exception_utils.DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 20 * 1024
 attribute posthog.exception_utils.Event = TypedDict('Event', {'breadcrumbs': Dict[Literal['values'], List[Dict[str, Any]]], 'check_in_id': str, 'contexts': Dict[str, Dict[str, object]], 'dist': str, 'duration': Optional[float], 'environment': str, 'errors': List[Dict[str, Any]], 'event_id': str, 'exception': Dict[Literal['values'], List[Dict[str, Any]]], 'level': LogLevelStr, 'logger': str, 'message': str, 'modules': Dict[str, str], 'monitor_slug': Optional[str], 'platform': Literal['python'], 'profile': object, 'release': str, 'request': Dict[str, object], 'server_name': str, 'spans': List[Dict[str, object]], 'stacktrace': Dict[str, object], 'start_timestamp': datetime, 'status': Optional[str], 'threads': Dict[Literal['values'], List[Dict[str, Any]]], 'timestamp': Optional[datetime], 'transaction': str, 'type': Literal['check_in', 'transaction'], 'user': Dict[str, object], '_metrics_summary': Dict[str, object]}, total=False)
@@ -746,7 +754,7 @@ class posthog.ai.types.ToolInProgress
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, _dedicated_ai_endpoint=False)
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, _dedicated_ai_endpoint=False)
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
@@ -867,21 +875,23 @@ function posthog.client.stringify_id(val)
 function posthog.contexts.get_capture_exception_code_variables_context() -> Optional[bool]
 function posthog.contexts.get_code_variables_ignore_patterns_context() -> Optional[list]
 function posthog.contexts.get_code_variables_mask_patterns_context() -> Optional[list]
+function posthog.contexts.get_code_variables_mask_url_credentials_context() -> Optional[bool]
 function posthog.contexts.get_context_device_id() -> Optional[str]
 function posthog.contexts.get_context_distinct_id() -> Optional[str]
 function posthog.contexts.get_context_session_id() -> Optional[str]
 function posthog.contexts.get_tags() -> Dict[str, Any]
 function posthog.contexts.identify_context(distinct_id: str) -> None
-function posthog.contexts.new_context(fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
-function posthog.contexts.scoped(fresh: bool = False, capture_exceptions: bool = True)
+function posthog.contexts.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
+function posthog.contexts.scoped(fresh: bool = False, capture_exceptions: Optional[bool] = None)
 function posthog.contexts.set_capture_exception_code_variables_context(enabled: bool) -> None
 function posthog.contexts.set_code_variables_ignore_patterns_context(ignore_patterns: list) -> None
 function posthog.contexts.set_code_variables_mask_patterns_context(mask_patterns: list) -> None
+function posthog.contexts.set_code_variables_mask_url_credentials_context(enabled: bool) -> None
 function posthog.contexts.set_context_device_id(device_id: str) -> None
 function posthog.contexts.set_context_session(session_id: str) -> None
 function posthog.contexts.tag(key: str, value: Any) -> None
 function posthog.evaluate_flags(distinct_id: Optional[str] = None, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
-function posthog.exception_utils.attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns)
+function posthog.exception_utils.attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns, mask_url_credentials=True)
 function posthog.exception_utils.construct_artificial_traceback(e)
 function posthog.exception_utils.event_hint_with_exc_info(exc_info=None)
 function posthog.exception_utils.exc_info_from_error(error)
@@ -903,7 +913,7 @@ function posthog.exception_utils.iter_stacks(tb)
 function posthog.exception_utils.mark_exception_as_captured(error, uuid)
 function posthog.exception_utils.safe_repr(value)
 function posthog.exception_utils.safe_str(value)
-function posthog.exception_utils.serialize_code_variables(frame, limiter, mask_patterns=None, ignore_patterns=None, max_length=1024)
+function posthog.exception_utils.serialize_code_variables(frame, limiter, mask_patterns=None, ignore_patterns=None, max_length=1024, mask_url_credentials=True)
 function posthog.exception_utils.serialize_frame(frame, tb_lineno=None, max_value_length=None)
 function posthog.exception_utils.set_in_app_in_frames(frames, in_app_exclude, in_app_include, project_root=None)
 function posthog.exception_utils.should_hide_frame(frame: FrameType) -> bool
@@ -911,7 +921,7 @@ function posthog.exception_utils.single_exception_from_error_tuple(exc_type, exc
 function posthog.exception_utils.strip_string(value, max_length=None)
 function posthog.exception_utils.to_string(value)
 function posthog.exception_utils.to_timestamp(value)
-function posthog.exception_utils.try_attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns)
+function posthog.exception_utils.try_attach_code_variables_to_frames(all_exceptions, exc_info, mask_patterns, ignore_patterns, mask_url_credentials=True)
 function posthog.exception_utils.walk_exception_chain(exc_info)
 function posthog.feature_enabled(key: str, distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 function posthog.feature_flag_definitions()
@@ -928,7 +938,7 @@ function posthog.feature_flags.parse_semver(value: str) -> tuple
 function posthog.feature_flags.relative_date_parse_for_feature_flag_matching(value: str) -> Optional[datetime.datetime]
 function posthog.feature_flags.resolve_bucketing_value(flag, distinct_id, device_id=None)
 function posthog.feature_flags.variant_lookup_table(feature_flag)
-function posthog.flush() -> None
+function posthog.flush(timeout_seconds: Optional[float] = 10) -> None
 function posthog.get_all_flags(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> Optional[dict[str, FlagValue]]
 function posthog.get_all_flags_and_payloads(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> FlagsAndPayloads
 function posthog.get_feature_flag(key: str, distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
@@ -941,7 +951,7 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.join() -> None
 function posthog.load_feature_flags()
-function posthog.new_context(fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
+function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
@@ -954,11 +964,12 @@ function posthog.request.post(api_key: str, host: Optional[str] = None, path: Op
 function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
 function posthog.request.reset_sessions() -> None
 function posthog.request.set_socket_options(socket_options: Optional[SocketOptions]) -> None
-function posthog.scoped(fresh=False, capture_exceptions=True)
+function posthog.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 function posthog.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 function posthog.set_capture_exception_code_variables_context(enabled: bool)
 function posthog.set_code_variables_ignore_patterns_context(ignore_patterns: list[str])
 function posthog.set_code_variables_mask_patterns_context(mask_patterns: list[str])
+function posthog.set_code_variables_mask_url_credentials_context(enabled: bool)
 function posthog.set_context_device_id(device_id: str)
 function posthog.set_context_session(session_id: str)
 function posthog.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
@@ -1050,7 +1061,7 @@ method posthog.client.Client.capture_exception(exception: Optional[ExceptionArg]
 method posthog.client.Client.evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[List[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 method posthog.client.Client.feature_enabled(key: str, distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 method posthog.client.Client.feature_flag_definitions()
-method posthog.client.Client.flush() -> None
+method posthog.client.Client.flush(timeout_seconds: Optional[float] = 10) -> None
 method posthog.client.Client.get_all_flags(distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> Optional[dict[str, Union[bool, str]]]
 method posthog.client.Client.get_all_flags_and_payloads(distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
 method posthog.client.Client.get_feature_flag(key: str, distinct_id: ID_TYPES, *, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
@@ -1061,13 +1072,19 @@ method posthog.client.Client.get_feature_payloads(distinct_id: ID_TYPES, groups:
 method posthog.client.Client.get_feature_variants(distinct_id: ID_TYPES, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> dict[str, Union[bool, str]]
 method posthog.client.Client.get_flags_decision(distinct_id: Optional[ID_TYPES] = None, groups: Optional[Dict[str, str]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsResponse
 method posthog.client.Client.get_remote_config_payload(key: str)
-method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.client.Client.get_tags() -> Dict[str, Any]
+method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.client.Client.identify_context(distinct_id: str) -> None
 method posthog.client.Client.join() -> None
 method posthog.client.Client.load_feature_flags()
-method posthog.client.Client.new_context(fresh=False, capture_exceptions=True)
+method posthog.client.Client.new_context(fresh=False, capture_exceptions: Optional[bool] = None)
+method posthog.client.Client.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 method posthog.client.Client.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
+method posthog.client.Client.set_context_device_id(device_id: str) -> None
+method posthog.client.Client.set_context_session(session_id: str) -> None
 method posthog.client.Client.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.shutdown() -> None
+method posthog.client.Client.tag(name: str, value: Any) -> None
 method posthog.consumer.Consumer.next()
 method posthog.consumer.Consumer.pause()
 method posthog.consumer.Consumer.request(batch)
@@ -1078,6 +1095,7 @@ method posthog.contexts.ContextScope.collect_tags() -> Dict[str, Any]
 method posthog.contexts.ContextScope.get_capture_exception_code_variables() -> Optional[bool]
 method posthog.contexts.ContextScope.get_code_variables_ignore_patterns() -> Optional[list]
 method posthog.contexts.ContextScope.get_code_variables_mask_patterns() -> Optional[list]
+method posthog.contexts.ContextScope.get_code_variables_mask_url_credentials() -> Optional[bool]
 method posthog.contexts.ContextScope.get_device_id() -> Optional[str]
 method posthog.contexts.ContextScope.get_distinct_id() -> Optional[str]
 method posthog.contexts.ContextScope.get_parent()
@@ -1085,6 +1103,7 @@ method posthog.contexts.ContextScope.get_session_id() -> Optional[str]
 method posthog.contexts.ContextScope.set_capture_exception_code_variables(enabled: bool)
 method posthog.contexts.ContextScope.set_code_variables_ignore_patterns(ignore_patterns: list)
 method posthog.contexts.ContextScope.set_code_variables_mask_patterns(mask_patterns: list)
+method posthog.contexts.ContextScope.set_code_variables_mask_url_credentials(enabled: bool)
 method posthog.contexts.ContextScope.set_device_id(device_id: str)
 method posthog.contexts.ContextScope.set_distinct_id(distinct_id: str)
 method posthog.contexts.ContextScope.set_session_id(session_id: str)

@@ -1,7 +1,9 @@
+import logging
+import asyncio
 import time
 import unittest
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from unittest import mock
 from parameterized import parameterized
@@ -9,6 +11,7 @@ from parameterized import parameterized
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError, GetResponse
+from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
@@ -80,6 +83,95 @@ class TestClient(unittest.TestCase):
 
         self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
 
+    def _reset_duplicate_client_registry(self):
+        Client._client_registry.clear()
+        Client._duplicate_client_warnings.clear()
+
+    def test_warns_once_on_duplicate_async_client_same_key_and_host(self):
+        self._reset_duplicate_client_registry()
+        self.addCleanup(self._reset_duplicate_client_registry)
+        host = "https://us.i.posthog.com"
+        registry_key = (FAKE_TEST_API_KEY, host)
+
+        with (
+            mock.patch("posthog.client.atexit.register"),
+            mock.patch("posthog.client.Consumer.start"),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            first = Client(FAKE_TEST_API_KEY, host=host)
+            second = Client(FAKE_TEST_API_KEY, host=host)
+            third = Client(FAKE_TEST_API_KEY, host=host)
+
+            self.assertIsNot(first, second)
+            self.assertIsNot(second, third)
+            mock_warning.assert_called_once_with(
+                "Multiple active PostHog clients detected for the same project "
+                "API key and host. Reuse one Posthog instance per app or "
+                "process when possible to avoid competing background queues "
+                "and missed shutdown flushes. Multiple clients are supported "
+                "when intentional."
+            )
+
+            first.shutdown()
+            second.shutdown()
+            third.shutdown()
+
+            self.assertNotIn(registry_key, Client._client_registry)
+            self.assertNotIn(registry_key, Client._duplicate_client_warnings)
+
+            fourth = Client(FAKE_TEST_API_KEY, host=host)
+            fifth = Client(FAKE_TEST_API_KEY, host=host)
+
+            self.assertEqual(mock_warning.call_count, 2)
+
+            fourth.shutdown()
+            fifth.shutdown()
+
+    @parameterized.expand(
+        [
+            ("different_host", {"host": "https://two.example.com"}),
+            ("sync_mode", {"host": "https://one.example.com", "sync_mode": True}),
+            ("send_disabled", {"host": "https://one.example.com", "send": False}),
+        ]
+    )
+    def test_duplicate_client_warning_allows_intentional_multi_client_cases(
+        self, _, duplicate_kwargs
+    ):
+        self._reset_duplicate_client_registry()
+        self.addCleanup(self._reset_duplicate_client_registry)
+
+        with (
+            mock.patch("posthog.client.atexit.register"),
+            mock.patch("posthog.client.Consumer.start"),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            first = Client(FAKE_TEST_API_KEY, host="https://one.example.com")
+            duplicate = Client(FAKE_TEST_API_KEY, **duplicate_kwargs)
+
+            self.assertIsNot(first, duplicate)
+            mock_warning.assert_not_called()
+
+            first.shutdown()
+            duplicate.shutdown()
+
+    def test_message_only_info_logs_include_posthog_prefix(self):
+        self.client.flag_cache = mock.Mock()
+        self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()
+
+        with capture_message_only_logs(level=logging.INFO) as logs:
+            self.client._get_stale_flag_fallback("distinct_id", "flag-key")
+
+        self.assertEqual(
+            logs.getvalue().strip(),
+            "[PostHog] [FEATURE FLAGS] Using stale cached value for flag flag-key",
+        )
+
+    def test_message_only_logs_do_not_duplicate_existing_posthog_prefix(self):
+        with capture_message_only_logs(level=logging.ERROR) as logs:
+            self.client.log.error("[PostHog] already prefixed")
+
+        self.assertEqual(logs.getvalue().strip(), "[PostHog] already prefixed")
+
     @mock.patch("posthog.client.get")
     def test_disabled_client_does_not_load_feature_flags(self, patch_get):
         client = Client("", personal_api_key="test", send=False)
@@ -140,6 +232,38 @@ class TestClient(unittest.TestCase):
 
     def test_empty_flush(self):
         self.client.flush()
+
+    def test_flush_timeout_returns_when_queue_does_not_drain(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+        client.queue.put({"event": "stuck"})
+
+        start = time.monotonic()
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            client.flush(timeout_seconds=0.01)
+
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertFalse(client.queue.empty())
+        self.assertIn("flush timed out", logs.output[0])
+
+        client.queue.get_nowait()
+        client.queue.task_done()
+
+    def test_flush_logs_and_returns_on_unexpected_error(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+        client.queue.put({"event": "stuck"})
+
+        with mock.patch.object(
+            client.queue.all_tasks_done,
+            "wait",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                client.flush(timeout_seconds=1)
+
+        self.assertIn("error flushing queue", logs.output[0])
+
+        client.queue.get_nowait()
+        client.queue.task_done()
 
     def test_basic_capture(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -216,6 +340,73 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
+
+    def test_basic_capture_with_uuid_object(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            uuid = UUID("00000000-0000-4000-8000-000000000002")
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", uuid=uuid
+            )
+            self.assertEqual(msg_uuid, str(uuid))
+            self.assertFalse(self.failed)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["uuid"], str(uuid))
+
+    @parameterized.expand(
+        [
+            ("empty string", ""),
+            ("invalid string", "not-a-uuid"),
+            ("short string", "1234"),
+            ("integer", 123),
+        ]
+    )
+    def test_capture_with_invalid_uuid_logs_and_falls_back_to_generated_uuid(
+        self, _name, invalid_uuid
+    ):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid=invalid_uuid
+                )
+
+            self.assertIsNotNone(msg_uuid)
+            UUID(msg_uuid)
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["uuid"], msg_uuid)
+            self.assertNotEqual(msg["uuid"], str(invalid_uuid))
+            self.assertTrue(
+                any(
+                    f"Invalid event uuid {invalid_uuid!r}" in message
+                    and "Expected a valid UUID string or uuid.UUID instance" in message
+                    and "Falling back to a generated UUID" in message
+                    for message in logs.output
+                )
+            )
+
+    @parameterized.expand(
+        [
+            ("empty string", ""),
+            ("invalid string", "not-a-uuid"),
+            ("short string", "1234"),
+            ("integer", 123),
+        ]
+    )
+    def test_capture_with_invalid_uuid_falls_back_in_debug(self, _name, invalid_uuid):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
+            with self.assertLogs("posthog", level="ERROR"):
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid=invalid_uuid
+                )
+
+            self.assertIsNotNone(msg_uuid)
+            UUID(msg_uuid)
+            mock_post.assert_called_once()
 
     def test_basic_capture_with_project_api_key(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -386,7 +577,7 @@ class TestClient(unittest.TestCase):
                 self.assertFalse(patch_capture.called)
                 self.assertEqual(
                     logs.output[0],
-                    "WARNING:posthog:No exception information available",
+                    "WARNING:posthog:[PostHog] No exception information available",
                 )
 
     def test_capture_exception_logs_when_enabled(self):
@@ -396,7 +587,7 @@ class TestClient(unittest.TestCase):
                 Exception("test exception"), distinct_id="distinct_id"
             )
             self.assertEqual(
-                logs.output[0], "ERROR:posthog:test exception\nNoneType: None"
+                logs.output[0], "ERROR:posthog:[PostHog] test exception\nNoneType: None"
             )
 
     @mock.patch("posthog.client.flags")
@@ -1271,10 +1462,10 @@ class TestClient(unittest.TestCase):
                 distinct_id="distinct_id",
                 properties={"property": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1286,7 +1477,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["event"], "python test event")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
-            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertTrue("$groups" not in msg["properties"])
 
@@ -1337,10 +1528,10 @@ class TestClient(unittest.TestCase):
                 distinct_id="distinct_id",
                 properties={"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1352,7 +1543,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
             self.assertTrue(isinstance(msg["timestamp"], str))
-            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_set_once(self):
@@ -1381,10 +1572,10 @@ class TestClient(unittest.TestCase):
                 distinct_id="distinct_id",
                 properties={"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1396,7 +1587,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
             self.assertTrue(isinstance(msg["timestamp"], str))
-            self.assertEqual(msg["uuid"], "new-uuid")
+            self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_group_identify(self):
@@ -1465,10 +1656,10 @@ class TestClient(unittest.TestCase):
                 "id:5",
                 {"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1498,11 +1689,11 @@ class TestClient(unittest.TestCase):
                 "id:5",
                 {"trait": "value"},
                 timestamp=datetime(2014, 9, 3),
-                uuid="new-uuid",
+                uuid="00000000-0000-4000-8000-000000000001",
                 distinct_id="distinct_id",
             )
 
-            self.assertEqual(msg_uuid, "new-uuid")
+            self.assertEqual(msg_uuid, "00000000-0000-4000-8000-000000000001")
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
@@ -1834,6 +2025,14 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client.queue.empty())
         for consumer in client.consumers:
             self.assertFalse(consumer.is_alive())
+
+    def test_shutdown_flushes_without_timeout(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+
+        with mock.patch.object(client, "flush") as mock_flush:
+            client.shutdown()
+
+        mock_flush.assert_called_once_with(timeout_seconds=None)
 
     def test_synchronous(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -2294,6 +2493,35 @@ class TestClient(unittest.TestCase):
                 flag_keys_to_evaluate=["random_key"],
             )
 
+    @mock.patch("posthog.client.flags")
+    def test_client_set_context_device_id_is_used_in_flags_request(self, patch_flags):
+        patch_flags.return_value = {
+            "featureFlags": {
+                "beta-feature": "random-variant",
+            }
+        }
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+        )
+
+        with client.new_context():
+            client.set_context_device_id("client-context-device-id")
+            client.get_feature_flag("random_key", "some_id")
+
+        patch_flags.assert_called_with(
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            distinct_id="some_id",
+            groups={},
+            person_properties={"distinct_id": "some_id"},
+            group_properties={},
+            geoip_disable=True,
+            device_id="client-context-device-id",
+            flag_keys_to_evaluate=["random_key"],
+        )
+
     @parameterized.expand(
         [
             # name, sys_platform, version_info, expected_runtime, expected_version, expected_os, expected_os_version, expected_os_distro, platform_method, platform_return
@@ -2466,6 +2694,77 @@ class TestClient(unittest.TestCase):
                 self.assertEqual(
                     msg["properties"]["$session_id"], "context-session-123"
                 )
+
+    @parameterized.expand([("new_context",), ("scoped",)])
+    def test_client_context_helpers_apply_to_capture(self, context_helper):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+
+            def capture_in_context():
+                client.tag("client_tag", "tag-value")
+                client.identify_context("context-user")
+                client.set_context_session("context-session-123")
+
+                self.assertEqual(client.get_tags(), {"client_tag": "tag-value"})
+
+                return client.capture(
+                    "test_event",
+                    properties={"custom_prop": "value"},
+                )
+
+            if context_helper == "new_context":
+                with client.new_context(fresh=True):
+                    msg_uuid = capture_in_context()
+            else:
+
+                @client.scoped(fresh=True)
+                def scoped_capture():
+                    return capture_in_context()
+
+                msg_uuid = scoped_capture()
+
+            self.assertIsNotNone(msg_uuid)
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["distinct_id"], "context-user")
+            self.assertEqual(msg["properties"]["client_tag"], "tag-value")
+            self.assertEqual(msg["properties"]["custom_prop"], "value")
+            self.assertEqual(msg["properties"]["$session_id"], "context-session-123")
+            self.assertCountEqual(msg["properties"]["$context_tags"], ["client_tag"])
+            self.assertEqual(client.get_tags(), {})
+
+    def test_client_scoped_context_helpers_apply_to_capture_async(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+
+            @client.scoped(fresh=True)
+            async def scoped_capture():
+                client.tag("async_scoped_tag", "async-scoped-value")
+                client.identify_context("async-scoped-user")
+                client.set_context_session("async-scoped-session-123")
+                await asyncio.sleep(0)
+                return client.capture("async_scoped_event")
+
+            msg_uuid = asyncio.run(scoped_capture())
+
+            self.assertIsNotNone(msg_uuid)
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            msg = batch_data[0]
+
+            self.assertEqual(msg["distinct_id"], "async-scoped-user")
+            self.assertEqual(
+                msg["properties"]["async_scoped_tag"], "async-scoped-value"
+            )
+            self.assertEqual(
+                msg["properties"]["$session_id"], "async-scoped-session-123"
+            )
+            self.assertCountEqual(
+                msg["properties"]["$context_tags"], ["async_scoped_tag"]
+            )
+            self.assertEqual(client.get_tags(), {})
 
     def test_set_context_session_with_page_explicit_properties(self):
         with mock.patch("posthog.client.batch_post") as mock_post:

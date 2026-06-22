@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.20.1",
+    "version": "7.20.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -343,7 +343,7 @@
     {
       "id": "PostHog",
       "title": "PostHog",
-      "description": "This is the SDK reference for the PostHog Python SDK. You can learn more about example usage in the [Python SDK documentation](/docs/libraries/python). You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django) guides to integrate PostHog into your project.  For long-running applications, create one client during application startup and reuse it for the lifetime of the process. This keeps background queues predictable and makes shutdown flushing straightforward. Multiple clients are still supported for intentional multi-project or multi-host setups.",
+      "description": "This is the SDK reference for the PostHog Python SDK. You can learn more about example usage in the [Python SDK documentation](/docs/libraries/python). You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django) guides to integrate PostHog into your project.",
       "functions": [
         {
           "id": "__init__",

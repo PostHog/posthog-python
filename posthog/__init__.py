@@ -25,6 +25,9 @@ from posthog.contexts import (
     set_code_variables_mask_patterns_context as inner_set_code_variables_mask_patterns_context,
 )
 from posthog.contexts import (
+    set_code_variables_mask_url_credentials_context as inner_set_code_variables_mask_url_credentials_context,
+)
+from posthog.contexts import (
     set_context_device_id as inner_set_context_device_id,
 )
 from posthog.contexts import (
@@ -39,6 +42,7 @@ from posthog.contexts import (
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
+    DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations as FeatureFlagEvaluations,
@@ -77,7 +81,7 @@ __version__ = VERSION
 
 def new_context(
     fresh: bool = False,
-    capture_exceptions: bool = True,
+    capture_exceptions: Optional[bool] = None,
     client: Optional[Client] = None,
 ):
     """
@@ -85,7 +89,7 @@ def new_context(
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture exceptions raised within the context (default: True)
+        capture_exceptions: Whether to capture exceptions raised within the context. If omitted, defaults to the relevant client's exception autocapture setting.
         client: Optional Posthog client instance to use for this context (default: None)
 
     Examples:
@@ -104,13 +108,13 @@ def new_context(
     )
 
 
-def scoped(fresh=False, capture_exceptions=True):
+def scoped(fresh=False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture and track exceptions with posthog error tracking (default: True)
+        capture_exceptions: Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting.
 
     Examples:
         ```python
@@ -225,6 +229,14 @@ def set_code_variables_ignore_patterns_context(ignore_patterns: list[str]):
         Contexts
     """
     return inner_set_code_variables_ignore_patterns_context(ignore_patterns)
+
+
+def set_code_variables_mask_url_credentials_context(enabled: bool):
+    """
+    Whether to scrub credentials embedded in URLs/DSNs (e.g. user:pass@host) from
+    captured code variables for the current context.
+    """
+    return inner_set_code_variables_mask_url_credentials_context(enabled)
 
 
 def tag(name: str, value: Any):
@@ -347,6 +359,7 @@ default_client = None  # type: Optional[Client]
 capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 in_app_modules = None  # type: Optional[list[str]]
 enable_exception_autocapture_rate_limiting = False  # type: bool
 exception_autocapture_bucket_size = ExceptionCapture.DEFAULT_BUCKET_SIZE  # type: int
@@ -371,7 +384,9 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
             properties: Dict of event properties
             timestamp: When the event occurred
             uuid: Unique identifier for this event. If omitted, one is generated
-                and returned.
+                and returned. If provided, it must be a valid UUID string or
+                uuid.UUID instance; invalid values are ignored and replaced with
+                a newly generated UUID.
             groups: Dict of group types and IDs
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
@@ -442,7 +457,9 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             properties: Dict of person properties to set.
             timestamp: When the properties were set.
             uuid: Unique identifier for this operation. If omitted, one is
-                generated and returned.
+                generated and returned. If provided, it must be a valid UUID
+                string or uuid.UUID instance; invalid values are ignored and
+                replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP lookup.
 
     Details:
@@ -472,7 +489,9 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             properties: Dict of person properties to set only once.
             timestamp: When the properties were set.
             uuid: Unique identifier for this operation. If omitted, one is
-                generated and returned.
+                generated and returned. If provided, it must be a valid UUID
+                string or uuid.UUID instance; invalid values are ignored and
+                replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP lookup.
 
     Details:
@@ -1023,9 +1042,13 @@ def load_feature_flags():
     return _proxy("load_feature_flags")
 
 
-def flush() -> None:
+def flush(timeout_seconds: Optional[float] = 10) -> None:
     """
     Tell the client to flush all queued events.
+
+    Args:
+        timeout_seconds: Maximum seconds to wait for the queue to flush.
+            Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
 
     Examples:
         ```python
@@ -1036,7 +1059,7 @@ def flush() -> None:
     Category:
         Client management
     """
-    _proxy("flush")
+    _proxy("flush", timeout_seconds=timeout_seconds)
 
 
 def join() -> None:
@@ -1115,6 +1138,7 @@ def setup() -> Client:
             capture_exception_code_variables=capture_exception_code_variables,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
+            code_variables_mask_url_credentials=code_variables_mask_url_credentials,
             in_app_modules=in_app_modules,
             enable_exception_autocapture_rate_limiting=enable_exception_autocapture_rate_limiting,
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,

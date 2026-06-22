@@ -13,6 +13,7 @@ except ImportError:
 
 from posthog.consumer import MAX_MSG_SIZE, Consumer
 from posthog.request import APIError
+from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
 
 
@@ -53,6 +54,18 @@ class TestConsumer(unittest.TestCase):
         q.put(_track_event())
         success = consumer.upload()
         self.assertTrue(success)
+
+    def test_message_only_error_logs_include_posthog_prefix(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, TEST_API_KEY)
+        q.put(_track_event())
+
+        with mock.patch.object(consumer, "request", side_effect=Exception("boom")):
+            with capture_message_only_logs() as logs:
+                success = consumer.upload()
+
+        self.assertFalse(success)
+        self.assertEqual(logs.getvalue().strip(), "[PostHog] error uploading: boom")
 
     def test_flush_interval(self) -> None:
         # Put _n_ items in the queue, pausing a little bit more than

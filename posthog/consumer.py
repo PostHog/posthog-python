@@ -4,6 +4,7 @@ import logging
 import time
 from threading import Thread
 
+from posthog._logging import _configure_posthog_logging
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
@@ -26,6 +27,9 @@ AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per `$ai_*` event
 # The maximum request body size is currently 20MiB, let's be conservative
 # in case we want to lower it in the future.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
+
+
+_configure_posthog_logging()
 
 
 class Consumer(Thread):
