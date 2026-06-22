@@ -871,6 +871,11 @@ def get_feature_flag_payload(
         disable_geoip: Whether to disable GeoIP lookup.
         device_id: Optional device ID override for experience-continuity flags.
 
+    Returns:
+        The payload associated with the matched feature flag value, or None.
+        This function returns the payload only, not the FeatureFlagResult wrapper
+        used internally to compute it.
+
     Category:
         Feature flags
     """

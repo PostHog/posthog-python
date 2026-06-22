@@ -2417,6 +2417,11 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this request.
             device_id: The device ID for this request.
 
+        Returns:
+            The payload associated with the matched feature flag value, or None.
+            This method returns the payload only, not the FeatureFlagResult wrapper
+            used internally to compute it.
+
         Examples:
             ```python
             is_my_flag_enabled = posthog.feature_enabled('flag-key', 'distinct_id_of_your_user')
