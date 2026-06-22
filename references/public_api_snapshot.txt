@@ -379,6 +379,7 @@ alias posthog.mcp.instrumentation.build_captured_mcp_parameters -> posthog.mcp.s
 alias posthog.mcp.instrumentation.capture_event -> posthog.mcp.capture.capture_event
 alias posthog.mcp.instrumentation.capture_exception -> posthog.mcp.exceptions.capture_exception
 alias posthog.mcp.instrumentation.handle_identify -> posthog.mcp.internal.handle_identify
+alias posthog.mcp.instrumentation.log -> posthog.mcp.logger.log
 alias posthog.mcp.instrumentation.resolve_event_properties -> posthog.mcp.internal.resolve_event_properties
 alias posthog.mcp.instrumentation.resolve_session_id -> posthog.mcp.session.resolve_session_id
 alias posthog.mcp.instrumentation.resolve_tool_call_intent -> posthog.mcp.intent.resolve_tool_call_intent
@@ -767,7 +768,7 @@ attribute posthog.mcp.event_types.MCPAnalyticsEventType.MCP_TOOLS_LIST = 'mcp:to
 attribute posthog.mcp.ids.MCPAnalyticsIDPrefix = Literal['evt', 'ses']
 attribute posthog.mcp.intent.ResolvedIntent = Tuple[str, str]
 attribute posthog.mcp.internal.MCPAnalyticsData.identified_sessions: IdentityCache = field(default_factory=IdentityCache)
-attribute posthog.mcp.internal.MCPAnalyticsData.initialized_sessions: Set[str] = field(default_factory=set)
+attribute posthog.mcp.internal.MCPAnalyticsData.initialized_sessions: 'OrderedDict[str, None]' = field(default_factory=OrderedDict)
 attribute posthog.mcp.internal.MCPAnalyticsData.last_activity: datetime = field(default_factory=(lambda: datetime.now(timezone.utc)))
 attribute posthog.mcp.internal.MCPAnalyticsData.last_mcp_session_id: Optional[str] = None
 attribute posthog.mcp.internal.MCPAnalyticsData.options: MCPAnalyticsOptions
@@ -1001,7 +1002,7 @@ class posthog.mcp.constants.PostHogMCPAnalyticsEvent
 class posthog.mcp.constants.PostHogMCPAnalyticsProperty 
 class posthog.mcp.event_types.MCPAnalyticsEventType 
 class posthog.mcp.internal.IdentityCache(max_size: int = 1000)
-class posthog.mcp.internal.MCPAnalyticsData(options: MCPAnalyticsOptions, sink: Optional[McpEventSink] = None, session_id: str = '', session_source: str = 'generated', last_mcp_session_id: Optional[str] = None, last_activity: datetime = (lambda: datetime.now(timezone.utc))(), identified_sessions: IdentityCache = IdentityCache(), tool_categories: Dict[str, str] = dict(), tool_descriptions: Dict[str, str] = dict(), initialized_sessions: Set[str] = set(), server_name: Optional[str] = None, server_version: Optional[str] = None, session_lock: asyncio.Lock = asyncio.Lock())
+class posthog.mcp.internal.MCPAnalyticsData(options: MCPAnalyticsOptions, sink: Optional[McpEventSink] = None, session_id: str = '', session_source: str = 'generated', last_mcp_session_id: Optional[str] = None, last_activity: datetime = (lambda: datetime.now(timezone.utc))(), identified_sessions: IdentityCache = IdentityCache(), tool_categories: Dict[str, str] = dict(), tool_descriptions: Dict[str, str] = dict(), initialized_sessions: 'OrderedDict[str, None]' = OrderedDict(), server_name: Optional[str] = None, server_version: Optional[str] = None, session_lock: asyncio.Lock = asyncio.Lock())
 class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, **kwargs: Any)
 class posthog.mcp.sink.McpCaptureOptions(enable_exception_autocapture: bool = True, before_send: Optional[BeforeSendFn] = None)
 class posthog.mcp.sink.McpEventSink(posthog: Client)
@@ -1218,14 +1219,15 @@ function posthog.mcp.instrument_lowlevel.instrument_fastmcp_v2(server: Any, data
 function posthog.mcp.instrument_lowlevel.instrument_low_level(server: Any, data: MCPAnalyticsData) -> None
 function posthog.mcp.instrumentation.append_get_more_tools(result: Any, name: str) -> None
 function posthog.mcp.instrumentation.build_tool_call_request(name: str, arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]
+function posthog.mcp.instrumentation.drain_pending() -> None
 function posthog.mcp.instrumentation.extract_tools(result: Any) -> list
 function posthog.mcp.instrumentation.fire_and_forget(coro: Optional[Any]) -> None
 function posthog.mcp.instrumentation.is_tool_result_error(result: Any) -> bool
 function posthog.mcp.instrumentation.prepare_request(data: MCPAnalyticsData, *, mcp_session_id: Optional[str], client_name: Optional[str], client_version: Optional[str], request: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> str
 function posthog.mcp.instrumentation.read_tool_category(tool: Any) -> Optional[str]
-function posthog.mcp.instrumentation.record_missing_capability(data: MCPAnalyticsData, session_id: str, *, tool_name: str, context: Optional[str], arguments: Optional[Dict[str, Any]], client_name: Optional[str] = None, client_version: Optional[str] = None) -> None
+function posthog.mcp.instrumentation.record_missing_capability(data: MCPAnalyticsData, session_id: str, *, tool_name: str, context: Optional[str], arguments: Optional[Dict[str, Any]], client_name: Optional[str] = None, client_version: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
 function posthog.mcp.instrumentation.record_tool_call(data: MCPAnalyticsData, session_id: str, *, name: str, arguments: Optional[Dict[str, Any]], result: Any = None, error: Any = None, duration_ms: Optional[float] = None, client_name: Optional[str] = None, client_version: Optional[str] = None, conversation_id: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
-function posthog.mcp.instrumentation.record_tools_list(data: MCPAnalyticsData, session_id: str, *, names: List[str], request: Dict[str, Any], client_name: Optional[str] = None, client_version: Optional[str] = None) -> None
+function posthog.mcp.instrumentation.record_tools_list(data: MCPAnalyticsData, session_id: str, *, names: List[str], request: Dict[str, Any], client_name: Optional[str] = None, client_version: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
 function posthog.mcp.instrumentation.request_to_dict(req: Any) -> Dict[str, Any]
 function posthog.mcp.intent.resolve_tool_call_intent(data: MCPAnalyticsData, request: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Optional[ResolvedIntent]
 function posthog.mcp.intent.set_event_intent(event: Dict[str, Any], resolved: Optional[ResolvedIntent]) -> None
@@ -1437,10 +1439,12 @@ method posthog.integrations.django.PosthogContextMiddleware.extract_request_user
 method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request)
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
 method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None) -> None
+method posthog.mcp.McpAnalytics.flush() -> None
 method posthog.mcp.internal.IdentityCache.get(session_id: str) -> Optional[UserIdentity]
 method posthog.mcp.internal.IdentityCache.has(session_id: str) -> bool
 method posthog.mcp.internal.IdentityCache.set(session_id: str, identity: UserIdentity) -> None
 method posthog.mcp.internal.IdentityCache.size() -> int
+method posthog.mcp.internal.MCPAnalyticsData.mark_session_initialized(session_id: str) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture_initialize(*, client_name: Optional[str] = None, client_version: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture_missing_capability(*, context: Optional[str] = None, parameters: Any = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture_tool_call(tool_name: str, *, intent: Optional[str] = None, intent_source: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, category: Optional[str] = None, tool_description: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None

@@ -108,7 +108,7 @@ def _wrap_call_tool(
 
         missing_name = resolve_missing_capability_tool_name(data.options)
         if data.options.report_missing and name == missing_name:
-            record_missing_capability(
+            await record_missing_capability(
                 data,
                 session_id,
                 tool_name=missing_name,
@@ -116,6 +116,7 @@ def _wrap_call_tool(
                 arguments=arguments,
                 client_name=client_name,
                 client_version=client_version,
+                extra=extra,
             )
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
@@ -147,6 +148,22 @@ def _wrap_call_tool(
         # The low-level handler already converted any exception to a
         # CallToolResult(isError=True); record_tool_call detects that from the result.
         call_result = getattr(result, "root", result)
+
+        # Inject the prompt-back before capture; only stamp a minted conversation_id
+        # when it was actually delivered (not on isError / non-list results), so we
+        # don't record an orphan id the agent never received.
+        delivered_conversation_id = conversation_id
+        if minted and conversation_id:
+            content = getattr(call_result, "content", None)
+            if not getattr(call_result, "isError", False) and isinstance(content, list):
+                content.append(
+                    mcp_types.TextContent(
+                        type="text", text=build_prompt_back(conversation_id)["text"]
+                    )
+                )
+            else:
+                delivered_conversation_id = None
+
         await record_tool_call(
             data,
             session_id,
@@ -156,17 +173,9 @@ def _wrap_call_tool(
             duration_ms=duration_ms,
             client_name=client_name,
             client_version=client_version,
-            conversation_id=conversation_id,
+            conversation_id=delivered_conversation_id,
             extra=extra,
         )
-        if minted and conversation_id and not getattr(call_result, "isError", False):
-            content = getattr(call_result, "content", None)
-            if isinstance(content, list):
-                content.append(
-                    mcp_types.TextContent(
-                        type="text", text=build_prompt_back(conversation_id)["text"]
-                    )
-                )
         return result
 
     setattr(handler, _WRAPPED_FLAG, True)
@@ -227,13 +236,14 @@ def _wrap_list_tools(
 
         client_name, client_version = _client_info(server)
         session_id = await resolve_session_id(data, _mcp_session_id(server))
-        record_tools_list(
+        await record_tools_list(
             data,
             session_id,
             names=names,
             request=request_to_dict(req),
             client_name=client_name,
             client_version=client_version,
+            extra={"session_id": _mcp_session_id(server)},
         )
 
         return result

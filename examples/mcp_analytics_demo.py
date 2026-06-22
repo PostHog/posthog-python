@@ -87,7 +87,7 @@ async def main() -> None:
     # custom event via the handle
     await analytics.capture("demo_feedback", {"rating": 5})
 
-    await asyncio.sleep(0.3)  # let fire-and-forget capture tasks complete
+    await analytics.flush()  # await in-flight auto-capture tasks (no racy sleep)
     posthog.flush()
     posthog.shutdown()
     print(f"Sent MCP analytics events for server '{SERVER_NAME}' to {HOST}")

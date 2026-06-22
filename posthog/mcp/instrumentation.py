@@ -10,6 +10,7 @@ so both stay in sync."""
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -18,26 +19,72 @@ from .event_types import MCPAnalyticsEventType
 from .exceptions import capture_exception
 from .intent import resolve_tool_call_intent, set_event_intent
 from .internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from .logger import log
 from .sanitization import build_captured_mcp_parameters
 from .session import resolve_session_id
 
-# Keep strong refs to fire-and-forget capture tasks so they aren't GC'd mid-flight.
-_BACKGROUND_TASKS: Set[asyncio.Task] = set()
+# Keep strong refs to in-flight capture tasks/futures so they aren't GC'd mid-flight,
+# and so the asyncio ones can be awaited via drain_pending() before shutdown. Holds
+# asyncio.Task (running-loop path) or concurrent.futures.Future (sync background-loop path).
+_BACKGROUND_TASKS: Set[Any] = set()
+
+# A single daemon event loop for hosts with no running loop (sync dispatchers
+# like PostHogMCP). Created lazily and reused, so we never leak a loop per call.
+_bg_loop: Optional[asyncio.AbstractEventLoop] = None
+_bg_loop_lock = threading.Lock()
+
+
+def _get_background_loop() -> asyncio.AbstractEventLoop:
+    global _bg_loop
+    if _bg_loop is None:
+        with _bg_loop_lock:
+            if _bg_loop is None:
+                loop = asyncio.new_event_loop()
+                threading.Thread(
+                    target=loop.run_forever, name="posthog-mcp-capture", daemon=True
+                ).start()
+                _bg_loop = loop
+    return _bg_loop
+
+
+def _on_task_done(task: Any) -> None:
+    _BACKGROUND_TASKS.discard(task)
+    try:
+        if not task.cancelled() and task.exception() is not None:
+            log(f"background capture task failed: {task.exception()}")
+    except Exception:  # noqa: BLE001 - never let bookkeeping raise
+        pass
 
 
 def fire_and_forget(coro: Optional[Any]) -> None:
     """Schedule a capture coroutine without blocking the tool path. No-ops if the
-    coroutine is ``None`` (no sink) or there is no running event loop."""
+    coroutine is ``None`` (no sink). Runs on the current loop when there is one,
+    otherwise on a shared daemon loop (sync hosts) — never creates a throwaway loop."""
     if coro is None:
         return
     try:
-        task = asyncio.ensure_future(coro)
+        asyncio.get_running_loop()
     except RuntimeError:
-        # No running loop — run it to completion synchronously as a fallback.
-        asyncio.new_event_loop().run_until_complete(coro)
+        # No running loop (sync host) — schedule on the shared background loop.
+        future = asyncio.run_coroutine_threadsafe(coro, _get_background_loop())
+        _BACKGROUND_TASKS.add(future)
+        future.add_done_callback(_on_task_done)
         return
+    task = asyncio.ensure_future(coro)
     _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    task.add_done_callback(_on_task_done)
+
+
+async def drain_pending() -> None:
+    """Await in-flight capture tasks scheduled on the current event loop. Lets a host
+    flush analytics before ``posthog.shutdown()`` instead of racing a sleep."""
+    pending = [
+        t
+        for t in list(_BACKGROUND_TASKS)
+        if isinstance(t, asyncio.Task) and not t.done()
+    ]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def is_tool_result_error(result: Any) -> bool:
@@ -83,25 +130,38 @@ async def _maybe_emit_initialize(
     session_id: str,
     client_name: Optional[str],
     client_version: Optional[str],
+    extra: Optional[Dict[str, Any]],
 ) -> None:
     """Lazily emit ``$mcp_initialize`` once per session. The Python MCP SDK handles
     ``InitializeRequest`` inside the session layer (not ``request_handlers``), so we
     synthesize the event from the first instrumented request that carries client info."""
     if session_id in data.initialized_sessions:
         return
-    data.initialized_sessions.add(session_id)
-    fire_and_forget(
-        capture_event(
-            data,
-            {
-                "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
-                "session_id": session_id,
-                "client_name": client_name,
-                "client_version": client_version,
-                "timestamp": datetime.now(timezone.utc),
-            },
-        )
+    data.mark_session_initialized(session_id)
+    event: Dict[str, Any] = {
+        "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
+        "session_id": session_id,
+        "client_name": client_name,
+        "client_version": client_version,
+        "timestamp": datetime.now(timezone.utc),
+    }
+    await _apply_event_properties(
+        data, event, {"method": "initialize", "params": {}}, extra
     )
+    fire_and_forget(capture_event(data, event))
+
+
+async def _apply_event_properties(
+    data: MCPAnalyticsData,
+    event: Dict[str, Any],
+    request: Dict[str, Any],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Resolve the customer's ``event_properties`` callback and stamp it onto the
+    event — applied to every auto-captured event type, matching the TS SDK."""
+    props = await resolve_event_properties(data, request, extra)
+    if props is not None:
+        event["properties"] = props
 
 
 async def prepare_request(
@@ -116,7 +176,7 @@ async def prepare_request(
     """Resolve the session id, lazily emit initialize, and run identify. Returns
     the session id to stamp on the event for this request."""
     session_id = await resolve_session_id(data, mcp_session_id)
-    await _maybe_emit_initialize(data, session_id, client_name, client_version)
+    await _maybe_emit_initialize(data, session_id, client_name, client_version, extra)
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event))
@@ -137,36 +197,41 @@ async def record_tool_call(
     conversation_id: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    request = build_tool_call_request(name, arguments)
-    event: Dict[str, Any] = {
-        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
-        "session_id": session_id,
-        "resource_name": name,
-        "tool_description": data.tool_descriptions.get(name),
-        "tool_category": data.tool_categories.get(name),
-        "parameters": build_captured_mcp_parameters(request),
-        "duration": duration_ms,
-        "client_name": client_name,
-        "client_version": client_version,
-        "conversation_id": conversation_id,
-        "is_error": False,
-    }
-    set_event_intent(event, await resolve_tool_call_intent(data, request, extra))
+    # Analytics must never change what the tool returns or raises: any failure
+    # building/publishing the event is logged and swallowed here.
+    try:
+        request = build_tool_call_request(name, arguments)
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+            "session_id": session_id,
+            "resource_name": name,
+            "tool_description": data.tool_descriptions.get(name),
+            "tool_category": data.tool_categories.get(name),
+            "parameters": build_captured_mcp_parameters(request),
+            "duration": duration_ms,
+            "client_name": client_name,
+            "client_version": client_version,
+            "conversation_id": conversation_id,
+            "is_error": False,
+        }
+        set_event_intent(event, await resolve_tool_call_intent(data, request, extra))
 
-    if error is not None:
-        event["is_error"] = True
-        event["error"] = capture_exception(error)
-    elif result is not None:
-        event["response"] = _wrap_response(result)
-        if is_tool_result_error(result):
+        if error is not None:
             event["is_error"] = True
-            event["error"] = capture_exception(result)
+            event["error"] = capture_exception(error)
+        elif result is not None:
+            event["response"] = _wrap_response(result)
+            if is_tool_result_error(result):
+                event["is_error"] = True
+                event["error"] = capture_exception(result)
 
-    props = await resolve_event_properties(data, request, extra)
-    if props is not None:
-        event["properties"] = props
+        props = await resolve_event_properties(data, request, extra)
+        if props is not None:
+            event["properties"] = props
 
-    fire_and_forget(capture_event(data, event))
+        fire_and_forget(capture_event(data, event))
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_tool_call failed (event dropped, tool unaffected): {err}")
 
 
 def extract_tools(result: Any) -> list:
@@ -218,7 +283,7 @@ def request_to_dict(req: Any) -> Dict[str, Any]:
     return {"method": method, "params": params_dict}
 
 
-def record_missing_capability(
+async def record_missing_capability(
     data: MCPAnalyticsData,
     session_id: str,
     *,
@@ -227,25 +292,30 @@ def record_missing_capability(
     arguments: Optional[Dict[str, Any]],
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record a ``get_more_tools`` call as ``$mcp_missing_capability``, with the
     agent's stated need as ``$mcp_intent``."""
-    request = build_tool_call_request(tool_name, arguments)
-    event: Dict[str, Any] = {
-        "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
-        "session_id": session_id,
-        "resource_name": tool_name,
-        "parameters": build_captured_mcp_parameters(request),
-        "client_name": client_name,
-        "client_version": client_version,
-    }
-    if isinstance(context, str) and context.strip():
-        event["user_intent"] = context.strip()
-        event["user_intent_source"] = "context_parameter"
-    fire_and_forget(capture_event(data, event))
+    try:
+        request = build_tool_call_request(tool_name, arguments)
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
+            "session_id": session_id,
+            "resource_name": tool_name,
+            "parameters": build_captured_mcp_parameters(request),
+            "client_name": client_name,
+            "client_version": client_version,
+        }
+        if isinstance(context, str) and context.strip():
+            event["user_intent"] = context.strip()
+            event["user_intent_source"] = "context_parameter"
+        await _apply_event_properties(data, event, request, extra)
+        fire_and_forget(capture_event(data, event))
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_missing_capability failed (event dropped): {err}")
 
 
-def record_tools_list(
+async def record_tools_list(
     data: MCPAnalyticsData,
     session_id: str,
     *,
@@ -253,18 +323,20 @@ def record_tools_list(
     request: Dict[str, Any],
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    fire_and_forget(
-        capture_event(
-            data,
-            {
-                "event_type": MCPAnalyticsEventType.MCP_TOOLS_LIST,
-                "session_id": session_id,
-                "listed_tool_names": names,
-                "parameters": build_captured_mcp_parameters(request),
-                "client_name": client_name,
-                "client_version": client_version,
-                "timestamp": datetime.now(timezone.utc),
-            },
-        )
-    )
+    try:
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_TOOLS_LIST,
+            "session_id": session_id,
+            "listed_tool_names": names,
+            "parameters": build_captured_mcp_parameters(request),
+            "client_name": client_name,
+            "client_version": client_version,
+            "is_error": False,
+            "timestamp": datetime.now(timezone.utc),
+        }
+        await _apply_event_properties(data, event, request, extra)
+        fire_and_forget(capture_event(data, event))
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_tools_list failed (event dropped): {err}")

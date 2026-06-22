@@ -106,7 +106,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
 
         missing_name = resolve_missing_capability_tool_name(data.options)
         if data.options.report_missing and name == missing_name:
-            record_missing_capability(
+            await record_missing_capability(
                 data,
                 session_id,
                 tool_name=missing_name,
@@ -114,6 +114,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 arguments=arguments,
                 client_name=client_name,
                 client_version=client_version,
+                extra=extra,
             )
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
@@ -135,6 +136,8 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 name, call_arguments, context=context, convert_result=convert_result
             )
         except Exception as error:
+            # The minted prompt-back was never delivered to the agent — don't stamp
+            # an orphan conversation_id it can't echo (an agent-supplied id is kept).
             await record_tool_call(
                 data,
                 session_id,
@@ -144,10 +147,21 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 duration_ms=(time.monotonic() - start) * 1000,
                 client_name=client_name,
                 client_version=client_version,
-                conversation_id=conversation_id,
+                conversation_id=None if minted else conversation_id,
                 extra=extra,
             )
             raise
+
+        # Inject the prompt-back first, then capture the delivered result. Only stamp
+        # a minted conversation_id when it was actually appended to what the agent got.
+        delivered_conversation_id = conversation_id
+        if minted and conversation_id:
+            injected = _inject_prompt_back(result, conversation_id)
+            if injected is result:
+                delivered_conversation_id = (
+                    None  # not injectable (e.g. tuple/scalar result)
+                )
+            result = injected
 
         await record_tool_call(
             data,
@@ -158,11 +172,9 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             duration_ms=(time.monotonic() - start) * 1000,
             client_name=client_name,
             client_version=client_version,
-            conversation_id=conversation_id,
+            conversation_id=delivered_conversation_id,
             extra=extra,
         )
-        if minted and conversation_id:
-            result = _inject_prompt_back(result, conversation_id)
         return result
 
     setattr(wrapped, _WRAPPED_FLAG, True)
@@ -223,7 +235,9 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
                 names.append(missing_name)
 
         session_id = await resolve_session_id(data, None)
-        record_tools_list(data, session_id, names=names, request=request_to_dict(req))
+        await record_tools_list(
+            data, session_id, names=names, request=request_to_dict(req)
+        )
 
         return result
 
@@ -236,10 +250,15 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
 def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     """Append the conversation_id prompt-back to a tool result so the agent echoes
-    it on later calls. Handles FastMCP's content-list results and dict results."""
+    it on later calls. Handles every shape ToolManager.call_tool can return:
+    a ``(content_list, structured)`` tuple (the convert_result=True production path),
+    a bare content list, or a ``{content: [...]}`` dict. Returns the result unchanged
+    (so the caller can detect non-delivery) for shapes we can't append to."""
     block = mcp_types.TextContent(
         type="text", text=build_prompt_back(conversation_id)["text"]
     )
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], list):
+        return ([*result[0], block], result[1])
     if isinstance(result, list):
         return [*result, block]
     if (

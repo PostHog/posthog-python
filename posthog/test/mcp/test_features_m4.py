@@ -185,6 +185,68 @@ async def test_conversation_id_reused_when_supplied():
 
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["properties"]["$mcp_conversation_id"] == "conv-123"
+    # the injected conversation_id is stripped from captured params (surfaces only as $mcp_conversation_id)
+    args = calls[0]["properties"]["$mcp_parameters"]["request"]["params"]["arguments"]
+    assert "conversation_id" not in args
+
+
+async def test_conversation_id_not_stamped_when_prompt_back_undeliverable():
+    # A tool that errors -> the minted prompt-back can't be delivered, so we must NOT
+    # record an orphan $mcp_conversation_id the agent never received.
+    server = Server("conv-err")
+
+    @server.list_tools()
+    async def _lt():
+        return [
+            mcp_types.Tool(
+                name="boom",
+                description="b",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ]
+
+    @server.call_tool()
+    async def _ct(name, arguments):
+        raise ValueError("kaboom")
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    out = await server.request_handlers[mcp_types.CallToolRequest](
+        _call_request("boom", {"context": "trying"})
+    )
+    await _flush()
+
+    assert out.root.isError is True
+    calls = _events(client, "$mcp_tool_call")
+    assert calls and calls[0]["properties"]["$mcp_is_error"] is True
+    assert "$mcp_conversation_id" not in calls[0]["properties"]
+
+
+async def test_event_properties_applied_to_all_event_types():
+    server = make_lowlevel()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(event_properties=lambda request, extra: {"tenant": "acme"}),
+    )
+
+    await server.request_handlers[mcp_types.ListToolsRequest](
+        mcp_types.ListToolsRequest(method="tools/list")
+    )
+    await server.request_handlers[mcp_types.CallToolRequest](
+        _call_request("echo", {"msg": "hi", "context": "x"})
+    )
+    await _flush()
+
+    # event_properties must land on every auto-captured event type, not just $mcp_tool_call
+    for name in ("$mcp_tools_list", "$mcp_initialize", "$mcp_tool_call"):
+        evs = _events(client, name)
+        assert evs, f"no {name} event captured"
+        assert evs[0]["properties"].get("tenant") == "acme", (
+            f"{name} missing event_properties"
+        )
 
 
 # --- PostHogMCP --------------------------------------------------------------

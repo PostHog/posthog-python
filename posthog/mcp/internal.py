@@ -17,7 +17,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from .logger import log
 from .sink import McpEventSink
@@ -66,10 +66,20 @@ class MCPAnalyticsData:
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
-    initialized_sessions: Set[str] = field(default_factory=set)
+    # Bounded FIFO of sessions we've emitted $mcp_initialize for, so a long-lived
+    # server can't accumulate one entry per session forever.
+    initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
     server_name: Optional[str] = None
     server_version: Optional[str] = None
     session_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def mark_session_initialized(self, session_id: str) -> None:
+        self.initialized_sessions[session_id] = None
+        while len(self.initialized_sessions) > _MAX_INITIALIZED_SESSIONS:
+            self.initialized_sessions.popitem(last=False)
+
+
+_MAX_INITIALIZED_SESSIONS = 1000
 
 
 _server_tracking: "weakref.WeakKeyDictionary[Any, MCPAnalyticsData]" = (

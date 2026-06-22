@@ -13,7 +13,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
-_CONTEXT_ARGUMENT_NAME = "context"
+# SDK-injected arguments stripped from captured $mcp_parameters (they surface as
+# dedicated properties: $mcp_intent and $mcp_conversation_id).
+_INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
 _REDACTED_VALUE = "[redacted]"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
 _SIZE_GATE = 10_240
@@ -177,7 +179,7 @@ def _build_captured_mcp_arguments(arguments: Any) -> Any:
 
     captured: Dict[str, Any] = {}
     for key, value in arguments.items():
-        if key == _CONTEXT_ARGUMENT_NAME:
+        if key in _INJECTED_ARGUMENT_NAMES:
             continue
         captured[key] = sanitize_captured_value(value)
     return captured

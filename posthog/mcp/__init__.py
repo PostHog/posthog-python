@@ -42,6 +42,7 @@ from .constants import (
 from .event_types import MCPAnalyticsEventType
 from .instrument_fastmcp import instrument_fastmcp
 from .instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
+from .instrumentation import drain_pending
 from .internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
@@ -110,6 +111,12 @@ class McpAnalytics:
         if coro is not None:
             await coro
 
+    async def flush(self) -> None:
+        """Await in-flight auto-captured events scheduled on the current event loop.
+        Call this before ``posthog.shutdown()`` on exit so trailing tool-call events
+        aren't dropped. (Then call ``posthog.flush()``/``shutdown()`` to send them.)"""
+        await drain_pending()
+
 
 class _NoopAnalytics(McpAnalytics):
     def __init__(self) -> None:  # noqa: D401 - graceful degradation handle
@@ -143,7 +150,8 @@ def instrument(
     state instead of double-wrapping. Degrades to a no-op handle on any failure so
     the host application keeps working.
 
-    :param server: A ``FastMCP`` server (low-level ``Server`` support: see M3).
+    :param server: A ``FastMCP`` server (official ``mcp.server.fastmcp`` or jlowin's
+        ``fastmcp`` 2.0) or a low-level ``mcp.server.Server``.
     :param posthog_client: A posthog ``Client`` you construct and own (call
         ``shutdown()`` on exit to flush). Falls back to the global client.
     :param options: Optional :class:`MCPAnalyticsOptions`.
