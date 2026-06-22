@@ -6,7 +6,7 @@ values the code branched on, with no additional /flags request.
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
 from posthog.types import FlagValue
 
@@ -62,7 +62,7 @@ class FeatureFlagEvaluations:
         host: _FeatureFlagEvaluationsHost,
         distinct_id: str,
         flags: Dict[str, _EvaluatedFlagRecord],
-        groups: Optional[Dict[str, str]] = None,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
         request_id: Optional[str] = None,
         evaluated_at: Optional[int] = None,
@@ -74,7 +74,7 @@ class FeatureFlagEvaluations:
         self._host = host
         self._distinct_id = distinct_id
         self._flags = flags
-        self._groups: Dict[str, str] = groups or {}
+        self._groups: Dict[str, Union[str, int]] = dict(groups or {})
         self._disable_geoip = disable_geoip
         self._request_id = request_id
         self._evaluated_at = evaluated_at
@@ -177,7 +177,7 @@ class FeatureFlagEvaluations:
         return self._distinct_id
 
     @property
-    def _internal_groups(self) -> Dict[str, str]:
+    def _internal_groups(self) -> Dict[str, Union[str, int]]:
         return self._groups
 
     def _clone_with(

@@ -77,6 +77,23 @@ jobs:
                   python .github/scripts/test_check_public_api.py
                   make public_api_check
 
+    strict-type-smoke:
+        name: Strict type smoke
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.11
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: 3.11.11
+
+            - name: Check strict downstream Pyright usage
+              run: .github/scripts/check_strict_types.sh
+
     package-build:
         name: Package build
         runs-on: ubuntu-latest

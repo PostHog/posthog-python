@@ -1,9 +1,14 @@
 import datetime  # noqa: F401
-from typing import Any, Callable, Dict, Optional  # noqa: F401
+from typing import Any, Callable, Dict, Mapping, Optional, Union  # noqa: F401
 
 from typing_extensions import Unpack
 
-from posthog.args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.args import (
+    ID_TYPES as ID_TYPES,
+    ExceptionArg,
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+)
 from posthog.client import Client
 from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
@@ -65,8 +70,9 @@ from posthog.request import (
 )
 from posthog.types import (
     BeforeSendCallback as BeforeSendCallback,
-    FeatureFlag,
-    FlagsAndPayloads,
+    FeatureFlag as FeatureFlag,
+    FlagValue as FlagValue,
+    FlagsAndPayloads as FlagsAndPayloads,
 )
 from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
@@ -202,7 +208,7 @@ def set_capture_exception_code_variables_context(enabled: bool):
     return inner_set_capture_exception_code_variables_context(enabled)
 
 
-def set_code_variables_mask_patterns_context(mask_patterns: list):
+def set_code_variables_mask_patterns_context(mask_patterns: list[str]):
     """
     Override code-variable mask patterns for exceptions in the current context.
 
@@ -216,7 +222,7 @@ def set_code_variables_mask_patterns_context(mask_patterns: list):
     return inner_set_code_variables_mask_patterns_context(mask_patterns)
 
 
-def set_code_variables_ignore_patterns_context(ignore_patterns: list):
+def set_code_variables_ignore_patterns_context(ignore_patterns: list[str]):
     """
     Override code-variable ignore patterns for exceptions in the current context.
 
@@ -510,15 +516,14 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
 
 
 def group_identify(
-    group_type,  # type: str
-    group_key,  # type: str
-    properties=None,  # type: Optional[Dict]
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    disable_geoip=None,  # type: Optional[bool]
-    distinct_id=None,  # type: Optional[str]
-):
-    # type: (...) -> Optional[str]
+    group_type: str,
+    group_key: str,
+    properties: Optional[Dict[str, Any]] = None,
+    timestamp: Optional[datetime.datetime] = None,
+    uuid: Optional[str] = None,
+    disable_geoip: Optional[bool] = None,
+    distinct_id: Optional[ID_TYPES] = None,
+) -> Optional[str]:
     """
     Set properties on a group.
 
@@ -557,13 +562,12 @@ def group_identify(
 
 
 def alias(
-    previous_id,  # type: str
-    distinct_id,  # type: str
-    timestamp=None,  # type: Optional[datetime.datetime]
-    uuid=None,  # type: Optional[str]
-    disable_geoip=None,  # type: Optional[bool]
-):
-    # type: (...) -> Optional[str]
+    previous_id: str,
+    distinct_id: str,
+    timestamp: Optional[datetime.datetime] = None,
+    uuid: Optional[str] = None,
+    disable_geoip: Optional[bool] = None,
+) -> Optional[str]:
     """
     Associate user behaviour before and after they e.g. register, login, or perform some other identifying action.
 
@@ -629,17 +633,16 @@ def capture_exception(
 
 
 def feature_enabled(
-    key,  # type: str
-    distinct_id,  # type: str
-    groups=None,  # type: Optional[dict]
-    person_properties=None,  # type: Optional[dict]
-    group_properties=None,  # type: Optional[dict]
-    only_evaluate_locally=False,  # type: bool
-    send_feature_flag_events=True,  # type: bool
-    disable_geoip=None,  # type: Optional[bool]
-    device_id=None,  # type: Optional[str]
-):
-    # type: (...) -> bool
+    key: str,
+    distinct_id: ID_TYPES,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    send_feature_flag_events: bool = True,
+    disable_geoip: Optional[bool] = None,
+    device_id: Optional[str] = None,
+) -> Optional[bool]:
     """
     Use feature flags to enable or disable features for users.
 
@@ -683,16 +686,16 @@ def feature_enabled(
 
 
 def get_feature_flag(
-    key,  # type: str
-    distinct_id,  # type: str
-    groups=None,  # type: Optional[dict]
-    person_properties=None,  # type: Optional[dict]
-    group_properties=None,  # type: Optional[dict]
-    only_evaluate_locally=False,  # type: bool
-    send_feature_flag_events=True,  # type: bool
-    disable_geoip=None,  # type: Optional[bool]
-    device_id=None,  # type: Optional[str]
-) -> Optional[FeatureFlag]:
+    key: str,
+    distinct_id: ID_TYPES,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    send_feature_flag_events: bool = True,
+    disable_geoip: Optional[bool] = None,
+    device_id: Optional[str] = None,
+) -> Optional[FlagValue]:
     """
     Get feature flag variant for users. Used with experiments.
 
@@ -736,15 +739,15 @@ def get_feature_flag(
 
 
 def get_all_flags(
-    distinct_id,  # type: str
-    groups=None,  # type: Optional[dict]
-    person_properties=None,  # type: Optional[dict]
-    group_properties=None,  # type: Optional[dict]
-    only_evaluate_locally=False,  # type: bool
-    disable_geoip=None,  # type: Optional[bool]
-    device_id=None,  # type: Optional[str]
-    flag_keys_to_evaluate=None,  # type: Optional[list[str]]
-) -> Optional[dict[str, FeatureFlag]]:
+    distinct_id: ID_TYPES,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    disable_geoip: Optional[bool] = None,
+    device_id: Optional[str] = None,
+    flag_keys_to_evaluate: Optional[list[str]] = None,
+) -> Optional[dict[str, FlagValue]]:
     """
     Get all flags for a given user.
 
@@ -784,17 +787,16 @@ def get_all_flags(
 
 
 def get_feature_flag_result(
-    key,
-    distinct_id,
-    groups=None,  # type: Optional[dict]
-    person_properties=None,  # type: Optional[dict]
-    group_properties=None,  # type: Optional[dict]
-    only_evaluate_locally=False,
-    send_feature_flag_events=True,
-    disable_geoip=None,  # type: Optional[bool]
-    device_id=None,  # type: Optional[str]
-):
-    # type: (...) -> Optional[FeatureFlagResult]
+    key: str,
+    distinct_id: ID_TYPES,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    send_feature_flag_events: bool = True,
+    disable_geoip: Optional[bool] = None,
+    device_id: Optional[str] = None,
+) -> Optional[FeatureFlagResult]:
     """
     Get a FeatureFlagResult object which contains the flag result and payload.
 
@@ -840,17 +842,17 @@ def get_feature_flag_result(
 
 
 def get_feature_flag_payload(
-    key,
-    distinct_id,
-    match_value=None,
-    groups=None,  # type: Optional[dict]
-    person_properties=None,  # type: Optional[dict]
-    group_properties=None,  # type: Optional[dict]
-    only_evaluate_locally=False,
-    send_feature_flag_events=True,
-    disable_geoip=None,  # type: Optional[bool]
-    device_id=None,  # type: Optional[str]
-) -> Optional[str]:
+    key: str,
+    distinct_id: ID_TYPES,
+    match_value: Optional[FlagValue] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    send_feature_flag_events: bool = True,
+    disable_geoip: Optional[bool] = None,
+    device_id: Optional[str] = None,
+) -> Optional[object]:
     """
     Get the payload associated with a feature flag value.
 
@@ -868,6 +870,11 @@ def get_feature_flag_payload(
         send_feature_flag_events: Whether to send a $feature_flag_called event.
         disable_geoip: Whether to disable GeoIP lookup.
         device_id: Optional device ID override for experience-continuity flags.
+
+    Returns:
+        The payload associated with the matched feature flag value, or None.
+        This function returns the payload only, not the FeatureFlagResult wrapper
+        used internally to compute it.
 
     Category:
         Feature flags
@@ -888,7 +895,7 @@ def get_feature_flag_payload(
 
 
 def get_remote_config_payload(
-    key,  # type: str
+    key: str,
 ):
     """Get the payload for a remote config feature flag.
 
@@ -908,14 +915,14 @@ def get_remote_config_payload(
 
 
 def get_all_flags_and_payloads(
-    distinct_id,
-    groups=None,  # type: Optional[dict]
-    person_properties=None,  # type: Optional[dict]
-    group_properties=None,  # type: Optional[dict]
-    only_evaluate_locally=False,
-    disable_geoip=None,  # type: Optional[bool]
-    device_id=None,  # type: Optional[str]
-    flag_keys_to_evaluate=None,  # type: Optional[list[str]]
+    distinct_id: ID_TYPES,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    disable_geoip: Optional[bool] = None,
+    device_id: Optional[str] = None,
+    flag_keys_to_evaluate: Optional[list[str]] = None,
 ) -> FlagsAndPayloads:
     """
     Get all feature flag values and payloads for a user.
@@ -951,14 +958,14 @@ def get_all_flags_and_payloads(
 
 
 def evaluate_flags(
-    distinct_id=None,  # type: Optional[str]
-    groups=None,  # type: Optional[Dict[str, str]]
-    person_properties=None,  # type: Optional[Dict[str, Any]]
-    group_properties=None,  # type: Optional[Dict[str, Dict[str, Any]]]
-    only_evaluate_locally=False,  # type: bool
-    disable_geoip=None,  # type: Optional[bool]
-    flag_keys=None,  # type: Optional[list]
-    device_id=None,  # type: Optional[str]
+    distinct_id: Optional[ID_TYPES] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
+    person_properties: Optional[Dict[str, Any]] = None,
+    group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+    only_evaluate_locally: bool = False,
+    disable_geoip: Optional[bool] = None,
+    flag_keys: Optional[list[str]] = None,
+    device_id: Optional[str] = None,
 ) -> FeatureFlagEvaluations:
     """Evaluate all feature flags for a user in a single call and return a
     :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
