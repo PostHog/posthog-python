@@ -8,3 +8,6 @@ This repository uses [Sampo](https://github.com/bruits/sampo) for versioning and
 4. Approve the release in Slack when prompted — this triggers the version bump, publishes both `posthog` and the `posthoganalytics` mirror package to PyPI, creates a git tag, and creates a GitHub Release
 
 You can also trigger a release manually via the workflow's `workflow_dispatch` trigger (still requires pending changesets).
+
+> [!IMPORTANT]
+> Changesets must live in **`.sampo/changesets/`** (this is where `sampo add` puts them). Do **not** create them in the legacy `.changeset/` directory — Sampo and the `Release` workflow only read `.sampo/changesets/*.md`, so a changeset placed anywhere else is silently ignored and **no release is triggered**.
