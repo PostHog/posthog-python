@@ -1,5 +1,11 @@
 # posthog
 
+## 7.20.0 — 2026-06-22
+
+### Minor changes
+
+- [bc8e531](https://github.com/posthog/posthog-python/commit/bc8e5316e59006477ee4ac63407a9fc7aed2874a) Add a default timeout for flushing queued events. — Thanks @marandaneto!
+
 ## 7.19.2 — 2026-06-17
 
 ### Patch changes

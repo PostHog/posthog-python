@@ -149,7 +149,7 @@ def test_excepthook(tmpdir):
 
     assert b"ZeroDivisionError" in output
     assert b"LOL" in output
-    assert b"DEBUG:posthog:data uploaded successfully" in output
+    assert b"DEBUG:posthog:[PostHog] data uploaded successfully" in output
     assert (
         b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
         in output
