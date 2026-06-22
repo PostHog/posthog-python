@@ -83,6 +83,77 @@ class TestClient(unittest.TestCase):
 
         self.assertIsNone(client.capture("event", distinct_id="distinct_id"))
 
+    def _reset_duplicate_client_registry(self):
+        Client._client_registry.clear()
+        Client._duplicate_client_warnings.clear()
+
+    def test_warns_once_on_duplicate_async_client_same_key_and_host(self):
+        self._reset_duplicate_client_registry()
+        self.addCleanup(self._reset_duplicate_client_registry)
+        host = "https://us.i.posthog.com"
+        registry_key = (FAKE_TEST_API_KEY, host)
+
+        with (
+            mock.patch("posthog.client.atexit.register"),
+            mock.patch("posthog.client.Consumer.start"),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            first = Client(FAKE_TEST_API_KEY, host=host)
+            second = Client(FAKE_TEST_API_KEY, host=host)
+            third = Client(FAKE_TEST_API_KEY, host=host)
+
+            self.assertIsNot(first, second)
+            self.assertIsNot(second, third)
+            mock_warning.assert_called_once_with(
+                "Multiple active PostHog clients detected for the same project "
+                "API key and host. Reuse one Posthog instance per app or "
+                "process when possible to avoid competing background queues "
+                "and missed shutdown flushes. Multiple clients are supported "
+                "when intentional."
+            )
+
+            first.shutdown()
+            second.shutdown()
+            third.shutdown()
+
+            self.assertNotIn(registry_key, Client._client_registry)
+            self.assertNotIn(registry_key, Client._duplicate_client_warnings)
+
+            fourth = Client(FAKE_TEST_API_KEY, host=host)
+            fifth = Client(FAKE_TEST_API_KEY, host=host)
+
+            self.assertEqual(mock_warning.call_count, 2)
+
+            fourth.shutdown()
+            fifth.shutdown()
+
+    @parameterized.expand(
+        [
+            ("different_host", {"host": "https://two.example.com"}),
+            ("sync_mode", {"host": "https://one.example.com", "sync_mode": True}),
+            ("send_disabled", {"host": "https://one.example.com", "send": False}),
+        ]
+    )
+    def test_duplicate_client_warning_allows_intentional_multi_client_cases(
+        self, _, duplicate_kwargs
+    ):
+        self._reset_duplicate_client_registry()
+        self.addCleanup(self._reset_duplicate_client_registry)
+
+        with (
+            mock.patch("posthog.client.atexit.register"),
+            mock.patch("posthog.client.Consumer.start"),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            first = Client(FAKE_TEST_API_KEY, host="https://one.example.com")
+            duplicate = Client(FAKE_TEST_API_KEY, **duplicate_kwargs)
+
+            self.assertIsNot(first, duplicate)
+            mock_warning.assert_not_called()
+
+            first.shutdown()
+            duplicate.shutdown()
+
     def test_message_only_info_logs_include_posthog_prefix(self):
         self.client.flag_cache = mock.Mock()
         self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()

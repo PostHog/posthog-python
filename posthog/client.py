@@ -194,6 +194,11 @@ class Client(object):
     You can also follow [Flask](/docs/libraries/flask) and [Django](/docs/libraries/django)
     guides to integrate PostHog into your project.
 
+    For long-running applications, create one client during application startup
+    and reuse it for the lifetime of the process. This keeps background queues
+    predictable and makes shutdown flushing straightforward. Multiple clients are
+    still supported for intentional multi-project or multi-host setups.
+
     Examples:
         ```python
         from posthog import Posthog
@@ -205,6 +210,9 @@ class Client(object):
     """
 
     log = logging.getLogger("posthog")
+    _client_registry_lock = threading.Lock()
+    _client_registry: dict[tuple[str, str], weakref.WeakSet] = {}
+    _duplicate_client_warnings: set[tuple[str, str]] = set()
 
     def __init__(
         self,
@@ -341,6 +349,7 @@ class Client(object):
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
+        self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self.gzip = gzip
         self.timeout = timeout
         self._feature_flags: Optional[list[Any]] = (
@@ -475,6 +484,54 @@ class Client(object):
             os.register_at_fork(
                 after_in_child=lambda: Client._reinit_after_fork_weak(weak_self)
             )
+
+        self._warn_if_duplicate_async_client()
+
+    def _warn_if_duplicate_async_client(self):
+        if self.disabled or not self.send or self.sync_mode or not self.api_key:
+            return
+
+        registry_key = (self.api_key, self.host)
+        should_warn = False
+
+        with Client._client_registry_lock:
+            clients = Client._client_registry.setdefault(
+                registry_key, weakref.WeakSet()
+            )
+            has_existing_client = len(clients) > 0
+            clients.add(self)
+            self._duplicate_client_registry_key = registry_key
+
+            if (
+                has_existing_client
+                and registry_key not in Client._duplicate_client_warnings
+            ):
+                Client._duplicate_client_warnings.add(registry_key)
+                should_warn = True
+
+        if should_warn:
+            self.log.warning(
+                "Multiple active PostHog clients detected for the same project "
+                "API key and host. Reuse one Posthog instance per app or "
+                "process when possible to avoid competing background queues "
+                "and missed shutdown flushes. Multiple clients are supported "
+                "when intentional."
+            )
+
+    def _unregister_duplicate_client(self):
+        registry_key = self._duplicate_client_registry_key
+        if registry_key is None:
+            return
+
+        with Client._client_registry_lock:
+            clients = Client._client_registry.get(registry_key)
+            if clients is not None:
+                clients.discard(self)
+                if not clients:
+                    del Client._client_registry[registry_key]
+                    Client._duplicate_client_warnings.discard(registry_key)
+
+            self._duplicate_client_registry_key = None
 
     def _set_before_send(self, before_send):
         if before_send is not None:
@@ -1606,6 +1663,7 @@ class Client(object):
 
         # Shutdown the cache provider (release locks, cleanup)
         self._shutdown_flag_definition_cache_provider()
+        self._unregister_duplicate_client()
 
     def shutdown(self) -> None:
         """
