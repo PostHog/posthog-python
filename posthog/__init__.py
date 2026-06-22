@@ -1,5 +1,5 @@
 import datetime  # noqa: F401
-from typing import Any, Callable, Dict, Optional  # noqa: F401
+from typing import Any, Callable, Dict, Mapping, Optional, Union  # noqa: F401
 
 from typing_extensions import Unpack
 
@@ -635,7 +635,7 @@ def capture_exception(
 def feature_enabled(
     key: str,
     distinct_id: ID_TYPES,
-    groups: Optional[Dict[str, str]] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
@@ -688,7 +688,7 @@ def feature_enabled(
 def get_feature_flag(
     key: str,
     distinct_id: ID_TYPES,
-    groups: Optional[Dict[str, str]] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
@@ -740,7 +740,7 @@ def get_feature_flag(
 
 def get_all_flags(
     distinct_id: ID_TYPES,
-    groups: Optional[Dict[str, str]] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
@@ -789,7 +789,7 @@ def get_all_flags(
 def get_feature_flag_result(
     key: str,
     distinct_id: ID_TYPES,
-    groups: Optional[Dict[str, str]] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
@@ -845,7 +845,7 @@ def get_feature_flag_payload(
     key: str,
     distinct_id: ID_TYPES,
     match_value: Optional[FlagValue] = None,
-    groups: Optional[Dict[str, str]] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
@@ -916,7 +916,7 @@ def get_remote_config_payload(
 
 def get_all_flags_and_payloads(
     distinct_id: ID_TYPES,
-    groups: Optional[Dict[str, str]] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
@@ -958,8 +958,8 @@ def get_all_flags_and_payloads(
 
 
 def evaluate_flags(
-    distinct_id: Optional[str] = None,
-    groups: Optional[Dict[str, str]] = None,
+    distinct_id: Optional[ID_TYPES] = None,
+    groups: Optional[Mapping[str, Union[str, int]]] = None,
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,

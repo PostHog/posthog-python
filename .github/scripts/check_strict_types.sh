@@ -14,17 +14,20 @@ cat > "$tmp/strict_posthog_types.py" <<'PY'
 import atexit
 
 import posthog
-from posthog import FlagValue, Posthog
+from posthog import FeatureFlagEvaluations, FlagValue, Posthog
 
 client = Posthog("phc_test")
 atexit.register(client.shutdown)
 
-flag_value: FlagValue | None = client.get_feature_flag("flag", "user")
-all_flags: dict[str, FlagValue] | None = posthog.get_all_flags("user")
-enabled: bool | None = posthog.feature_enabled("flag", "user")
-payload: object | None = client.get_feature_flag_payload("flag", "user")
+groups: dict[str, str | int] = {"company": 123}
 
-_ = (flag_value, all_flags, enabled, payload)
+flag_value: FlagValue | None = client.get_feature_flag("flag", 123, groups=groups)
+all_flags: dict[str, FlagValue] | None = posthog.get_all_flags("user", groups=groups)
+enabled: bool | None = posthog.feature_enabled("flag", "user", groups=groups)
+payload: object | None = client.get_feature_flag_payload("flag", "user", groups=groups)
+evaluations: FeatureFlagEvaluations = posthog.evaluate_flags(123, groups=groups)
+
+_ = (flag_value, all_flags, enabled, payload, evaluations)
 PY
 
 "$tmp/.venv/bin/python" - <<'PY' > "$tmp/public_api_access.py"
