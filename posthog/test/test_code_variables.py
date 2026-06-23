@@ -20,6 +20,8 @@ from posthog.exception_utils import (
     _MaskingConfig,
     _compile_patterns,
     _encode_variable,
+    _is_high_entropy_secret,
+    _looks_like_secret,
     _mask_value,
     _pattern_matches,
     _redact_url_credentials,
@@ -360,8 +362,8 @@ class TestCollectionMasking:
                 return {}
             return {f"k{i}": tree(width, depth - 1) for i in range(width)}
 
-        assert TOO_LONG in json.dumps(mask(tree(25, 3)))  # ~16k nodes, over the budget
-        assert TOO_LONG not in json.dumps(mask(tree(5, 3)))  # ~150 nodes, well under
+        assert TOO_LONG in json.dumps(mask(tree(8, 3)))  # ~580 nodes, over the budget
+        assert TOO_LONG not in json.dumps(mask(tree(4, 2)))  # ~20 nodes, well under
 
 
 # --- 6. object traversal -------------------------------------------------------------
@@ -908,3 +910,217 @@ class TestEndToEnd:
         )
         assert "code_variables" in output
         assert "p4ssRUNTIME" in output  # URL masking disabled -> credential retained
+
+
+# --- entropy-based secret detection (last resort) ------------------------------------
+
+
+# Synthetic, format-correct fakes (no real credentials). Vendor keys are assembled from
+# prefix + body so no complete secret literal lives in source (which trips secret scanners).
+def _key(prefix, body):
+    return prefix + body
+
+
+KNOWN_FORMAT_SECRETS = [
+    _key("sk-proj-", "T3BlbkFJabcd1234efgh5678ijkl9012mnop3456qrst7890wxyz"),  # OpenAI
+    _key(
+        "sk-", "Hf8sJd72hsKbNd83jdH5sQp2T3BlbkFJabcdEFGH1234ijklMNOPqrst"
+    ),  # OpenAI legacy
+    _key(
+        "sk-ant-", "api03-aBcDeFgHiJkLmNoPqRsTuVwX0123456789-AbCdEf_gHiJkLmQQ"
+    ),  # Anthropic
+    _key("AKIA", "IOSFODNN7EXAMPLE"),  # AWS access key id (AWS's own doc example)
+    _key("sk_live_", "4eC39HqLyjWDarjtT1zdp7dc"),  # Stripe secret key
+    _key("pk_live_", "TYooMQauvdEDq54NiTphI7jx"),  # Stripe publishable key
+    _key("ghp_", "16C7e42F292c6912E7710c838347Ae178B4a"),  # GitHub PAT
+    _key(
+        "github_pat_", "11ABCDEFG0aBcDeFgHiJkL_mNoPqRsTuVwXyZ0123456789abcdef"
+    ),  # GitHub
+    _key("glpat-", "aB1cD2eF3gH4iJ5kL6mN"),  # GitLab PAT
+    _key(
+        "xoxb-", "1234567890-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+    ),  # Slack bot token
+    _key("AIza", "SyD-1a2B3c4D5e6F7g8H9i0JkLmNoPqRsTuVw"),  # Google API key
+    _key(
+        "eyJ", "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N"
+    ),  # JWT
+    _key("hf_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ01234567"),  # Hugging Face
+    _key("ya29.", "a0AfH6SMBx1y2z3-_abcDEFghiJKLmnoPQ"),  # Google OAuth
+    _key("sq0atp-", "1a2B3c4D5e6F7g8H9i0JkL"),  # Square
+    _key("glsa_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ012345_a1b2c3d4"),  # Grafana
+    _key("SK", "0123456789abcdef0123456789abcdef"),  # Twilio
+    _key(
+        "SG.", "aBcDeFgHiJkLmNoPqRsTuV.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+    ),  # SendGrid
+    _key("npm_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"),  # npm
+    _key("dapi", "0123456789abcdef0123456789abcdef"),  # Databricks
+    _key(
+        "PMAK-", "0123456789abcdef01234567-0123456789abcdef0123456789abcdef0123"
+    ),  # Postman
+    _key("lin_api_", "0123456789abcdef0123456789abcdef01234567"),  # Linear
+    _key("shpat_", "0123456789abcdef0123456789abcdef"),  # Shopify
+    _key("NRAK-", "0123456789ABCDEFGHIJKLMNOPQ"),  # New Relic
+    _key("0123456789abcdef0123456789abcdef", "-us12"),  # Mailchimp
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1234",  # PEM private key
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXkt",  # OpenSSH private key
+]
+
+HIGH_ENTROPY_SECRETS = [
+    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",  # AWS secret key (no prefix, base64)
+    "xK9#mP2$vL5nQ8w!",  # strong password with symbols
+    "P@ssw0rd!2024#Secure$Key",  # strong password
+    "xK9mP2vL5nQ8wRtZ",  # strong password, no symbols
+    "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH",  # random mixed-case+digit token
+    "dGhpc2lzYVNlY3JldFRva2VuMTIzNA==",  # base64 blob
+]
+
+NON_SECRETS = [
+    # structured high-entropy ids/hashes/encodings -- must never be flagged
+    "550e8400-e29b-41d4-a716-446655440000",  # UUID v4 (lowercase)
+    "F47AC10B-58CC-4372-A567-0E02B2C3D479",  # UUID (uppercase)
+    "507f1f77bcf86cd799439011",  # Mongo ObjectId
+    "e83c5163316f89bfbde7d9ab23ca2e25604af290",  # git SHA-1
+    "d41d8cd98f00b204e9800998ecf8427e",  # md5 hex digest
+    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",  # sha256 hex
+    "a7F2c9E1b4D8a3C6e0F5b2D9c7A1e4F8",  # pure mixed-case hex (treated as an id)
+    # object reprs / structured strings -- common in code variables, high-entropy but
+    # must stay readable (regression: a real prod event flagged the first one)
+    "CheckActivityInput(proxy_record_id=UUID('019df333-e9e2-0000-fa8e-ba3dd4217c09'))",
+    "<posthog.temporal.common._ActivityInterceptor object at 0xffff77a7a850>",
+    "ExecuteActivityInput(fn=check_status,args=[Input(id=42,name=widget)])",
+    # ordinary code values -- must stay readable for debugging
+    "user_authentication_handler",  # snake_case identifier
+    "getUserByIdAndOrganization",  # camelCase identifier
+    "getUserById2024",  # camelCase with digits
+    "ApplicationConfigurationManager",  # PascalCase class name
+    "PENDING_APPROVAL",  # SCREAMING_CASE enum
+    "created-at-descending",  # dashed slug
+    "application/json",  # mime type
+    "alice.smith@example.com",  # email
+    "the quick brown fox jumps over",  # prose (has spaces)
+    "/usr/local/lib/python3.13/site-packages/posthog/client.py",  # unix path
+    "C:\\Users\\admin\\app\\config.yaml",  # windows path
+    "https://api.example.com/v2/users/12345/orders",  # url
+    "1234567890123456",  # long number
+    "3.141592653589793",  # float
+    "2026-06-23T11:11:00.000Z",  # ISO timestamp
+    "v1.2.3-beta.4",  # version string
+    "active",  # short word
+]
+
+
+class TestSecretDetection:
+    """The entropy-based last-resort detector: catches vendor keys and strong
+    random secrets, while leaving ids/hashes/identifiers/paths readable."""
+
+    @pytest.mark.parametrize("value", KNOWN_FORMAT_SECRETS)
+    def test_known_vendor_formats_are_detected(self, value):
+        assert _looks_like_secret(value) is True
+
+    @pytest.mark.parametrize("value", HIGH_ENTROPY_SECRETS)
+    def test_high_entropy_secrets_are_detected(self, value):
+        assert _looks_like_secret(value) is True
+
+    @pytest.mark.parametrize("value", NON_SECRETS)
+    def test_non_secrets_are_not_flagged(self, value):
+        assert _looks_like_secret(value) is False
+
+    def test_uuids_and_object_ids_are_never_flagged(self):
+        assert _looks_like_secret("550e8400-e29b-41d4-a716-446655440000") is False
+        assert _looks_like_secret("507f1f77bcf86cd799439011") is False
+
+    def test_short_strings_bail_cheaply(self):
+        assert _looks_like_secret("xK9#mP2$") is False
+        assert _is_high_entropy_secret("xK9#mP2$") is False
+
+    def test_pure_hex_is_treated_as_an_id_not_a_secret(self):
+        assert _is_high_entropy_secret("d41d8cd98f00b204e9800998ecf8427e") is False
+
+    # -- integration with the masking pipeline --------------------------------------
+
+    def test_high_entropy_value_in_a_neutral_variable_is_redacted(self):
+        result = extract(api_response="n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH")
+        assert result == {"api_response": REDACTED}
+
+    def test_secret_inside_a_nested_structure_is_redacted(self):
+        out = mask(
+            {"entries": [_key("sk_live_", "4eC39HqLyjWDarjtT1zdp7dc"), "plain-value"]}
+        )
+        assert out == {"entries": [REDACTED, "plain-value"]}
+
+    def test_object_id_value_survives(self):
+        result = extract(order_id="507f1f77bcf86cd799439011")
+        assert result == {"order_id": "507f1f77bcf86cd799439011"}
+
+    def test_opaque_object_whose_repr_is_a_secret_is_redacted(self):
+        # an untraversable object whose __repr__ is a bare token must not bypass
+        # detection through the repr fallback
+        class OpaqueToken:
+            __slots__ = ()
+
+            def __repr__(self):
+                return "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH"
+
+        assert mask(OpaqueToken()) == REDACTED
+
+    def test_ordinary_object_repr_is_not_redacted(self):
+        class Thing:
+            __slots__ = ()
+
+            def __repr__(self):
+                return "<Thing alive=True count=3>"
+
+        assert mask(Thing()) == "<Thing alive=True count=3>"
+
+    def test_detection_can_be_disabled(self):
+        config = _MaskingConfig.build(
+            list(DEFAULT_CODE_VARIABLES_MASK_PATTERNS), [], detect_secrets=False
+        )
+        secret = "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH"
+        assert _mask_value(secret, config) == secret
+
+    def test_detection_is_independent_of_url_scrubbing(self):
+        config = _MaskingConfig.build(
+            [], [], mask_url_credentials=False, detect_secrets=True
+        )
+        assert _mask_value("n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH", config) == REDACTED
+
+    def test_end_to_end_neutral_named_secret_is_redacted(self, tmpdir):
+        # neutral local, no keyword, no known prefix -> only the entropy gate can catch it
+        output = run_app(
+            tmpdir,
+            """
+            make_client(capture_exception_code_variables=True)
+
+            def trigger_error():
+                handle = os.environ["TEST_TOKEN"]
+                1 / 0
+
+            trigger_error()
+            """,
+            env={"TEST_TOKEN": "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH"},
+        )
+        assert "code_variables" in output
+        assert "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH" not in output
+        assert REDACTED in output
+
+    def test_end_to_end_detection_disabled_via_client_option(self, tmpdir):
+        # detection off on the client -> value captured verbatim (full public plumbing)
+        output = run_app(
+            tmpdir,
+            """
+            make_client(
+                capture_exception_code_variables=True,
+                code_variables_detect_secrets=False,
+            )
+
+            def trigger_error():
+                handle = os.environ["TEST_TOKEN"]
+                1 / 0
+
+            trigger_error()
+            """,
+            env={"TEST_TOKEN": "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH"},
+        )
+        assert "code_variables" in output
+        assert "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH" in output  # detection off -> retained

@@ -20,6 +20,7 @@ from posthog.consumer import Consumer
 from posthog.contexts import (
     _get_current_context,
     get_capture_exception_code_variables_context,
+    get_code_variables_detect_secrets_context,
     get_code_variables_ignore_patterns_context,
     get_code_variables_mask_patterns_context,
     get_code_variables_mask_url_credentials_context,
@@ -37,6 +38,7 @@ from posthog.contexts import (
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
+    DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
@@ -251,6 +253,7 @@ class Client(object):
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         code_variables_mask_url_credentials=None,
+        code_variables_detect_secrets=None,
         in_app_modules: list[str] | None = None,
         enable_exception_autocapture_rate_limiting=False,
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
@@ -319,6 +322,11 @@ class Client(object):
             code_variables_mask_url_credentials: Scrub credentials embedded in
                 URLs/DSNs (e.g. ``user:pass@host``) from captured code variables,
                 regardless of the surrounding variable name. Defaults to True.
+            code_variables_detect_secrets: Last-resort entropy-based detection that
+                redacts high-entropy secret-looking values (API keys, tokens, strong
+                passwords) sitting in innocuously-named variables, after the name and
+                URL checks. Skips structured ids (UUIDs, ObjectIds, hashes). Defaults
+                to True.
             in_app_modules: Module/package prefixes treated as in-app frames in
                 captured exceptions.
             enable_exception_autocapture_rate_limiting: Rate limit
@@ -416,6 +424,11 @@ class Client(object):
             code_variables_mask_url_credentials
             if code_variables_mask_url_credentials is not None
             else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
+        )
+        self.code_variables_detect_secrets = (
+            code_variables_detect_secrets
+            if code_variables_detect_secrets is not None
+            else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
         )
         self.in_app_modules = in_app_modules
 
@@ -1399,6 +1412,7 @@ class Client(object):
             context_mask_url_credentials = (
                 get_code_variables_mask_url_credentials_context()
             )
+            context_detect_secrets = get_code_variables_detect_secrets_context()
 
             enabled = (
                 context_enabled
@@ -1420,6 +1434,11 @@ class Client(object):
                 if context_mask_url_credentials is not None
                 else self.code_variables_mask_url_credentials
             )
+            detect_secrets = (
+                context_detect_secrets
+                if context_detect_secrets is not None
+                else self.code_variables_detect_secrets
+            )
 
             if enabled:
                 try_attach_code_variables_to_frames(
@@ -1428,6 +1447,7 @@ class Client(object):
                     mask_patterns=mask_patterns,
                     ignore_patterns=ignore_patterns,
                     mask_url_credentials=mask_url_credentials,
+                    detect_secrets=detect_secrets,
                 )
 
             if self.log_captured_exceptions:
