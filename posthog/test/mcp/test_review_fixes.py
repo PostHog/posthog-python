@@ -206,3 +206,53 @@ def test_drain_pending_sync_waits_for_background_futures():
     instr.drain_pending_sync(timeout=2)
 
     assert done == [1]
+
+
+# --- D: PostHogMCP is usable without the official mcp SDK installed ------------
+
+
+def test_posthogmcp_usable_without_mcp_sdk():
+    # Block `import mcp` in a fresh interpreter and confirm PostHogMCP (the custom-
+    # dispatcher client) still imports, while instrument() raises a clear install hint.
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "sys.modules['mcp'] = None\n"  # makes `import mcp` raise ImportError
+        "from posthog.mcp import PostHogMCP, instrument\n"
+        "c = PostHogMCP('phc_test')\n"
+        "print('IMPORT_OK')\n"
+        "try:\n"
+        "    instrument(object(), c)\n"
+        "    print('NO_RAISE')\n"
+        "except ModuleNotFoundError as e:\n"
+        "    print('RAISED' if 'posthog[mcp]' in str(e) else 'WRONG')\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert "IMPORT_OK" in out.stdout, out.stderr
+    assert "RAISED" in out.stdout, out.stdout + out.stderr
+
+
+# --- H: tracking is canonicalized to the underlying low-level server ----------
+
+
+async def test_instrument_canonicalizes_wrapper_and_underlying_server():
+    from posthog.mcp.internal import get_server_tracking_data
+
+    server = FastMCP("canon")
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    client = FakeClient()
+    instrument(server, client)
+    data1 = get_server_tracking_data(server._mcp_server)
+    assert data1 is not None
+
+    wrapped = server._mcp_server.request_handlers[mcp_types.CallToolRequest]
+    # Instrumenting the underlying low-level server resolves to the same state.
+    instrument(server._mcp_server, client)
+    assert get_server_tracking_data(server._mcp_server) is data1
+    assert server._mcp_server.request_handlers[mcp_types.CallToolRequest] is wrapped
