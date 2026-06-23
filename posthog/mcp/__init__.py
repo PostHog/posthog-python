@@ -15,9 +15,10 @@ tool call, agent intent, and failure is captured to PostHog as a ``$mcp_*`` even
     server = FastMCP("my-server")
     analytics = instrument(server, posthog)
 
-``instrument()`` requires the optional ``mcp`` dependency (``pip install posthog[mcp]``);
-``PostHogMCP`` for custom dispatchers does not, so the SDK import is deferred into
-``instrument()`` rather than guarded at module import.
+Install is just ``pip install posthog``. ``instrument()`` needs the MCP SDK at runtime,
+but anyone wrapping a server already has it (you built the server with it), so it's
+treated as a peer dependency — imported lazily and version-checked inside ``instrument()``
+rather than bundled. ``PostHogMCP`` for custom dispatchers needs nothing beyond posthog.
 """
 
 from __future__ import annotations
@@ -129,6 +130,25 @@ def _resolve_client(posthog_client: Optional[Client]) -> Optional[Client]:
         return None
 
 
+def _warn_if_unsupported_mcp_version() -> None:
+    """The adapters hook private MCP SDK seams (``_tool_manager``, ``_mcp_server``,
+    ``request_handlers``) tested against ``mcp>=1.26,<2``. Since ``mcp`` is a peer
+    dependency we don't pin, advise at runtime when the installed version is outside
+    that range rather than failing hard (older/newer may still mostly work)."""
+    try:
+        from importlib.metadata import version
+
+        installed = version("mcp")
+        major, minor = (int(p) for p in installed.split(".")[:2])
+    except Exception:  # noqa: BLE001 - never let a version probe break instrument()
+        return
+    if (major, minor) < (1, 26) or major >= 2:
+        log(
+            f"Warning: PostHog MCP analytics is tested against mcp>=1.26,<2; found {installed}. "
+            "Instrumentation hooks private SDK internals and may behave unexpectedly."
+        )
+
+
 def _canonical_server(server: Any) -> Any:
     """The underlying low-level server for high-level wrappers (official FastMCP and
     jlowin's fastmcp 2.0 both expose ``_mcp_server``), else the server itself. Used as
@@ -160,16 +180,17 @@ def instrument(
     opts = options or MCPAnalyticsOptions()
 
     # The wrapping path hooks the official MCP SDK's server internals, so it needs the
-    # `mcp` package — but PostHogMCP (custom dispatchers) doesn't, which is why the SDK
-    # import is deferred to here instead of guarding the whole module. Raise a clear
-    # error rather than letting it fall through to a silent no-op below.
+    # `mcp` package. It's a peer dependency (you already have it — you built the server
+    # with it), imported lazily here rather than bundled. PostHogMCP (custom dispatchers)
+    # doesn't need it at all. Raise a clear error rather than a silent no-op below.
     try:
         import mcp  # noqa: F401
     except ImportError:
         raise ModuleNotFoundError(
-            "Please install the MCP SDK to instrument a server: 'pip install posthog[mcp]'. "
+            "instrument() needs the MCP SDK. Install it with: pip install 'mcp>=1.26'. "
             "(PostHogMCP for custom dispatchers works without it.)"
         )
+    _warn_if_unsupported_mcp_version()
     from .compatibility import is_fastmcp, is_fastmcp_v2, is_low_level_server
     from .instrument_fastmcp import instrument_fastmcp
     from .instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level

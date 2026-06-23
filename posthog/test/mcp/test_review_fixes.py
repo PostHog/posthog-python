@@ -227,7 +227,7 @@ def test_posthogmcp_usable_without_mcp_sdk():
         "    instrument(object(), c)\n"
         "    print('NO_RAISE')\n"
         "except ModuleNotFoundError as e:\n"
-        "    print('RAISED' if 'posthog[mcp]' in str(e) else 'WRONG')\n"
+        "    print('RAISED' if 'mcp>=1.26' in str(e) else 'WRONG')\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert "IMPORT_OK" in out.stdout, out.stderr

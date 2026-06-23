@@ -36,9 +36,10 @@ Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
 langchain = ["langchain>=0.2.0"]
-# Upper bound because the adapters hook private MCP SDK seams (_tool_manager,
-# _mcp_server, request_handlers); widen once a 2.x is tested.
-mcp = ["mcp>=1.26.0,<2"]
+# Note: the MCP SDK (`mcp`) is intentionally NOT an extra. It's a peer dependency of
+# `instrument()` — anyone wrapping a FastMCP/Server already has it — so it's imported
+# lazily and version-checked at runtime, not installed by posthog. `PostHogMCP` (custom
+# dispatchers) needs nothing beyond posthog.
 otel = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
