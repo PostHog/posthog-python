@@ -1,8 +1,10 @@
 """Tests for the PostHogMCP custom-dispatcher client (Milestone 3)."""
 
-import asyncio
-
 from posthog.mcp import PostHogMCP
+from posthog.test.mcp._helpers import (
+    events_named as _events,
+    flush_background as _flush,
+)
 
 
 def make_client():
@@ -11,21 +13,6 @@ def make_client():
     # Intercept the inherited Client.capture so nothing is sent over the network.
     client.capture = lambda event, **kwargs: captured.append({"event": event, **kwargs})
     return client, captured
-
-
-async def _flush():
-    import posthog.mcp.instrumentation as instr
-
-    for _ in range(10):
-        await asyncio.sleep(0)
-        pending = [t for t in list(instr._BACKGROUND_TASKS) if not t.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-    await asyncio.sleep(0)
-
-
-def _events(captured, name):
-    return [e for e in captured if e["event"] == name]
 
 
 async def test_capture_tool_call_success():

@@ -1,6 +1,5 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
-import asyncio
 
 import pytest
 
@@ -9,27 +8,11 @@ from mcp.server.fastmcp import FastMCP
 
 from posthog.mcp import instrument
 from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
-
-
-class FakeClient:
-    """Records capture() calls instead of sending them."""
-
-    def __init__(self):
-        self.events = []
-
-    def capture(
-        self,
-        event,
-        distinct_id=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        **kwargs,
-    ):
-        self.events.append(
-            {"event": event, "distinct_id": distinct_id, "properties": properties or {}}
-        )
-        return None
+from posthog.test.mcp._helpers import (
+    FakeClient,
+    events_named as _events,
+    flush_background as _flush,
+)
 
 
 def make_server():
@@ -44,22 +27,6 @@ def make_server():
         raise ValueError("explode")
 
     return server
-
-
-async def _flush():
-    """Let fire-and-forget capture tasks run to completion."""
-    import posthog.mcp.instrumentation as instr
-
-    for _ in range(10):
-        await asyncio.sleep(0)
-        pending = [t for t in list(instr._BACKGROUND_TASKS) if not t.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-    await asyncio.sleep(0)
-
-
-def _events(client, name):
-    return [e for e in client.events if e["event"] == name]
 
 
 async def _list_tools(server):

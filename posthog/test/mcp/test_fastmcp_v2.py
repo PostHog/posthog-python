@@ -1,7 +1,6 @@
 """Tests for jlowin's standalone FastMCP 2.0 (the `fastmcp` package), distinct
 from the official SDK's mcp.server.fastmcp.FastMCP."""
 
-import asyncio
 
 import pytest
 
@@ -12,40 +11,11 @@ from fastmcp import FastMCP  # noqa: E402
 
 from posthog.mcp import instrument  # noqa: E402
 from posthog.mcp.types import MCPAnalyticsOptions  # noqa: E402
-
-
-class FakeClient:
-    def __init__(self):
-        self.events = []
-
-    def capture(
-        self,
-        event,
-        distinct_id=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        **kwargs,
-    ):
-        self.events.append(
-            {"event": event, "distinct_id": distinct_id, "properties": properties or {}}
-        )
-        return None
-
-
-async def _flush():
-    import posthog.mcp.instrumentation as instr
-
-    for _ in range(10):
-        await asyncio.sleep(0)
-        pending = [t for t in list(instr._BACKGROUND_TASKS) if not t.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-    await asyncio.sleep(0)
-
-
-def _events(client, name):
-    return [e for e in client.events if e["event"] == name]
+from posthog.test.mcp._helpers import (  # noqa: E402
+    FakeClient,
+    events_named as _events,
+    flush_background as _flush,
+)
 
 
 def make_server():

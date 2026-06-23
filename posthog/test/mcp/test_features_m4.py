@@ -1,6 +1,5 @@
 """Tests for M4 parity features: get_more_tools (missing capability) + conversation_id."""
 
-import asyncio
 
 import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
@@ -8,40 +7,11 @@ from mcp.server.lowlevel import Server
 
 from posthog.mcp import PostHogMCP, get_more_tools_result, instrument
 from posthog.mcp.types import MCPAnalyticsOptions
-
-
-class FakeClient:
-    def __init__(self):
-        self.events = []
-
-    def capture(
-        self,
-        event,
-        distinct_id=None,
-        properties=None,
-        timestamp=None,
-        uuid=None,
-        **kwargs,
-    ):
-        self.events.append(
-            {"event": event, "distinct_id": distinct_id, "properties": properties or {}}
-        )
-        return None
-
-
-async def _flush():
-    import posthog.mcp.instrumentation as instr
-
-    for _ in range(10):
-        await asyncio.sleep(0)
-        pending = [t for t in list(instr._BACKGROUND_TASKS) if not t.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-    await asyncio.sleep(0)
-
-
-def _events(client, name):
-    return [e for e in client.events if e["event"] == name]
+from posthog.test.mcp._helpers import (
+    FakeClient,
+    events_named as _events,
+    flush_background as _flush,
+)
 
 
 def make_fastmcp():

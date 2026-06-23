@@ -56,11 +56,14 @@ async def resolve_tool_call_intent(
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[ResolvedIntent]:
+    from .tools import resolve_missing_capability_tool_name
+
     context_argument = _get_context_argument(request)
     name = (request.get("params") or {}).get("name")
+    missing_name = resolve_missing_capability_tool_name(data.options)
     if (
         is_context_enabled(data.options.context)
-        and name != "get_more_tools"
+        and name != missing_name
         and context_argument
     ):
         return (context_argument, "context_parameter")
