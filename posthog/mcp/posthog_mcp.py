@@ -23,7 +23,7 @@ from .context_parameters import (
 )
 from .event_types import MCPAnalyticsEventType
 from .exceptions import capture_exception
-from .instrumentation import fire_and_forget
+from .instrumentation import drain_pending_sync, fire_and_forget
 from .sink import McpCaptureOptions, McpEventSink
 from .tools import build_report_missing_descriptor
 from .types import (
@@ -52,6 +52,20 @@ class PostHogMCP(Client):
         self._missing_capability_tool_name = (
             missing_capability_tool_name or _GET_MORE_TOOLS_NAME
         )
+
+    # --- lifecycle -----------------------------------------------------------
+
+    def flush(self, timeout_seconds: Optional[float] = 10) -> None:
+        """Drain in-flight MCP captures scheduled on the background loop, then flush
+        the underlying client. The capture methods are fire-and-forget on a sync host,
+        so without this drain a trailing event could still be in flight at flush time."""
+        drain_pending_sync(timeout=timeout_seconds)
+        return super().flush(timeout_seconds=timeout_seconds)
+
+    def shutdown(self) -> None:
+        """Drain in-flight MCP captures, then shut the underlying client down."""
+        drain_pending_sync()
+        return super().shutdown()
 
     # --- capture methods -----------------------------------------------------
 

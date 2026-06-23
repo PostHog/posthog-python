@@ -10,6 +10,7 @@ so both stay in sync."""
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
@@ -76,15 +77,33 @@ def fire_and_forget(coro: Optional[Any]) -> None:
 
 
 async def drain_pending() -> None:
-    """Await in-flight capture tasks scheduled on the current event loop. Lets a host
-    flush analytics before ``posthog.shutdown()`` instead of racing a sleep."""
-    pending = [
+    """Await in-flight capture work before ``posthog.shutdown()`` instead of racing a
+    sleep. Covers both paths: ``asyncio.Task`` (running-loop hosts) and the
+    ``concurrent.futures.Future`` scheduled on the background loop (sync hosts like
+    PostHogMCP) — the latter wrapped so it can be awaited on the current loop."""
+    awaitables: List[Any] = []
+    for t in list(_BACKGROUND_TASKS):
+        if isinstance(t, asyncio.Task):
+            if not t.done():
+                awaitables.append(t)
+        elif isinstance(t, concurrent.futures.Future):
+            if not t.done():
+                awaitables.append(asyncio.wrap_future(t))
+    if awaitables:
+        await asyncio.gather(*awaitables, return_exceptions=True)
+
+
+def drain_pending_sync(timeout: Optional[float] = None) -> None:
+    """Block until background-loop captures finish. For sync hosts (PostHogMCP) that
+    can't await :func:`drain_pending` — call it before ``flush()``/``shutdown()`` so
+    trailing events aren't still in flight when the client tears down."""
+    futures = [
         t
         for t in list(_BACKGROUND_TASKS)
-        if isinstance(t, asyncio.Task) and not t.done()
+        if isinstance(t, concurrent.futures.Future) and not t.done()
     ]
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+    if futures:
+        concurrent.futures.wait(futures, timeout=timeout)
 
 
 def is_tool_result_error(result: Any) -> bool:
@@ -321,6 +340,10 @@ async def record_tools_list(
     *,
     names: List[str],
     request: Dict[str, Any],
+    response: Any = None,
+    duration_ms: Optional[float] = None,
+    is_error: bool = False,
+    error: Any = None,
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
@@ -331,11 +354,15 @@ async def record_tools_list(
             "session_id": session_id,
             "listed_tool_names": names,
             "parameters": build_captured_mcp_parameters(request),
+            "response": _wrap_response(response) if response is not None else None,
+            "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,
-            "is_error": False,
+            "is_error": is_error,
             "timestamp": datetime.now(timezone.utc),
         }
+        if error is not None:
+            event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
         fire_and_forget(capture_event(data, event))
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path

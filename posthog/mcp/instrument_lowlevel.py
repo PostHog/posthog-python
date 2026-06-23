@@ -30,6 +30,7 @@ from .conversation_id import (
     resolve_conversation_id,
 )
 from .instrumentation import (
+    _to_jsonable,
     append_get_more_tools,
     build_tool_call_request,
     extract_tools,
@@ -42,7 +43,6 @@ from .instrumentation import (
 )
 from .internal import MCPAnalyticsData
 from .logger import log
-from .session import resolve_session_id
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
     get_more_tools_result_text,
@@ -142,7 +142,27 @@ def _wrap_call_tool(
                 req.params.arguments.pop(key, None)
 
         start = time.monotonic()
-        result = await original(req)
+        try:
+            result = await original(req)
+        except Exception as error:
+            # The @server.call_tool() decorator converts raises into
+            # CallToolResult(isError=True), but a handler wired straight into
+            # request_handlers can raise — capture before re-raising so the failed
+            # call isn't silently dropped. A minted (undelivered) conversation_id is
+            # not stamped, matching the FastMCP path.
+            await record_tool_call(
+                data,
+                session_id,
+                name=name,
+                arguments=arguments,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                conversation_id=None if minted else conversation_id,
+                extra=extra,
+            )
+            raise
         duration_ms = (time.monotonic() - start) * 1000
 
         # The low-level handler already converted any exception to a
@@ -196,7 +216,39 @@ def _wrap_list_tools(
         if req is None:
             return await original(req)
 
-        result = await original(req)
+        client_name, client_version = _client_info(server)
+        mcp_session_id = _mcp_session_id(server)
+        request = request_to_dict(req)
+        extra = {"session_id": mcp_session_id}
+        # Resolve session, emit $mcp_initialize (once per session) and identify here
+        # too — a client may list tools without ever calling one.
+        session_id = await prepare_request(
+            data,
+            mcp_session_id=mcp_session_id,
+            client_name=client_name,
+            client_version=client_version,
+            request=request,
+            extra=extra,
+        )
+
+        start = time.monotonic()
+        try:
+            result = await original(req)
+        except Exception as error:
+            await record_tools_list(
+                data,
+                session_id,
+                names=[],
+                request=request,
+                duration_ms=(time.monotonic() - start) * 1000,
+                is_error=True,
+                error=error,
+                client_name=client_name,
+                client_version=client_version,
+                extra=extra,
+            )
+            raise
+        duration_ms = (time.monotonic() - start) * 1000
         tools = extract_tools(result)
 
         names = []
@@ -234,16 +286,16 @@ def _wrap_list_tools(
                 append_get_more_tools(result, missing_name)
                 names.append(missing_name)
 
-        client_name, client_version = _client_info(server)
-        session_id = await resolve_session_id(data, _mcp_session_id(server))
         await record_tools_list(
             data,
             session_id,
             names=names,
-            request=request_to_dict(req),
+            request=request,
+            response=_to_jsonable(result),
+            duration_ms=duration_ms,
             client_name=client_name,
             client_version=client_version,
-            extra={"session_id": _mcp_session_id(server)},
+            extra=extra,
         )
 
         return result

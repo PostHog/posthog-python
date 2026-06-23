@@ -37,6 +37,7 @@ from .conversation_id import (
     resolve_conversation_id,
 )
 from .instrumentation import (
+    _to_jsonable,
     append_get_more_tools,
     build_tool_call_request,
     extract_tools,
@@ -49,14 +50,12 @@ from .instrumentation import (
 )
 from .internal import MCPAnalyticsData
 from .logger import log
-from .session import resolve_session_id
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
     get_more_tools_result_text,
     resolve_missing_capability_tool_name,
 )
 
-_INJECTED_KEYS = ("context", "conversation_id")
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
 
@@ -124,11 +123,22 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             data.options.enable_conversation_id, arguments, name, missing_name
         )
 
+        # Strip each injected key independently. A tool can declare its own
+        # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
+        # so coupling both to context-ownership leaked conversation_id into the tool.
         call_arguments = arguments
-        if isinstance(arguments, dict) and not _tool_owns_context(server, name):
-            call_arguments = {
-                k: v for k, v in arguments.items() if k not in _INJECTED_KEYS
-            }
+        if isinstance(arguments, dict):
+            strip_keys = set()
+            if not _tool_owns_param(server, name, "context"):
+                strip_keys.add("context")
+            if data.options.enable_conversation_id and not _tool_owns_param(
+                server, name, "conversation_id"
+            ):
+                strip_keys.add("conversation_id")
+            if strip_keys:
+                call_arguments = {
+                    k: v for k, v in arguments.items() if k not in strip_keys
+                }
 
         start = time.monotonic()
         try:
@@ -199,7 +209,39 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         if req is None:
             return await original(req)
 
-        result = await original(req)
+        client_name, client_version = _low_level_client_info(server)
+        mcp_session_id = _low_level_session_id(server)
+        request = request_to_dict(req)
+        extra: Dict[str, Any] = {"session_id": mcp_session_id}
+        # Resolve session, emit $mcp_initialize (once per session) and identify here
+        # too — a client may list tools without ever calling one.
+        session_id = await prepare_request(
+            data,
+            mcp_session_id=mcp_session_id,
+            client_name=client_name,
+            client_version=client_version,
+            request=request,
+            extra=extra,
+        )
+
+        start = time.monotonic()
+        try:
+            result = await original(req)
+        except Exception as error:
+            await record_tools_list(
+                data,
+                session_id,
+                names=[],
+                request=request,
+                duration_ms=(time.monotonic() - start) * 1000,
+                is_error=True,
+                error=error,
+                client_name=client_name,
+                client_version=client_version,
+                extra=extra,
+            )
+            raise
+        duration_ms = (time.monotonic() - start) * 1000
         tools = extract_tools(result)
 
         names = []
@@ -234,9 +276,16 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
                 append_get_more_tools(result, missing_name)
                 names.append(missing_name)
 
-        session_id = await resolve_session_id(data, None)
         await record_tools_list(
-            data, session_id, names=names, request=request_to_dict(req)
+            data,
+            session_id,
+            names=names,
+            request=request,
+            response=_to_jsonable(result),
+            duration_ms=duration_ms,
+            client_name=client_name,
+            client_version=client_version,
+            extra=extra,
         )
 
         return result
@@ -270,9 +319,9 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     return result
 
 
-def _tool_owns_context(server: Any, name: str) -> bool:
-    """True when the tool's own function declares a ``context`` parameter — then we
-    must not inject or strip our analytics ``context``."""
+def _tool_owns_param(server: Any, name: str, param: str) -> bool:
+    """True when the tool's own function declares ``param`` — then it's a real tool
+    argument we must neither inject nor strip (the agent's value belongs to the tool)."""
     tool_manager = getattr(server, "_tool_manager", None)
     if tool_manager is None:
         return False
@@ -281,9 +330,49 @@ def _tool_owns_context(server: Any, name: str) -> bool:
     if fn is None:
         return False
     try:
-        return "context" in inspect.signature(fn).parameters
+        return param in inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return False
+
+
+def _tool_owns_context(server: Any, name: str) -> bool:
+    return _tool_owns_param(server, name, "context")
+
+
+def _low_level_request_context(server: Any) -> Any:
+    """The underlying low-level server's request_context, set during a request. The
+    tools/list handler runs on ``server._mcp_server``, so client info / session id
+    come from there rather than from a FastMCP ``Context`` (which only the call path has)."""
+    low_level = getattr(server, "_mcp_server", None)
+    if low_level is None:
+        return None
+    try:
+        return low_level.request_context
+    except (LookupError, AttributeError):
+        return None
+
+
+def _low_level_client_info(server: Any) -> Tuple[Optional[str], Optional[str]]:
+    ctx = _low_level_request_context(server)
+    try:
+        client_params = ctx.session.client_params
+        if client_params and client_params.clientInfo:
+            return client_params.clientInfo.name, client_params.clientInfo.version
+    except Exception:  # noqa: BLE001
+        pass
+    return None, None
+
+
+def _low_level_session_id(server: Any) -> Optional[str]:
+    ctx = _low_level_request_context(server)
+    try:
+        request = getattr(ctx, "request", None)
+        headers = getattr(request, "headers", None)
+        if headers is not None:
+            return headers.get("mcp-session-id")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:

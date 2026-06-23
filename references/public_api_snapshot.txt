@@ -352,7 +352,6 @@ alias posthog.mcp.instrument_fastmcp.record_tools_list -> posthog.mcp.instrument
 alias posthog.mcp.instrument_fastmcp.request_to_dict -> posthog.mcp.instrumentation.request_to_dict
 alias posthog.mcp.instrument_fastmcp.resolve_conversation_id -> posthog.mcp.conversation_id.resolve_conversation_id
 alias posthog.mcp.instrument_fastmcp.resolve_missing_capability_tool_name -> posthog.mcp.tools.resolve_missing_capability_tool_name
-alias posthog.mcp.instrument_fastmcp.resolve_session_id -> posthog.mcp.session.resolve_session_id
 alias posthog.mcp.instrument_lowlevel.MCPAnalyticsData -> posthog.mcp.internal.MCPAnalyticsData
 alias posthog.mcp.instrument_lowlevel.add_context_parameter_to_schema -> posthog.mcp.context_parameters.add_context_parameter_to_schema
 alias posthog.mcp.instrument_lowlevel.add_conversation_id_to_schema -> posthog.mcp.conversation_id.add_conversation_id_to_schema
@@ -372,7 +371,6 @@ alias posthog.mcp.instrument_lowlevel.record_tools_list -> posthog.mcp.instrumen
 alias posthog.mcp.instrument_lowlevel.request_to_dict -> posthog.mcp.instrumentation.request_to_dict
 alias posthog.mcp.instrument_lowlevel.resolve_conversation_id -> posthog.mcp.conversation_id.resolve_conversation_id
 alias posthog.mcp.instrument_lowlevel.resolve_missing_capability_tool_name -> posthog.mcp.tools.resolve_missing_capability_tool_name
-alias posthog.mcp.instrument_lowlevel.resolve_session_id -> posthog.mcp.session.resolve_session_id
 alias posthog.mcp.instrumentation.MCPAnalyticsData -> posthog.mcp.internal.MCPAnalyticsData
 alias posthog.mcp.instrumentation.MCPAnalyticsEventType -> posthog.mcp.event_types.MCPAnalyticsEventType
 alias posthog.mcp.instrumentation.build_captured_mcp_parameters -> posthog.mcp.sanitization.build_captured_mcp_parameters
@@ -407,6 +405,7 @@ alias posthog.mcp.posthog_mcp.PreparedToolCall -> posthog.mcp.types.PreparedTool
 alias posthog.mcp.posthog_mcp.add_context_parameter_to_schema -> posthog.mcp.context_parameters.add_context_parameter_to_schema
 alias posthog.mcp.posthog_mcp.build_report_missing_descriptor -> posthog.mcp.tools.build_report_missing_descriptor
 alias posthog.mcp.posthog_mcp.capture_exception -> posthog.mcp.exceptions.capture_exception
+alias posthog.mcp.posthog_mcp.drain_pending_sync -> posthog.mcp.instrumentation.drain_pending_sync
 alias posthog.mcp.posthog_mcp.fire_and_forget -> posthog.mcp.instrumentation.fire_and_forget
 alias posthog.mcp.posthog_mcp.get_context_description -> posthog.mcp.context_parameters.get_context_description
 alias posthog.mcp.posthog_mcp.is_context_enabled -> posthog.mcp.context_parameters.is_context_enabled
@@ -1220,6 +1219,7 @@ function posthog.mcp.instrument_lowlevel.instrument_low_level(server: Any, data:
 function posthog.mcp.instrumentation.append_get_more_tools(result: Any, name: str) -> None
 function posthog.mcp.instrumentation.build_tool_call_request(name: str, arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]
 function posthog.mcp.instrumentation.drain_pending() -> None
+function posthog.mcp.instrumentation.drain_pending_sync(timeout: Optional[float] = None) -> None
 function posthog.mcp.instrumentation.extract_tools(result: Any) -> list
 function posthog.mcp.instrumentation.fire_and_forget(coro: Optional[Any]) -> None
 function posthog.mcp.instrumentation.is_tool_result_error(result: Any) -> bool
@@ -1227,7 +1227,7 @@ function posthog.mcp.instrumentation.prepare_request(data: MCPAnalyticsData, *, 
 function posthog.mcp.instrumentation.read_tool_category(tool: Any) -> Optional[str]
 function posthog.mcp.instrumentation.record_missing_capability(data: MCPAnalyticsData, session_id: str, *, tool_name: str, context: Optional[str], arguments: Optional[Dict[str, Any]], client_name: Optional[str] = None, client_version: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
 function posthog.mcp.instrumentation.record_tool_call(data: MCPAnalyticsData, session_id: str, *, name: str, arguments: Optional[Dict[str, Any]], result: Any = None, error: Any = None, duration_ms: Optional[float] = None, client_name: Optional[str] = None, client_version: Optional[str] = None, conversation_id: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
-function posthog.mcp.instrumentation.record_tools_list(data: MCPAnalyticsData, session_id: str, *, names: List[str], request: Dict[str, Any], client_name: Optional[str] = None, client_version: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
+function posthog.mcp.instrumentation.record_tools_list(data: MCPAnalyticsData, session_id: str, *, names: List[str], request: Dict[str, Any], response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, client_name: Optional[str] = None, client_version: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None
 function posthog.mcp.instrumentation.request_to_dict(req: Any) -> Dict[str, Any]
 function posthog.mcp.intent.resolve_tool_call_intent(data: MCPAnalyticsData, request: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Optional[ResolvedIntent]
 function posthog.mcp.intent.set_event_intent(event: Dict[str, Any], resolved: Optional[ResolvedIntent]) -> None
@@ -1449,8 +1449,10 @@ method posthog.mcp.posthog_mcp.PostHogMCP.capture_initialize(*, client_name: Opt
 method posthog.mcp.posthog_mcp.PostHogMCP.capture_missing_capability(*, context: Optional[str] = None, parameters: Any = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture_tool_call(tool_name: str, *, intent: Optional[str] = None, intent_source: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, category: Optional[str] = None, tool_description: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture_tools_list(*, tool_names: Optional[List[str]] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.flush(timeout_seconds: Optional[float] = 10) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_call(name: str, args: Optional[JsonRecord] = None) -> PreparedToolCall
 method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_list(tools: List[Any], context: Union[bool, MCPAnalyticsContextOptions] = True, report_missing: bool = False) -> List[Any]
+method posthog.mcp.posthog_mcp.PostHogMCP.shutdown() -> None
 method posthog.mcp.sink.McpEventSink.capture(event: McpEvent, options: McpCaptureOptions) -> None
 method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
