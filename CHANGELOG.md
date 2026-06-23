@@ -1,5 +1,11 @@
 # posthog
 
+## 7.20.3 — 2026-06-23
+
+### Patch changes
+
+- [42ff4ca](https://github.com/posthog/posthog-python/commit/42ff4ca6abdc11579806915d8a41ceba8d452969) Detect and redact high-entropy secrets (API keys, tokens, passwords) in exception code variables. Adds the `code_variables_detect_secrets` option (default `True`). — Thanks @ablaszkiewicz!
+
 ## 7.20.2 — 2026-06-22
 
 ### Patch changes
