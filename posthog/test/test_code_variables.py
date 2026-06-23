@@ -1035,6 +1035,26 @@ class TestSecretDetection:
         result = extract(order_id="507f1f77bcf86cd799439011")
         assert result == {"order_id": "507f1f77bcf86cd799439011"}
 
+    def test_opaque_object_whose_repr_is_a_secret_is_redacted(self):
+        # an untraversable object whose __repr__ is a bare token must not bypass
+        # detection through the repr fallback
+        class OpaqueToken:
+            __slots__ = ()
+
+            def __repr__(self):
+                return "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH"
+
+        assert mask(OpaqueToken()) == REDACTED
+
+    def test_ordinary_object_repr_is_not_redacted(self):
+        class Thing:
+            __slots__ = ()
+
+            def __repr__(self):
+                return "<Thing alive=True count=3>"
+
+        assert mask(Thing()) == "<Thing alive=True count=3>"
+
     def test_detection_can_be_disabled(self):
         config = _MaskingConfig.build(
             list(DEFAULT_CODE_VARIABLES_MASK_PATTERNS), [], detect_secrets=False

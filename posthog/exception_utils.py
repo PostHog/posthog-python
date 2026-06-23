@@ -1249,6 +1249,9 @@ def _safe_repr(value, config):
         return CODE_VARIABLES_REDACTED_VALUE
     if _matcher_matches(rendered, config.mask):
         return CODE_VARIABLES_REDACTED_VALUE
+    # A __repr__ that is itself a bare secret would otherwise bypass detection.
+    if config.detect_secrets and _looks_like_secret(rendered):
+        return CODE_VARIABLES_REDACTED_VALUE
     if config.mask_url_credentials:
         return _redact_url_credentials(rendered)
     return rendered
