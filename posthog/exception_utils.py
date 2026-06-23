@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import types
+from collections import Counter
 from datetime import datetime
 from types import FrameType, TracebackType  # noqa: F401
 from typing import (  # noqa: F401
@@ -72,19 +73,23 @@ DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
 
 DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS = True
 
+# Last-resort entropy-based redaction of secret-looking values, after name/URL masking.
+DEFAULT_CODE_VARIABLES_DETECT_SECRETS = True
+
 CODE_VARIABLES_REDACTED_VALUE = "$$_posthog_redacted_based_on_masking_rules_$$"
 CODE_VARIABLES_TOO_LONG_VALUE = "$$_posthog_value_too_long_$$"
 
-_MAX_VALUE_LENGTH_FOR_PATTERN_MATCH = 5_000
-_MAX_COLLECTION_ITEMS_TO_SCAN = 100
+# Strings longer than this are redacted as "too long" rather than scanned.
+_MAX_VALUE_LENGTH_FOR_PATTERN_MATCH = 2_048
+_MAX_COLLECTION_ITEMS_TO_SCAN = 50
 _REGEX_METACHARACTERS = frozenset(r"\.^$*+?{}[]|()")
 
 # Max recursion depth into nested structures while masking (cycles are guarded separately).
-_MAX_MASK_DEPTH = 25
+_MAX_MASK_DEPTH = 12
 
 # Cap on total non-scalar nodes traversed per top-level value; the depth/collection caps
 # don't bound aggregate work, so this stops a wide-and-deep graph from fanning out.
-_MAX_TOTAL_NODES_TO_MASK = 200
+_MAX_TOTAL_NODES_TO_MASK = 100
 
 # Matches `user:pass` credentials in URLs/DSNs (e.g. `postgresql://user:pass@host`); the
 # bounded scheme length avoids catastrophic backtracking.
@@ -101,7 +106,7 @@ def _redact_url_credentials(value):
     )
 
 
-DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 20 * 1024
+DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 10 * 1024
 
 
 class VariableSizeLimiter:
@@ -1069,6 +1074,7 @@ class _MaskingConfig:
         Tuple[Optional[Pattern], List[Pattern]]
     ]  # variable-name skip matcher
     mask_url_credentials: bool
+    detect_secrets: bool = DEFAULT_CODE_VARIABLES_DETECT_SECRETS
     max_length: int = DEFAULT_MAX_VALUE_LENGTH
 
     @classmethod
@@ -1077,6 +1083,7 @@ class _MaskingConfig:
         mask_patterns=None,
         ignore_patterns=None,
         mask_url_credentials=True,
+        detect_secrets=DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
         max_length=DEFAULT_MAX_VALUE_LENGTH,
     ):
         # type: (...) -> _MaskingConfig
@@ -1084,16 +1091,137 @@ class _MaskingConfig:
             mask=_build_matcher(_compile_patterns(mask_patterns or [])),
             ignore=_build_matcher(_compile_patterns(ignore_patterns or [])),
             mask_url_credentials=mask_url_credentials,
+            detect_secrets=detect_secrets,
             max_length=max_length,
         )
 
 
+# --- Entropy-based secret detection (last resort) ------------------------------------
+# Catches high-entropy secrets (API keys, tokens, strong passwords) in innocuously-named
+# variables, after name/keyword masking. Trade-off: pure-hex strings are treated as
+# ids/hashes, so UUIDs/ObjectIds/SHAs are never flagged (and hex-encoded secrets slip by).
+
+_SECRET_MIN_LENGTH = 16  # also the shortest known vendor format
+_SECRET_MIN_ENTROPY_BITS = 3.8  # Shannon bits/char
+_SECRET_MIN_CHAR_CLASSES = 3  # of {lower, upper, digit, symbol}
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+# Punctuation seen in object reprs / structured strings but never in a bare token; keeps
+# high-entropy reprs like `Thing(id=UUID('...'))` from being redacted.
+_SECRET_REJECT_CHARS = frozenset("()[]{}<>'\"`,;")
+
+_UUID_RE = re.compile(
+    r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z"
+)
+
+# Lowercase word-like path segment; two around a '/' marks a filesystem path.
+_PATH_WORD_RE = re.compile(r"\A[a-z][a-z.]*\Z")
+
+# Well-known credential formats, matched regardless of entropy.
+_KNOWN_SECRET_PATTERNS = [
+    r"sk-ant-[A-Za-z0-9_-]{16,}",  # Anthropic
+    r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}",  # OpenAI
+    r"(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}",  # Stripe
+    r"AKIA[0-9A-Z]{16}",  # AWS access key id
+    r"(?:ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA|ACCA)[0-9A-Z]{16}",  # other AWS ids
+    r"gh[pousr]_[A-Za-z0-9]{36}",  # GitHub
+    r"github_pat_[A-Za-z0-9_]{20,}",  # GitHub fine-grained PAT
+    r"glpat-[A-Za-z0-9_-]{20}",  # GitLab
+    r"xox[baprs]-[A-Za-z0-9-]{10,}",  # Slack
+    r"AIza[A-Za-z0-9_-]{35}",  # Google
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}",  # JWT
+]
+_KNOWN_SECRET_RE = re.compile("|".join(_KNOWN_SECRET_PATTERNS))
+
+_PEM_PRIVATE_KEY_MARKER = "PRIVATE KEY-----"  # covers RSA/EC/OpenSSH/PKCS8
+_KNOWN_SECRET_MAX_SCAN_LENGTH = 200
+
+
+def _looks_like_path_or_url(value):
+    if "://" in value or "\\" in value:
+        return True
+    if "/" in value:
+        word_segments = 0
+        for segment in value.split("/"):
+            if segment and _PATH_WORD_RE.match(segment):
+                word_segments += 1
+                if word_segments >= 2:
+                    return True
+    return False
+
+
+def _is_high_entropy_secret(value):
+    """Generic gate: long, character-class-diverse, high-entropy strings that aren't
+    structured ids/paths/reprs. Assumes ``len(value) >= _SECRET_MIN_LENGTH``. Cost is
+    dominated by one C-level ``Counter`` pass; everything else runs over distinct chars."""
+    if " " in value:  # prose; the common benign case, bailed before any scan
+        return False
+    if _looks_like_path_or_url(value):
+        return False
+    if _UUID_RE.match(value):
+        return False
+
+    counts = Counter(value)
+    distinct = counts.keys()
+    if not _SECRET_REJECT_CHARS.isdisjoint(distinct):
+        return False
+
+    has_lower = has_upper = has_digit = has_symbol = False
+    hex_only = True
+    for ch in distinct:
+        if ch.isspace():
+            return False
+        if ch.islower():
+            has_lower = True
+            if ch not in _HEX_DIGITS:
+                hex_only = False
+        elif ch.isupper():
+            has_upper = True
+            if ch not in _HEX_DIGITS:
+                hex_only = False
+        elif ch.isdigit():
+            has_digit = True
+        else:
+            has_symbol = True
+            hex_only = False
+
+    if hex_only:  # ObjectId / SHA / md5 digest
+        return False
+    if (has_lower + has_upper + has_digit + has_symbol) < _SECRET_MIN_CHAR_CLASSES:
+        return False  # identifiers, enums, slugs, numbers
+
+    n = len(value)
+    entropy = 0.0
+    for occurrences in counts.values():
+        p = occurrences / n
+        entropy -= p * math.log2(p)
+    return entropy >= _SECRET_MIN_ENTROPY_BITS
+
+
+def _looks_like_secret(value):
+    """Last-resort credential check, layered cheapest first."""
+    if _PEM_PRIVATE_KEY_MARKER in value:
+        return True
+    n = len(value)
+    if n < _SECRET_MIN_LENGTH:
+        return False
+    if _is_high_entropy_secret(value):
+        return True
+    # Known formats the entropy gate misses (e.g. AWS AKIA ids: only two char classes).
+    if n <= _KNOWN_SECRET_MAX_SCAN_LENGTH:
+        return _KNOWN_SECRET_RE.search(value) is not None
+    return False
+
+
 def _mask_string(value, config):
-    """Apply the string masking policy: over-length cap, name/value patterns, then
-    embedded URL credentials."""
+    """Apply the string masking policy: over-length cap, name/value patterns,
+    entropy-based secret detection, then embedded URL credentials."""
     if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
         return CODE_VARIABLES_TOO_LONG_VALUE
     if _matcher_matches(value, config.mask):
+        return CODE_VARIABLES_REDACTED_VALUE
+    if config.detect_secrets and _looks_like_secret(value):
         return CODE_VARIABLES_REDACTED_VALUE
     if config.mask_url_credentials:
         return _redact_url_credentials(value)
@@ -1220,8 +1348,12 @@ def _mask_value(value, config, seen=None, depth=0):
     """Turn any Python value into a JSON-safe, masked value. Single source of truth for
     what gets redacted; the result contains only JSON-native types so it can be handed
     straight to ``json.dumps``."""
-    # Name masking and URL scrubbing are independent toggles; skip only when both are off.
-    if config.mask is None and not config.mask_url_credentials:
+    # Nothing to do only when every redaction toggle is off.
+    if (
+        config.mask is None
+        and not config.mask_url_credentials
+        and not config.detect_secrets
+    ):
         return value
 
     # Exact-type fast paths for plain scalars, avoiding the isinstance ladder below.
@@ -1410,6 +1542,7 @@ def serialize_code_variables(
     ignore_patterns=None,
     max_length=1024,
     mask_url_credentials=True,
+    detect_secrets=DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
 ):
     """Serialize a single frame's locals. Convenience wrapper that builds a one-off config;
     the hot path builds the config once - see ``attach_code_variables_to_frames``."""
@@ -1417,13 +1550,19 @@ def serialize_code_variables(
         mask_patterns=mask_patterns,
         ignore_patterns=ignore_patterns,
         mask_url_credentials=mask_url_credentials,
+        detect_secrets=detect_secrets,
         max_length=max_length,
     )
     return _serialize_frame_variables(frame, limiter, config)
 
 
 def try_attach_code_variables_to_frames(
-    all_exceptions, exc_info, mask_patterns, ignore_patterns, mask_url_credentials=True
+    all_exceptions,
+    exc_info,
+    mask_patterns,
+    ignore_patterns,
+    mask_url_credentials=True,
+    detect_secrets=DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
 ):
     try:
         attach_code_variables_to_frames(
@@ -1432,13 +1571,19 @@ def try_attach_code_variables_to_frames(
             mask_patterns,
             ignore_patterns,
             mask_url_credentials,
+            detect_secrets,
         )
     except Exception:
         pass
 
 
 def attach_code_variables_to_frames(
-    all_exceptions, exc_info, mask_patterns, ignore_patterns, mask_url_credentials=True
+    all_exceptions,
+    exc_info,
+    mask_patterns,
+    ignore_patterns,
+    mask_url_credentials=True,
+    detect_secrets=DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
 ):
     exc_type, exc_value, traceback = exc_info
 
@@ -1455,6 +1600,7 @@ def attach_code_variables_to_frames(
         mask_patterns=mask_patterns,
         ignore_patterns=ignore_patterns,
         mask_url_credentials=mask_url_credentials,
+        detect_secrets=detect_secrets,
     )
     limiter = VariableSizeLimiter()
 

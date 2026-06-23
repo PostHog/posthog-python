@@ -27,6 +27,7 @@ class ContextScope:
         self.code_variables_mask_patterns: Optional[list] = None
         self.code_variables_ignore_patterns: Optional[list] = None
         self.code_variables_mask_url_credentials: Optional[bool] = None
+        self.code_variables_detect_secrets: Optional[bool] = None
 
     def set_session_id(self, session_id: str):
         self.session_id = session_id
@@ -51,6 +52,9 @@ class ContextScope:
 
     def set_code_variables_mask_url_credentials(self, enabled: bool):
         self.code_variables_mask_url_credentials = enabled
+
+    def set_code_variables_detect_secrets(self, enabled: bool):
+        self.code_variables_detect_secrets = enabled
 
     def get_parent(self):
         return self.parent
@@ -111,6 +115,13 @@ class ContextScope:
             return self.code_variables_mask_url_credentials
         if self.parent is not None and not self.fresh:
             return self.parent.get_code_variables_mask_url_credentials()
+        return None
+
+    def get_code_variables_detect_secrets(self) -> Optional[bool]:
+        if self.code_variables_detect_secrets is not None:
+            return self.code_variables_detect_secrets
+        if self.parent is not None and not self.fresh:
+            return self.parent.get_code_variables_detect_secrets()
         return None
 
 
@@ -390,6 +401,17 @@ def set_code_variables_mask_url_credentials_context(enabled: bool) -> None:
         current_context.set_code_variables_mask_url_credentials(enabled)
 
 
+def set_code_variables_detect_secrets_context(enabled: bool) -> None:
+    """
+    Whether to apply entropy-based secret detection as a last-resort redaction of
+    high-entropy values (API keys, tokens, strong passwords) in captured code
+    variables for the current context.
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.set_code_variables_detect_secrets(enabled)
+
+
 def get_capture_exception_code_variables_context() -> Optional[bool]:
     current_context = _get_current_context()
     if current_context:
@@ -415,6 +437,13 @@ def get_code_variables_mask_url_credentials_context() -> Optional[bool]:
     current_context = _get_current_context()
     if current_context:
         return current_context.get_code_variables_mask_url_credentials()
+    return None
+
+
+def get_code_variables_detect_secrets_context() -> Optional[bool]:
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.get_code_variables_detect_secrets()
     return None
 
 

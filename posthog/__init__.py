@@ -33,6 +33,9 @@ from posthog.contexts import (
     set_code_variables_mask_url_credentials_context as inner_set_code_variables_mask_url_credentials_context,
 )
 from posthog.contexts import (
+    set_code_variables_detect_secrets_context as inner_set_code_variables_detect_secrets_context,
+)
+from posthog.contexts import (
     set_context_device_id as inner_set_context_device_id,
 )
 from posthog.contexts import (
@@ -45,6 +48,7 @@ from posthog.contexts import (
     get_tags as inner_get_tags,
 )
 from posthog.exception_utils import (
+    DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
@@ -244,6 +248,18 @@ def set_code_variables_mask_url_credentials_context(enabled: bool):
     return inner_set_code_variables_mask_url_credentials_context(enabled)
 
 
+def set_code_variables_detect_secrets_context(enabled: bool):
+    """
+    Whether to apply entropy-based secret detection as a last-resort redaction of
+    high-entropy values (API keys, tokens, strong passwords) in captured code
+    variables for the current context.
+
+    Category:
+        Contexts
+    """
+    return inner_set_code_variables_detect_secrets_context(enabled)
+
+
 def tag(name: str, value: Any):
     """
     Add a tag to the current context.
@@ -321,6 +337,9 @@ Attributes:
         code variables.
     code_variables_ignore_patterns: Variable-name patterns to omit when capturing
         code variables.
+    code_variables_detect_secrets: Last-resort entropy-based redaction of
+        high-entropy secret-looking values (API keys, tokens, strong passwords)
+        in captured code variables. Defaults to True.
     in_app_modules: Module/package prefixes treated as in-app frames in captured
         exceptions.
     enable_exception_autocapture_rate_limiting: Rate limit autocaptured
@@ -365,6 +384,7 @@ capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
+code_variables_detect_secrets = DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 in_app_modules = None  # type: Optional[list[str]]
 enable_exception_autocapture_rate_limiting = False  # type: bool
 exception_autocapture_bucket_size = ExceptionCapture.DEFAULT_BUCKET_SIZE  # type: int
@@ -1149,6 +1169,7 @@ def setup() -> Client:
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
             code_variables_mask_url_credentials=code_variables_mask_url_credentials,
+            code_variables_detect_secrets=code_variables_detect_secrets,
             in_app_modules=in_app_modules,
             enable_exception_autocapture_rate_limiting=enable_exception_autocapture_rate_limiting,
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,
