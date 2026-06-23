@@ -1118,18 +1118,45 @@ _UUID_RE = re.compile(
 # Lowercase word-like path segment; two around a '/' marks a filesystem path.
 _PATH_WORD_RE = re.compile(r"\A[a-z][a-z.]*\Z")
 
-# Well-known credential formats, matched regardless of entropy.
+# Well-known credential formats, matched regardless of entropy. High-confidence,
+# distinctive-prefix patterns adapted from the gitleaks / detect-secrets rule sets.
 _KNOWN_SECRET_PATTERNS = [
+    # AI / LLM providers
     r"sk-ant-[A-Za-z0-9_-]{16,}",  # Anthropic
     r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}",  # OpenAI
-    r"(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}",  # Stripe
+    r"hf_[A-Za-z0-9]{34}",  # Hugging Face
+    # Cloud providers
     r"AKIA[0-9A-Z]{16}",  # AWS access key id
     r"(?:ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA|ACCA)[0-9A-Z]{16}",  # other AWS ids
+    r"AIza[A-Za-z0-9_-]{35}",  # Google API key
+    r"ya29\.[A-Za-z0-9_-]{20,}",  # Google OAuth token
+    r"do[opr]_v1_[a-f0-9]{64}",  # DigitalOcean
+    # Payments
+    r"(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}",  # Stripe
+    r"sq0[a-z]{3}-[A-Za-z0-9_-]{22,43}",  # Square
+    # Source control / CI/CD
     r"gh[pousr]_[A-Za-z0-9]{36}",  # GitHub
     r"github_pat_[A-Za-z0-9_]{20,}",  # GitHub fine-grained PAT
-    r"glpat-[A-Za-z0-9_-]{20}",  # GitLab
-    r"xox[baprs]-[A-Za-z0-9-]{10,}",  # Slack
-    r"AIza[A-Za-z0-9_-]{35}",  # Google
+    r"gl(?:pat|ptt|rt|soat)-[A-Za-z0-9_-]{20}",  # GitLab
+    r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}",  # Grafana service account
+    # Messaging / email
+    r"xox[abeoprs]-[A-Za-z0-9-]{10,}",  # Slack
+    r"xapp-[0-9]-[A-Za-z0-9-]{10,}",  # Slack app-level
+    r"SK[0-9a-fA-F]{32}",  # Twilio API key
+    r"SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}",  # SendGrid
+    r"key-[0-9a-f]{32}",  # Mailgun
+    r"[0-9a-f]{32}-us[0-9]{1,2}",  # Mailchimp
+    # Dev tools / registries / SaaS
+    r"npm_[A-Za-z0-9]{36}",  # npm
+    r"pypi-AgEI[A-Za-z0-9_-]{50,}",  # PyPI upload token
+    r"dapi[0-9a-f]{32}",  # Databricks
+    r"dp\.pt\.[A-Za-z0-9]{40,}",  # Doppler
+    r"PMAK-[a-f0-9]{24}-[a-f0-9]{34}",  # Postman
+    r"lin_api_[A-Za-z0-9]{40}",  # Linear
+    r"ntn_[A-Za-z0-9]{40,}",  # Notion
+    r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}",  # Shopify
+    r"NR(?:AK|JS|II|MA|RA)-[A-Za-z0-9]{27}",  # New Relic
+    # Tokens with embedded structure
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}",  # JWT
 ]
 _KNOWN_SECRET_RE = re.compile("|".join(_KNOWN_SECRET_PATTERNS))

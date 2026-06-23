@@ -944,6 +944,23 @@ KNOWN_FORMAT_SECRETS = [
     _key(
         "eyJ", "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N"
     ),  # JWT
+    _key("hf_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ01234567"),  # Hugging Face
+    _key("ya29.", "a0AfH6SMBx1y2z3-_abcDEFghiJKLmnoPQ"),  # Google OAuth
+    _key("sq0atp-", "1a2B3c4D5e6F7g8H9i0JkL"),  # Square
+    _key("glsa_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ012345_a1b2c3d4"),  # Grafana
+    _key("SK", "0123456789abcdef0123456789abcdef"),  # Twilio
+    _key(
+        "SG.", "aBcDeFgHiJkLmNoPqRsTuV.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+    ),  # SendGrid
+    _key("npm_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"),  # npm
+    _key("dapi", "0123456789abcdef0123456789abcdef"),  # Databricks
+    _key(
+        "PMAK-", "0123456789abcdef01234567-0123456789abcdef0123456789abcdef0123"
+    ),  # Postman
+    _key("lin_api_", "0123456789abcdef0123456789abcdef01234567"),  # Linear
+    _key("shpat_", "0123456789abcdef0123456789abcdef"),  # Shopify
+    _key("NRAK-", "0123456789ABCDEFGHIJKLMNOPQ"),  # New Relic
+    _key("0123456789abcdef0123456789abcdef", "-us12"),  # Mailchimp
     "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1234",  # PEM private key
     "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXkt",  # OpenSSH private key
 ]
