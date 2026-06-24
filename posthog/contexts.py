@@ -138,15 +138,14 @@ def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
     if client is not None:
         return client.enable_exception_autocapture
 
-    import posthog
+    from . import default_client, enable_exception_autocapture
 
-    default_client = getattr(posthog, "default_client", None)
     if default_client is not None:
         client_default = getattr(default_client, "enable_exception_autocapture", None)
         if isinstance(client_default, bool):
             return client_default
 
-    return posthog.enable_exception_autocapture
+    return enable_exception_autocapture
 
 
 @contextmanager
@@ -197,7 +196,7 @@ def new_context(
     Category:
         Contexts
     """
-    from posthog import capture_exception
+    from . import capture_exception
 
     current_context = _get_current_context()
     resolved_capture_exceptions = (

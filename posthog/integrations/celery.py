@@ -69,8 +69,8 @@ import logging
 import time
 from typing import Any, Callable, Optional
 
-from posthog import contexts
-from posthog.client import Client
+from .. import contexts
+from ..client import Client
 
 
 CONTEXT_DISTINCT_ID_HEADER = "X-POSTHOG-DISTINCT-ID"
@@ -198,9 +198,9 @@ class PosthogCeleryIntegration:
             if self.client:
                 self.client.flush()
             else:
-                import posthog
+                from .. import flush
 
-                posthog.flush()
+                flush()
 
             self.uninstrument()
             self._shut_down = True
