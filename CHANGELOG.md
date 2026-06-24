@@ -1,5 +1,11 @@
 # posthog
 
+## 7.20.5 — 2026-06-24
+
+### Patch changes
+
+- [cdd878c](https://github.com/posthog/posthog-python/commit/cdd878c88d198efffd80ea853525589f2ec9ab30) Clear feature flag called cache on shutdown — Thanks @marandaneto!
+
 ## 7.20.4 — 2026-06-24
 
 ### Patch changes
