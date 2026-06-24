@@ -198,9 +198,9 @@ class PosthogCeleryIntegration:
             if self.client:
                 self.client.flush()
             else:
-                import posthog
+                from .. import flush
 
-                posthog.flush()
+                flush()
 
             self.uninstrument()
             self._shut_down = True
