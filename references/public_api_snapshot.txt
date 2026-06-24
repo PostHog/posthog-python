@@ -636,6 +636,7 @@ attribute posthog.feature_flags_request_timeout_seconds = 3
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.cohorts: Required[Dict[str, Any]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.flags: Required[List[Dict[str, Any]]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.group_type_mapping: Required[Dict[str, str]]
+attribute posthog.flag_definition_cache.FlagDefinitionCacheData.minimal_flag_called_events: NotRequired[bool]
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
@@ -775,6 +776,7 @@ attribute posthog.types.FlagsAndPayloads.featureFlags: Optional[dict[str, FlagVa
 attribute posthog.types.FlagsResponse.errorsWhileComputingFlags: bool
 attribute posthog.types.FlagsResponse.evaluatedAt: Optional[int]
 attribute posthog.types.FlagsResponse.flags: dict[str, FeatureFlag]
+attribute posthog.types.FlagsResponse.minimalFlagCalledEvents: bool
 attribute posthog.types.FlagsResponse.quotaLimit: Optional[List[str]]
 attribute posthog.types.FlagsResponse.requestId: str
 attribute posthog.types.LegacyFlagMetadata.payload: Any

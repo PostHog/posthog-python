@@ -440,7 +440,12 @@ class TestAsyncCacheProvider(TestFlagDefinitionCacheProvider):
         self.assertEqual(self.cache_provider.should_fetch_call_count, 1)
         self.assertEqual(self.cache_provider.get_call_count, 0)
         self.assertEqual(self.cache_provider.on_received_call_count, 1)
-        self.assertEqual(self.cache_provider.stored_data, self.sample_flags_data)
+        # The stored payload carries the minimal $feature_flag_called gate alongside
+        # the flag definitions so it survives cache round-trips.
+        self.assertEqual(
+            self.cache_provider.stored_data,
+            {**self.sample_flags_data, "minimal_flag_called_events": False},
+        )
         self.assertEqual(len(set(self.cache_provider.loop_ids)), 1)
 
         client.join()
