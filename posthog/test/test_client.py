@@ -2026,6 +2026,14 @@ class TestClient(unittest.TestCase):
         for consumer in client.consumers:
             self.assertFalse(consumer.is_alive())
 
+    def test_shutdown_clears_feature_flag_called_dedupe_cache(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+        client.distinct_ids_feature_flags_reported["user"] = {("flag", True, ())}
+
+        client.shutdown()
+
+        self.assertEqual(len(client.distinct_ids_feature_flags_reported), 0)
+
     def test_shutdown_flushes_without_timeout(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
 

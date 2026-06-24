@@ -1716,6 +1716,7 @@ class Client(object):
         """
         self.flush(timeout_seconds=None)
         self.join()
+        self.distinct_ids_feature_flags_reported.clear()
 
         if self.exception_capture:
             self.exception_capture.close()
