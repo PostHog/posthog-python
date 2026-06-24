@@ -1,5 +1,11 @@
 # posthog
 
+## 7.20.4 — 2026-06-24
+
+### Patch changes
+
+- [89adb2f](https://github.com/posthog/posthog-python/commit/89adb2f997ba2968b25a49eb29abc6d6d3bb19f8) Fix internal imports for posthoganalytics mirror — Thanks @hpouillot!
+
 ## 7.20.3 — 2026-06-23
 
 ### Patch changes
