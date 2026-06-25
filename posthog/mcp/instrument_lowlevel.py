@@ -14,6 +14,7 @@ server's ``request_context`` contextvar (the handler receives only the request).
 
 from __future__ import annotations
 
+import inspect
 import time
 from typing import Any, Optional, Tuple
 
@@ -49,7 +50,6 @@ from .tools import (
     resolve_missing_capability_tool_name,
 )
 
-_INJECTED_KEYS = ("context", "conversation_id")
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
 
@@ -77,12 +77,12 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
     data.server_version = getattr(server, "version", None) or getattr(
         low_level, "version", None
     )
-    _wrap_call_tool(low_level, data, strip_injected=True)
+    _wrap_call_tool(low_level, data, strip_injected=True, high_level=server)
     _wrap_list_tools(low_level, data, context_required=True)
 
 
 def _wrap_call_tool(
-    server: Any, data: MCPAnalyticsData, *, strip_injected: bool
+    server: Any, data: MCPAnalyticsData, *, strip_injected: bool, high_level: Any = None
 ) -> None:
     handlers = server.request_handlers
     original = handlers.get(mcp_types.CallToolRequest)
@@ -136,10 +136,15 @@ def _wrap_call_tool(
         # On raw low-level servers `context`/`conversation_id` are injected as
         # *optional* schema properties and left in place (a (name, arguments)
         # handler ignores extra keys). FastMCP 2.0 validates against the function
-        # signature and rejects unexpected kwargs, so strip them before dispatch.
+        # signature and rejects unexpected kwargs, so strip them before dispatch —
+        # but NOT a key the tool declares itself (that's a real argument). Ownership
+        # is read from the tool's own signature, so it holds with or without a prior
+        # tools/list and across stateless per-request server instances.
         if strip_injected and req.params.arguments:
-            for key in _INJECTED_KEYS:
-                req.params.arguments.pop(key, None)
+            owned = await _tool_owned_injected_keys(high_level, name)
+            for key in ("context", "conversation_id"):
+                if key not in owned:
+                    req.params.arguments.pop(key, None)
 
         start = time.monotonic()
         try:
@@ -260,6 +265,10 @@ def _wrap_list_tools(
             if category:
                 data.tool_categories[tool.name] = category
 
+        # Zero advertised tools is treated as an errored tools/list (parity with the
+        # TS SDK) — captured before we append our own get_more_tools virtual tool.
+        empty = len(tools) == 0
+
         context_enabled = is_context_enabled(data.options.context)
         description = get_context_description(data.options.context)
         for tool in tools:
@@ -268,11 +277,13 @@ def _wrap_list_tools(
             schema = getattr(tool, "inputSchema", None)
             # required follows the path: raw low-level validates the call against
             # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
-            if context_enabled and not _schema_has_context(schema):
+            if context_enabled and not _schema_has_param(schema, "context"):
                 schema = add_context_parameter_to_schema(
                     schema, tool.name, description, required=context_required
                 )
-            if data.options.enable_conversation_id:
+            if data.options.enable_conversation_id and not _schema_has_param(
+                schema, "conversation_id"
+            ):
                 schema = add_conversation_id_to_schema(schema, tool.name)
             if schema is not getattr(tool, "inputSchema", None):
                 try:
@@ -293,6 +304,8 @@ def _wrap_list_tools(
             request=request,
             response=_to_jsonable(result),
             duration_ms=duration_ms,
+            is_error=empty,
+            error="tools/list returned no tools" if empty else None,
             client_name=client_name,
             client_version=client_version,
             extra=extra,
@@ -304,12 +317,28 @@ def _wrap_list_tools(
     handlers[mcp_types.ListToolsRequest] = handler
 
 
-def _schema_has_context(schema: Any) -> bool:
+def _schema_has_param(schema: Any, name: str) -> bool:
     return (
         isinstance(schema, dict)
         and isinstance(schema.get("properties"), dict)
-        and "context" in schema["properties"]
+        and name in schema["properties"]
     )
+
+
+async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:
+    """Which of (``context``, ``conversation_id``) the jlowin FastMCP tool declares
+    itself, read from its function signature. These are real tool arguments we must
+    not strip. On any lookup failure, return empty (strip both) — same as the prior
+    unconditional behaviour, so a flaky introspection never leaks an injected key."""
+    if high_level is None:
+        return set()
+    try:
+        tool = await high_level.get_tool(name)
+        fn = getattr(tool, "fn", None)
+        params = set(inspect.signature(fn).parameters) if fn is not None else set()
+        return {k for k in ("context", "conversation_id") if k in params}
+    except Exception:  # noqa: BLE001 - introspection is best-effort
+        return set()
 
 
 def _request_context(server: Any) -> Any:

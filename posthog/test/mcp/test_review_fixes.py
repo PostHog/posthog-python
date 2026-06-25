@@ -19,8 +19,8 @@ import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
 
-from posthog.mcp import instrument
-from posthog.mcp.types import MCPAnalyticsOptions
+from posthog.mcp import PostHogMCP, instrument
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
@@ -86,9 +86,7 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
 
     # The tool's own context flowed through (not stripped, not broken by the
     # injected conversation_id sitting alongside it).
-    text_blocks = [
-        c.text for c in result[0] if getattr(c, "type", None) == "text"
-    ]
+    text_blocks = [c.text for c in result[0] if getattr(c, "type", None) == "text"]
     assert any("ctx=my own context" in t for t in text_blocks)
 
     calls = _events(client, "$mcp_tool_call")
@@ -256,3 +254,83 @@ async def test_instrument_canonicalizes_wrapper_and_underlying_server():
     instrument(server._mcp_server, client)
     assert get_server_tracking_data(server._mcp_server) is data1
     assert server._mcp_server.request_handlers[mcp_types.CallToolRequest] is wrapped
+
+
+# --- round 2 review findings --------------------------------------------------
+
+
+async def test_tools_list_empty_is_flagged_as_error():
+    # #3: zero advertised tools is an errored tools/list (parity with the TS SDK).
+    server = Server("empty-tools")
+
+    @server.list_tools()
+    async def _lt():
+        return []
+
+    @server.call_tool()
+    async def _ct(name, arguments):
+        return []
+
+    client = FakeClient()
+    instrument(server, client)
+
+    await server.request_handlers[mcp_types.ListToolsRequest](_list_request())
+    await _flush()
+
+    listed = _events(client, "$mcp_tools_list")
+    assert listed and listed[0]["properties"]["$mcp_is_error"] is True
+    assert _events(client, "$exception")
+
+
+async def test_initialize_carries_identity_when_identify_resolves():
+    # #4: identify runs before initialize, so the first $mcp_initialize is attributed
+    # rather than anonymous.
+    server = make_lowlevel()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            identify=lambda request, extra: UserIdentity(distinct_id="user_9")
+        ),
+    )
+
+    await server.request_handlers[mcp_types.ListToolsRequest](_list_request())
+    await _flush()
+
+    inits = _events(client, "$mcp_initialize")
+    assert inits and inits[0]["distinct_id"] == "user_9"
+
+
+def test_posthogmcp_can_disable_exception_fanout():
+    # #5: mcp_exception_autocapture=False -> a failed tool call emits no $exception.
+    import posthog.mcp.instrumentation as instr
+
+    client = PostHogMCP("phc_test", mcp_exception_autocapture=False)
+    captured = []
+    client.capture = lambda event, **kw: captured.append({"event": event, **kw})
+
+    client.capture_tool_call("boom", is_error=True, error="kaboom")
+    instr.drain_pending_sync(timeout=2)
+
+    names = [c["event"] for c in captured]
+    assert "$mcp_tool_call" in names
+    assert "$exception" not in names
+
+
+def test_version_warning_uses_supplied_logger(monkeypatch):
+    # #6: the mcp-version advisory goes to the supplied logger, not the no-op default.
+    logs = []
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "1.20.0")
+
+    server = Server("ver-warn")
+
+    @server.list_tools()
+    async def _lt():
+        return []
+
+    instrument(
+        server, FakeClient(), MCPAnalyticsOptions(logger=lambda m: logs.append(m))
+    )
+
+    assert any("tested against mcp>=1.26" in m for m in logs)

@@ -179,6 +179,11 @@ def instrument(
     """
     opts = options or MCPAnalyticsOptions()
 
+    # Install the logger first so the version advisory below (and any warning) is
+    # actually visible rather than going to the default no-op sink.
+    if opts.logger:
+        set_logger(opts.logger)
+
     # The wrapping path hooks the official MCP SDK's server internals, so it needs the
     # `mcp` package. It's a peer dependency (you already have it — you built the server
     # with it), imported lazily here rather than bundled. PostHogMCP (custom dispatchers)
@@ -198,9 +203,6 @@ def instrument(
     key = _canonical_server(server)
 
     try:
-        if opts.logger:
-            set_logger(opts.logger)
-
         client = _resolve_client(posthog_client)
         if client is None:
             log("Warning: no PostHog client available; MCP events will not be sent.")

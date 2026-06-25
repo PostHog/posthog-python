@@ -243,6 +243,9 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             raise
         duration_ms = (time.monotonic() - start) * 1000
         tools = extract_tools(result)
+        # Zero advertised tools is treated as an errored tools/list (parity with the
+        # TS SDK), checked before we append our own get_more_tools virtual tool.
+        empty = len(tools) == 0
 
         names = []
         for tool in tools:
@@ -283,6 +286,8 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             request=request,
             response=_to_jsonable(result),
             duration_ms=duration_ms,
+            is_error=empty,
+            error="tools/list returned no tools" if empty else None,
             client_name=client_name,
             client_version=client_version,
             extra=extra,

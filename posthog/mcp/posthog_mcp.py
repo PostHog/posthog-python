@@ -45,6 +45,7 @@ class PostHogMCP(Client):
         self,
         api_key: str,
         missing_capability_tool_name: Optional[str] = None,
+        mcp_exception_autocapture: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(api_key, **kwargs)
@@ -52,6 +53,10 @@ class PostHogMCP(Client):
         self._missing_capability_tool_name = (
             missing_capability_tool_name or _GET_MORE_TOOLS_NAME
         )
+        # Whether a failed tool call fans out an `$exception` sibling event. Distinct
+        # from the inherited Client.enable_exception_autocapture (global uncaught-error
+        # hook); this mirrors instrument()'s enable_exception_autocapture, default on.
+        self._mcp_exception_autocapture = mcp_exception_autocapture
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -282,7 +287,9 @@ class PostHogMCP(Client):
 
     def _emit(self, event: Dict[str, Any]) -> None:
         # Fire-and-forget, mirroring posthog-node: never block or raise into the host.
-        options = McpCaptureOptions(enable_exception_autocapture=True)
+        options = McpCaptureOptions(
+            enable_exception_autocapture=self._mcp_exception_autocapture
+        )
         fire_and_forget(self._mcp_sink.capture(event, options))
 
     def _inject_context(self, tool: Any, description: Optional[str]) -> Any:

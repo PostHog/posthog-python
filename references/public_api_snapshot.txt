@@ -1002,7 +1002,7 @@ class posthog.mcp.constants.PostHogMCPAnalyticsProperty
 class posthog.mcp.event_types.MCPAnalyticsEventType 
 class posthog.mcp.internal.IdentityCache(max_size: int = 1000)
 class posthog.mcp.internal.MCPAnalyticsData(options: MCPAnalyticsOptions, sink: Optional[McpEventSink] = None, session_id: str = '', session_source: str = 'generated', last_mcp_session_id: Optional[str] = None, last_activity: datetime = (lambda: datetime.now(timezone.utc))(), identified_sessions: IdentityCache = IdentityCache(), tool_categories: Dict[str, str] = dict(), tool_descriptions: Dict[str, str] = dict(), initialized_sessions: 'OrderedDict[str, None]' = OrderedDict(), server_name: Optional[str] = None, server_version: Optional[str] = None, session_lock: asyncio.Lock = asyncio.Lock())
-class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, **kwargs: Any)
+class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, mcp_exception_autocapture: bool = True, **kwargs: Any)
 class posthog.mcp.sink.McpCaptureOptions(enable_exception_autocapture: bool = True, before_send: Optional[BeforeSendFn] = None)
 class posthog.mcp.sink.McpEventSink(posthog: Client)
 class posthog.mcp.types.CaptureEventData(event: str, properties: Optional[JsonRecord] = None)

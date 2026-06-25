@@ -1,6 +1,5 @@
 """End-to-end tests for the low-level mcp.server.Server adapter (Milestone 3)."""
 
-
 import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
 

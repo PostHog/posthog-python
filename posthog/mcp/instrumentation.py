@@ -192,13 +192,19 @@ async def prepare_request(
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]],
 ) -> str:
-    """Resolve the session id, lazily emit initialize, and run identify. Returns
-    the session id to stamp on the event for this request."""
+    """Resolve the session id, run identify, then lazily emit initialize. Returns
+    the session id to stamp on the event for this request.
+
+    Identify runs *before* initialize so the resolved identity is already in the cache
+    when ``capture_event`` builds the initialize event — otherwise the first
+    ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
+    (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
+    the Python SDK handles initialize in the session layer, not ``request_handlers``.)"""
     session_id = await resolve_session_id(data, mcp_session_id)
-    await _maybe_emit_initialize(data, session_id, client_name, client_version, extra)
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event))
+    await _maybe_emit_initialize(data, session_id, client_name, client_version, extra)
     return session_id
 
 

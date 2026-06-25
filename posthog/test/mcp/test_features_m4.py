@@ -1,6 +1,5 @@
 """Tests for M4 parity features: get_more_tools (missing capability) + conversation_id."""
 
-
 import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server

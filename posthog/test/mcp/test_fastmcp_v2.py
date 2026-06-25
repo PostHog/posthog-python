@@ -1,7 +1,6 @@
 """Tests for jlowin's standalone FastMCP 2.0 (the `fastmcp` package), distinct
 from the official SDK's mcp.server.fastmcp.FastMCP."""
 
-
 import pytest
 
 pytest.importorskip("fastmcp")
@@ -77,6 +76,29 @@ async def test_jlowin_call_strips_context_so_validation_passes():
         == "summing two numbers for the monthly report"
     )
     assert calls[0]["properties"]["$mcp_is_error"] is False
+
+
+async def test_jlowin_tool_owning_context_keeps_its_real_argument():
+    # A v2 tool that declares its own `context` must NOT have it stripped (we only
+    # strip the keys we inject). Works without a prior tools/list, since ownership is
+    # read from the tool's signature — important for stateless per-request servers.
+    server = FastMCP("v2-ctx-owner")
+
+    @server.tool
+    def summarize(text: str, context: str) -> str:
+        return f"{text}|ctx={context}"
+
+    client = FakeClient()
+    instrument(server, client)
+
+    out = await _call(
+        server, "summarize", {"text": "hi", "context": "the user's real context"}
+    )
+    await _flush()
+
+    assert out.root.isError is False
+    texts = [c.text for c in out.root.content if getattr(c, "type", None) == "text"]
+    assert any("ctx=the user's real context" in t for t in texts)
 
 
 async def test_jlowin_report_missing_advertises_get_more_tools():

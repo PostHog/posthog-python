@@ -1,6 +1,5 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
-
 import pytest
 
 import mcp.types as mcp_types
