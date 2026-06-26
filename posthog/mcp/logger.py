@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+__all__ = ["set_logger"]
+
 LoggerFn = Callable[[str], None]
 
 _active_logger: Optional[LoggerFn] = None

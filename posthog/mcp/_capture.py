@@ -11,10 +11,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Coroutine, Dict, Optional
 
-from .event_types import MCPAnalyticsEventType
-from .internal import MCPAnalyticsData
+from ._event_types import MCPAnalyticsEventType
+from ._internal import MCPAnalyticsData
 from .logger import log
-from .sink import McpCaptureOptions
+from ._sink import McpCaptureOptions
 from .version import __version__
 
 

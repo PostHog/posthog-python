@@ -13,7 +13,7 @@ import copy
 from typing import Any, Dict, Optional, Tuple
 
 from .constants import DEFAULT_CONVERSATION_ID_DESCRIPTION
-from .ids import _uuid7
+from ._ids import _uuid7
 from .logger import log
 
 CONVERSATION_ID_PARAM_NAME = "conversation_id"

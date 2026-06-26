@@ -19,11 +19,11 @@ from typing import List, Optional, Tuple
 
 from posthog.client import Client
 
-from .ids import _uuid7, new_prefixed_id
+from ._ids import _uuid7, new_prefixed_id
 from .logger import log
-from .posthog_events import PostHogCaptureEvent, build_posthog_capture_events
-from .sanitization import sanitize_event
-from .truncation import truncate_event
+from ._posthog_events import PostHogCaptureEvent, build_posthog_capture_events
+from ._sanitization import sanitize_event
+from ._truncation import truncate_event
 from .types import BeforeSendFn, Event, McpEvent
 
 

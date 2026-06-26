@@ -9,6 +9,12 @@ which is 3.11+) so they work on the repo's minimum Python 3.10 and read the same
 way as the TypeScript const objects: ``PostHogMCPAnalyticsEvent.TOOL_CALL``.
 """
 
+__all__ = [
+    "POSTHOG_MCP_ANALYTICS_SOURCE",
+    "PostHogMCPAnalyticsEvent",
+    "PostHogMCPAnalyticsProperty",
+]
+
 INACTIVITY_TIMEOUT_IN_MINUTES = 30
 
 DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (

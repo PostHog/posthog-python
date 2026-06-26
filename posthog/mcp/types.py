@@ -21,6 +21,14 @@ from typing import Any, Awaitable, Callable, Dict, Optional, TypedDict, Union
 
 from .logger import LoggerFn
 
+__all__ = [
+    "MCPAnalyticsOptions",
+    "MCPAnalyticsContextOptions",
+    "UserIdentity",
+    "CaptureEventData",
+    "PreparedToolCall",
+]
+
 JsonRecord = Dict[str, Any]
 
 # PostHog error-tracking properties (the ``$exception_list`` / ``$exception_level`` shape).

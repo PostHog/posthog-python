@@ -30,7 +30,7 @@ class FakeClient:
 
 async def flush_background():
     """Let fire-and-forget capture tasks run to completion."""
-    import posthog.mcp.instrumentation as instr
+    import posthog.mcp._instrumentation as instr
 
     for _ in range(10):
         await asyncio.sleep(0)

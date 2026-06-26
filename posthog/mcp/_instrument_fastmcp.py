@@ -26,17 +26,17 @@ from typing import Any, Dict, Optional, Tuple
 
 import mcp.types as mcp_types
 
-from .context_parameters import (
+from ._context_parameters import (
     add_context_parameter_to_schema,
     get_context_description,
     is_context_enabled,
 )
-from .conversation_id import (
+from ._conversation_id import (
     add_conversation_id_to_schema,
     build_prompt_back,
     resolve_conversation_id,
 )
-from .instrumentation import (
+from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
     build_tool_call_request,
@@ -48,7 +48,7 @@ from .instrumentation import (
     record_tools_list,
     request_to_dict,
 )
-from .internal import MCPAnalyticsData
+from ._internal import MCPAnalyticsData
 from .logger import log
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,

@@ -192,7 +192,7 @@ def test_drain_pending_sync_waits_for_background_futures():
     # No running loop here (a plain sync test), so fire_and_forget schedules on the
     # shared background loop as a concurrent.futures.Future — which drain_pending()
     # used to skip. drain_pending_sync must block until it completes.
-    import posthog.mcp.instrumentation as instr
+    import posthog.mcp._instrumentation as instr
 
     done = []
 
@@ -236,7 +236,7 @@ def test_posthogmcp_usable_without_mcp_sdk():
 
 
 async def test_instrument_canonicalizes_wrapper_and_underlying_server():
-    from posthog.mcp.internal import get_server_tracking_data
+    from posthog.mcp._internal import get_server_tracking_data
 
     server = FastMCP("canon")
 
@@ -304,7 +304,7 @@ async def test_initialize_carries_identity_when_identify_resolves():
 
 def test_posthogmcp_can_disable_exception_fanout():
     # #5: mcp_exception_autocapture=False -> a failed tool call emits no $exception.
-    import posthog.mcp.instrumentation as instr
+    import posthog.mcp._instrumentation as instr
 
     client = PostHogMCP("phc_test", mcp_exception_autocapture=False)
     captured = []

@@ -7,17 +7,17 @@ from posthog.mcp.constants import (
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
-from posthog.mcp.event_types import MCPAnalyticsEventType
-from posthog.mcp.exceptions import capture_exception
-from posthog.mcp.ids import deterministic_prefixed_id, new_prefixed_id
-from posthog.mcp.posthog_events import build_posthog_capture_events
-from posthog.mcp.sanitization import (
+from posthog.mcp._event_types import MCPAnalyticsEventType
+from posthog.mcp._exceptions import capture_exception
+from posthog.mcp._ids import deterministic_prefixed_id, new_prefixed_id
+from posthog.mcp._posthog_events import build_posthog_capture_events
+from posthog.mcp._sanitization import (
     build_captured_mcp_parameters,
     sanitize_captured_value,
     sanitize_event,
 )
-from posthog.mcp.sink import McpCaptureOptions, process_mcp_event
-from posthog.mcp.truncation import MAX_EVENT_BYTES, normalize, truncate_event
+from posthog.mcp._sink import McpCaptureOptions, process_mcp_event
+from posthog.mcp._truncation import MAX_EVENT_BYTES, normalize, truncate_event
 
 # --- ids ---------------------------------------------------------------------
 

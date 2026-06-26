@@ -28,15 +28,15 @@ from typing import Any, Optional
 
 from posthog.client import Client
 
-from .capture import capture_event
+from ._capture import capture_event
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
-from .event_types import MCPAnalyticsEventType
-from .instrumentation import drain_pending
-from .internal import (
+from ._event_types import MCPAnalyticsEventType
+from ._instrumentation import drain_pending
+from ._internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
     set_server_tracking_data,
@@ -44,7 +44,7 @@ from .internal import (
 from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
 from .session import derive_session_id_from_mcp_session, new_session_id
-from .sink import McpEventSink
+from ._sink import McpEventSink
 from .tools import get_more_tools_result
 from .types import (
     CaptureEventData,
@@ -196,9 +196,9 @@ def instrument(
             "(PostHogMCP for custom dispatchers works without it.)"
         )
     _warn_if_unsupported_mcp_version()
-    from .compatibility import is_fastmcp, is_fastmcp_v2, is_low_level_server
-    from .instrument_fastmcp import instrument_fastmcp
-    from .instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
+    from ._compatibility import is_fastmcp, is_fastmcp_v2, is_low_level_server
+    from ._instrument_fastmcp import instrument_fastmcp
+    from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
 
     key = _canonical_server(server)
 

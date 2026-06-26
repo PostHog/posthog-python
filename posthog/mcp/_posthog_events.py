@@ -15,7 +15,7 @@ from .constants import (
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
-from .event_types import MCPAnalyticsEventType
+from ._event_types import MCPAnalyticsEventType
 from .types import Event, PostHogCaptureEvent
 
 _BUILT_IN_EVENT_NAME_BY_TYPE = {

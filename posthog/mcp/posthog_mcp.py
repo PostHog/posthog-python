@@ -16,21 +16,23 @@ from typing import Any, Dict, List, Optional, Union
 
 from posthog.client import Client
 
-from .context_parameters import (
+from ._context_parameters import (
     add_context_parameter_to_schema,
     get_context_description,
     is_context_enabled,
 )
-from .event_types import MCPAnalyticsEventType
-from .exceptions import capture_exception
-from .instrumentation import drain_pending_sync, fire_and_forget
-from .sink import McpCaptureOptions, McpEventSink
+from ._event_types import MCPAnalyticsEventType
+from ._exceptions import capture_exception
+from ._instrumentation import drain_pending_sync, fire_and_forget
+from ._sink import McpCaptureOptions, McpEventSink
 from .tools import build_report_missing_descriptor
 from .types import (
     JsonRecord,
     MCPAnalyticsContextOptions,
     PreparedToolCall,
 )
+
+__all__ = ["PostHogMCP"]
 
 _GET_MORE_TOOLS_NAME = "get_more_tools"
 

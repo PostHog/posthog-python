@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
-from .ids import deterministic_prefixed_id, new_prefixed_id
-from .internal import MCPAnalyticsData
+from ._ids import deterministic_prefixed_id, new_prefixed_id
+from ._internal import MCPAnalyticsData
+
+__all__ = ["derive_session_id_from_mcp_session"]
 
 
 def new_session_id() -> str:

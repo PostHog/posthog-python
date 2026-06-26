@@ -15,13 +15,13 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
-from .capture import capture_event
-from .event_types import MCPAnalyticsEventType
-from .exceptions import capture_exception
-from .intent import resolve_tool_call_intent, set_event_intent
-from .internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._capture import capture_event
+from ._event_types import MCPAnalyticsEventType
+from ._exceptions import capture_exception
+from ._intent import resolve_tool_call_intent, set_event_intent
+from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
 from .logger import log
-from .sanitization import build_captured_mcp_parameters
+from ._sanitization import build_captured_mcp_parameters
 from .session import resolve_session_id
 
 # Keep strong refs to in-flight capture tasks/futures so they aren't GC'd mid-flight,

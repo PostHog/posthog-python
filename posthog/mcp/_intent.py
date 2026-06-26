@@ -11,8 +11,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional, Tuple
 
-from .context_parameters import is_context_enabled
-from .internal import MCPAnalyticsData, _maybe_await
+from ._context_parameters import is_context_enabled
+from ._internal import MCPAnalyticsData, _maybe_await
 from .logger import log
 
 # (intent, source)

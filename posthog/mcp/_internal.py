@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from .logger import log
-from .sink import McpEventSink
+from ._sink import McpEventSink
 from .types import MCPAnalyticsOptions, UserIdentity
 
 
@@ -163,7 +163,7 @@ async def handle_identify(
         data.identified_sessions.set(session_id, merged)
 
         if has_changed:
-            from .event_types import MCPAnalyticsEventType
+            from ._event_types import MCPAnalyticsEventType
 
             log(f"Identified session {session_id}")
             return {
