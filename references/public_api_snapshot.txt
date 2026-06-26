@@ -313,6 +313,19 @@ alias posthog.inner_set_context_session -> posthog.contexts.set_context_session
 alias posthog.inner_tag -> posthog.contexts.tag
 alias posthog.integrations.django.Client -> posthog.client.Client
 alias posthog.integrations.django.contexts -> posthog.contexts
+alias posthog.mcp.CaptureEventData -> posthog.mcp.types.CaptureEventData
+alias posthog.mcp.MCPAnalyticsContextOptions -> posthog.mcp.types.MCPAnalyticsContextOptions
+alias posthog.mcp.MCPAnalyticsOptions -> posthog.mcp.types.MCPAnalyticsOptions
+alias posthog.mcp.POSTHOG_MCP_ANALYTICS_SOURCE -> posthog.mcp.constants.POSTHOG_MCP_ANALYTICS_SOURCE
+alias posthog.mcp.PostHogMCP -> posthog.mcp.posthog_mcp.PostHogMCP
+alias posthog.mcp.PostHogMCPAnalyticsEvent -> posthog.mcp.constants.PostHogMCPAnalyticsEvent
+alias posthog.mcp.PostHogMCPAnalyticsProperty -> posthog.mcp.constants.PostHogMCPAnalyticsProperty
+alias posthog.mcp.PreparedToolCall -> posthog.mcp.types.PreparedToolCall
+alias posthog.mcp.UserIdentity -> posthog.mcp.types.UserIdentity
+alias posthog.mcp.__version__ -> posthog.mcp.version.__version__
+alias posthog.mcp.derive_session_id_from_mcp_session -> posthog.mcp.session.derive_session_id_from_mcp_session
+alias posthog.mcp.get_more_tools_result -> posthog.mcp.tools.get_more_tools_result
+alias posthog.mcp.set_logger -> posthog.mcp.logger.set_logger
 alias posthog.request.VERSION -> posthog.version.VERSION
 alias posthog.request.remove_trailing_slash -> posthog.utils.remove_trailing_slash
 alias posthog.set_socket_options -> posthog.request.set_socket_options
@@ -611,6 +624,57 @@ attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = Tr
 attribute posthog.integrations.django.PosthogContextMiddleware.tag_map = cast('Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]', settings.POSTHOG_MW_TAG_MAP)
 attribute posthog.is_server = True
 attribute posthog.log_captured_exceptions = False
+attribute posthog.mcp.constants.POSTHOG_MCP_ANALYTICS_SOURCE = 'posthog_mcp_analytics'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.CUSTOM = '$mcp_custom'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.EXCEPTION = '$exception'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.IDENTIFY = '$identify'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.INITIALIZE = '$mcp_initialize'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.MISSING_CAPABILITY = '$mcp_missing_capability'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.PROMPTS_LIST = '$mcp_prompts_list'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.PROMPT_GET = '$mcp_prompt_get'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.RESOURCES_LIST = '$mcp_resources_list'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.RESOURCE_READ = '$mcp_resource_read'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.TOOLS_LIST = '$mcp_tools_list'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.TOOL_CALL = '$mcp_tool_call'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CLIENT_NAME = '$mcp_client_name'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CLIENT_VERSION = '$mcp_client_version'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CONVERSATION_ID = '$mcp_conversation_id'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.DURATION_MS = '$mcp_duration_ms'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTENT = '$mcp_intent'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTENT_SOURCE = '$mcp_intent_source'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.IS_ERROR = '$mcp_is_error'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.LISTED_TOOL_NAMES = '$mcp_listed_tool_names'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.PARAMETERS = '$mcp_parameters'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.RESOURCE_NAME = '$mcp_resource_name'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.RESPONSE = '$mcp_response'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SERVER_NAME = '$mcp_server_name'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SERVER_VERSION = '$mcp_server_version'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SESSION_ID = '$session_id'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SOURCE = '$mcp_source'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_CATEGORY = '$mcp_tool_category'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_DESCRIPTION = '$mcp_tool_description'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_NAME = '$mcp_tool_name'
+attribute posthog.mcp.types.CaptureEventData.event: str
+attribute posthog.mcp.types.CaptureEventData.properties: Optional[JsonRecord] = None
+attribute posthog.mcp.types.MCPAnalyticsContextOptions.description: Optional[str] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.before_send: Optional[BeforeSendFn] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.context: Union[bool, MCPAnalyticsContextOptions] = True
+attribute posthog.mcp.types.MCPAnalyticsOptions.enable_conversation_id: bool = False
+attribute posthog.mcp.types.MCPAnalyticsOptions.enable_exception_autocapture: bool = True
+attribute posthog.mcp.types.MCPAnalyticsOptions.event_properties: Optional[EventPropertiesFn] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.identify: Optional[Union[IdentifyFn, UserIdentity]] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.intent_fallback: Optional[IntentFallbackFn] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.logger: Optional[LoggerFn] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.missing_capability_tool_name: Optional[str] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.report_missing: bool = False
+attribute posthog.mcp.types.PreparedToolCall.args: Optional[JsonRecord] = None
+attribute posthog.mcp.types.PreparedToolCall.intent: Optional[str] = None
+attribute posthog.mcp.types.PreparedToolCall.intent_source: Optional[str] = None
+attribute posthog.mcp.types.PreparedToolCall.is_missing_capability: bool = False
+attribute posthog.mcp.types.UserIdentity.distinct_id: str
+attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
+attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
+attribute posthog.mcp.version.__version__ = '0.1.0'
 attribute posthog.on_error = None
 attribute posthog.personal_api_key = None
 attribute posthog.poll_interval = 30
@@ -776,6 +840,15 @@ class posthog.flag_definition_cache.FlagDefinitionCacheData
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
+class posthog.mcp.McpAnalytics(key: Any)
+class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
+class posthog.mcp.constants.PostHogMCPAnalyticsProperty 
+class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, mcp_exception_autocapture: bool = True, **kwargs: Any)
+class posthog.mcp.types.CaptureEventData(event: str, properties: Optional[JsonRecord] = None)
+class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
+class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = False, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None)
+class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False)
+class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
 class posthog.poller.Poller(interval, execute, *args, **kwargs)
 class posthog.request.APIError(status: Union[int, str], message: str, retry_after: Optional[float] = None)
 class posthog.request.DatetimeSerializer 
@@ -961,6 +1034,10 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.join() -> None
 function posthog.load_feature_flags()
+function posthog.mcp.instrument(server: Any, posthog_client: Optional[Client] = None, options: Optional[MCPAnalyticsOptions] = None) -> McpAnalytics
+function posthog.mcp.logger.set_logger(logger: Optional[LoggerFn]) -> None
+function posthog.mcp.session.derive_session_id_from_mcp_session(mcp_session_id: str) -> str
+function posthog.mcp.tools.get_more_tools_result() -> Dict[str, Any]
 function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
 function posthog.request.determine_server_host(host: Optional[str]) -> str
@@ -1148,6 +1225,16 @@ method posthog.integrations.django.PosthogContextMiddleware.aextract_tags(reques
 method posthog.integrations.django.PosthogContextMiddleware.extract_request_user(request)
 method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request)
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
+method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None) -> None
+method posthog.mcp.McpAnalytics.flush() -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_initialize(*, client_name: Optional[str] = None, client_version: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_missing_capability(*, context: Optional[str] = None, parameters: Any = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_tool_call(tool_name: str, *, intent: Optional[str] = None, intent_source: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, category: Optional[str] = None, tool_description: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_tools_list(*, tool_names: Optional[List[str]] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.flush(timeout_seconds: Optional[float] = 10) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_call(name: str, args: Optional[JsonRecord] = None) -> PreparedToolCall
+method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_list(tools: List[Any], context: Union[bool, MCPAnalyticsContextOptions] = True, report_missing: bool = False) -> List[Any]
+method posthog.mcp.posthog_mcp.PostHogMCP.shutdown() -> None
 method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
 method posthog.request.DatetimeSerializer.default(obj: Any)
@@ -1220,6 +1307,14 @@ module posthog.flag_definition_cache
 module posthog.integrations
 module posthog.integrations.celery
 module posthog.integrations.django
+module posthog.mcp
+module posthog.mcp.constants
+module posthog.mcp.logger
+module posthog.mcp.posthog_mcp
+module posthog.mcp.session
+module posthog.mcp.tools
+module posthog.mcp.types
+module posthog.mcp.version
 module posthog.poller
 module posthog.request
 module posthog.types
