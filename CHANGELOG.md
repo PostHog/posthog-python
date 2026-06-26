@@ -1,5 +1,11 @@
 # posthog
 
+## 7.21.0 — 2026-06-26
+
+### Minor changes
+
+- [888a725](https://github.com/posthog/posthog-python/commit/888a7251f412328d59c9fc35c4c9b4b0c10fa55d) Add `posthog.mcp`, a Python SDK for PostHog MCP analytics (just `pip install posthog`; the MCP SDK is a peer dependency of `instrument()`, not bundled). `instrument(server, posthog_client)` wraps a `FastMCP` or low-level `mcp.server.Server` so every tool call, agent intent, tools/list, initialize, and failure is captured to PostHog as a `$mcp_*` event. Also adds `PostHogMCP`, a `Client` subclass for custom dispatchers (needs nothing beyond posthog), plus opt-in `context` intent capture, `identify`, `report_missing` (`get_more_tools`), and `conversation_id`. Beta. — Thanks @lucasheriques for your first contribution 🎉!
+
 ## 7.20.5 — 2026-06-24
 
 ### Patch changes
