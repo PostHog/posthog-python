@@ -215,7 +215,6 @@ alias posthog.ai.utils.tag -> posthog.tag
 alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
-alias posthog.capture_v1.guess_timezone -> posthog.utils.guess_timezone
 alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.client.APIError -> posthog.request.APIError
 alias posthog.client.CaptureMode -> posthog.capture_mode.CaptureMode

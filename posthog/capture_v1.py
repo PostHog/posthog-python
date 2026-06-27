@@ -19,10 +19,11 @@ encodes:
   ``PostHog-Sdk-Info`` header and are stripped from v1 properties.
 """
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from posthog.utils import guess_timezone
+from posthog.utils import guess_timezone as _guess_timezone
 
 CAPTURE_V1_PATH = "/i/v1/analytics/events"
 
@@ -44,15 +45,6 @@ RESULT_RETRY = "retry"
 # retried) — the backend signals overload via retryable 5xx + Retry-After.
 RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
 TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
-
-# Sentinel properties lifted into the typed `options` object, with the rename to
-# the backend's field name and the coercion enforcing its strict type.
-_OPTION_SENTINELS: tuple[tuple[str, str, Any], ...] = (
-    ("$cookieless_mode", "cookieless_mode", "_coerce_bool"),
-    ("$ignore_sent_at", "disable_skew_correction", "_coerce_bool"),
-    ("$product_tour_id", "product_tour_id", "_coerce_str"),
-    ("$process_person_profile", "process_person_profile", "_coerce_bool"),
-)
 
 # Sentinel properties lifted to top-level string fields on the event.
 _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
@@ -94,7 +86,17 @@ def _coerce_str(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
-_COERCERS = {"_coerce_bool": _coerce_bool, "_coerce_str": _coerce_str}
+# Sentinel properties lifted into the typed `options` object: legacy property
+# key, the backend's field name, and the coercer enforcing its strict type
+# (wrong JSON types fail deserialization of the whole batch, so a value that
+# won't coerce is omitted). The coercer is stored directly to keep the dispatch
+# type-checked rather than keyed by a stringly-typed name.
+_OPTION_SENTINELS: tuple[tuple[str, str, Callable[[Any], Any]], ...] = (
+    ("$cookieless_mode", "cookieless_mode", _coerce_bool),
+    ("$ignore_sent_at", "disable_skew_correction", _coerce_bool),
+    ("$product_tour_id", "product_tour_id", _coerce_str),
+    ("$process_person_profile", "process_person_profile", _coerce_bool),
+)
 
 
 def _v1_timestamp(timestamp: Any) -> str:
@@ -109,7 +111,7 @@ def _v1_timestamp(timestamp: Any) -> str:
     if timestamp is None:
         return datetime.now(timezone.utc).isoformat()
     if isinstance(timestamp, datetime):
-        return guess_timezone(timestamp).isoformat()
+        return _guess_timezone(timestamp).isoformat()
     return timestamp
 
 
@@ -138,12 +140,12 @@ def to_v1_event(msg: dict) -> dict:
         properties.pop(key, None)
 
     options: dict[str, Any] = {}
-    for prop_key, wire_key, coercer_name in _OPTION_SENTINELS:
+    for prop_key, wire_key, coercer in _OPTION_SENTINELS:
         if prop_key not in properties:
             continue
         # Always removed from properties — these sentinels must never reach v1
         # backend properties — but only emitted as an option when coercible.
-        coerced = _COERCERS[coercer_name](properties.pop(prop_key))
+        coerced = coercer(properties.pop(prop_key))
         if coerced is not None:
             options[wire_key] = coerced
 
