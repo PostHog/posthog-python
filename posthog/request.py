@@ -227,6 +227,7 @@ def post(
     gzip: bool = False,
     timeout: int = 15,
     session: Optional[requests.Session] = None,
+    api_key_field: str = "api_key",
     **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the API"""
@@ -235,7 +236,7 @@ def post(
     body["sent_at"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + cast(str, path)
-    body["api_key"] = api_key
+    body[api_key_field] = api_key
     data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
     log.debug("making request: %s to url: %s", data, url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
@@ -321,6 +322,7 @@ def flags(
         gzip,
         timeout,
         session=_get_flags_session(),
+        api_key_field="token",
         **kwargs,
     )
     return _process_response(

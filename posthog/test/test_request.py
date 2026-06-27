@@ -85,6 +85,18 @@ def test_post_sends_snake_case_sent_at(key, expected_present):
     assert (key in data) is expected_present
 
 
+def test_flags_request_uses_token_field_for_project_api_key():
+    mock_response = mock.MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"featureFlags": {}}
+
+    with mock.patch.object(request_module, "post", return_value=mock_response) as mock_post:
+        flags(TEST_API_KEY, host="https://test.posthog.com", distinct_id="user_1")
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["api_key_field"] == "token"
+
+
 def test_message_only_debug_logs_include_posthog_prefix():
     mock_response = requests.Response()
     mock_response.status_code = 200
