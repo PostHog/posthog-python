@@ -4,6 +4,7 @@
 # members. Modules with __all__ use it; other modules include non-underscore
 # names. External imports are excluded.
 alias posthog.BeforeSendCallback -> posthog.types.BeforeSendCallback
+alias posthog.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.Client -> posthog.client.Client
 alias posthog.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 alias posthog.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -216,6 +217,7 @@ alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.Fe
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
 alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.client.APIError -> posthog.request.APIError
+alias posthog.client.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.client.Consumer -> posthog.consumer.Consumer
 alias posthog.client.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 alias posthog.client.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -275,6 +277,7 @@ alias posthog.client.normalize_host -> posthog.request.normalize_host
 alias posthog.client.remote_config -> posthog.request.remote_config
 alias posthog.client.reset_sessions -> posthog.request.reset_sessions
 alias posthog.client.resolve_bucketing_value -> posthog.feature_flags.resolve_bucketing_value
+alias posthog.client.resolve_capture_mode -> posthog.capture_mode.resolve_capture_mode
 alias posthog.client.system_context -> posthog.utils.system_context
 alias posthog.client.to_flags_and_payloads -> posthog.types.to_flags_and_payloads
 alias posthog.client.to_payloads -> posthog.types.to_payloads
@@ -282,6 +285,7 @@ alias posthog.client.to_values -> posthog.types.to_values
 alias posthog.client.try_attach_code_variables_to_frames -> posthog.exception_utils.try_attach_code_variables_to_frames
 alias posthog.consumer.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.consumer.APIError -> posthog.request.APIError
+alias posthog.consumer.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.consumer.DatetimeSerializer -> posthog.request.DatetimeSerializer
 alias posthog.consumer.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
 alias posthog.consumer.batch_post -> posthog.request.batch_post
@@ -471,8 +475,13 @@ attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
 attribute posthog.bucketed_rate_limiter.log = logging.getLogger('posthog')
 attribute posthog.capture_exception_code_variables = False
+attribute posthog.capture_mode.CAPTURE_MODE_ENV_VAR = 'POSTHOG_CAPTURE_MODE'
+attribute posthog.capture_mode.CaptureMode.V0 = 'v0'
+attribute posthog.capture_mode.CaptureMode.V1 = 'v1'
+attribute posthog.capture_mode.log = logging.getLogger('posthog')
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
+attribute posthog.client.Client.capture_mode = resolve_capture_mode(capture_mode)
 attribute posthog.client.Client.code_variables_detect_secrets = code_variables_detect_secrets if code_variables_detect_secrets is not None else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 attribute posthog.client.Client.code_variables_ignore_patterns = code_variables_ignore_patterns if code_variables_ignore_patterns is not None else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 attribute posthog.client.Client.code_variables_mask_patterns = code_variables_mask_patterns if code_variables_mask_patterns is not None else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
@@ -524,6 +533,7 @@ attribute posthog.code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_M
 attribute posthog.consumer.AI_MAX_MSG_SIZE = 8 * 1024 * 1024
 attribute posthog.consumer.BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 attribute posthog.consumer.Consumer.api_key = api_key
+attribute posthog.consumer.Consumer.capture_mode = capture_mode
 attribute posthog.consumer.Consumer.daemon = True
 attribute posthog.consumer.Consumer.dedicated_ai_endpoint = dedicated_ai_endpoint
 attribute posthog.consumer.Consumer.flush_at = flush_at
@@ -826,8 +836,9 @@ class posthog.ai.types.ToolInProgress
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, _dedicated_ai_endpoint=False)
-class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False)
+class posthog.capture_mode.CaptureMode 
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, _dedicated_ai_endpoint=False)
+class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False, capture_mode=CaptureMode.V0)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
@@ -949,6 +960,7 @@ function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mo
 function posthog.alias(previous_id: str, distinct_id: str, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
 function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+function posthog.capture_mode.resolve_capture_mode(capture_mode: Optional[Union[CaptureMode, str]] = None) -> CaptureMode
 function posthog.client.add_context_tags(properties)
 function posthog.client.get_identity_state(passed) -> tuple[str, bool]
 function posthog.client.no_throw(default_return=None)
@@ -1296,6 +1308,7 @@ module posthog.ai.types
 module posthog.ai.utils
 module posthog.args
 module posthog.bucketed_rate_limiter
+module posthog.capture_mode
 module posthog.client
 module posthog.consumer
 module posthog.contexts

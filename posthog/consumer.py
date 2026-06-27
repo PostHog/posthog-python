@@ -5,6 +5,7 @@ import time
 from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
+from posthog.capture_mode import CaptureMode
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
@@ -50,6 +51,7 @@ class Consumer(Thread):
         timeout=15,
         historical_migration=False,
         dedicated_ai_endpoint=False,
+        capture_mode=CaptureMode.V0,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -63,6 +65,7 @@ class Consumer(Thread):
         self.queue = queue
         self.gzip = gzip
         self.dedicated_ai_endpoint = dedicated_ai_endpoint
+        self.capture_mode = capture_mode
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
