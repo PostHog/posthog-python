@@ -21,28 +21,36 @@ encodes:
 The response is per-event: a 200 carries a ``results`` map keyed by event uuid,
 each tagged ``ok``/``warning`` (terminal-success), ``drop`` (terminal-failure),
 or ``retry``. :func:`send_v1_batch` resends only the ``retry`` events on the next
-attempt (a stable ``PostHog-Request-Id`` and ``created_at`` across attempts; an
-incrementing ``PostHog-Attempt``), logs drops, and raises a
-:class:`CaptureV1Error` on batch-level/terminal failure or retry exhaustion so
-the consumer's existing ``on_error(exc, batch)`` path fires unchanged.
+attempt, holding the ``PostHog-Request-Id`` and batch ``created_at`` stable
+across attempts while incrementing ``PostHog-Attempt``. ``ok``/``warning``/absent
+events succeed; ``drop`` and retry-exhaustion are carried on the
+:class:`CaptureV1Error` raised on batch-level/terminal failure, so the consumer's
+existing ``on_error(exc, batch)`` path surfaces them unchanged (no per-event
+logging of its own).
+
+Request bodies are optionally compressed per :class:`~posthog.capture_compression.CaptureCompression`
+(``gzip`` or zlib-wrapped ``deflate``), advertised via ``Content-Encoding``.
 """
 
 import json
 import logging
 import time
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import TYPE_CHECKING, Any, Optional, cast
+from gzip import GzipFile
+from io import BytesIO
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
+from posthog.capture_compression import CaptureCompression
 from posthog.request import (
     DatetimeSerializer,
     USER_AGENT,
     APIError,
     _get_session,
-    gzip_compress,
     normalize_host,
 )
 from posthog.utils import guess_timezone as _guess_timezone, remove_trailing_slash
@@ -202,15 +210,19 @@ def _to_v1_event(msg: dict) -> dict:
 
 
 def _build_v1_batch_body(
-    events: list[dict], historical_migration: bool = False
+    events: list[dict],
+    historical_migration: bool = False,
+    created_at: Optional[str] = None,
 ) -> dict:
     """Assemble the v1 batch envelope.
 
     Carries no ``api_key`` (Bearer auth) and no ``sent_at``.
     ``historical_migration`` is omitted when False (the server defaults it).
+    ``created_at`` defaults to now in UTC; :func:`send_v1_batch` passes a value
+    hoisted once so it stays stable across retry attempts.
     """
     body: dict[str, Any] = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": created_at or datetime.now(timezone.utc).isoformat(),
         "batch": events,
     }
     if historical_migration:
@@ -291,6 +303,27 @@ def _parse_retry_after(header_value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _compress_v1(
+    compression: CaptureCompression, data: str
+) -> tuple[str | bytes, Optional[str]]:
+    """Compress a v1 request body, returning ``(body, Content-Encoding token)``.
+
+    ``GZIP`` emits a gzip stream; ``DEFLATE`` emits a *zlib-wrapped* deflate
+    stream (RFC 1950, leading ``0x78``) to match posthog-go / posthog-rs and the
+    server's zlib decoder for ``Content-Encoding: deflate`` — raw, headerless
+    deflate would be misrouted. ``NONE`` returns the string body and no token.
+    """
+    if compression == CaptureCompression.GZIP:
+        buf = BytesIO()
+        with GzipFile(fileobj=buf, mode="w") as gz:
+            # `data` is produced by json.dumps(), whose default encoding is utf-8.
+            gz.write(data.encode("utf-8"))
+        return buf.getvalue(), "gzip"
+    if compression == CaptureCompression.DEFLATE:
+        return zlib.compress(data.encode("utf-8")), "deflate"
+    return data, None
+
+
 def post_v1(
     api_key: str,
     host: Optional[str],
@@ -298,7 +331,7 @@ def post_v1(
     *,
     attempt: int,
     request_id: str,
-    gzip: bool = False,
+    compression: CaptureCompression = CaptureCompression.NONE,
     timeout: int = 15,
     session: Optional["requests.Session"] = None,
 ) -> "requests.Response":
@@ -307,11 +340,13 @@ def post_v1(
     Bearer-authed (no ``api_key`` in the body) with the required v1 headers.
     ``attempt`` (1-based) and the stable ``request_id`` are echoed via
     ``PostHog-Attempt``/``PostHog-Request-Id`` so the backend can correlate
-    retries. Returns the raw response; classification is left to the caller.
+    retries. The body is compressed per ``compression`` (advertised via
+    ``Content-Encoding``). Returns the raw response; classification is left to
+    the caller.
     """
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + _CAPTURE_V1_PATH
-    data: str | bytes = json.dumps(batch_body, cls=DatetimeSerializer)
+    data = json.dumps(batch_body, cls=DatetimeSerializer)
     headers = {
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
@@ -321,13 +356,13 @@ def post_v1(
         _HEADER_REQUEST_ID: request_id,
         _HEADER_REQUEST_TIMESTAMP: datetime.now(timezone.utc).isoformat(),
     }
-    if gzip:
-        headers["Content-Encoding"] = "gzip"
-        data = gzip_compress(cast(str, data))
+    body, encoding = _compress_v1(compression, data)
+    if encoding is not None:
+        headers["Content-Encoding"] = encoding
 
     log.debug("capture v1 POST %s attempt=%s request_id=%s", url, attempt, request_id)
     return (session or _get_session()).post(
-        url, data=data, headers=headers, timeout=timeout
+        url, data=body, headers=headers, timeout=timeout
     )
 
 
@@ -410,7 +445,7 @@ def send_v1_batch(
     host: Optional[str],
     batch: list[dict],
     *,
-    gzip: bool = False,
+    compression: CaptureCompression = CaptureCompression.NONE,
     timeout: int = 15,
     max_retries: int = 3,
     historical_migration: bool = False,
@@ -420,13 +455,19 @@ def send_v1_batch(
 
     The v1 sibling of ``Consumer._send``: it loops up to ``max_retries + 1``
     attempts, but unlike v0 it shrinks the batch to only the events the server
-    tagged ``retry`` after each 2xx. ``ok``/``warning``/absent events succeed
-    silently; ``drop`` events are logged (a successful request that the server
-    chose to drop is not a delivery failure). Raises :class:`CaptureV1Error`
-    (or the underlying transport exception) on a batch-level terminal/transport
-    failure or once retries are exhausted, so the caller's ``on_error`` fires.
+    tagged ``retry`` after each 2xx. ``ok``/``warning``/absent events succeed; a
+    server-chosen ``drop`` on an otherwise-successful request is not a delivery
+    failure, so it is not raised or logged per-event (the DEBUG summary tallies
+    it). Raises :class:`CaptureV1Error` (or the underlying transport exception)
+    on a batch-level terminal/transport failure or once retries are exhausted —
+    carrying any ``drops`` and exhausted uuids — so the caller's ``on_error``
+    fires unchanged. ``request_id`` and the batch ``created_at`` are stable
+    across attempts; ``PostHog-Attempt`` increments.
     """
     request_id = str(uuid4())
+    # Hoisted once so the batch envelope is byte-identical across retry attempts
+    # (only the events list shrinks and the attempt header increments).
+    created_at = datetime.now(timezone.utc).isoformat()
     pending_events = [_to_v1_event(m) for m in batch]
     pending_uuids = [e["uuid"] for e in pending_events]
     last_exc: Optional[Exception] = None
@@ -434,7 +475,9 @@ def send_v1_batch(
     for attempt_index in range(max_retries + 1):
         attempt = attempt_index + 1
         last_attempt = attempt_index == max_retries
-        body = _build_v1_batch_body(pending_events, historical_migration)
+        body = _build_v1_batch_body(
+            pending_events, historical_migration, created_at=created_at
+        )
 
         try:
             res = post_v1(
@@ -443,7 +486,7 @@ def send_v1_batch(
                 body,
                 attempt=attempt,
                 request_id=request_id,
-                gzip=gzip,
+                compression=compression,
                 timeout=timeout,
                 session=session,
             )
@@ -482,14 +525,6 @@ def send_v1_batch(
                 elif directive.result == _RESULT_DROP:
                     drops.append((uid, directive.details))
                 # ok / warning / unrecognized -> terminal success.
-
-            for uid, details in drops:
-                log.warning(
-                    "capture v1 dropped event uuid=%s request_id=%s details=%s",
-                    uid,
-                    request_id,
-                    details or "",
-                )
 
             if not retry_uuids:
                 return

@@ -1,10 +1,12 @@
 import json
 import unittest
+import zlib
 from datetime import datetime, timezone
 from unittest import mock
 
 from parameterized import parameterized
 
+from posthog.capture_compression import CaptureCompression
 from posthog.capture_v1 import (
     _CAPTURE_V1_PATH,
     _HEADER_ATTEMPT,
@@ -72,7 +74,7 @@ class _PostV1Stub:
         *,
         attempt,
         request_id,
-        gzip=False,
+        compression=CaptureCompression.NONE,
         timeout=15,
         session=None,
     ):
@@ -80,6 +82,8 @@ class _PostV1Stub:
             {
                 "attempt": attempt,
                 "request_id": request_id,
+                "compression": compression,
+                "created_at": batch_body["created_at"],
                 "uuids": [e["uuid"] for e in batch_body["batch"]],
             }
         )
@@ -347,6 +351,12 @@ class TestBuildV1BatchBody(unittest.TestCase):
         parsed = datetime.fromisoformat(body["created_at"])
         self.assertIsNotNone(parsed.tzinfo)
 
+    def test_created_at_passthrough_used_verbatim(self) -> None:
+        # send_v1_batch hoists created_at and passes it in so it stays stable
+        # across retry attempts.
+        body = _build_v1_batch_body([], created_at="2026-06-27T12:00:00+00:00")
+        self.assertEqual(body["created_at"], "2026-06-27T12:00:00+00:00")
+
     def test_historical_migration_omitted_when_false(self) -> None:
         self.assertNotIn("historical_migration", _build_v1_batch_body([]))
 
@@ -389,15 +399,26 @@ class TestPostV1(unittest.TestCase):
         self.assertNotIn("api_key", json.loads(data))
 
     def test_uncompressed_body_is_json_str_without_encoding_header(self) -> None:
-        call = self._post(_results_response({}), gzip=False)
+        call = self._post(_results_response({}), compression=CaptureCompression.NONE)
         self.assertIsInstance(call["data"], str)
         self.assertNotIn("Content-Encoding", call["headers"])
 
     def test_gzip_sets_encoding_header_and_compresses_body(self) -> None:
-        call = self._post(_results_response({}), gzip=True)
+        call = self._post(_results_response({}), compression=CaptureCompression.GZIP)
         self.assertEqual(call["headers"]["Content-Encoding"], "gzip")
         self.assertIsInstance(call["data"], bytes)
         self.assertEqual(call["data"][:2], b"\x1f\x8b")  # gzip magic
+
+    def test_deflate_sets_encoding_header_and_zlib_wraps_body(self) -> None:
+        # Must be zlib-wrapped (RFC 1950, 0x78 prefix), matching posthog-go /
+        # posthog-rs, so the server routes Content-Encoding: deflate to its zlib
+        # decoder rather than treating it as raw deflate.
+        call = self._post(_results_response({}), compression=CaptureCompression.DEFLATE)
+        self.assertEqual(call["headers"]["Content-Encoding"], "deflate")
+        self.assertIsInstance(call["data"], bytes)
+        self.assertEqual(call["data"][0], 0x78)  # zlib header
+        roundtripped = zlib.decompress(call["data"]).decode("utf-8")
+        self.assertNotIn("api_key", json.loads(roundtripped))
 
 
 class TestParseV1Response(unittest.TestCase):
@@ -490,7 +511,7 @@ class TestSendV1Batch(unittest.TestCase):
         # Second attempt carries only the event the server asked to retry.
         self.assertEqual(stub.calls[1]["uuids"], ["u-retry"])
 
-    def test_request_id_stable_and_attempt_increments(self) -> None:
+    def test_request_id_and_created_at_stable_attempt_increments(self) -> None:
         stub = self._run(
             [_msg("u-1")],
             [
@@ -499,17 +520,30 @@ class TestSendV1Batch(unittest.TestCase):
             ],
         )
         self.assertEqual(stub.calls[0]["request_id"], stub.calls[1]["request_id"])
+        # created_at is hoisted once, so the envelope timestamp is identical
+        # across retry attempts (only the attempt header increments).
+        self.assertEqual(stub.calls[0]["created_at"], stub.calls[1]["created_at"])
         self.assertEqual([c["attempt"] for c in stub.calls], [1, 2])
 
-    def test_drop_on_2xx_is_logged_not_raised(self) -> None:
+    def test_compression_forwarded_to_post_v1(self) -> None:
+        stub = self._run(
+            [_msg("u-1")],
+            [_results_response({"u-1": "ok"})],
+            compression=CaptureCompression.DEFLATE,
+        )
+        self.assertEqual(stub.calls[0]["compression"], CaptureCompression.DEFLATE)
+
+    def test_drop_on_2xx_is_accepted_not_raised_or_logged(self) -> None:
+        # A server-chosen drop on a successful request is not a delivery failure:
+        # the send completes without raising and without per-event WARNING noise
+        # (drops surface via CaptureV1Error only on batch-level failure).
         batch = [_msg("u-ok"), _msg("u-drop")]
-        with self.assertLogs("posthog", level="WARNING") as logs:
+        with self.assertNoLogs("posthog", level="WARNING"):
             stub = self._run(
                 batch,
                 [_results_response({"u-ok": "ok", "u-drop": ("drop", "invalid")})],
             )
         self.assertEqual(len(stub.calls), 1)
-        self.assertTrue(any("u-drop" in line for line in logs.output))
 
     def test_retry_exhausted_raises_with_uuids(self) -> None:
         stub, exc = self._run_expecting_error(
