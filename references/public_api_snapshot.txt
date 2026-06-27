@@ -1055,6 +1055,7 @@ function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
 function posthog.request.flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, max_retries: int = 1, **kwargs) -> Any
 function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
+function posthog.request.gzip_compress(data: str) -> bytes
 function posthog.request.is_ai_event(event_name) -> bool
 function posthog.request.normalize_host(host: Optional[str]) -> str
 function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
