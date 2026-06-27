@@ -240,13 +240,16 @@ def post(
     log.debug("making request: %s to url: %s", data, url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
-        headers["Content-Encoding"] = "gzip"
-        buf = BytesIO()
-        with GzipFile(fileobj=buf, mode="w") as gz:
-            # 'data' was produced by json.dumps(),
-            # whose default encoding is utf-8.
-            gz.write(cast(str, data).encode("utf-8"))
-        data = buf.getvalue()
+        try:
+            buf = BytesIO()
+            with GzipFile(fileobj=buf, mode="w") as gz:
+                # 'data' was produced by json.dumps(),
+                # whose default encoding is utf-8.
+                gz.write(cast(str, data).encode("utf-8"))
+            data = buf.getvalue()
+            headers["Content-Encoding"] = "gzip"
+        except OSError as exc:
+            log.warning("failed to gzip request body, sending uncompressed: %s", exc)
 
     res = (session or _get_session()).post(
         url, data=data, headers=headers, timeout=timeout

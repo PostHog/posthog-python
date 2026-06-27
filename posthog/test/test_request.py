@@ -179,6 +179,27 @@ class TestRequests(unittest.TestCase):
         self.assertIsInstance(data, bytes)
         self.assertEqual(headers["Content-Encoding"], "gzip")
 
+    def test_post_falls_back_to_uncompressed_payload_when_gzip_fails(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+
+        with mock.patch.object(request_module, "GzipFile", side_effect=OSError("boom")):
+            request_module.post(
+                TEST_API_KEY,
+                host="https://test.posthog.com",
+                path="/batch/",
+                gzip=True,
+                session=mock_session,
+                batch=[],
+            )
+
+        data = mock_session.post.call_args.kwargs["data"]
+        headers = mock_session.post.call_args.kwargs["headers"]
+        self.assertIsInstance(data, str)
+        self.assertNotIn("Content-Encoding", headers)
+
     def test_datetime_serialization(self):
         data = {"created": datetime(2012, 3, 4, 5, 6, 7, 891011)}
         result = json.dumps(data, cls=DatetimeSerializer)
