@@ -23,21 +23,29 @@ class TestResolveCaptureMode(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("enum_v0", CaptureMode.V0, CaptureMode.V0),
-            ("enum_v1", CaptureMode.V1, CaptureMode.V1),
-            ("str_v0", "v0", CaptureMode.V0),
-            ("str_v1", "v1", CaptureMode.V1),
-            ("str_legacy_alias", "legacy", CaptureMode.V0),
-            ("str_analytics_v1_alias", "analytics_v1", CaptureMode.V1),
-            ("str_upper_and_padded", "  V1  ", CaptureMode.V1),
+            # (name, kwarg, expected, opposite_env): the env always names the
+            # mode the kwarg must override, so every row proves the kwarg wins.
+            ("enum_v0", CaptureMode.V0, CaptureMode.V0, "v1"),
+            ("enum_v1", CaptureMode.V1, CaptureMode.V1, "v0"),
+            ("str_v0", "v0", CaptureMode.V0, "v1"),
+            ("str_v1", "v1", CaptureMode.V1, "v0"),
+            ("str_legacy_alias", "legacy", CaptureMode.V0, "v1"),
+            ("str_analytics_v1_alias", "analytics_v1", CaptureMode.V1, "v0"),
+            ("str_upper_and_padded", "  V1  ", CaptureMode.V1, "v0"),
         ]
     )
     def test_explicit_kwarg_takes_precedence_and_coerces(
-        self, _name, kwarg, expected
+        self, _name, kwarg, expected, opposite_env
     ) -> None:
-        # Env is set to the opposite mode to prove the kwarg wins.
-        with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: "v1"}):
+        with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: opposite_env}):
             self.assertIs(resolve_capture_mode(kwarg), expected)
+
+    def test_invalid_kwarg_raises_even_with_valid_env(self) -> None:
+        # The kwarg path is consulted before the env, so an invalid kwarg raises
+        # rather than silently falling back to a valid env value.
+        with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: "v1"}):
+            with self.assertRaises(ValueError):
+                resolve_capture_mode("bogus")
 
     @parameterized.expand(
         [
