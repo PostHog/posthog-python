@@ -3260,3 +3260,70 @@ class TestClient(unittest.TestCase):
                 with self.assertRaises(Exception) as cm:
                     method(*args, **kwargs)
                 self.assertEqual(str(cm.exception), "Expected error")
+
+
+class TestClientSyncCaptureMode(unittest.TestCase):
+    """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`;
+    the dedicated AI endpoint always uses the legacy submitter."""
+
+    def _client(self, **kwargs):
+        return Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
+
+    def test_v0_sync_uses_legacy_batch_post(self):
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client().capture("evt", distinct_id="d")
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
+
+    def test_v1_sync_uses_v1_submitter(self):
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client(capture_mode="v1").capture("evt", distinct_id="d")
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()
+            sent_batch = mock_v1.call_args.args[2]
+            self.assertEqual(len(sent_batch), 1)
+            self.assertEqual(sent_batch[0]["event"], "evt")
+
+    def test_v1_sync_forwards_config_to_submitter(self):
+        with (
+            mock.patch("posthog.client.batch_post"),
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client(
+                capture_mode="v1",
+                gzip=True,
+                max_retries=4,
+                historical_migration=True,
+            ).capture("evt", distinct_id="d")
+            kwargs = mock_v1.call_args.kwargs
+            self.assertEqual(kwargs["gzip"], True)
+            self.assertEqual(kwargs["max_retries"], 4)
+            self.assertEqual(kwargs["historical_migration"], True)
+
+    def test_v1_sync_dedicated_ai_event_stays_legacy(self):
+        # $ai_* on the dedicated AI endpoint has no v1 form.
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            client = self._client(capture_mode="v1", _dedicated_ai_endpoint=True)
+            client.capture("$ai_generation", distinct_id="d")
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
+            self.assertEqual(mock_post.call_args.kwargs["path"], "/i/v0/ai/batch/")
+
+    def test_v1_sync_dedicated_ai_analytics_event_uses_v1(self):
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            client = self._client(capture_mode="v1", _dedicated_ai_endpoint=True)
+            client.capture("regular_event", distinct_id="d")
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()

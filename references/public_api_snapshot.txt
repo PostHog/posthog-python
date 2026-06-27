@@ -522,6 +522,7 @@ attribute posthog.client.Client.in_app_modules = in_app_modules
 attribute posthog.client.Client.is_server = is_server
 attribute posthog.client.Client.log = logging.getLogger('posthog')
 attribute posthog.client.Client.log_captured_exceptions = log_captured_exceptions
+attribute posthog.client.Client.max_retries = max_retries
 attribute posthog.client.Client.on_error = on_error
 attribute posthog.client.Client.personal_api_key = (personal_api_key.strip() if isinstance(personal_api_key, str) else personal_api_key) or None
 attribute posthog.client.Client.poll_interval = poll_interval
