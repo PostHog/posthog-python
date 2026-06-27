@@ -284,6 +284,7 @@ alias posthog.client.remote_config -> posthog.request.remote_config
 alias posthog.client.reset_sessions -> posthog.request.reset_sessions
 alias posthog.client.resolve_bucketing_value -> posthog.feature_flags.resolve_bucketing_value
 alias posthog.client.resolve_capture_mode -> posthog.capture_mode.resolve_capture_mode
+alias posthog.client.send_v1_batch -> posthog.capture_v1.send_v1_batch
 alias posthog.client.system_context -> posthog.utils.system_context
 alias posthog.client.to_flags_and_payloads -> posthog.types.to_flags_and_payloads
 alias posthog.client.to_payloads -> posthog.types.to_payloads
@@ -296,6 +297,7 @@ alias posthog.consumer.DatetimeSerializer -> posthog.request.DatetimeSerializer
 alias posthog.consumer.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
 alias posthog.consumer.batch_post -> posthog.request.batch_post
 alias posthog.consumer.is_ai_event -> posthog.request.is_ai_event
+alias posthog.consumer.send_v1_batch -> posthog.capture_v1.send_v1_batch
 alias posthog.contexts.Client -> posthog.client.Client
 alias posthog.disable_connection_reuse -> posthog.request.disable_connection_reuse
 alias posthog.enable_keep_alive -> posthog.request.enable_keep_alive
@@ -548,6 +550,7 @@ attribute posthog.client.Client.in_app_modules = in_app_modules
 attribute posthog.client.Client.is_server = is_server
 attribute posthog.client.Client.log = logging.getLogger('posthog')
 attribute posthog.client.Client.log_captured_exceptions = log_captured_exceptions
+attribute posthog.client.Client.max_retries = max_retries
 attribute posthog.client.Client.on_error = on_error
 attribute posthog.client.Client.personal_api_key = (personal_api_key.strip() if isinstance(personal_api_key, str) else personal_api_key) or None
 attribute posthog.client.Client.poll_interval = poll_interval

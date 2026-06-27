@@ -17,6 +17,7 @@ from typing_extensions import Unpack
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.capture_mode import CaptureMode, resolve_capture_mode
+from posthog.capture_v1 import send_v1_batch
 from posthog.consumer import Consumer
 from posthog.contexts import (
     _get_current_context,
@@ -373,6 +374,7 @@ class Client(object):
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self.gzip = gzip
         self.timeout = timeout
+        self.max_retries = max_retries
         self._feature_flags: Optional[list[Any]] = (
             None  # private variable to store flags
         )
@@ -1629,11 +1631,24 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            path = (
-                AI_EVENTS_ENDPOINT
-                if self._dedicated_ai_endpoint and is_ai_event(msg.get("event"))
-                else EVENTS_ENDPOINT
+            is_dedicated_ai = self._dedicated_ai_endpoint and is_ai_event(
+                msg.get("event")
             )
+            # Analytics events follow `capture_mode`; the dedicated AI endpoint
+            # has no v1 form and always uses the legacy submitter.
+            if not is_dedicated_ai and self.capture_mode == CaptureMode.V1:
+                send_v1_batch(
+                    self.api_key,
+                    self.host,
+                    [msg],
+                    gzip=self.gzip,
+                    timeout=self.timeout,
+                    max_retries=self.max_retries,
+                    historical_migration=self.historical_migration,
+                )
+                return sent_uuid
+
+            path = AI_EVENTS_ENDPOINT if is_dedicated_ai else EVENTS_ENDPOINT
             batch_post(
                 self.api_key,
                 self.host,
