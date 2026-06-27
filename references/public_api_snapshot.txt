@@ -215,6 +215,12 @@ alias posthog.ai.utils.tag -> posthog.tag
 alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
+alias posthog.capture_v1.APIError -> posthog.request.APIError
+alias posthog.capture_v1.DatetimeSerializer -> posthog.request.DatetimeSerializer
+alias posthog.capture_v1.USER_AGENT -> posthog.request.USER_AGENT
+alias posthog.capture_v1.gzip_compress -> posthog.request.gzip_compress
+alias posthog.capture_v1.normalize_host -> posthog.request.normalize_host
+alias posthog.capture_v1.remove_trailing_slash -> posthog.utils.remove_trailing_slash
 alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.client.APIError -> posthog.request.APIError
 alias posthog.client.CaptureMode -> posthog.capture_mode.CaptureMode
@@ -480,6 +486,10 @@ attribute posthog.capture_mode.CaptureMode.V0 = 'v0'
 attribute posthog.capture_mode.CaptureMode.V1 = 'v1'
 attribute posthog.capture_mode.log = logging.getLogger('posthog')
 attribute posthog.capture_v1.CAPTURE_V1_PATH = '/i/v1/analytics/events'
+attribute posthog.capture_v1.CaptureV1Error.attempts = attempts
+attribute posthog.capture_v1.CaptureV1Error.drops = drops or []
+attribute posthog.capture_v1.CaptureV1Error.request_id = request_id
+attribute posthog.capture_v1.CaptureV1Error.retry_exhausted = retry_exhausted or []
 attribute posthog.capture_v1.HEADER_ATTEMPT = 'PostHog-Attempt'
 attribute posthog.capture_v1.HEADER_REQUEST_ID = 'PostHog-Request-Id'
 attribute posthog.capture_v1.HEADER_REQUEST_TIMESTAMP = 'PostHog-Request-Timestamp'
@@ -490,6 +500,15 @@ attribute posthog.capture_v1.RESULT_RETRY = 'retry'
 attribute posthog.capture_v1.RESULT_WARNING = 'warning'
 attribute posthog.capture_v1.RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
 attribute posthog.capture_v1.TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
+attribute posthog.capture_v1.V1EventResult.details: Optional[str] = None
+attribute posthog.capture_v1.V1EventResult.result: Optional[str]
+attribute posthog.capture_v1.V1ParsedResponse.error_message: str = ''
+attribute posthog.capture_v1.V1ParsedResponse.is_success: bool
+attribute posthog.capture_v1.V1ParsedResponse.malformed: bool = False
+attribute posthog.capture_v1.V1ParsedResponse.results: Optional[dict[str, V1EventResult]] = None
+attribute posthog.capture_v1.V1ParsedResponse.retry_after: Optional[float] = None
+attribute posthog.capture_v1.V1ParsedResponse.status_code: int
+attribute posthog.capture_v1.log = logging.getLogger('posthog')
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
 attribute posthog.client.Client.capture_mode = resolve_capture_mode(capture_mode)
@@ -848,6 +867,9 @@ class posthog.args.OptionalCaptureArgs
 class posthog.args.OptionalSetArgs 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
 class posthog.capture_mode.CaptureMode 
+class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
+class posthog.capture_v1.V1EventResult(result: Optional[str], details: Optional[str] = None)
+class posthog.capture_v1.V1ParsedResponse(status_code: int, is_success: bool, retry_after: Optional[float] = None, results: Optional[dict[str, V1EventResult]] = None, malformed: bool = False, error_message: str = '')
 class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, _dedicated_ai_endpoint=False)
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False, capture_mode=CaptureMode.V0)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
@@ -973,6 +995,9 @@ function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> O
 function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_mode.resolve_capture_mode(capture_mode: Optional[Union[CaptureMode, str]] = None) -> CaptureMode
 function posthog.capture_v1.build_v1_batch_body(events: list[dict], historical_migration: bool = False) -> dict
+function posthog.capture_v1.parse_v1_response(res: requests.Response) -> V1ParsedResponse
+function posthog.capture_v1.post_v1(api_key: str, host: Optional[str], batch_body: dict, *, attempt: int, request_id: str, gzip: bool = False, timeout: int = 15, session: Optional[requests.Session] = None) -> requests.Response
+function posthog.capture_v1.send_v1_batch(api_key: str, host: Optional[str], batch: list[dict], *, gzip: bool = False, timeout: int = 15, max_retries: int = 3, historical_migration: bool = False, session: Optional[requests.Session] = None) -> None
 function posthog.capture_v1.to_v1_event(msg: dict) -> dict
 function posthog.client.add_context_tags(properties)
 function posthog.client.get_identity_state(passed) -> tuple[str, bool]
@@ -1070,6 +1095,7 @@ function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
 function posthog.request.flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any
 function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
+function posthog.request.gzip_compress(data: str) -> bytes
 function posthog.request.is_ai_event(event_name) -> bool
 function posthog.request.normalize_host(host: Optional[str]) -> str
 function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response

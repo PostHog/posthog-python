@@ -50,6 +50,15 @@ def _mask_tokens_in_url(url: str) -> str:
     return re.sub(r"(token=)([^&]{10})[^&]*", r"\1\2...", url)
 
 
+def gzip_compress(data: str) -> bytes:
+    """Gzip-compress a UTF-8 string for an ``Content-Encoding: gzip`` body."""
+    buf = BytesIO()
+    with GzipFile(fileobj=buf, mode="w") as gz:
+        # `data` is produced by json.dumps(), whose default encoding is utf-8.
+        gz.write(data.encode("utf-8"))
+    return buf.getvalue()
+
+
 @dataclass
 class GetResponse:
     """Response from a GET request with ETag support."""
@@ -241,12 +250,7 @@ def post(
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
         headers["Content-Encoding"] = "gzip"
-        buf = BytesIO()
-        with GzipFile(fileobj=buf, mode="w") as gz:
-            # 'data' was produced by json.dumps(),
-            # whose default encoding is utf-8.
-            gz.write(cast(str, data).encode("utf-8"))
-        data = buf.getvalue()
+        data = gzip_compress(cast(str, data))
 
     res = (session or _get_session()).post(
         url, data=data, headers=headers, timeout=timeout
