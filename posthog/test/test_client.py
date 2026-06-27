@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from unittest import mock
 from parameterized import parameterized
 
+from posthog.capture_compression import CaptureCompression
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError, GetResponse
@@ -3269,26 +3270,28 @@ class TestClientSyncCaptureMode(unittest.TestCase):
     def _client(self, **kwargs):
         return Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
 
-    def test_v0_sync_uses_legacy_batch_post(self):
+    @parameterized.expand(
+        [
+            ("v0", None, False),
+            ("v1", "v1", True),
+        ]
+    )
+    def test_capture_mode_selects_sync_submitter(self, _name, capture_mode, expects_v1):
+        kwargs = {"capture_mode": capture_mode} if capture_mode else {}
         with (
             mock.patch("posthog.client.batch_post") as mock_post,
             mock.patch("posthog.client._send_v1_batch") as mock_v1,
         ):
-            self._client().capture("evt", distinct_id="d")
-            mock_v1.assert_not_called()
-            mock_post.assert_called_once()
-
-    def test_v1_sync_uses_v1_submitter(self):
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            self._client(capture_mode="v1").capture("evt", distinct_id="d")
+            self._client(**kwargs).capture("evt", distinct_id="d")
+        if expects_v1:
             mock_post.assert_not_called()
             mock_v1.assert_called_once()
             sent_batch = mock_v1.call_args.args[2]
             self.assertEqual(len(sent_batch), 1)
             self.assertEqual(sent_batch[0]["event"], "evt")
+        else:
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
 
     def test_v1_sync_forwards_config_to_submitter(self):
         with (
@@ -3297,14 +3300,25 @@ class TestClientSyncCaptureMode(unittest.TestCase):
         ):
             self._client(
                 capture_mode="v1",
-                gzip=True,
+                capture_compression=CaptureCompression.GZIP,
                 max_retries=4,
                 historical_migration=True,
             ).capture("evt", distinct_id="d")
             kwargs = mock_v1.call_args.kwargs
-            self.assertEqual(kwargs["gzip"], True)
+            self.assertEqual(kwargs["compression"], CaptureCompression.GZIP)
             self.assertEqual(kwargs["max_retries"], 4)
             self.assertEqual(kwargs["historical_migration"], True)
+
+    def test_v1_sync_gzip_flag_falls_back_to_gzip_compression(self):
+        # Legacy `gzip=True` with no explicit capture_compression -> GZIP on v1.
+        with (
+            mock.patch("posthog.client.batch_post"),
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client(capture_mode="v1", gzip=True).capture("evt", distinct_id="d")
+            self.assertEqual(
+                mock_v1.call_args.kwargs["compression"], CaptureCompression.GZIP
+            )
 
     def test_v1_sync_dedicated_ai_event_stays_legacy(self):
         # $ai_* on the dedicated AI endpoint has no v1 form.
