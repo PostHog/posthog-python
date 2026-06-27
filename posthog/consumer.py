@@ -5,6 +5,7 @@ import time
 from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
+from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
 from posthog.capture_v1 import send_v1_batch
 from posthog.request import (
@@ -53,6 +54,7 @@ class Consumer(Thread):
         historical_migration=False,
         dedicated_ai_endpoint=False,
         capture_mode=CaptureMode.V0,
+        capture_compression=CaptureCompression.NONE,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -67,6 +69,7 @@ class Consumer(Thread):
         self.gzip = gzip
         self.dedicated_ai_endpoint = dedicated_ai_endpoint
         self.capture_mode = capture_mode
+        self.capture_compression = capture_compression
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
@@ -173,7 +176,7 @@ class Consumer(Thread):
         first_exc = None
         for events, label, sender in (
             (analytics_events, "analytics", self._send_analytics),
-            (ai_events, AI_EVENTS_ENDPOINT, self._send_ai),
+            (ai_events, "ai", self._send_ai),
         ):
             if not events:
                 continue
@@ -195,7 +198,7 @@ class Consumer(Thread):
                 self.api_key,
                 self.host,
                 batch,
-                gzip=self.gzip,
+                compression=self.capture_compression,
                 timeout=self.timeout,
                 max_retries=self.retries,
                 historical_migration=self.historical_migration,
