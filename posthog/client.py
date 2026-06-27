@@ -16,6 +16,7 @@ from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.capture_mode import CaptureMode, resolve_capture_mode
 from posthog.consumer import Consumer
 from posthog.contexts import (
     _get_current_context,
@@ -260,6 +261,7 @@ class Client(object):
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
+        capture_mode: Optional[Union[CaptureMode, str]] = None,
         _dedicated_ai_endpoint=False,
     ):
         """
@@ -343,6 +345,11 @@ class Client(object):
                 interval for each exception type's bucket.
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
+            capture_mode: Capture wire protocol to use. Defaults to
+                ``CaptureMode.V0`` (legacy ``/batch/``). Set ``CaptureMode.V1``
+                (or pass the string ``"v1"``) to opt into
+                ``/i/v1/analytics/events``. When omitted, the
+                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V0``.
 
         Examples:
             ```python
@@ -398,6 +405,10 @@ class Client(object):
         self.disable_geoip = disable_geoip
         self.is_server = is_server
         self.historical_migration = historical_migration
+        # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
+        # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
+        # applied once; V0 is the default and keeps upgrades transparent.
+        self.capture_mode = resolve_capture_mode(capture_mode)
         # Internal, not ready for use: routes `$ai_*` events to a dedicated
         # capture-ai endpoint while the backend route + ingress roll out.
         self._dedicated_ai_endpoint = _dedicated_ai_endpoint
@@ -503,6 +514,7 @@ class Client(object):
                     timeout=timeout,
                     historical_migration=historical_migration,
                     dedicated_ai_endpoint=self._dedicated_ai_endpoint,
+                    capture_mode=self.capture_mode,
                 )
                 self.consumers.append(consumer)
 
@@ -1525,6 +1537,7 @@ class Client(object):
                     timeout=old.timeout,
                     historical_migration=old.historical_migration,
                     dedicated_ai_endpoint=old.dedicated_ai_endpoint,
+                    capture_mode=old.capture_mode,
                 )
                 new_consumers.append(consumer)
 
