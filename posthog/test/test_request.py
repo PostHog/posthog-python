@@ -188,7 +188,9 @@ class TestRequests(unittest.TestCase):
                 mock_session = mock.MagicMock()
                 mock_session.post.return_value = mock_response
 
-                with mock.patch.object(request_module, "GzipFile", side_effect=compression_error):
+                with mock.patch.object(
+                    request_module, "GzipFile", side_effect=compression_error
+                ):
                     request_module.post(
                         TEST_API_KEY,
                         host="https://test.posthog.com",
