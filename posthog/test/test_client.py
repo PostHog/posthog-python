@@ -976,6 +976,7 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=3,
+                max_retries=1,
                 distinct_id="distinct_id",
                 groups={},
                 person_properties={},
@@ -984,20 +985,29 @@ class TestClient(unittest.TestCase):
                 device_id=None,
             )
 
-    @mock.patch("posthog.client.flags")
-    def test_feature_flags_request_max_retries_is_forwarded_when_configured(
-        self, patch_flags
+    @parameterized.expand(
+        [
+            ("default", 1),
+            ("disabled", 0),
+            ("two_retries", 2),
+        ]
+    )
+    def test_feature_flags_request_max_retries_is_forwarded(
+        self, _name, expected_max_retries
     ):
-        patch_flags.return_value = {"featureFlags": {}, "featureFlagPayloads": {}}
-        client = Client(
-            FAKE_TEST_API_KEY,
-            feature_flags_request_max_retries=0,
-            personal_api_key=FAKE_TEST_API_KEY,
+        with mock.patch("posthog.client.flags") as patch_flags:
+            patch_flags.return_value = {"featureFlags": {}, "featureFlagPayloads": {}}
+            client = Client(
+                FAKE_TEST_API_KEY,
+                feature_flags_request_max_retries=expected_max_retries,
+                personal_api_key=FAKE_TEST_API_KEY,
+            )
+
+            client.get_all_flags("distinct_id")
+
+        self.assertEqual(
+            patch_flags.call_args.kwargs["max_retries"], expected_max_retries
         )
-
-        client.get_all_flags("distinct_id")
-
-        self.assertEqual(patch_flags.call_args.kwargs["max_retries"], 0)
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(
@@ -1056,6 +1066,7 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=12,
+                max_retries=1,
                 distinct_id="distinct_id",
                 groups={},
                 person_properties={},
@@ -2276,6 +2287,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={},
             person_properties={"distinct_id": "some_id"},
@@ -2292,6 +2304,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="feature_enabled_distinct_id",
             groups={},
             person_properties={"distinct_id": "feature_enabled_distinct_id"},
@@ -2306,6 +2319,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="all_flags_payloads_id",
             groups={},
             person_properties={"distinct_id": "all_flags_payloads_id"},
@@ -2352,6 +2366,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "http://app2.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
             person_properties={"distinct_id": "some_id", "x1": "y1"},
@@ -2380,6 +2395,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "http://app2.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
             person_properties={"distinct_id": "override"},
@@ -2401,6 +2417,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "http://app2.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={},
             person_properties={"distinct_id": "some_id"},
@@ -2461,7 +2478,11 @@ class TestClient(unittest.TestCase):
             expected_call["flag_keys_to_evaluate"] = expected_flag_keys
 
         patch_flags.assert_called_with(
-            "random_key", "https://us.i.posthog.com", timeout=3, **expected_call
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            max_retries=1,
+            **expected_call,
         )
 
     @mock.patch("posthog.client.flags")
@@ -2487,6 +2508,7 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=3,
+                max_retries=1,
                 distinct_id="some_id",
                 groups={},
                 person_properties={"distinct_id": "some_id"},
@@ -2507,6 +2529,7 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=3,
+                max_retries=1,
                 distinct_id="some_id",
                 groups={},
                 person_properties={"distinct_id": "some_id"},
@@ -2536,6 +2559,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={},
             person_properties={"distinct_id": "some_id"},

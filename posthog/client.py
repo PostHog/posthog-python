@@ -902,15 +902,11 @@ class Client(object):
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
 
-        flag_request_options: Dict[str, Any] = {}
-        if self.feature_flags_request_max_retries != 1:
-            flag_request_options["max_retries"] = self.feature_flags_request_max_retries
-
         resp_data = flags(
             self.api_key,
             self.host,
             timeout=self.feature_flags_request_timeout_seconds,
-            **flag_request_options,
+            max_retries=self.feature_flags_request_max_retries,
             **request_data,
         )
 
