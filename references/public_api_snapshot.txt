@@ -479,6 +479,17 @@ attribute posthog.capture_mode.CAPTURE_MODE_ENV_VAR = 'POSTHOG_CAPTURE_MODE'
 attribute posthog.capture_mode.CaptureMode.V0 = 'v0'
 attribute posthog.capture_mode.CaptureMode.V1 = 'v1'
 attribute posthog.capture_mode.log = logging.getLogger('posthog')
+attribute posthog.capture_v1.CAPTURE_V1_PATH = '/i/v1/analytics/events'
+attribute posthog.capture_v1.HEADER_ATTEMPT = 'PostHog-Attempt'
+attribute posthog.capture_v1.HEADER_REQUEST_ID = 'PostHog-Request-Id'
+attribute posthog.capture_v1.HEADER_REQUEST_TIMESTAMP = 'PostHog-Request-Timestamp'
+attribute posthog.capture_v1.HEADER_SDK_INFO = 'PostHog-Sdk-Info'
+attribute posthog.capture_v1.RESULT_DROP = 'drop'
+attribute posthog.capture_v1.RESULT_OK = 'ok'
+attribute posthog.capture_v1.RESULT_RETRY = 'retry'
+attribute posthog.capture_v1.RESULT_WARNING = 'warning'
+attribute posthog.capture_v1.RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
+attribute posthog.capture_v1.TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
 attribute posthog.client.Client.capture_mode = resolve_capture_mode(capture_mode)
@@ -961,6 +972,8 @@ function posthog.alias(previous_id: str, distinct_id: str, timestamp: Optional[d
 function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_mode.resolve_capture_mode(capture_mode: Optional[Union[CaptureMode, str]] = None) -> CaptureMode
+function posthog.capture_v1.build_v1_batch_body(events: list[dict], historical_migration: bool = False) -> dict
+function posthog.capture_v1.to_v1_event(msg: dict) -> dict
 function posthog.client.add_context_tags(properties)
 function posthog.client.get_identity_state(passed) -> tuple[str, bool]
 function posthog.client.no_throw(default_return=None)
@@ -1309,6 +1322,7 @@ module posthog.ai.utils
 module posthog.args
 module posthog.bucketed_rate_limiter
 module posthog.capture_mode
+module posthog.capture_v1
 module posthog.client
 module posthog.consumer
 module posthog.contexts
