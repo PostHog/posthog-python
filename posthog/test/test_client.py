@@ -985,6 +985,21 @@ class TestClient(unittest.TestCase):
             )
 
     @mock.patch("posthog.client.flags")
+    def test_feature_flags_request_max_retries_is_forwarded_when_configured(
+        self, patch_flags
+    ):
+        patch_flags.return_value = {"featureFlags": {}, "featureFlagPayloads": {}}
+        client = Client(
+            FAKE_TEST_API_KEY,
+            feature_flags_request_max_retries=0,
+            personal_api_key=FAKE_TEST_API_KEY,
+        )
+
+        client.get_all_flags("distinct_id")
+
+        self.assertEqual(patch_flags.call_args.kwargs["max_retries"], 0)
+
+    @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(
         self, patch_flags
     ):

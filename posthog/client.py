@@ -240,6 +240,7 @@ class Client(object):
         is_server=True,
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
+        feature_flags_request_max_retries=1,
         super_properties=None,
         enable_exception_autocapture=False,
         log_captured_exceptions=False,
@@ -296,6 +297,9 @@ class Client(object):
             historical_migration: Mark events as historical migration imports.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
+            feature_flags_request_max_retries: Number of retries for feature flag
+                requests after network, transport, or timeout failures. Defaults
+                to 1. Set to 0 to disable retries.
             super_properties: Properties merged into every captured event.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
@@ -375,6 +379,9 @@ class Client(object):
         self.poll_interval = poll_interval
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
+        )
+        self.feature_flags_request_max_retries = max(
+            0, feature_flags_request_max_retries
         )
         self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
@@ -895,10 +902,15 @@ class Client(object):
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
 
+        flag_request_options: Dict[str, Any] = {}
+        if self.feature_flags_request_max_retries != 1:
+            flag_request_options["max_retries"] = self.feature_flags_request_max_retries
+
         resp_data = flags(
             self.api_key,
             self.host,
             timeout=self.feature_flags_request_timeout_seconds,
+            **flag_request_options,
             **request_data,
         )
 
