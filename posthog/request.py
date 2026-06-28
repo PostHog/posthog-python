@@ -248,7 +248,7 @@ def post(
                 gz.write(cast(str, data).encode("utf-8"))
             data = buf.getvalue()
             headers["Content-Encoding"] = "gzip"
-        except OSError as exc:
+        except Exception as exc:
             log.warning("failed to gzip request body, sending uncompressed: %s", exc)
 
     res = (session or _get_session()).post(
