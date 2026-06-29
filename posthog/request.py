@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import socket
+import zlib
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from gzip import GzipFile
@@ -248,7 +249,7 @@ def post(
                 gz.write(cast(str, data).encode("utf-8"))
             data = buf.getvalue()
             headers["Content-Encoding"] = "gzip"
-        except Exception as exc:
+        except (OSError, zlib.error) as exc:
             log.warning("failed to gzip request body, sending uncompressed: %s", exc)
 
     res = (session or _get_session()).post(
