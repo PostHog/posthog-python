@@ -1,5 +1,11 @@
 # posthog
 
+## 7.21.1 — 2026-06-29
+
+### Patch changes
+
+- [cd86110](https://github.com/posthog/posthog-python/commit/cd86110e9e3c86f988a32277a0139a71e2512459) Fall back to uncompressed uploads when gzip compression fails — Thanks @marandaneto!
+
 ## 7.21.0 — 2026-06-26
 
 ### Minor changes
