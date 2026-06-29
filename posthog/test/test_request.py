@@ -86,16 +86,42 @@ def test_post_sends_snake_case_sent_at(key, expected_present):
     assert (key in data) is expected_present
 
 
-def test_flags_request_uses_token_field_for_project_api_key():
-    mock_response = mock.MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"featureFlags": {}}
+@pytest.mark.parametrize(
+    "api_call, call_kwargs, expected_api_key_field",
+    [
+        ("post", {"path": "/batch/", "batch": []}, "api_key"),
+        ("flags", {"distinct_id": "user_1"}, "token"),
+    ],
+)
+def test_project_api_key_field_name(api_call, call_kwargs, expected_api_key_field):
+    if api_call == "post":
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
 
-    with mock.patch.object(request_module, "post", return_value=mock_response) as mock_post:
-        flags(TEST_API_KEY, host="https://test.posthog.com", distinct_id="user_1")
+        request_module.post(
+            TEST_API_KEY,
+            host="https://test.posthog.com",
+            session=mock_session,
+            **call_kwargs,
+        )
 
-    mock_post.assert_called_once()
-    assert mock_post.call_args.kwargs["api_key_field"] == "token"
+        data = json.loads(mock_session.post.call_args.kwargs["data"])
+        assert data[expected_api_key_field] == TEST_API_KEY
+        assert "token" not in data
+    else:
+        mock_response = mock.MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"featureFlags": {}}
+
+        with mock.patch.object(
+            request_module, "post", return_value=mock_response
+        ) as mock_post:
+            flags(TEST_API_KEY, host="https://test.posthog.com", **call_kwargs)
+
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["api_key_field"] == expected_api_key_field
 
 
 def test_message_only_debug_logs_include_posthog_prefix():
