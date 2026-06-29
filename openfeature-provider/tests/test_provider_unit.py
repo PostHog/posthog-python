@@ -128,6 +128,47 @@ def test_object_missing_payload_is_type_mismatch(fake_client):
         _provider(fake_client).resolve_object_details("cfg", {}, EvaluationContext("u"))
 
 
+# A user who matches no condition / a disabled flag (enabled=False, variant/payload
+# absent) is NOT a type error: the default is returned with a normal reason and no
+# error_code, instead of TYPE_MISMATCH / Reason.ERROR.
+def test_string_unmatched_returns_default_without_error(fake_client):
+    fake_client.get_feature_flag_result.return_value = make_result(
+        enabled=False, variant=None, reason="no condition set matched"
+    )
+    details = _provider(fake_client).resolve_string_details(
+        "exp", "fallback", EvaluationContext("user-1")
+    )
+    assert details.value == "fallback"
+    assert details.reason == Reason.DEFAULT
+    assert details.error_code is None
+
+
+@pytest.mark.parametrize(
+    "resolver", ["resolve_integer_details", "resolve_float_details"]
+)
+def test_number_unmatched_returns_default_without_error(fake_client, resolver):
+    fake_client.get_feature_flag_result.return_value = make_result(
+        enabled=False, variant=None, reason="no condition set matched"
+    )
+    details = getattr(_provider(fake_client), resolver)("n", 7, EvaluationContext("u"))
+    assert details.value == 7
+    assert details.reason == Reason.DEFAULT
+    assert details.error_code is None
+
+
+def test_object_unmatched_returns_default_without_error(fake_client):
+    fake_client.get_feature_flag_result.return_value = make_result(
+        enabled=False, variant=None, payload=None, reason="no condition set matched"
+    )
+    default = {"fallback": True}
+    details = _provider(fake_client).resolve_object_details(
+        "cfg", default, EvaluationContext("u")
+    )
+    assert details.value == default
+    assert details.reason == Reason.DEFAULT
+    assert details.error_code is None
+
+
 def test_flag_not_found_raises(fake_client):
     fake_client.get_feature_flag_result.return_value = None
     with pytest.raises(FlagNotFoundError):
@@ -164,6 +205,18 @@ def test_context_split(fake_client):
     assert kwargs["groups"] == {"org": "acme"}
     assert kwargs["group_properties"] == {"org": {"tier": "ent"}}
     assert kwargs["person_properties"] == {"plan": "pro"}
+
+
+@pytest.mark.parametrize("bad_value", ["acme", ["a", "b"], 42])
+def test_context_split_non_dict_groups_coerced_to_none(fake_client, bad_value):
+    # A non-dict `groups` / `group_properties` is coerced to {} and forwarded as
+    # None, never passed straight through to get_feature_flag_result.
+    fake_client.get_feature_flag_result.return_value = make_result()
+    ctx = EvaluationContext("u", {"groups": bad_value, "group_properties": bad_value})
+    _provider(fake_client).resolve_boolean_details("flag", False, ctx)
+    kwargs = fake_client.get_feature_flag_result.call_args.kwargs
+    assert kwargs["groups"] is None
+    assert kwargs["group_properties"] is None
 
 
 def test_send_feature_flag_events_forwarded(fake_client):

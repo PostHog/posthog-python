@@ -31,6 +31,7 @@ _RESERVED_KEYS = frozenset({GROUPS_KEY, GROUP_PROPERTIES_KEY})
 
 ObjectValue = Union[Sequence[Any], Mapping[str, Any]]
 
+_T = TypeVar("_T")
 _N = TypeVar("_N", int, float)
 
 _logger = logging.getLogger(__name__)
@@ -141,12 +142,7 @@ class PostHogProvider(AbstractProvider):
         evaluation_context: Optional[EvaluationContext] = None,
     ) -> FlagResolutionDetails[bool]:
         result = self._resolve(flag_key, evaluation_context)
-        return FlagResolutionDetails(
-            value=result.enabled,
-            variant=result.variant,
-            reason=self._map_reason(result),
-            flag_metadata=self._flag_metadata(result),
-        )
+        return self._details(result.enabled, result)
 
     def resolve_string_details(
         self,
@@ -156,18 +152,17 @@ class PostHogProvider(AbstractProvider):
     ) -> FlagResolutionDetails[str]:
         result = self._resolve(flag_key, evaluation_context)
         if result.variant is None:
-            # A boolean flag has no string variant. Surface a type mismatch so
-            # the caller gets its default value (per the OpenFeature spec)
-            # rather than a surprising "True"/"False" string.
+            if not result.enabled:
+                # The user matched no condition / the flag is off. This is not a
+                # type error: return the caller's default with a normal reason.
+                return self._details(default_value, result)
+            # Enabled but no variant => a boolean flag read as a string. Surface
+            # a type mismatch so the caller gets its default per the OF spec
+            # rather than a surprising "True"/"False".
             raise TypeMismatchError(
                 f"Flag '{flag_key}' has no string variant (boolean flag)."
             )
-        return FlagResolutionDetails(
-            value=result.variant,
-            variant=result.variant,
-            reason=self._map_reason(result),
-            flag_metadata=self._flag_metadata(result),
-        )
+        return self._details(result.variant, result)
 
     def resolve_integer_details(
         self,
@@ -175,7 +170,7 @@ class PostHogProvider(AbstractProvider):
         default_value: int,
         evaluation_context: Optional[EvaluationContext] = None,
     ) -> FlagResolutionDetails[int]:
-        return self._resolve_number(flag_key, evaluation_context, int)
+        return self._resolve_number(flag_key, default_value, evaluation_context, int)
 
     def resolve_float_details(
         self,
@@ -183,7 +178,7 @@ class PostHogProvider(AbstractProvider):
         default_value: float,
         evaluation_context: Optional[EvaluationContext] = None,
     ) -> FlagResolutionDetails[float]:
-        return self._resolve_number(flag_key, evaluation_context, float)
+        return self._resolve_number(flag_key, default_value, evaluation_context, float)
 
     def resolve_object_details(
         self,
@@ -194,22 +189,26 @@ class PostHogProvider(AbstractProvider):
         result = self._resolve(flag_key, evaluation_context)
         payload = result.payload  # already JSON-deserialized by posthog
         if not isinstance(payload, (dict, list)):
+            if not result.enabled:
+                # Non-enrolled / disabled flag: return the default with a normal
+                # reason rather than flagging it as a type error.
+                return self._details(default_value, result)
+            # Matched flag with no object payload => a genuine type mismatch.
             raise TypeMismatchError(f"Flag '{flag_key}' has no object/JSON payload.")
-        return FlagResolutionDetails(
-            value=payload,
-            variant=result.variant,
-            reason=self._map_reason(result),
-            flag_metadata=self._flag_metadata(result),
-        )
+        return self._details(payload, result)
 
     def _resolve_number(
         self,
         flag_key: str,
+        default_value: _N,
         evaluation_context: Optional[EvaluationContext],
         ctor: Callable[[str], _N],
     ) -> FlagResolutionDetails[_N]:
         result = self._resolve(flag_key, evaluation_context)
         if result.variant is None:
+            if not result.enabled:
+                # Non-enrolled / disabled flag: not a type error.
+                return self._details(default_value, result)
             raise TypeMismatchError(
                 f"Flag '{flag_key}' has no variant to parse as {ctor.__name__}."
             )
@@ -220,6 +219,12 @@ class PostHogProvider(AbstractProvider):
                 f"Flag '{flag_key}' variant '{result.variant}' is not a valid "
                 f"{ctor.__name__}."
             ) from exc
+        return self._details(value, result)
+
+    def _details(
+        self, value: _T, result: FeatureFlagResult
+    ) -> FlagResolutionDetails[_T]:
+        """Build resolution details with our shared reason/metadata wiring."""
         return FlagResolutionDetails(
             value=value,
             variant=result.variant,
