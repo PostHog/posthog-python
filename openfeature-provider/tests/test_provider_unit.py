@@ -41,6 +41,7 @@ def test_boolean_reason_mapping(
     )
     assert details.value is expected_value
     assert details.reason == expected_reason
+    assert details.flag_metadata["posthog_reason"] == reason
     fake_client.get_feature_flag_result.assert_called_once()
 
 
@@ -107,6 +108,16 @@ def test_object_payload(fake_client):
         "cfg", {}, EvaluationContext("u")
     )
     assert details.value == {"color": "blue"}
+
+
+def test_object_payload_list(fake_client):
+    fake_client.get_feature_flag_result.return_value = make_result(
+        enabled=True, variant="v1", payload=[1, 2, 3]
+    )
+    details = _provider(fake_client).resolve_object_details(
+        "cfg", {}, EvaluationContext("u")
+    )
+    assert details.value == [1, 2, 3]
 
 
 def test_object_missing_payload_is_type_mismatch(fake_client):
@@ -179,3 +190,8 @@ def test_initialize_logs_warning_on_preload_failure(fake_client, caplog):
         PostHogProvider(fake_client).initialize(EvaluationContext())
     fake_client.load_feature_flags.assert_called_once()
     assert "failed to preload" in caplog.text
+
+
+def test_shutdown_does_not_touch_client(fake_client):
+    PostHogProvider(fake_client).shutdown()
+    fake_client.shutdown.assert_not_called()

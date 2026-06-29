@@ -258,7 +258,6 @@ class PostHogProvider(AbstractProvider):
     @staticmethod
     def _map_reason(result: FeatureFlagResult) -> Reason:
         """Map PostHog's free-text reason / enabled state to an OpenFeature Reason."""
-        text = (result.reason or "").lower()
         if result.enabled:
             # Enabled: the user matched a targeting condition (or was assigned a
             # variant). PostHog has no distinct OpenFeature-style reason here.
@@ -268,6 +267,7 @@ class PostHogProvider(AbstractProvider):
         # a ``False`` result overwhelmingly means the flag is active but no
         # targeting condition matched -> ``DEFAULT``. Only report ``DISABLED``
         # (the flag itself is turned off) when the reason text says so.
+        text = (result.reason or "").lower()
         if "disabled" in text:
             return Reason.DISABLED
         return Reason.DEFAULT
