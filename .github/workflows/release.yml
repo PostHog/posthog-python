@@ -227,6 +227,53 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
 
+      # Publish the `openfeature-provider-posthog` distribution, but only when
+      # this release actually bumped it (a changeset targeting
+      # `pypi/openfeature-provider-posthog` was processed by Sampo, changing its
+      # version in openfeature-provider/pyproject.toml). Releases that only touch
+      # `posthog` skip these steps entirely, so the core release is unaffected.
+      # These run after the posthog publish/tag/release above so a provider issue
+      # can never block the main release.
+      #
+      # NOTE: the first provider release requires a PyPI trusted publisher to be
+      # registered for `openfeature-provider-posthog` (this workflow, environment
+      # "Release"), exactly like posthog/posthoganalytics.
+      - name: Detect openfeature-provider release
+        id: of-provider
+        if: steps.commit-release.outputs.commit-hash != ''
+        run: |
+          if git diff --name-only HEAD~1 HEAD -- openfeature-provider/pyproject.toml | grep -q .; then
+            version=$(python3 -c "import tomllib; print(tomllib.load(open('openfeature-provider/pyproject.toml','rb'))['project']['version'])")
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "openfeature-provider-posthog bumped to $version; will publish."
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "openfeature-provider-posthog not changed in this release; skipping."
+          fi
+
+      - name: Build openfeature-provider-posthog
+        if: steps.of-provider.outputs.released == 'true'
+        working-directory: openfeature-provider
+        run: uv build
+
+      - name: Publish openfeature-provider-posthog to PyPI
+        if: steps.of-provider.outputs.released == 'true'
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: openfeature-provider/dist
+
+      - name: Tag openfeature-provider release
+        if: steps.of-provider.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          PROVIDER_VERSION: ${{ steps.of-provider.outputs.version }}
+          COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
+        run: |
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f "ref=refs/tags/openfeature-provider-posthog-v${PROVIDER_VERSION}" \
+            -f "sha=${COMMIT_HASH}"
+
       # Notify in case of a failure
       - name: Send failure event to PostHog
         if: ${{ failure() }}

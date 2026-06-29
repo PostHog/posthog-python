@@ -299,6 +299,14 @@ jobs:
                   uv build
                   uv run --with twine twine check dist/*
 
+            - name: Smoke test built wheel in a clean environment
+              working-directory: openfeature-provider
+              shell: bash
+              run: |
+                  uv venv /tmp/of-smoke
+                  uv pip install --python /tmp/of-smoke/bin/python dist/*.whl
+                  /tmp/of-smoke/bin/python -c "from openfeature.contrib.provider.posthog import PostHogProvider; print(PostHogProvider)"
+
     django5-integration:
         name: Django 5 integration tests
         runs-on: ubuntu-latest

@@ -25,8 +25,10 @@ classifiers = [
 ]
 dependencies = [
     # FeatureFlagResult / get_feature_flag_result are the modern, non-deprecated
-    # single-call API. Our reason mapping tolerates an absent reason field.
-    "posthog>=6.0.0",
+    # single-call API. Pinned to the posthog major this provider is released and
+    # tested against (both ship from this repo); bump the upper bound when moving
+    # the provider to a new posthog major.
+    "posthog>=7.0.0,<8.0.0",
     "openfeature-sdk>=0.8.0",
 ]
 
