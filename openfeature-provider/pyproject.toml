@@ -9,7 +9,6 @@ description = "Official PostHog provider for the OpenFeature Python SDK."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
 license = { text = "MIT" }
-readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -35,6 +34,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/posthog/posthog-python"
 Repository = "https://github.com/posthog/posthog-python"
+Documentation = "https://posthog.com/docs/feature-flags/installation/openfeature"
 
 [project.optional-dependencies]
 dev = [
