@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openfeature-provider-posthog"
+version = "0.1.0"
+description = "Official PostHog provider for the OpenFeature Python SDK."
+authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
+maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    # FeatureFlagResult / get_feature_flag_result are the modern, non-deprecated
+    # single-call API. Our reason mapping tolerates an absent reason field.
+    "posthog>=6.0.0",
+    "openfeature-sdk>=0.8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/posthog/posthog-python"
+Repository = "https://github.com/posthog/posthog-python"
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "ruff",
+    "pytest",
+]
+
+[tool.setuptools]
+packages = ["openfeature.contrib.provider.posthog"]
+
+[tool.setuptools.package-data]
+"openfeature.contrib.provider.posthog" = ["py.typed"]
+
+# Local development: use the in-repo posthog as an editable source, exactly like
+# integration_tests/django5/pyproject.toml does.
+[tool.uv.sources]
+posthog = { path = "..", editable = true }
+
+[tool.uv]
+required-version = ">=0.5"
+exclude-newer = "7 days"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# This sub-project runs its own mypy (with openfeature-sdk installed in its env).
+[tool.mypy]
+python_version = "3.10"
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "."
+ignore_missing_imports = true
+strict_optional = true
+check_untyped_defs = true

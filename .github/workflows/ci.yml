@@ -256,6 +256,49 @@ jobs:
             - name: Check import produces no warnings
               run: python -W error -c "import posthog"
 
+    openfeature-provider:
+        name: OpenFeature provider
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.12
+              uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
+              with:
+                  python-version: 3.12
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+              with:
+                  enable-cache: true
+
+            - name: Install provider dependencies
+              shell: bash
+              working-directory: openfeature-provider
+              run: |
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra dev
+
+            - name: Run provider tests
+              working-directory: openfeature-provider
+              run: |
+                  uv run pytest --verbose
+
+            - name: Lint and type-check provider
+              working-directory: openfeature-provider
+              run: |
+                  uv run ruff format --check .
+                  uv run ruff check .
+                  uv run mypy .
+
+            - name: Build and verify provider distribution
+              working-directory: openfeature-provider
+              run: |
+                  uv build
+                  uv run --with twine twine check dist/*
+
     django5-integration:
         name: Django 5 integration tests
         runs-on: ubuntu-latest

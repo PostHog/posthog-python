@@ -27,6 +27,7 @@ SDK usage examples and code snippets live in the official documentation so they 
 - [Python library docs](https://posthog.com/docs/libraries/python)
 - [Django framework docs](https://posthog.com/docs/libraries/django)
 - [Flask framework docs](https://posthog.com/docs/libraries/flask)
+- [OpenFeature provider](openfeature-provider/README.md) — use PostHog flags through the [OpenFeature](https://openfeature.dev) Python SDK
 
 ## Contributing
 
