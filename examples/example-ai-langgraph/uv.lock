@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.10"
 
 [options]
-exclude-newer = "2026-04-07T08:50:22.731684Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -469,15 +469,15 @@ wheels = [
 
 [[package]]
 name = "langgraph-sdk"
-version = "0.3.12"
+version = "0.3.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "orjson" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/a1/012f0e0f5c9fd26f92bdc9d244756ad673c428230156ef668e6ec7c18cee/langgraph_sdk-0.3.12.tar.gz", hash = "sha256:c9c9ec22b3c0fcd352e2b8f32a815164f69446b8648ca22606329f4ff4c59a71", size = 194932, upload-time = "2026-03-18T22:15:54.592Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/af/cdd4d6f3c05b3c1112ed3f12ef830faf15951b21d22cbc622a4becbbe25c/langgraph_sdk-0.3.15.tar.gz", hash = "sha256:29e805003d2c6e296823dd71992610976fd0428cefaa8b3304fd91f2247037de", size = 201924, upload-time = "2026-05-22T16:54:27.678Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/4d/4f796e86b03878ab20d9b30aaed1ad459eda71a5c5b67f7cfe712f3548f2/langgraph_sdk-0.3.12-py3-none-any.whl", hash = "sha256:44323804965d6ec2a07127b3cf08a0428ea6deaeb172c2d478d5cd25540e3327", size = 95834, upload-time = "2026-03-18T22:15:53.545Z" },
+    { url = "https://files.pythonhosted.org/packages/be/a5/0196d9c05749c25bc198e4909d68c998bc3120297e14944921baf2f4c384/langgraph_sdk-0.3.15-py3-none-any.whl", hash = "sha256:3838773acf7456d158165385d49f48f1e856f28b56ccd99ea139a8f27004815d", size = 98166, upload-time = "2026-05-22T16:54:26.013Z" },
 ]
 
 [[package]]
@@ -792,14 +792,12 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.10.3"
+version = "7.21.0"
 source = { directory = "../../" }
 dependencies = [
     { name = "backoff" },
     { name = "distro" },
-    { name = "python-dateutil" },
     { name = "requests" },
-    { name = "six" },
     { name = "typing-extensions" },
 ]
 
@@ -816,10 +814,12 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'test'" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "distro", specifier = ">=1.5.0" },
-    { name = "django", marker = "extra == 'test'" },
+    { name = "django", marker = "extra == 'test'", specifier = ">=5.2.8,<6.0" },
     { name = "django-stubs", marker = "extra == 'dev'" },
+    { name = "fastmcp", marker = "extra == 'test'", specifier = ">=2.0" },
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
     { name = "google-genai", marker = "extra == 'test'" },
+    { name = "griffe", marker = "extra == 'dev'" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
     { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
@@ -828,7 +828,7 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=3.0.1" },
     { name = "lxml", marker = "extra == 'dev'" },
-    { name = "mock", marker = "extra == 'test'", specifier = ">=2.0.0" },
+    { name = "mcp", marker = "extra == 'test'", specifier = ">=1.26.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
     { name = "openai", marker = "extra == 'test'", specifier = ">=2.0" },
@@ -843,22 +843,20 @@ requires-dist = [
     { name = "pydantic", marker = "extra == 'test'", specifier = ">=2.12.0" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "pytest-bdd", marker = "extra == 'test'", specifier = ">=8.1.0" },
     { name = "pytest-timeout", marker = "extra == 'test'" },
-    { name = "python-dateutil", specifier = ">=2.2" },
+    { name = "python-dateutil", marker = "extra == 'test'", specifier = ">=2.9.0.post0" },
     { name = "requests", specifier = ">=2.7,<3.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "setuptools", marker = "extra == 'dev'" },
-    { name = "six", specifier = ">=1.5" },
     { name = "tiktoken", marker = "extra == 'test'", specifier = ">=0.12.0" },
     { name = "tomli", marker = "extra == 'dev'" },
     { name = "tomli-w", marker = "extra == 'dev'" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "types-mock", marker = "extra == 'dev'" },
-    { name = "types-python-dateutil", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "types-setuptools", marker = "extra == 'dev'" },
-    { name = "types-six", marker = "extra == 'dev'" },
     { name = "typing-extensions", specifier = ">=4.2.0" },
+    { name = "tzdata", marker = "extra == 'test'" },
     { name = "wheel", marker = "extra == 'dev'" },
 ]
 provides-extras = ["langchain", "otel", "dev", "test"]
@@ -1012,18 +1010,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/f2/f11dd73284122713f5f89fc940f370d035fa8e1e078d446b3313955157fe/pydantic_core-2.41.5-pp311-pypy311_pp73-musllinux_1_1_armv7l.whl", hash = "sha256:a668ce24de96165bb239160b3d854943128f4334822900534f2fe947930e5770", size = 2330317, upload-time = "2025-11-04T13:43:40.406Z" },
     { url = "https://files.pythonhosted.org/packages/88/9d/b06ca6acfe4abb296110fb1273a4d848a0bfb2ff65f3ee92127b3244e16b/pydantic_core-2.41.5-pp311-pypy311_pp73-musllinux_1_1_x86_64.whl", hash = "sha256:f14f8f046c14563f8eb3f45f499cc658ab8d10072961e07225e507adb700e93f", size = 2316992, upload-time = "2025-11-04T13:43:43.602Z" },
     { url = "https://files.pythonhosted.org/packages/36/c7/cfc8e811f061c841d7990b0201912c3556bfeb99cdcb7ed24adc8d6f8704/pydantic_core-2.41.5-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:56121965f7a4dc965bff783d70b907ddf3d57f6eba29b6d2e5dabfaf07799c51", size = 2145302, upload-time = "2025-11-04T13:43:46.64Z" },
-]
-
-[[package]]
-name = "python-dateutil"
-version = "2.9.0.post0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
 ]
 
 [[package]]
@@ -1236,15 +1222,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481, upload-time = "2023-05-01T04:11:28.427Z" },
-]
-
-[[package]]
-name = "six"
-version = "1.17.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
 
 [[package]]
