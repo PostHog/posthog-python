@@ -361,3 +361,23 @@ class TestConsumerCaptureModeRouting(unittest.TestCase):
             mock_v1.assert_not_called()
             mock_post.assert_called_once()
             self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
+
+    def test_v1_without_dedicated_ai_endpoint_routes_ai_events_through_v1(self) -> None:
+        # The dedicated AI endpoint is the only v1 gate: with it off, $ai_* events
+        # follow `capture_mode` like any analytics event and ride the v1 submitter
+        # (matching legacy, where they ship to the standard analytics endpoint).
+        consumer = Consumer(
+            None,
+            TEST_API_KEY,
+            capture_mode=CaptureMode.V1,
+            dedicated_ai_endpoint=False,
+        )
+        batch = [_ai_event(), _track_event()]
+        with (
+            mock.patch("posthog.consumer.batch_post") as mock_post,
+            mock.patch("posthog.consumer.send_v1_batch") as mock_v1,
+        ):
+            consumer.request(batch)
+            mock_v1.assert_called_once()
+            self.assertEqual(mock_v1.call_args.args[2], batch)
+            mock_post.assert_not_called()

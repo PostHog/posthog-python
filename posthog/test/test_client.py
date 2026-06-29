@@ -3302,3 +3302,18 @@ class TestClientSyncCaptureMode(unittest.TestCase):
             client.capture("regular_event", distinct_id="d")
             mock_post.assert_not_called()
             mock_v1.assert_called_once()
+
+    def test_v1_sync_ai_event_uses_v1_without_dedicated_endpoint(self):
+        # Without the dedicated AI endpoint, $ai_* events follow `capture_mode`
+        # and ride the v1 submitter like any analytics event.
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client.send_v1_batch") as mock_v1,
+        ):
+            client = self._client(capture_mode="v1")
+            client.capture("$ai_generation", distinct_id="d")
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()
+            sent_batch = mock_v1.call_args.args[2]
+            self.assertEqual(len(sent_batch), 1)
+            self.assertEqual(sent_batch[0]["event"], "$ai_generation")
