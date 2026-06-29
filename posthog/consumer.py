@@ -5,7 +5,9 @@ import time
 from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
+from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
+from posthog.capture_v1 import send_v1_batch
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
@@ -52,6 +54,7 @@ class Consumer(Thread):
         historical_migration=False,
         dedicated_ai_endpoint=False,
         capture_mode=CaptureMode.V0,
+        capture_compression=CaptureCompression.NONE,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -66,6 +69,7 @@ class Consumer(Thread):
         self.gzip = gzip
         self.dedicated_ai_endpoint = dedicated_ai_endpoint
         self.capture_mode = capture_mode
+        self.capture_compression = capture_compression
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
@@ -154,9 +158,13 @@ class Consumer(Thread):
         invokes `on_error`); a second is logged here so it isn't silently lost.
         The batch was already dequeued in `upload()`, so unsent events are dropped
         after retries, same as the single-endpoint path.
+
+        The analytics destination follows `capture_mode` (v1 -> partial-retry
+        submitter); the dedicated AI endpoint has no v1 form and always uses the
+        legacy submitter.
         """
         if not self.dedicated_ai_endpoint:
-            self._send(batch, EVENTS_ENDPOINT)
+            self._send_analytics(batch)
             return
 
         ai_events: list[Any] = []
@@ -166,22 +174,41 @@ class Consumer(Thread):
             target.append(item)
 
         first_exc = None
-        for events, path in (
-            (analytics_events, EVENTS_ENDPOINT),
-            (ai_events, AI_EVENTS_ENDPOINT),
+        for events, label, sender in (
+            (analytics_events, "analytics", self._send_analytics),
+            (ai_events, "ai", self._send_ai),
         ):
             if not events:
                 continue
             try:
-                self._send(events, path)
+                sender(events)
             except Exception as e:
                 if first_exc is None:
                     first_exc = e
                 else:
-                    self.log.error("error uploading to %s: %s", path, e)
+                    self.log.error("error uploading to %s: %s", label, e)
 
         if first_exc is not None:
             raise first_exc
+
+    def _send_analytics(self, batch):
+        """Submit analytics events via the wire protocol selected by `capture_mode`."""
+        if self.capture_mode == CaptureMode.V1:
+            send_v1_batch(
+                self.api_key,
+                self.host,
+                batch,
+                compression=self.capture_compression,
+                timeout=self.timeout,
+                max_retries=self.retries,
+                historical_migration=self.historical_migration,
+            )
+            return
+        self._send(batch, EVENTS_ENDPOINT)
+
+    def _send_ai(self, batch):
+        """Submit `$ai_*` events to the dedicated legacy AI endpoint (no v1 form)."""
+        self._send(batch, AI_EVENTS_ENDPOINT)
 
     def _send(self, batch, path):
         """Attempt to upload a single batch to `path`, retrying before raising an error"""
