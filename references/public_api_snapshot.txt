@@ -1112,7 +1112,7 @@ function posthog.request.flags(api_key: str, host: Optional[str] = None, gzip: b
 function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
 function posthog.request.is_ai_event(event_name) -> bool
 function posthog.request.normalize_host(host: Optional[str]) -> str
-function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
+function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: int = 15, session: Optional[requests.Session] = None, api_key_field: str = 'api_key', **kwargs) -> requests.Response
 function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
 function posthog.request.reset_sessions() -> None
 function posthog.request.set_socket_options(socket_options: Optional[SocketOptions]) -> None

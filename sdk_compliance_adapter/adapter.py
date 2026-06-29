@@ -14,17 +14,29 @@ from typing import Any, Dict, List, Optional
 from flask import Flask, jsonify, request
 
 from posthog import Client
+from posthog.capture_compression import CaptureCompression
+from posthog.capture_v1 import post_v1 as original_post_v1
 from posthog.request import EVENTS_ENDPOINT
 from posthog.request import batch_post as original_batch_post
 from posthog.version import VERSION
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Selects which capture protocol this adapter process speaks. Baked at build
+# time via the CAPTURE_MODE env var ("v1" => capture-v1, anything else => legacy
+# v0), mirroring the v0/v1 Dockerfile split. One process speaks one mode and
+# advertises it via /health capabilities.
+CAPTURE_MODE = os.environ.get("CAPTURE_MODE", "")
+
+
+def is_v1() -> bool:
+    return CAPTURE_MODE == "v1"
 
 
 class RequestInfo:
@@ -132,6 +144,33 @@ class SDKState:
                 if retry_attempt > 0:
                     self.total_retries += 1
 
+    def record_request_v1(
+        self, status_code: int, batch: List[Dict], attempt: int, terminal_count: int
+    ):
+        """Record a capture-v1 HTTP attempt.
+
+        Unlike v0, the retry attempt is carried on the request (PostHog-Attempt,
+        1-based) rather than inferred from a batch id, and a 2xx no longer means
+        the whole batch was accepted — only events with a terminal (non-"retry")
+        per-event result count as sent.
+        """
+        with self.lock:
+            uuid_list = [event.get("uuid", "") for event in batch]
+            self.requests_made.append(
+                RequestInfo(
+                    timestamp_ms=int(time.time() * 1000),
+                    status_code=status_code,
+                    retry_attempt=attempt - 1,
+                    event_count=len(batch),
+                    uuid_list=uuid_list,
+                )
+            )
+            if attempt > 1:
+                self.total_retries += 1
+            if 200 <= status_code < 300:
+                self.total_events_sent += terminal_count
+                self.pending_events = max(0, self.pending_events - terminal_count)
+
     def record_error(self, error: str):
         """Record an error"""
         with self.lock:
@@ -188,6 +227,60 @@ def patched_batch_post(
         raise
 
 
+def patched_post_v1(
+    api_key: str,
+    host: Optional[str],
+    batch_body: Dict,
+    *,
+    attempt: int,
+    request_id: str,
+    compression: CaptureCompression = CaptureCompression.NONE,
+    timeout: int = 15,
+    session: Any = None,
+):
+    """Patched version of post_v1 that records requests for /state assertions.
+
+    Mirrors the legacy `patched_batch_post`, but reads the retry attempt from the
+    call (1-based) and counts only terminal per-event results as sent.
+    """
+    batch = batch_body.get("batch", [])
+    try:
+        response = original_post_v1(
+            api_key,
+            host,
+            batch_body,
+            attempt=attempt,
+            request_id=request_id,
+            compression=compression,
+            timeout=timeout,
+            session=session,
+        )
+    except Exception as e:
+        status_code = getattr(e, "status", 0)
+        state.record_request_v1(
+            status_code if isinstance(status_code, int) else 0, batch, attempt, 0
+        )
+        state.record_error(str(e))
+        raise
+
+    terminal = 0
+    status = response.status_code
+    if 200 <= status < 300:
+        try:
+            results = response.json().get("results", {})
+            # Mirror send_v1_batch: only a non-retry directive is terminal. A
+            # missing/null `result` is not counted as sent.
+            terminal = sum(
+                1
+                for r in results.values()
+                if (r or {}).get("result") not in (None, "retry")
+            )
+        except Exception:
+            terminal = 0
+    state.record_request_v1(status, batch, attempt, terminal)
+    return response
+
+
 # Monkey-patch the batch_post function
 import posthog.request  # noqa: E402
 
@@ -198,16 +291,26 @@ import posthog.consumer  # noqa: E402
 
 posthog.consumer.batch_post = patched_batch_post
 
+# Patch the capture-v1 submitter. `send_v1_batch` resolves `post_v1` as a module
+# global at call time, so patching it here covers both the async consumer and the
+# sync client paths.
+import posthog.capture_v1  # noqa: E402
+
+posthog.capture_v1.post_v1 = patched_post_v1
+
 
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint"""
+    capabilities = (
+        ["capture_v1", "encoding_gzip"] if is_v1() else ["capture_v0", "encoding_gzip"]
+    )
     return jsonify(
         {
             "sdk_name": "posthog-python",
             "sdk_version": VERSION,
             "adapter_version": "1.0.0",
-            "capabilities": ["capture_v0", "encoding_gzip"],
+            "capabilities": capabilities,
         }
     )
 
@@ -225,9 +328,14 @@ def init():
         api_key = data.get("api_key")
         host = data.get("host")
         flush_at = data.get("flush_at", 100)
-        flush_interval_ms = data.get("flush_interval_ms", 5000)
+        flush_interval_ms = data.get("flush_interval_ms", 500)
         max_retries = data.get("max_retries", 3)
         enable_compression = data.get("enable_compression", False)
+        # Compliance tests assert the request-level default when callers omit
+        # disable_geoip, so the adapter default keeps geoip-enabled /flags
+        # requests while still allowing per-call overrides.
+        disable_geoip = data.get("disable_geoip", False)
+        historical_migration = data.get("historical_migration", False)
 
         if not api_key:
             return jsonify({"error": "api_key is required"}), 400
@@ -237,6 +345,9 @@ def init():
         # Convert flush_interval from ms to seconds
         flush_interval = flush_interval_ms / 1000.0
 
+        # One adapter process speaks one capture protocol, selected by CAPTURE_MODE.
+        capture_mode = "v1" if is_v1() else "v0"
+
         # Create client
         client = Client(
             project_api_key=api_key,
@@ -245,11 +356,10 @@ def init():
             flush_interval=flush_interval,
             gzip=enable_compression,
             max_retries=max_retries,
-            debug=True,
-            # Compliance tests assert the request-level default when callers omit
-            # disable_geoip. Configure the adapter to exercise geoip-enabled
-            # /flags requests by default while still allowing per-call overrides.
-            disable_geoip=False,
+            debug=False,
+            disable_geoip=disable_geoip,
+            historical_migration=historical_migration,
+            capture_mode=capture_mode,
         )
 
         state.client = client
@@ -257,7 +367,9 @@ def init():
         logger.info(
             f"Initialized SDK with api_key={api_key[:10]}..., host={host}, "
             f"flush_at={flush_at}, flush_interval={flush_interval}, "
-            f"max_retries={max_retries}, gzip={enable_compression}"
+            f"max_retries={max_retries}, gzip={enable_compression}, "
+            f"capture_mode={capture_mode}, disable_geoip={disable_geoip}, "
+            f"historical_migration={historical_migration}"
         )
 
         return jsonify({"success": True})
@@ -279,11 +391,27 @@ def capture():
         event = data.get("event")
         properties = data.get("properties")
         timestamp = data.get("timestamp")
+        options = data.get("options")
 
         if not distinct_id:
             return jsonify({"error": "distinct_id is required"}), 400
         if not event:
             return jsonify({"error": "event is required"}), 400
+
+        # Fold capture-v1 options back into the magic `$`-prefixed properties the
+        # SDK lifts onto the wire `options` object. Renamed keys mirror the SDK's
+        # sentinel table; unknown keys get a bare `$` prefix. v0 has no wire
+        # options object, so this only applies in v1 mode.
+        if options and is_v1():
+            properties = dict(properties or {})
+            option_to_property = {
+                "cookieless_mode": "$cookieless_mode",
+                "disable_skew_correction": "$ignore_sent_at",
+                "process_person_profile": "$process_person_profile",
+                "product_tour_id": "$product_tour_id",
+            }
+            for key, value in options.items():
+                properties[option_to_property.get(key, "$" + key)] = value
 
         # Capture event
         kwargs = {"distinct_id": distinct_id, "properties": properties}
