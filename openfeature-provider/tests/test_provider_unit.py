@@ -20,27 +20,28 @@ def test_metadata(fake_client):
     assert _provider(fake_client).get_metadata().name == "PostHogProvider"
 
 
-def test_boolean_targeting_match(fake_client):
+@pytest.mark.parametrize(
+    ("enabled", "reason", "expected_value", "expected_reason"),
+    [
+        (True, "matched condition set 1", True, Reason.TARGETING_MATCH),
+        # Active flag, user matched nothing -> DEFAULT (not DISABLED).
+        (False, "no condition set matched", False, Reason.DEFAULT),
+        # Only an explicitly-disabled flag maps to DISABLED.
+        (False, "flag is disabled", False, Reason.DISABLED),
+    ],
+)
+def test_boolean_reason_mapping(
+    fake_client, enabled, reason, expected_value, expected_reason
+):
     fake_client.get_feature_flag_result.return_value = make_result(
-        enabled=True, variant=None
+        enabled=enabled, variant=None, reason=reason
     )
     details = _provider(fake_client).resolve_boolean_details(
-        "flag", False, EvaluationContext("user-1")
+        "flag", not expected_value, EvaluationContext("user-1")
     )
-    assert details.value is True
-    assert details.reason == Reason.TARGETING_MATCH
+    assert details.value is expected_value
+    assert details.reason == expected_reason
     fake_client.get_feature_flag_result.assert_called_once()
-
-
-def test_boolean_disabled(fake_client):
-    fake_client.get_feature_flag_result.return_value = make_result(
-        enabled=False, variant=None, reason="no match"
-    )
-    details = _provider(fake_client).resolve_boolean_details(
-        "flag", True, EvaluationContext("user-1")
-    )
-    assert details.value is False
-    assert details.reason == Reason.DISABLED
 
 
 def test_string_variant(fake_client):
@@ -64,32 +65,38 @@ def test_string_on_boolean_flag_is_type_mismatch(fake_client):
         )
 
 
-def test_integer_variant_parse(fake_client):
+@pytest.mark.parametrize(
+    ("resolver", "variant", "expected"),
+    [
+        ("resolve_integer_details", "42", 42),
+        ("resolve_integer_details", "3", 3),
+        ("resolve_float_details", "3.5", 3.5),
+        ("resolve_float_details", "3", 3.0),
+    ],
+)
+def test_number_variant_parse(fake_client, resolver, variant, expected):
     fake_client.get_feature_flag_result.return_value = make_result(
-        enabled=True, variant="42"
+        enabled=True, variant=variant
     )
-    details = _provider(fake_client).resolve_integer_details(
-        "n", 0, EvaluationContext("u")
-    )
-    assert details.value == 42
+    details = getattr(_provider(fake_client), resolver)("n", 0, EvaluationContext("u"))
+    assert details.value == expected
 
 
-def test_integer_variant_parse_failure(fake_client):
+@pytest.mark.parametrize(
+    ("resolver", "variant"),
+    [
+        ("resolve_integer_details", "not-an-int"),
+        ("resolve_integer_details", None),
+        ("resolve_float_details", "abc"),
+        ("resolve_float_details", None),
+    ],
+)
+def test_number_variant_parse_failure(fake_client, resolver, variant):
     fake_client.get_feature_flag_result.return_value = make_result(
-        enabled=True, variant="not-an-int"
+        enabled=True, variant=variant
     )
     with pytest.raises(TypeMismatchError):
-        _provider(fake_client).resolve_integer_details("n", 0, EvaluationContext("u"))
-
-
-def test_float_variant_parse(fake_client):
-    fake_client.get_feature_flag_result.return_value = make_result(
-        enabled=True, variant="3.5"
-    )
-    details = _provider(fake_client).resolve_float_details(
-        "n", 0.0, EvaluationContext("u")
-    )
-    assert details.value == 3.5
+        getattr(_provider(fake_client), resolver)("n", 0, EvaluationContext("u"))
 
 
 def test_object_payload(fake_client):
@@ -157,3 +164,18 @@ def test_send_feature_flag_events_forwarded(fake_client):
         fake_client.get_feature_flag_result.call_args.kwargs["send_feature_flag_events"]
         is False
     )
+
+
+def test_initialize_skips_preload_without_personal_api_key(fake_client):
+    # fake_client.personal_api_key is None by default.
+    PostHogProvider(fake_client).initialize(EvaluationContext())
+    fake_client.load_feature_flags.assert_not_called()
+
+
+def test_initialize_logs_warning_on_preload_failure(fake_client, caplog):
+    fake_client.personal_api_key = "phx_test"
+    fake_client.load_feature_flags.side_effect = RuntimeError("bad key")
+    with caplog.at_level("WARNING"):
+        PostHogProvider(fake_client).initialize(EvaluationContext())
+    fake_client.load_feature_flags.assert_called_once()
+    assert "failed to preload" in caplog.text

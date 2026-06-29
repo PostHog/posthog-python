@@ -7,6 +7,7 @@ contract, using the modern, single-call ``Client.get_feature_flag_result`` API.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar, Union
 
 from openfeature.evaluation_context import EvaluationContext
@@ -31,6 +32,8 @@ _RESERVED_KEYS = frozenset({GROUPS_KEY, GROUP_PROPERTIES_KEY})
 ObjectValue = Union[Sequence[Any], Mapping[str, Any]]
 
 _N = TypeVar("_N", int, float)
+
+_logger = logging.getLogger(__name__)
 
 
 class PostHogProvider(AbstractProvider):
@@ -90,7 +93,16 @@ class PostHogProvider(AbstractProvider):
             try:
                 self._client.load_feature_flags()
             except Exception:
-                pass
+                # Don't block the OpenFeature client on a preload failure
+                # (remote evaluation still works), but surface it: an invalid
+                # personal_api_key, unreachable host, or missing permissions
+                # would otherwise silently disable local evaluation.
+                _logger.warning(
+                    "PostHogProvider: failed to preload feature flag "
+                    "definitions for local evaluation; falling back to remote "
+                    "evaluation.",
+                    exc_info=True,
+                )
 
     def shutdown(self) -> None:
         # The provider does not own the injected client's lifecycle, so this is
@@ -246,16 +258,19 @@ class PostHogProvider(AbstractProvider):
     @staticmethod
     def _map_reason(result: FeatureFlagResult) -> Reason:
         """Map PostHog's free-text reason / enabled state to an OpenFeature Reason."""
-        if not result.enabled:
-            return Reason.DISABLED
         text = (result.reason or "").lower()
-        if "condition" in text or "match" in text or "variant" in text:
+        if result.enabled:
+            # Enabled: the user matched a targeting condition (or was assigned a
+            # variant). PostHog has no distinct OpenFeature-style reason here.
             return Reason.TARGETING_MATCH
-        if "default" in text:
-            return Reason.DEFAULT
-        # Enabled, but no recognizable reason text: treat an absent reason as a
-        # targeting match, and an unfamiliar reason string as unknown.
-        return Reason.TARGETING_MATCH if result.reason is None else Reason.UNKNOWN
+        # Not enabled. ``get_feature_flag_result`` returns ``None`` (surfaced as
+        # ``FlagNotFoundError`` one level up) for archived/non-existent flags, so
+        # a ``False`` result overwhelmingly means the flag is active but no
+        # targeting condition matched -> ``DEFAULT``. Only report ``DISABLED``
+        # (the flag itself is turned off) when the reason text says so.
+        if "disabled" in text:
+            return Reason.DISABLED
+        return Reason.DEFAULT
 
     @staticmethod
     def _flag_metadata(result: FeatureFlagResult) -> Mapping[str, Any]:
