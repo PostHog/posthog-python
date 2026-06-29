@@ -12,6 +12,12 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[manifest]
+members = [
+    "openfeature-provider-posthog",
+    "posthog",
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
@@ -172,7 +178,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version != '3.11.*'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/68/fb4fb78c9eac59d5e819108a57664737f855c5a8e9b76aec1738bb137f9e/asgiref-3.9.0.tar.gz", hash = "sha256:3dd2556d0f08c4fab8a010d9ab05ef8c34565f6bf32381d17505f7ca5b273767", size = 36772, upload-time = "2025-07-03T13:25:01.491Z" }
 wheels = [
@@ -2136,6 +2142,41 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/3f/aa0c1150627b4e683ae5673486b7d5cf2623a8821601863ee389e430965a/openapi_spec_validator-0.8.5.tar.gz", hash = "sha256:93b04ef5321d5866b2502371123d86333e5c1444f051d323e02525d9e83c7622", size = 1756845, upload-time = "2026-04-24T15:25:21.334Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/96/d7dfe1cc0be2df22d7a97ffb0f8bb00b10d92749aa6e64ffa7cc9a041580/openapi_spec_validator-0.8.5-py3-none-any.whl", hash = "sha256:3669106361856934153991e30714616a294865a33f6411a4c25d1dc2d08cfbc2", size = 50334, upload-time = "2026-04-24T15:25:19.65Z" },
+]
+
+[[package]]
+name = "openfeature-provider-posthog"
+version = "0.1.0"
+source = { editable = "openfeature-provider" }
+dependencies = [
+    { name = "openfeature-sdk" },
+    { name = "posthog" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "openfeature-sdk", specifier = ">=0.8.0" },
+    { name = "posthog", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "openfeature-sdk"
+version = "0.10.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/30/cfc684b7d8314398d476ae8ed515c10db99c4d7f950989db464b4ded12ce/openfeature_sdk-0.10.0.tar.gz", hash = "sha256:938c2540bdea4da3b01ef507517ee636f223a35abaaca845c5587e594151b052", size = 33516, upload-time = "2026-06-01T19:45:35.136Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/44/8a4f5225e930ff0d999fd43f5d743a4babeb6c7e76dddc00f0e118878ef3/openfeature_sdk-0.10.0-py3-none-any.whl", hash = "sha256:75497ea75d73f684eef509a25f79ad6386368862e050af80ab70a44ae49b33e4", size = 38941, upload-time = "2026-06-01T19:45:33.011Z" },
 ]
 
 [[package]]

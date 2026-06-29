@@ -49,14 +49,11 @@ packages = ["openfeature.contrib.provider.posthog"]
 [tool.setuptools.package-data]
 "openfeature.contrib.provider.posthog" = ["py.typed"]
 
-# Local development: use the in-repo posthog as an editable source, exactly like
-# integration_tests/django5/pyproject.toml does.
+# Local development: resolve posthog from the uv workspace (the repo root),
+# declared in the root pyproject's [tool.uv.workspace]. This guarantees the
+# provider is always built/tested against the in-repo posthog.
 [tool.uv.sources]
-posthog = { path = "..", editable = true }
-
-[tool.uv]
-required-version = ">=0.5"
-exclude-newer = "7 days"
+posthog = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

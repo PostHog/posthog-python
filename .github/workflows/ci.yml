@@ -257,46 +257,52 @@ jobs:
               run: python -W error -c "import posthog"
 
     openfeature-provider:
-        name: OpenFeature provider
+        name: OpenFeature provider Python ${{ matrix.python-version }}
         runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
         steps:
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
               with:
                   fetch-depth: 1
 
-            - name: Set up Python 3.12
+            - name: Set up Python ${{ matrix.python-version }}
               uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
-                  python-version: 3.12
+                  python-version: ${{ matrix.python-version }}
 
             - name: Install uv
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
 
+            # openfeature-provider-posthog is a uv workspace member (declared in
+            # the root pyproject), so commands are scoped to it with --package and
+            # builds are pinned to its own dist/ with --out-dir.
             - name: Install provider dependencies
               shell: bash
               working-directory: openfeature-provider
               run: |
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra dev
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --package openfeature-provider-posthog --extra dev
 
             - name: Run provider tests
               working-directory: openfeature-provider
               run: |
-                  uv run pytest --verbose
+                  uv run --package openfeature-provider-posthog pytest --verbose
 
             - name: Lint and type-check provider
               working-directory: openfeature-provider
               run: |
-                  uv run ruff format --check .
-                  uv run ruff check .
-                  uv run mypy .
+                  uv run --package openfeature-provider-posthog ruff format --check .
+                  uv run --package openfeature-provider-posthog ruff check .
+                  uv run --package openfeature-provider-posthog mypy .
 
             - name: Build and verify provider distribution
               working-directory: openfeature-provider
               run: |
-                  uv build
+                  uv build --package openfeature-provider-posthog --out-dir dist
                   uv run --with twine twine check dist/*
 
             - name: Smoke test built wheel in a clean environment

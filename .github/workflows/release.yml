@@ -255,7 +255,7 @@ jobs:
       - name: Build openfeature-provider-posthog
         if: steps.of-provider.outputs.released == 'true'
         working-directory: openfeature-provider
-        run: uv build
+        run: uv build --package openfeature-provider-posthog --out-dir dist
 
       - name: Publish openfeature-provider-posthog to PyPI
         if: steps.of-provider.outputs.released == 'true'
