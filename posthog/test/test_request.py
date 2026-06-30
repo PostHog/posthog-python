@@ -86,6 +86,25 @@ def test_post_sends_snake_case_sent_at(key, expected_present):
     assert (key in data) is expected_present
 
 
+def test_post_sends_project_api_key_field():
+    mock_response = requests.Response()
+    mock_response.status_code = 200
+    mock_session = mock.MagicMock()
+    mock_session.post.return_value = mock_response
+
+    request_module.post(
+        TEST_API_KEY,
+        host="https://test.posthog.com",
+        path="/batch/",
+        session=mock_session,
+        batch=[],
+    )
+
+    data = json.loads(mock_session.post.call_args.kwargs["data"])
+    assert data["api_key"] == TEST_API_KEY
+    assert "token" not in data
+
+
 def test_message_only_debug_logs_include_posthog_prefix():
     mock_response = requests.Response()
     mock_response.status_code = 200
