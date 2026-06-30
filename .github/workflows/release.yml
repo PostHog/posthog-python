@@ -262,19 +262,11 @@ jobs:
             changelog: openfeature-provider/CHANGELOG.md
             github_release: true
     steps:
-      - name: Get GitHub App token
-        id: releaser
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_APP_ID }}
-          private-key: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_PRIVATE_KEY }}
-
       - name: Checkout release commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.version-bump.outputs.commit-hash }}
           fetch-depth: 0
-          token: ${{ steps.releaser.outputs.token }}
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -320,7 +312,7 @@ jobs:
       - name: Tag ${{ matrix.package.name }} release
         if: steps.detect.outputs.has-new-version == 'true' && matrix.package.tag_prefix != ''
         env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
           COMMIT_HASH: ${{ needs.version-bump.outputs.commit-hash }}
         run: |
@@ -331,7 +323,7 @@ jobs:
       - name: Create ${{ matrix.package.name }} GitHub Release
         if: steps.detect.outputs.has-new-version == 'true' && matrix.package.github_release
         env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
           CHANGELOG_FILE: ${{ matrix.package.changelog }}
         run: |
