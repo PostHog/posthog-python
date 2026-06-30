@@ -242,7 +242,7 @@ jobs:
             version_file: pyproject.toml
             build: uv run make build_release
             packages_dir: dist
-            tag_prefix: "v"
+            tag_prefix: "posthog-v"
             changelog: CHANGELOG.md
             github_release: true
           # posthoganalytics is a build-time mirror of posthog (same version, no
