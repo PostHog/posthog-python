@@ -53,8 +53,12 @@ jobs:
       slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
       posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
 
-  release:
-    name: Release and publish
+  # Bump versions, commit to main, and regenerate references. This is the single
+  # approval-gated job (environment "Release"). It does NOT publish — publishing
+  # happens in the `publish` matrix job below, which has no environment so the
+  # matrix never multiplies approval prompts.
+  version-bump:
+    name: Bump versions and commit to main
     needs: [check-changesets, notify-approval-needed]
     runs-on: ubuntu-latest
     # Use `always()` to ensure the job runs even if notify-approval-needed is skipped,
@@ -63,7 +67,9 @@ jobs:
     environment: "Release" # This will require an approval from a maintainer, they are notified in Slack above
     permissions:
       contents: write
-      id-token: write
+    outputs:
+      commit-hash: ${{ steps.commit-release.outputs.commit-hash }}
+      new_version: ${{ steps.sampo-release.outputs.new_version }}
     steps:
       - name: Notify Slack - Approved
         if: needs.notify-approval-needed.outputs.slack_ts != ''
@@ -119,6 +125,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
+      # `sampo release` bumps every workspace package that has a pending changeset
+      # (posthog at the root, and openfeature-provider-posthog as a workspace
+      # member). new_version is the posthog version, used for the version.py sync
+      # and the posthog tag.
       - name: Prepare release with Sampo
         id: sampo-release
         env:
@@ -151,52 +161,6 @@ jobs:
         run: |
           git fetch origin main
           git reset --hard "$COMMIT_HASH"
-
-      # Publishing is done manually (not via `sampo publish`) because we need to
-      # publish both `posthog` and `posthoganalytics` packages to PyPI.
-      # Sampo only knows about the `posthog` package, so we handle both here.
-      # Both packages use PyPI OIDC trusted publishing (no API tokens needed).
-      - name: Build posthog
-        if: steps.commit-release.outputs.commit-hash != ''
-        run: uv run make build_release
-
-      - name: Publish posthog to PyPI
-        if: steps.commit-release.outputs.commit-hash != ''
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
-
-      # The `posthoganalytics` package is a mirror of `posthog` published under
-      # a different name for backwards compatibility. The make target handles
-      # copying, renaming imports, and building the dist automatically.
-      - name: Build posthoganalytics
-        if: steps.commit-release.outputs.commit-hash != ''
-        run: uv run make build_release_analytics
-
-      - name: Publish posthoganalytics to PyPI
-        if: steps.commit-release.outputs.commit-hash != ''
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
-
-      # We skip `sampo publish` (which normally creates the tag) because we
-      # need to publish both posthog and posthoganalytics manually, so we
-      # create the tag ourselves.
-      - name: Tag release
-        if: steps.commit-release.outputs.commit-hash != ''
-        env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
-          COMMIT_HASH: ${{ steps.commit-release.outputs.commit-hash }}
-        run: |
-          gh api "repos/${{ github.repository }}/git/refs" \
-            -f "ref=refs/tags/${NEW_VERSION}" \
-            -f "sha=${COMMIT_HASH}"
-
-      - name: Create GitHub Release
-        if: steps.commit-release.outputs.commit-hash != ''
-        env:
-          GH_TOKEN: ${{ steps.releaser.outputs.token }}
-          NEW_VERSION: ${{ steps.sampo-release.outputs.new_version }}
-        run: |
-          CHANGELOG_ENTRY=$(awk -v defText="see CHANGELOG.md" '/^## /{if (flag) exit; flag=1; next} flag; END{if (!flag) print defText}' CHANGELOG.md | sed '/[^[:space:]]/,$!d' | tac | sed '/[^[:space:]]/,$!d' | tac)
-          gh release create "$NEW_VERSION" --notes "$CHANGELOG_ENTRY"
 
       - name: Generate references
         if: steps.commit-release.outputs.commit-hash != ''
@@ -249,14 +213,234 @@ jobs:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
           thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to release `posthog-python@${{ steps.sampo-release.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          message: "❌ Failed to bump versions for `posthog-python@${{ steps.sampo-release.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
           emoji_reaction: "x"
+
+  # Build, publish, and tag each package whose version was bumped in this release.
+  # A matrix over the publishable packages (N packages, like the posthog-ruby and
+  # JS monorepos). The approval gate lives on `version-bump`, so this job has no
+  # environment and the matrix never re-triggers approval. `max-parallel: 1`
+  # publishes sequentially (posthog before its posthoganalytics mirror).
+  #
+  # Each package uses PyPI OIDC trusted publishing (no API tokens). A trusted
+  # publisher must be registered for every package name (this workflow,
+  # `publish` job) before its first release.
+  publish:
+    name: Publish ${{ matrix.package.name }}
+    needs: [check-changesets, notify-approval-needed, version-bump]
+    runs-on: ubuntu-latest
+    if: always() && needs.version-bump.outputs.commit-hash != ''
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        package:
+          - name: posthog
+            version_file: pyproject.toml
+            build: uv run make build_release
+            packages_dir: dist
+            tag_prefix: "posthog-v"
+            changelog: CHANGELOG.md
+            github_release: true
+          # posthoganalytics is a build-time mirror of posthog (same version, no
+          # separate tag/release); it always ships alongside posthog.
+          - name: posthoganalytics
+            version_file: pyproject.toml
+            build: uv run make build_release_analytics
+            packages_dir: dist
+            tag_prefix: ""
+            changelog: ""
+            github_release: false
+          - name: openfeature-provider-posthog
+            version_file: openfeature-provider/pyproject.toml
+            build: uv build --package openfeature-provider-posthog --out-dir openfeature-provider/dist
+            packages_dir: openfeature-provider/dist
+            tag_prefix: "openfeature-provider-posthog-v"
+            changelog: openfeature-provider/CHANGELOG.md
+            github_release: true
+    steps:
+      - name: Get GitHub App token
+        id: releaser
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_APP_ID }}
+          private-key: ${{ secrets.GH_APP_POSTHOG_PYTHON_RELEASER_PRIVATE_KEY }}
+
+      - name: Checkout release commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.version-bump.outputs.commit-hash }}
+          fetch-depth: 0
+          token: ${{ steps.releaser.outputs.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: 3.11.11
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # Publish a package only if this release actually changed its version. The
+      # release commit (HEAD) is compared to its parent: posthog/posthoganalytics
+      # gate on the root pyproject, the provider on its own pyproject.
+      - name: Detect ${{ matrix.package.name }} version change
+        id: detect
+        env:
+          VERSION_FILE: ${{ matrix.package.version_file }}
+        run: |
+          if git diff --quiet HEAD~1 HEAD -- "$VERSION_FILE"; then
+            echo "has-new-version=false" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.package.name }}: no version change in this release; skipping."
+          else
+            version=$(python3 -c "import tomllib; print(tomllib.load(open('$VERSION_FILE','rb'))['project']['version'])")
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "has-new-version=true" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.package.name }}: releasing $version"
+          fi
+
+      - name: Build ${{ matrix.package.name }}
+        if: steps.detect.outputs.has-new-version == 'true'
+        run: ${{ matrix.package.build }}
+
+      - name: Publish ${{ matrix.package.name }} to PyPI
+        if: steps.detect.outputs.has-new-version == 'true'
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: ${{ matrix.package.packages_dir }}
+
+      - name: Tag ${{ matrix.package.name }} release
+        if: steps.detect.outputs.has-new-version == 'true' && matrix.package.tag_prefix != ''
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
+          COMMIT_HASH: ${{ needs.version-bump.outputs.commit-hash }}
+        run: |
+          gh api "repos/${{ github.repository }}/git/refs" \
+            -f "ref=refs/tags/${TAG}" \
+            -f "sha=${COMMIT_HASH}"
+
+      - name: Create ${{ matrix.package.name }} GitHub Release
+        if: steps.detect.outputs.has-new-version == 'true' && matrix.package.github_release
+        env:
+          GH_TOKEN: ${{ steps.releaser.outputs.token }}
+          TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
+          CHANGELOG_FILE: ${{ matrix.package.changelog }}
+        run: |
+          # Use the latest changelog section (lines between the first '## ' and the
+          # next '## ') as release notes. Fall back to a pointer if the file is
+          # missing or has no section yet, so a release is never blocked on notes.
+          notes="See ${CHANGELOG_FILE} for details."
+          if [ -f "${CHANGELOG_FILE}" ]; then
+            entry=$(awk '/^## /{if (seen) exit; seen=1; next} seen' "${CHANGELOG_FILE}" | sed '/[^[:space:]]/,$!d')
+            if [ -n "$(printf '%s' "$entry" | tr -d '[:space:]')" ]; then
+              notes="$entry"
+            fi
+          fi
+          gh release create "$TAG" --notes "$notes"
+
+      # Notify in case of a failure
+      - name: Send failure event to PostHog
+        if: ${{ failure() }}
+        uses: PostHog/posthog-github-action@58dea254b598fb5d469c0699c98af8288a7f7650 # v1.2.0
+        with:
+          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
+          event: "posthog-python-github-release-workflow-failure"
+          properties: >-
+            {
+              "commitSha": "${{ github.sha }}",
+              "jobStatus": "${{ job.status }}",
+              "ref": "${{ github.ref }}",
+              "package": "${{ matrix.package.name }}",
+              "version": "${{ needs.version-bump.outputs.new_version }}"
+            }
+
+      - name: Notify Slack - Failed
+        if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
+        uses: posthog/.github/.github/actions/slack-thread-reply@5fc4680761e8ac29a61b212756230eba0e276d8c
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "❌ Failed to publish `${{ matrix.package.name }}@${{ needs.version-bump.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+          emoji_reaction: "x"
+
+  # Side-effect-free rehearsal: runs ONLY when this workflow is manually
+  # dispatched on a non-main branch (e.g. this PR branch). It applies the Sampo
+  # version bump, builds openfeature-provider-posthog, and publishes it to
+  # TestPyPI via OIDC — exercising the version bump + the trusted-publisher
+  # handshake without touching main, prod PyPI, git tags, or GitHub releases.
+  # On real (push-to-main) releases this job is skipped, so the prod flow is
+  # unaffected. Requires a TestPyPI trusted publisher for
+  # openfeature-provider-posthog (workflow release.yml, no environment).
+  dry-run-testpypi:
+    name: Dry-run publish to TestPyPI (provider)
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout dispatched branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: 3.11.11
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e
+        with:
+          toolchain: 1.91.1
+          components: cargo
+
+      - name: Cache Sampo CLI
+        id: cache-sampo
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cargo/bin/sampo
+          key: sampo-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Sampo CLI
+        if: steps.cache-sampo.outputs.cache-hit != 'true'
+        run: cargo install sampo
+
+      # Apply pending changesets to bump versions in the working tree (no commit).
+      # This validates that Sampo discovers the workspace member and bumps it
+      # from the changeset, exactly as the real version-bump job would.
+      - name: Apply version bumps with Sampo (no commit)
+        run: sampo release
+
+      - name: Build openfeature-provider-posthog
+        run: uv build --package openfeature-provider-posthog --out-dir openfeature-provider/dist
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: openfeature-provider/dist
+          repository-url: https://test.pypi.org/legacy/
 
   notify-released:
     name: Notify Slack - Released
-    needs: [check-changesets, notify-approval-needed, release]
+    needs: [check-changesets, notify-approval-needed, version-bump, publish]
     runs-on: ubuntu-latest
-    if: always() && needs.release.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
+    if: always() && needs.publish.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

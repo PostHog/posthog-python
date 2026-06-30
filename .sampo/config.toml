@@ -3,7 +3,9 @@ version = 1
 
 [git]
 default_branch = "main"
-short_tags = "posthog"    # Tag with v1.2.3 rather than posthog-v1.2.3
+# No short_tags: every published package is tagged with its name prefix
+# (posthog-v1.2.3, openfeature-provider-posthog-v0.1.0), matching the multi-package
+# convention used by other PostHog SDKs (e.g. posthog-ruby).
 
 [github]
 repository = "posthog/posthog-python"

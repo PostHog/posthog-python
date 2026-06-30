@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openfeature-provider-posthog"
+version = "0.0.0"
+description = "Official PostHog provider for the OpenFeature Python SDK."
+authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
+maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    # FeatureFlagResult / get_feature_flag_result are the modern, non-deprecated
+    # single-call API. Pinned to the posthog major this provider is released and
+    # tested against (both ship from this repo); bump the upper bound when moving
+    # the provider to a new posthog major.
+    "posthog>=7.0.0,<8.0.0",
+    "openfeature-sdk>=0.8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/posthog/posthog-python"
+Repository = "https://github.com/posthog/posthog-python"
+Documentation = "https://posthog.com/docs/feature-flags/installation/openfeature"
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "ruff",
+    "pytest",
+]
+
+[tool.setuptools]
+packages = ["openfeature.contrib.provider.posthog"]
+
+[tool.setuptools.package-data]
+"openfeature.contrib.provider.posthog" = ["py.typed"]
+
+# Local development: resolve posthog from the uv workspace (the repo root),
+# declared in the root pyproject's [tool.uv.workspace]. This guarantees the
+# provider is always built/tested against the in-repo posthog.
+[tool.uv.sources]
+posthog = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# This sub-project runs its own mypy (with openfeature-sdk installed in its env).
+[tool.mypy]
+python_version = "3.10"
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "."
+ignore_missing_imports = true
+strict_optional = true
+check_untyped_defs = true
