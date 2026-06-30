@@ -335,8 +335,17 @@ jobs:
           TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
           CHANGELOG_FILE: ${{ matrix.package.changelog }}
         run: |
-          CHANGELOG_ENTRY=$(awk -v defText="see ${CHANGELOG_FILE}" '/^## /{if (flag) exit; flag=1; next} flag; END{if (!flag) print defText}' "${CHANGELOG_FILE}" | sed '/[^[:space:]]/,$!d' | tac | sed '/[^[:space:]]/,$!d' | tac)
-          gh release create "$TAG" --notes "$CHANGELOG_ENTRY"
+          # Use the latest changelog section (lines between the first '## ' and the
+          # next '## ') as release notes. Fall back to a pointer if the file is
+          # missing or has no section yet, so a release is never blocked on notes.
+          notes="See ${CHANGELOG_FILE} for details."
+          if [ -f "${CHANGELOG_FILE}" ]; then
+            entry=$(awk '/^## /{if (seen) exit; seen=1; next} seen' "${CHANGELOG_FILE}" | sed '/[^[:space:]]/,$!d')
+            if [ -n "$(printf '%s' "$entry" | tr -d '[:space:]')" ]; then
+              notes="$entry"
+            fi
+          fi
+          gh release create "$TAG" --notes "$notes"
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
