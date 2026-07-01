@@ -7797,7 +7797,7 @@ class TestConsistency(unittest.TestCase):
         call_args = mock_flags.call_args[1]
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag2"])
         self.assertEqual(
-            call_args["person_properties"], {"distinct_id": "user123", "region": "USA"}
+            call_args["person_properties"], {"region": "USA"}
         )
 
         # Check the result
@@ -7834,7 +7834,7 @@ class TestConsistency(unittest.TestCase):
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag3"])
         self.assertEqual(
             call_args["person_properties"],
-            {"distinct_id": "user123", "subscription": "pro"},
+            {"subscription": "pro"},
         )
 
         # Check the result
