@@ -1,5 +1,11 @@
 # posthog
 
+## 7.21.2 — 2026-07-01
+
+### Patch changes
+
+- [c6350b6](https://github.com/posthog/posthog-python/commit/c6350b69c6eb5fd6489460586f052738cbc4a420) Testing release workflow. — Thanks @marandaneto!
+
 ## 7.21.1 — 2026-06-29
 
 ### Patch changes
