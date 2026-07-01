@@ -2134,7 +2134,6 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -2753,7 +2752,7 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id, groups, person_properties, group_properties
+                groups, person_properties, group_properties
             )
         )
 
@@ -2867,7 +2866,6 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -3166,9 +3164,9 @@ class Client(object):
         return self.feature_flags
 
     def _add_local_person_and_group_properties(
-        self, distinct_id, groups, person_properties, group_properties
+        self, groups, person_properties, group_properties
     ):
-        all_person_properties = person_properties or {}
+        person_properties = person_properties or {}
 
         all_group_properties = {}
         if groups:
@@ -3178,7 +3176,7 @@ class Client(object):
                     **((group_properties or {}).get(group_name) or {}),
                 }
 
-        return all_person_properties, all_group_properties
+        return person_properties, all_group_properties
 
 
 def stringify_id(val):

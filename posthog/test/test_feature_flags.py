@@ -7796,9 +7796,7 @@ class TestConsistency(unittest.TestCase):
         mock_flags.assert_called_once()
         call_args = mock_flags.call_args[1]
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag2"])
-        self.assertEqual(
-            call_args["person_properties"], {"region": "USA"}
-        )
+        self.assertEqual(call_args["person_properties"], {"region": "USA"})
 
         # Check the result
         self.assertEqual(result, {"flag1": "value1", "flag2": True})
