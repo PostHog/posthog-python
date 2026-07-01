@@ -8,63 +8,305 @@ on:
 
 permissions:
     contents: read
+    pull-requests: read
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
     cancel-in-progress: true
 
 jobs:
-    ruff-format:
-        name: Ruff format
+    changes:
+        name: Classify changed files
         runs-on: ubuntu-latest
+        outputs:
+            skip_heavy: ${{ steps.classify.outputs.skip_heavy }}
 
         steps:
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
               with:
+                  fetch-depth: 0
+
+            - name: Classify changed files
+              id: classify
+              shell: bash
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  PR_FILES_URL: ${{ github.event.pull_request.url }}/files
+              run: |
+                  set -u
+
+                  python3 <<'PY'
+                  import json
+                  import os
+                  import sys
+                  import urllib.error
+                  import urllib.request
+                  from fnmatch import fnmatchcase
+
+                  SAFE_WORKFLOW_NAMES = {
+                      "release",
+                      "publish",
+                      "stale",
+                      "lint-pr",
+                      "call-flags-project-board",
+                      "changeset-hygiene",
+                      "dependabot-changeset",
+                      "validate-versioning",
+                      "new-pr",
+                      "generated-files-notice",
+                      "posthog-upgrade",
+                  }
+
+                  def is_safe_global_file(path):
+                      if not isinstance(path, str) or not path:
+                          return False
+
+                      if path.endswith(".md"):
+                          return True
+
+                      if path.startswith("docs/"):
+                          return True
+
+                      if path.startswith(".github/ISSUE_TEMPLATE/"):
+                          return True
+
+                      if path.startswith(".github/PULL_REQUEST_TEMPLATE/"):
+                          return True
+
+                      if path in {
+                          ".github/pull_request_template.md",
+                          ".github/CODEOWNERS",
+                          "CODEOWNERS",
+                          ".github/dependabot.yml",
+                      }:
+                          return True
+
+                      workflow_prefix = ".github/workflows/"
+                      if path.startswith(workflow_prefix) and (path.endswith(".yml") or path.endswith(".yaml")):
+                          workflow_name = path[len(workflow_prefix):].rsplit(".", 1)[0]
+                          return workflow_name in SAFE_WORKFLOW_NAMES or fnmatchcase(workflow_name, "posthog-watcher-*")
+
+                      return False
+
+                  def get_pr_files(files_url, token):
+                      files = []
+                      page = 1
+                      per_page = 100
+
+                      while True:
+                          separator = "&" if "?" in files_url else "?"
+                          url = f"{files_url}{separator}per_page={per_page}&page={page}"
+                          request = urllib.request.Request(
+                              url,
+                              headers={
+                                  "Accept": "application/vnd.github+json",
+                                  "Authorization": f"Bearer {token}",
+                                  "X-GitHub-Api-Version": "2022-11-28",
+                                  "User-Agent": "posthog-python-ci-change-classifier",
+                              },
+                          )
+                          with urllib.request.urlopen(request, timeout=30) as response:
+                              page_files = json.loads(response.read().decode("utf-8"))
+
+                          if not isinstance(page_files, list):
+                              raise ValueError("pull request files API did not return a list")
+
+                          if not page_files:
+                              break
+
+                          files.extend(page_files)
+
+                          if len(page_files) < per_page:
+                              break
+
+                          page += 1
+
+                      return files
+
+                  def print_files(heading, files):
+                      if not files:
+                          return
+                      print(heading)
+                      for file in files:
+                          print(f"  - {file}")
+
+                  def main():
+                      skip_heavy = False
+                      reason = "Running full CI by default."
+                      changed_files = []
+                      safe_files = []
+                      full_ci_files = []
+
+                      event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+                      files_url = os.environ.get("PR_FILES_URL", "")
+                      token = os.environ.get("GITHUB_TOKEN", "")
+
+                      if event_name != "pull_request":
+                          reason = f"{event_name or 'unknown'} event; running full CI."
+                      elif not files_url or not token:
+                          reason = "Missing pull request files API URL or token; running full CI."
+                      else:
+                          try:
+                              pr_files = get_pr_files(files_url, token)
+                          except (OSError, TimeoutError, ValueError, json.JSONDecodeError, urllib.error.URLError) as error:
+                              reason = f"Unable to read pull request changed files from the GitHub API; running full CI. ({error})"
+                          else:
+                              if not pr_files:
+                                  reason = "No changed files detected by the GitHub API; running full CI."
+                              else:
+                                  for item in pr_files:
+                                      filename = item.get("filename") if isinstance(item, dict) else None
+                                      previous_filename = item.get("previous_filename") if isinstance(item, dict) else None
+
+                                      if isinstance(filename, str) and filename:
+                                          changed_files.append(filename)
+
+                                      paths_to_check = [("filename", filename)]
+                                      if previous_filename is not None:
+                                          paths_to_check.append(("previous_filename", previous_filename))
+
+                                      for field, file_path in paths_to_check:
+                                          if is_safe_global_file(file_path):
+                                              label = file_path if field == "filename" else f"{file_path} (previous_filename)"
+                                              safe_files.append(label)
+                                          else:
+                                              if isinstance(file_path, str) and file_path:
+                                                  label = file_path if field == "filename" else f"{file_path} (previous_filename)"
+                                              else:
+                                                  label = f"empty {field}"
+                                              full_ci_files.append(label)
+
+                                  if full_ci_files:
+                                      reason = "At least one changed filename or previous_filename is outside the global safe set; running full CI."
+                                  elif not safe_files:
+                                      reason = "No non-empty changed filenames detected by the GitHub API; running full CI."
+                                  else:
+                                      skip_heavy = True
+                                      reason = "Only globally safe changed filenames and previous_filenames detected; skipping heavy Python CI steps."
+
+                      github_output = os.environ.get("GITHUB_OUTPUT")
+                      if github_output:
+                          with open(github_output, "a", encoding="utf-8") as output:
+                              output.write(f"skip_heavy={str(skip_heavy).lower()}\n")
+
+                      print("Changed files:")
+                      if changed_files:
+                          for file in changed_files:
+                              print(file)
+                      else:
+                          print("  (not available)")
+                      print_files("Globally safe files:", safe_files)
+                      print_files("Files requiring full CI:", full_ci_files)
+                      print(f"skip_heavy={str(skip_heavy).lower()}")
+                      print(reason)
+
+                      step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+                      if step_summary:
+                          with open(step_summary, "a", encoding="utf-8") as summary:
+                              summary.write("### Changed-file classification\n\n")
+                              summary.write(f"- skip_heavy: `{str(skip_heavy).lower()}`\n")
+                              summary.write(f"- reason: {reason}\n\n")
+                              summary.write("#### Changed files\n")
+                              if changed_files:
+                                  for file in changed_files:
+                                      summary.write(f"- `{file}`\n")
+                              else:
+                                  summary.write("- not available\n")
+
+                  if __name__ == "__main__":
+                      try:
+                          main()
+                      except Exception as error:  # noqa: BLE001 - CI safety valve: API/classifier failures run full CI.
+                          github_output = os.environ.get("GITHUB_OUTPUT")
+                          if github_output:
+                              with open(github_output, "a", encoding="utf-8") as output:
+                                  output.write("skip_heavy=false\n")
+                          print("Changed files:")
+                          print("  (not available)")
+                          print("skip_heavy=false")
+                          print(f"Unexpected classifier failure; running full CI. ({error})", file=sys.stderr)
+                  PY
+
+    ruff-format:
+        name: Ruff format
+        runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
+
+        steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping Ruff format because only non-impacting files changed."
+
+            - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
+              with:
                   fetch-depth: 1
 
             - name: Set up Python dev environment
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: ./.github/actions/setup-python-dev
 
             - name: Check formatting with ruff
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: |
                   ruff format --check .
 
     ruff-lint:
         name: Ruff lint
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
 
         steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping Ruff lint because only non-impacting files changed."
+
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               with:
                   fetch-depth: 1
 
             - name: Set up Python dev environment
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: ./.github/actions/setup-python-dev
 
             - name: Lint with ruff
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: |
                   ruff check .
 
     mypy:
         name: Mypy
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
 
         steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping Mypy because only non-impacting files changed."
+
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               with:
                   fetch-depth: 1
 
             - name: Set up Python dev environment
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: ./.github/actions/setup-python-dev
 
             - name: Check types with mypy
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: |
                   mypy --no-site-packages --config-file mypy.ini  . | mypy-baseline filter
 
     public-api:
         name: Public API snapshot
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() && needs.changes.outputs.skip_heavy != 'true' }}
 
         steps:
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
@@ -80,6 +322,8 @@ jobs:
     strict-type-smoke:
         name: Strict type smoke
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() && needs.changes.outputs.skip_heavy != 'true' }}
 
         steps:
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
@@ -97,23 +341,33 @@ jobs:
     package-build:
         name: Package build
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
 
         steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping package build because only non-impacting files changed."
+
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               with:
                   fetch-depth: 1
 
             - name: Set up Python 3.11
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
                   python-version: 3.11.11
 
             - name: Install uv
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
 
             - name: Build and verify distributions
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: |
                   uv build
                   uv run --with twine twine check dist/*
@@ -121,37 +375,50 @@ jobs:
     tests:
         name: Python ${{ matrix.python-version }} tests
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
         strategy:
             matrix:
                 python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
         steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping Python ${{ matrix.python-version }} tests because only non-impacting files changed."
+
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               with:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
                   python-version: ${{ matrix.python-version }}
 
             - name: Install uv
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
 
             - name: Install test dependencies
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               shell: bash
               run: |
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra test
 
             - name: Run posthog tests
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: |
                   pytest --verbose --timeout=30
 
     mutation-tests:
         name: Targeted mutation tests
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() && needs.changes.outputs.skip_heavy != 'true' }}
 
         steps:
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
@@ -236,29 +503,41 @@ jobs:
     import-check:
         name: Python ${{ matrix.python-version }} import check
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
         strategy:
             matrix:
                 python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
         steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping Python ${{ matrix.python-version }} import check because only non-impacting files changed."
+
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               with:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
                   python-version: ${{ matrix.python-version }}
 
             - name: Install posthog
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: pip install .
 
             - name: Check import produces no warnings
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               run: python -W error -c "import posthog"
 
     openfeature-provider:
         name: OpenFeature provider Python ${{ matrix.python-version }}
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() && needs.changes.outputs.skip_heavy != 'true' }}
         strategy:
             matrix:
                 python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
@@ -316,29 +595,40 @@ jobs:
     django5-integration:
         name: Django 5 integration tests
         runs-on: ubuntu-latest
+        needs: changes
+        if: ${{ always() }}
 
         steps:
+            - name: Skip heavy Python CI for non-impacting changes
+              if: ${{ needs.changes.outputs.skip_heavy == 'true' }}
+              run: echo "Skipping Django 5 integration tests because only non-impacting files changed."
+
             - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               with:
                   fetch-depth: 1
 
             - name: Set up Python 3.12
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: actions/setup-python@8d9ed9ac5c53483de85588cdf95a591a75ab9f55
               with:
                   python-version: 3.12
 
             - name: Install uv
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
               with:
                   enable-cache: true
 
             - name: Install Django 5 test project dependencies
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               shell: bash
               working-directory: integration_tests/django5
               run: |
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync
 
             - name: Run Django 5 middleware integration tests
+              if: ${{ needs.changes.outputs.skip_heavy != 'true' }}
               working-directory: integration_tests/django5
               run: |
                   uv run pytest test_middleware.py test_exception_capture.py --verbose
