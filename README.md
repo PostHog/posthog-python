@@ -37,20 +37,19 @@ Install the async extra to use the asyncio-native client:
 pip install 'posthog[async]'
 ```
 
-Use `AsyncPosthog` in async applications and close it with `async with` or `await shutdown()`:
+Use `AsyncPostHog` in async applications and close it with `async with` or `await shutdown()`:
 
 ```python
-from posthog import AsyncPosthog
+from posthog import AsyncPostHog
 
-async with AsyncPosthog("<ph_project_api_key>", host="<ph_client_api_host>") as posthog:
+async with AsyncPostHog("<ph_project_api_key>", host="<ph_client_api_host>") as posthog:
     await posthog.capture("page_viewed", distinct_id="user_123")
-    await posthog.flush()
 ```
 
 Async feature flag evaluation uses non-blocking HTTP requests:
 
 ```python
-async with AsyncPosthog("<ph_project_api_key>") as posthog:
+async with AsyncPostHog("<ph_project_api_key>") as posthog:
     flags = await posthog.evaluate_flags("user_123")
     if flags.is_enabled("new-dashboard"):
         ...
