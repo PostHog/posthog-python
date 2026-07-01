@@ -150,7 +150,7 @@ class AsyncClient(Client):
         )
         self.send = send
         self.sync_mode = sync_mode
-        self.queue: asyncio.Queue = asyncio.Queue(max_queue_size)
+        self.queue: asyncio.Queue = asyncio.Queue(max_queue_size)  # type: ignore[assignment]
         self.async_consumers: list[AsyncConsumer] = []
         self._worker_tasks: list[asyncio.Task] = []
         self._thread_count = thread
@@ -412,7 +412,7 @@ class AsyncClient(Client):
             self.log.exception(f"Error in alias: {e}")
             return None
 
-    async def capture_exception(
+    async def capture_exception(  # type: ignore[override]
         self,
         exception: Optional[ExceptionArg] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
@@ -516,7 +516,7 @@ class AsyncClient(Client):
             self.log.exception(f"Failed to capture exception: {e}")
             return None
 
-    async def _enqueue(self, msg, disable_geoip) -> Optional[str]:
+    async def _enqueue(self, msg, disable_geoip) -> Optional[str]:  # type: ignore[override]
         if self.disabled:
             return None
 
@@ -603,7 +603,7 @@ class AsyncClient(Client):
             self.log.warning("analytics-python async queue is full")
             return None
 
-    async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
+    async def flush(self, timeout_seconds: Optional[float] = 10) -> None:  # type: ignore[override]
         if timeout_seconds is None:
             await self.queue.join()
             return
@@ -616,7 +616,7 @@ class AsyncClient(Client):
                 self.queue.qsize(),
             )
 
-    async def join(self) -> None:
+    async def join(self) -> None:  # type: ignore[override]
         for consumer in self.async_consumers:
             consumer.pause()
         for task in self._worker_tasks:
@@ -632,7 +632,7 @@ class AsyncClient(Client):
         self._shutdown_flag_definition_cache_provider()
         self._unregister_duplicate_client()
 
-    async def shutdown(self) -> None:
+    async def shutdown(self) -> None:  # type: ignore[override]
         if self._closed:
             return
         await self.flush(timeout_seconds=None)

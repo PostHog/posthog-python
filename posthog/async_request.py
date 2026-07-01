@@ -23,7 +23,7 @@ from .utils import remove_trailing_slash
 try:  # pragma: no cover - exercised when the optional dependency is absent
     import httpx
 except ImportError:  # pragma: no cover
-    httpx = None  # type: ignore[assignment]
+    httpx = None
 
 
 _async_client: Optional["httpx.AsyncClient"] = None
