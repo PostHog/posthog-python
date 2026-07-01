@@ -360,14 +360,24 @@ jobs:
           # Use the latest changelog section (lines between the first '## ' and the
           # next '## ') as release notes. Fall back to a pointer if the file is
           # missing or has no section yet, so a release is never blocked on notes.
+          fallback="See $CHANGELOG_FILE for details."
           if [ -f "$CHANGELOG_FILE" ]; then
-            awk -v defText="See $CHANGELOG_FILE for details." '
+            awk '
               /^## / { if (found_version) exit; found_version=1; next }
-              found_version { print }
-              END { if (!found_version) print defText }
-            ' "$CHANGELOG_FILE" | sed '/[^[:space:]]/,$!d' | tac | sed '/[^[:space:]]/,$!d' | tac > release-notes.md
+              found_version { lines[++n] = $0 }
+              END {
+                start = 1
+                while (start <= n && lines[start] ~ /^[[:space:]]*$/) start++
+                end = n
+                while (end >= start && lines[end] ~ /^[[:space:]]*$/) end--
+                for (i = start; i <= end; i++) print lines[i]
+              }
+            ' "$CHANGELOG_FILE" > release-notes.md
+            if [ -z "$(tr -d '[:space:]' < release-notes.md)" ]; then
+              echo "$fallback" > release-notes.md
+            fi
           else
-            echo "See $CHANGELOG_FILE for details." > release-notes.md
+            echo "$fallback" > release-notes.md
           fi
 
           gh release create "$TAG" \
