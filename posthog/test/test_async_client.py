@@ -163,21 +163,18 @@ async def test_async_identify_methods_enqueue_events(
 
 
 @pytest.mark.asyncio
-async def test_capture_send_feature_flags_runs_sync_fallback_in_thread():
-    async def fake_to_thread(fn, *args, **kwargs):
-        assert fn.__name__ == "get_feature_variants"
-        return {"beta": True}
-
+async def test_capture_send_feature_flags_uses_async_flag_evaluation():
     client = AsyncPostHog("test-key", send=False)
 
-    with mock.patch(
-        "posthog.async_client.asyncio.to_thread", side_effect=fake_to_thread
-    ):
+    with mock.patch.object(
+        AsyncPostHog, "get_all_flags", mock.AsyncMock(return_value={"beta": True})
+    ) as get_all_flags:
         event_uuid = await client.capture(
             "async event", distinct_id="user-1", send_feature_flags=True
         )
 
     assert event_uuid is not None
+    get_all_flags.assert_awaited_once()
     await client.shutdown()
 
 
