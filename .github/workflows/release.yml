@@ -134,7 +134,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
         run: |
+          # Sampo writes the root package changelog to CHANGELOG.md because the
+          # posthog package metadata lives at the repository root. Keep the
+          # user-facing root changelog as a package index and store posthog's
+          # generated changelog alongside the package instead.
+          cp posthog/CHANGELOG.md CHANGELOG.md
           sampo release
+          mv CHANGELOG.md posthog/CHANGELOG.md
+          printf '%s\n' \
+            '# Changelog' \
+            '' \
+            'Package-specific changelogs live with each package:' \
+            '' \
+            '- [`posthog`](posthog/CHANGELOG.md)' \
+            '- [`openfeature-provider-posthog`](openfeature-provider/CHANGELOG.md)' \
+            > CHANGELOG.md
           new_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
 
@@ -243,7 +257,7 @@ jobs:
             build: uv run make build_release
             packages_dir: dist
             tag_prefix: "posthog-v"
-            changelog: CHANGELOG.md
+            changelog: posthog/CHANGELOG.md
             github_release: true
           # posthoganalytics is a build-time mirror of posthog (same version, no
           # separate tag/release); it always ships alongside posthog.
