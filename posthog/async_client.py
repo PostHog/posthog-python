@@ -265,7 +265,8 @@ class AsyncClient(Client):
         feature_variants: Optional[dict[str, Union[bool, str]]] = {}
         try:
             if flag_options["only_evaluate_locally"] is True:
-                feature_variants = self.get_all_flags(
+                feature_variants = await asyncio.to_thread(
+                    self.get_all_flags,
                     distinct_id,
                     groups=(groups or {}),
                     person_properties=flag_options["person_properties"],
@@ -275,7 +276,8 @@ class AsyncClient(Client):
                     flag_keys_to_evaluate=flag_options["flag_keys_filter"],
                 )
             else:
-                feature_variants = self.get_feature_variants(
+                feature_variants = await asyncio.to_thread(
+                    self.get_feature_variants,
                     distinct_id,
                     groups,
                     person_properties=flag_options["person_properties"],

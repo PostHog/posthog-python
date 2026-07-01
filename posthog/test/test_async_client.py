@@ -123,7 +123,29 @@ async def test_sync_mode_awaits_direct_batch_post():
 
 
 @pytest.mark.asyncio
-async def test_async_set_and_alias_methods_enqueue_events():
+@pytest.mark.parametrize(
+    ("method_name", "method_kwargs", "expected_event"),
+    [
+        (
+            "set",
+            {"distinct_id": "user-1", "properties": {"email": "a@example.com"}},
+            "$set",
+        ),
+        (
+            "set_once",
+            {"distinct_id": "user-1", "properties": {"first_seen": True}},
+            "$set_once",
+        ),
+        (
+            "alias",
+            {"previous_id": "anon-1", "distinct_id": "user-1"},
+            "$create_alias",
+        ),
+    ],
+)
+async def test_async_identify_methods_enqueue_events(
+    method_name, method_kwargs, expected_event
+):
     batches = []
 
     async def mock_batch_post(*args, **kwargs):
@@ -133,12 +155,27 @@ async def test_async_set_and_alias_methods_enqueue_events():
         "posthog.async_consumer.async_batch_post", side_effect=mock_batch_post
     ):
         async with AsyncPosthog("test-key", flush_at=1, flush_interval=0.01) as client:
-            await client.set(
-                distinct_id="user-1", properties={"email": "a@example.com"}
-            )
-            await client.set_once(distinct_id="user-1", properties={"first_seen": True})
-            await client.alias(previous_id="anon-1", distinct_id="user-1")
+            method = getattr(client, method_name)
+            await method(**method_kwargs)
             await client.flush(timeout_seconds=1)
 
-    events = [batch[0]["event"] for batch in batches]
-    assert events == ["$set", "$set_once", "$create_alias"]
+    assert batches[0][0]["event"] == expected_event
+
+
+@pytest.mark.asyncio
+async def test_capture_send_feature_flags_runs_sync_fallback_in_thread():
+    async def fake_to_thread(fn, *args, **kwargs):
+        assert fn.__name__ == "get_feature_variants"
+        return {"beta": True}
+
+    client = AsyncPosthog("test-key", send=False)
+
+    with mock.patch(
+        "posthog.async_client.asyncio.to_thread", side_effect=fake_to_thread
+    ):
+        event_uuid = await client.capture(
+            "async event", distinct_id="user-1", send_feature_flags=True
+        )
+
+    assert event_uuid is not None
+    await client.shutdown()
