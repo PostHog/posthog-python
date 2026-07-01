@@ -94,7 +94,7 @@ async def async_post(
     url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
     data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
-    log.debug("making async request: %s to url: %s", data, url)
+    log.debug("making async request to url: %s", url)
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
         try:
@@ -167,7 +167,7 @@ def _process_async_response(
 
     try:
         payload = _response_json(res)
-        log.debug("received response: %s", payload)
+        log.debug("received response with status: %s", res.status_code)
         raise APIError(res.status_code, payload["detail"], retry_after=retry_after)
     except (KeyError, ValueError):
         raise APIError(res.status_code, _response_text(res), retry_after=retry_after)
