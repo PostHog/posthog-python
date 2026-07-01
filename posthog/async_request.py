@@ -132,7 +132,7 @@ def _process_async_response(
 ) -> Any:
     log = logging.getLogger("posthog")
     if res.status_code == 200:
-        log.debug(success_message)
+        log.debug("request completed successfully")
         response = _response_json(res) if return_json else res
         if (
             isinstance(response, dict)
@@ -247,9 +247,7 @@ async def async_get(
         response_etag = res.headers.get("ETag")
         return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
 
-    data = _process_async_response(
-        res, success_message=f"GET {masked_url} completed successfully"
-    )
+    data = _process_async_response(res, success_message="GET completed successfully")
     response_etag = res.headers.get("ETag")
     return GetResponse(data=data, etag=response_etag, not_modified=False)
 
