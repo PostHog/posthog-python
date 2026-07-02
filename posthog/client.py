@@ -1,6 +1,5 @@
 import atexit
 import inspect
-import json
 import logging
 import os
 import sys
@@ -51,8 +50,11 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations,
-    _EvaluatedFlagRecord,
     _FeatureFlagEvaluationsHost,
+    _feature_flag_called_properties,
+    _flag_details_metadata,
+    _local_evaluation_records,
+    _remote_evaluation_records,
 )
 from posthog.feature_flags import (
     InconclusiveMatchError,
@@ -85,7 +87,7 @@ from posthog.types import (
     FeatureFlag,
     FeatureFlagError,
     FeatureFlagResult,
-    FlagMetadata,
+    FlagMetadata as FlagMetadata,
     FlagsAndPayloads,
     FlagsResponse,
     FlagValue,
@@ -2572,31 +2574,19 @@ class Client(object):
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
     ):
-        properties: dict[str, Any] = {
-            "$feature_flag": key,
-            "$feature_flag_response": response,
-            "locally_evaluated": flag_was_locally_evaluated,
-            f"$feature/{key}": response,
-        }
-
-        if payload is not None:
-            # if payload is not a string, json serialize it to a string
-            properties["$feature_flag_payload"] = payload
-
-        if request_id:
-            properties["$feature_flag_request_id"] = request_id
-        if evaluated_at:
-            properties["$feature_flag_evaluated_at"] = evaluated_at
-        if isinstance(flag_details, FeatureFlag):
-            if flag_details.reason and flag_details.reason.description:
-                properties["$feature_flag_reason"] = flag_details.reason.description
-            if isinstance(flag_details.metadata, FlagMetadata):
-                if flag_details.metadata.version:
-                    properties["$feature_flag_version"] = flag_details.metadata.version
-                if flag_details.metadata.id:
-                    properties["$feature_flag_id"] = flag_details.metadata.id
-        if feature_flag_error:
-            properties["$feature_flag_error"] = feature_flag_error
+        flag_id, flag_version, flag_reason = _flag_details_metadata(flag_details)
+        properties = _feature_flag_called_properties(
+            key=key,
+            response=response,
+            locally_evaluated=flag_was_locally_evaluated,
+            payload=payload,
+            request_id=request_id,
+            evaluated_at=evaluated_at,
+            flag_id=flag_id,
+            flag_version=flag_version,
+            flag_reason=flag_reason,
+            feature_flag_error=feature_flag_error,
+        )
 
         self._capture_feature_flag_called_if_needed(
             distinct_id=distinct_id,
@@ -2917,12 +2907,10 @@ class Client(object):
         )
         groups = groups or {}
 
-        records: Dict[str, _EvaluatedFlagRecord] = {}
         request_id: Optional[str] = None
         evaluated_at: Optional[int] = None
         errors_while_computing = False
         quota_limited = False
-        locally_evaluated_keys: set[str] = set()
 
         # Try local evaluation first when the poller has loaded definitions.
         local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
@@ -2933,24 +2921,9 @@ class Client(object):
             flag_keys_to_evaluate=flag_keys,
         )
 
-        feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
-        local_flags = local_result.get("featureFlags") or {}
-        local_payloads = local_result.get("featureFlagPayloads") or {}
-        for key, value in local_flags.items():
-            flag_def = feature_flags_by_key.get(key) or {}
-            records[key] = _EvaluatedFlagRecord(
-                key=key,
-                enabled=value is not False,
-                variant=value if isinstance(value, str) else None,
-                payload=local_payloads.get(key),
-                id=flag_def.get("id"),
-                # The local-evaluation flag definition does not carry a version field;
-                # only the remote ``/flags`` response does via ``metadata.version``.
-                version=None,
-                reason="Evaluated locally",
-                locally_evaluated=True,
-            )
-            locally_evaluated_keys.add(key)
+        records, locally_evaluated_keys = _local_evaluation_records(
+            local_result, self.feature_flags_by_key or {}
+        )
 
         # Fall back to remote evaluation for any flags the poller couldn't resolve locally.
         # Use the flags decision path directly so the resulting records carry id/version/reason
@@ -2966,52 +2939,13 @@ class Client(object):
                     flag_keys_to_evaluate=flag_keys,
                     device_id=device_id,
                 )
-                request_id = response.get("requestId")
-                raw_evaluated_at = response.get("evaluatedAt")
-                evaluated_at = (
-                    raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
-                )
-                errors_while_computing = bool(
-                    response.get("errorsWhileComputingFlags", False)
-                )
-                for key, detail in response.get("flags", {}).items():
-                    if key in locally_evaluated_keys:
-                        continue
-                    payload: Optional[Any] = None
-                    raw_payload = (
-                        detail.metadata.payload
-                        if isinstance(detail.metadata, FlagMetadata)
-                        else getattr(detail.metadata, "payload", None)
-                    )
-                    if isinstance(raw_payload, str) and raw_payload:
-                        try:
-                            payload = json.loads(raw_payload)
-                        except (json.JSONDecodeError, TypeError):
-                            payload = raw_payload
-                    elif raw_payload is not None:
-                        payload = raw_payload
-                    records[key] = _EvaluatedFlagRecord(
-                        key=key,
-                        enabled=detail.enabled,
-                        variant=detail.variant,
-                        payload=payload,
-                        id=(
-                            detail.metadata.id
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        version=(
-                            detail.metadata.version
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        reason=(
-                            detail.reason.description
-                            if detail.reason and detail.reason.description
-                            else None
-                        ),
-                        locally_evaluated=False,
-                    )
+                (
+                    remote_records,
+                    request_id,
+                    evaluated_at,
+                    errors_while_computing,
+                ) = _remote_evaluation_records(response, locally_evaluated_keys)
+                records.update(remote_records)
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 quota_limited = True

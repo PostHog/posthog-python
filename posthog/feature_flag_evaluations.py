@@ -5,10 +5,18 @@ the same snapshot to capture() via the `flags` option so events carry the exact 
 values the code branched on, with no additional /flags request.
 """
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import FlagValue
+from .types import (
+    FeatureFlag as _FeatureFlag,
+    FeatureFlagError as _FeatureFlagError,
+    FlagMetadata as _FlagMetadata,
+    FlagsAndPayloads as _FlagsAndPayloads,
+    FlagsResponse as _FlagsResponse,
+    FlagValue,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,131 @@ class _FeatureFlagEvaluationsHost:
 
     capture_flag_called_event_if_needed: Callable[..., None]
     log_warning: Callable[[str], None]
+
+
+def _parse_evaluation_payload(raw_payload: Any) -> Optional[Any]:
+    if isinstance(raw_payload, str) and raw_payload:
+        try:
+            return json.loads(raw_payload)
+        except (json.JSONDecodeError, TypeError):
+            return raw_payload
+    if raw_payload is not None:
+        return raw_payload
+    return None
+
+
+def _flag_details_metadata(
+    flag_details: Optional[_FeatureFlag],
+) -> tuple[Optional[int], Optional[int], Optional[str]]:
+    if not isinstance(flag_details, _FeatureFlag):
+        return None, None, None
+
+    flag_id: Optional[int] = None
+    flag_version: Optional[int] = None
+    if isinstance(flag_details.metadata, _FlagMetadata):
+        flag_id = flag_details.metadata.id
+        flag_version = flag_details.metadata.version
+    flag_reason = (
+        flag_details.reason.description
+        if flag_details.reason and flag_details.reason.description
+        else None
+    )
+    return flag_id, flag_version, flag_reason
+
+
+def _feature_flag_called_properties(
+    *,
+    key: str,
+    response: Optional[FlagValue],
+    locally_evaluated: bool,
+    payload: Optional[Any] = None,
+    request_id: Optional[str] = None,
+    evaluated_at: Optional[int] = None,
+    flag_id: Optional[int] = None,
+    flag_version: Optional[int] = None,
+    flag_reason: Optional[str] = None,
+    feature_flag_error: Optional[str] = None,
+) -> Dict[str, Any]:
+    properties: Dict[str, Any] = {
+        "$feature_flag": key,
+        "$feature_flag_response": response,
+        "locally_evaluated": locally_evaluated,
+        f"$feature/{key}": response,
+    }
+    if payload is not None:
+        properties["$feature_flag_payload"] = payload
+    if request_id:
+        properties["$feature_flag_request_id"] = request_id
+    if evaluated_at:
+        properties["$feature_flag_evaluated_at"] = evaluated_at
+    if flag_id:
+        properties["$feature_flag_id"] = flag_id
+    if flag_version:
+        properties["$feature_flag_version"] = flag_version
+    if flag_reason:
+        properties["$feature_flag_reason"] = flag_reason
+    if feature_flag_error:
+        properties["$feature_flag_error"] = feature_flag_error
+    return properties
+
+
+def _local_evaluation_records(
+    local_result: _FlagsAndPayloads, feature_flags_by_key: Mapping[str, Any]
+) -> tuple[Dict[str, _EvaluatedFlagRecord], set[str]]:
+    records: Dict[str, _EvaluatedFlagRecord] = {}
+    locally_evaluated_keys: set[str] = set()
+    local_flags = local_result.get("featureFlags") or {}
+    local_payloads = local_result.get("featureFlagPayloads") or {}
+    for key, value in local_flags.items():
+        flag_def = feature_flags_by_key.get(key) or {}
+        records[key] = _EvaluatedFlagRecord(
+            key=key,
+            enabled=value is not False,
+            variant=value if isinstance(value, str) else None,
+            payload=local_payloads.get(key),
+            id=flag_def.get("id"),
+            # The local-evaluation flag definition does not carry a version field;
+            # only the remote ``/flags`` response does via ``metadata.version``.
+            version=None,
+            reason="Evaluated locally",
+            locally_evaluated=True,
+        )
+        locally_evaluated_keys.add(key)
+    return records, locally_evaluated_keys
+
+
+def _remote_evaluation_records(
+    response: _FlagsResponse, excluded_keys: Set[str]
+) -> tuple[Dict[str, _EvaluatedFlagRecord], Optional[str], Optional[int], bool]:
+    records: Dict[str, _EvaluatedFlagRecord] = {}
+    for key, detail in response.get("flags", {}).items():
+        if key in excluded_keys:
+            continue
+        flag_id, flag_version, flag_reason = _flag_details_metadata(detail)
+        raw_payload = (
+            detail.metadata.payload
+            if isinstance(detail.metadata, _FlagMetadata)
+            else getattr(detail.metadata, "payload", None)
+        )
+        records[key] = _EvaluatedFlagRecord(
+            key=key,
+            enabled=detail.enabled,
+            variant=detail.variant,
+            payload=_parse_evaluation_payload(raw_payload),
+            id=flag_id,
+            version=flag_version,
+            reason=flag_reason,
+            locally_evaluated=False,
+        )
+
+    raw_evaluated_at = response.get("evaluatedAt")
+    evaluated_at = raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
+    return (
+        records,
+        response.get("requestId"),
+        evaluated_at,
+        bool(response.get("errorsWhileComputingFlags", False)),
+    )
 
 
 class FeatureFlagEvaluations:
@@ -216,40 +349,33 @@ class FeatureFlagEvaluations:
         else:
             response = flag.variant if flag.variant is not None else True
 
-        properties: Dict[str, Any] = {
-            "$feature_flag": key,
-            "$feature_flag_response": response,
-            "locally_evaluated": flag.locally_evaluated if flag else False,
-            f"$feature/{key}": response,
-        }
-
-        if flag is not None:
-            if flag.payload is not None:
-                properties["$feature_flag_payload"] = flag.payload
-            if flag.id:
-                properties["$feature_flag_id"] = flag.id
-            if flag.version:
-                properties["$feature_flag_version"] = flag.version
-            if flag.reason:
-                properties["$feature_flag_reason"] = flag.reason
-
-        if self._request_id:
-            properties["$feature_flag_request_id"] = self._request_id
-        if self._evaluated_at and not (flag and flag.locally_evaluated):
-            properties["$feature_flag_evaluated_at"] = self._evaluated_at
-
         # Build the comma-joined `$feature_flag_error` matching the single-flag path's
         # granularity: response-level errors (errors-while-computing, quota-limited) are
         # combined with per-flag errors (flag-missing) so consumers can filter by type.
         errors: List[str] = []
         if self._errors_while_computing:
-            errors.append("errors_while_computing_flags")
+            errors.append(_FeatureFlagError.ERRORS_WHILE_COMPUTING)
         if self._quota_limited:
-            errors.append("quota_limited")
+            errors.append(_FeatureFlagError.QUOTA_LIMITED)
         if flag is None:
-            errors.append("flag_missing")
-        if errors:
-            properties["$feature_flag_error"] = ",".join(errors)
+            errors.append(_FeatureFlagError.FLAG_MISSING)
+
+        properties = _feature_flag_called_properties(
+            key=key,
+            response=response,
+            locally_evaluated=flag.locally_evaluated if flag else False,
+            payload=flag.payload if flag else None,
+            request_id=self._request_id,
+            evaluated_at=(
+                self._evaluated_at
+                if self._evaluated_at and not (flag and flag.locally_evaluated)
+                else None
+            ),
+            flag_id=flag.id if flag else None,
+            flag_version=flag.version if flag else None,
+            flag_reason=flag.reason if flag else None,
+            feature_flag_error=",".join(errors) if errors else None,
+        )
 
         self._host.capture_flag_called_event_if_needed(
             distinct_id=self._distinct_id,
