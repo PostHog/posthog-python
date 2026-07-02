@@ -3,29 +3,22 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional, Union
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from typing_extensions import Unpack
 
 from .args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from ._async_consumer import _AsyncConsumer
 from ._async_request import async_batch_post as _async_batch_post
-from .client import (
-    Client as _Client,
-    _stringify_event_uuid,
-    add_context_tags as _add_context_tags,
-    get_identity_state as _get_identity_state,
-    stringify_id as _stringify_id,
-)
+from .client import Client as _Client
 from .contexts import (
     get_capture_exception_code_variables_context as _get_capture_exception_code_variables_context,
     get_code_variables_detect_secrets_context as _get_code_variables_detect_secrets_context,
     get_code_variables_ignore_patterns_context as _get_code_variables_ignore_patterns_context,
     get_code_variables_mask_patterns_context as _get_code_variables_mask_patterns_context,
     get_code_variables_mask_url_credentials_context as _get_code_variables_mask_url_credentials_context,
-    get_context_session_id as _get_context_session_id,
 )
 from .exception_utils import (
     exc_info_from_error as _exc_info_from_error,
@@ -40,13 +33,6 @@ from .request import (
     EVENTS_ENDPOINT as _EVENTS_ENDPOINT,
     is_ai_event as _is_ai_event,
 )
-from .utils import (
-    clean as _clean,
-    guess_timezone as _guess_timezone,
-    system_context as _system_context,
-)
-from .version import VERSION as _VERSION
-
 
 __all__ = ["AsyncClient"]
 
@@ -211,24 +197,9 @@ class AsyncClient(_Client):
             send_feature_flags = kwargs.get("send_feature_flags", False)
             disable_geoip = kwargs.get("disable_geoip", None)
 
-            properties = {**(properties or {}), **_system_context()}
-            properties = _add_context_tags(properties)
-            assert properties is not None
-
-            distinct_id, personless = _get_identity_state(distinct_id)
-            if personless and "$process_person_profile" not in properties:
-                properties["$process_person_profile"] = False
-
-            msg = {
-                "properties": properties,
-                "timestamp": timestamp,
-                "distinct_id": distinct_id,
-                "event": event,
-                "uuid": uuid,
-            }
-
-            if groups:
-                properties["$groups"] = groups
+            msg, distinct_id = self._build_capture_message(
+                event, distinct_id, properties, timestamp, uuid, groups
+            )
 
             extra_properties: dict[str, Any] = {}
             if flags_snapshot is not None:
@@ -252,9 +223,7 @@ class AsyncClient(_Client):
                     disable_geoip,
                 )
 
-            if extra_properties:
-                properties = {**extra_properties, **properties}
-                msg["properties"] = properties
+            self._apply_capture_properties(msg, extra_properties)
 
             return await self._enqueue(msg, disable_geoip)
         except Exception as e:
@@ -298,37 +267,24 @@ class AsyncClient(_Client):
         except Exception as e:
             self.log.exception(f"[FEATURE FLAGS] Unable to get feature variants: {e}")
 
-        properties = msg["properties"]
-        for feature, variant in (feature_variants or {}).items():
-            properties[f"$feature/{feature}"] = variant
-        active_feature_flags = [
-            key for key, value in (feature_variants or {}).items() if value is not False
-        ]
-        if active_feature_flags:
-            properties["$active_feature_flags"] = active_feature_flags
+        self._apply_capture_properties(
+            msg, self._feature_flag_capture_properties(feature_variants)
+        )
         return await self._enqueue(msg, disable_geoip)
 
     async def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         try:
-            distinct_id = kwargs.get("distinct_id", None)
-            properties = kwargs.get("properties", None) or {}
-            timestamp = kwargs.get("timestamp", None)
-            uuid = kwargs.get("uuid", None)
-            disable_geoip = kwargs.get("disable_geoip", None)
-
-            properties = _add_context_tags(properties)
-            distinct_id, personless = _get_identity_state(distinct_id)
-            if personless or not properties:
+            msg = self._build_person_properties_message(
+                "$set",
+                "$set",
+                kwargs.get("distinct_id", None),
+                kwargs.get("properties", None),
+                kwargs.get("timestamp", None),
+                kwargs.get("uuid", None),
+            )
+            if msg is None:
                 return None
-
-            msg = {
-                "timestamp": timestamp,
-                "distinct_id": distinct_id,
-                "$set": properties,
-                "event": "$set",
-                "uuid": uuid,
-            }
-            return await self._enqueue(msg, disable_geoip)
+            return await self._enqueue(msg, kwargs.get("disable_geoip", None))
         except Exception as e:
             if self.debug:
                 raise
@@ -337,25 +293,17 @@ class AsyncClient(_Client):
 
     async def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         try:
-            distinct_id = kwargs.get("distinct_id", None)
-            properties = kwargs.get("properties", None) or {}
-            timestamp = kwargs.get("timestamp", None)
-            uuid = kwargs.get("uuid", None)
-            disable_geoip = kwargs.get("disable_geoip", None)
-
-            properties = _add_context_tags(properties)
-            distinct_id, personless = _get_identity_state(distinct_id)
-            if personless or not properties:
+            msg = self._build_person_properties_message(
+                "$set_once",
+                "$set_once",
+                kwargs.get("distinct_id", None),
+                kwargs.get("properties", None),
+                kwargs.get("timestamp", None),
+                kwargs.get("uuid", None),
+            )
+            if msg is None:
                 return None
-
-            msg = {
-                "timestamp": timestamp,
-                "distinct_id": distinct_id,
-                "$set_once": properties,
-                "event": "$set_once",
-                "uuid": uuid,
-            }
-            return await self._enqueue(msg, disable_geoip)
+            return await self._enqueue(msg, kwargs.get("disable_geoip", None))
         except Exception as e:
             if self.debug:
                 raise
@@ -373,20 +321,9 @@ class AsyncClient(_Client):
         distinct_id=None,
     ) -> Optional[str]:
         try:
-            distinct_id = _get_identity_state(distinct_id)[0]
-            msg: Dict[str, Any] = {
-                "event": "$groupidentify",
-                "properties": {
-                    "$group_type": group_type,
-                    "$group_key": group_key,
-                    "$group_set": properties or {},
-                },
-                "distinct_id": distinct_id,
-                "timestamp": timestamp,
-                "uuid": uuid,
-            }
-            if _get_context_session_id():
-                msg["properties"]["$session_id"] = str(_get_context_session_id())
+            msg = self._build_group_identify_message(
+                group_type, group_key, properties, timestamp, uuid, distinct_id
+            )
             return await self._enqueue(msg, disable_geoip)
         except Exception as e:
             if self.debug:
@@ -403,18 +340,9 @@ class AsyncClient(_Client):
         disable_geoip: Optional[bool] = None,
     ) -> Optional[str]:
         try:
-            distinct_id, personless = _get_identity_state(distinct_id)
-            if personless:
+            msg = self._build_alias_message(previous_id, distinct_id, timestamp, uuid)
+            if msg is None:
                 return None
-            msg: Dict[str, Any] = {
-                "properties": {"distinct_id": previous_id, "alias": distinct_id},
-                "timestamp": timestamp,
-                "event": "$create_alias",
-                "distinct_id": previous_id,
-                "uuid": uuid,
-            }
-            if _get_context_session_id():
-                msg["properties"]["$session_id"] = str(_get_context_session_id())
             return await self._enqueue(msg, disable_geoip)
         except Exception as e:
             if self.debug:
@@ -527,47 +455,9 @@ class AsyncClient(_Client):
             return None
 
     async def _enqueue(self, msg, disable_geoip) -> Optional[str]:  # type: ignore[override]
-        if self.disabled:
+        msg, sent_uuid = self._prepare_enqueue_message(msg, disable_geoip)
+        if msg is None or sent_uuid is None:
             return None
-
-        timestamp = msg["timestamp"]
-        if timestamp is None:
-            timestamp = datetime.now(tz=timezone.utc)
-
-        timestamp = _guess_timezone(timestamp)
-        msg["timestamp"] = timestamp.isoformat()
-
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
-
-        if "uuid" not in msg:
-            msg["uuid"] = _stringify_id(uuid4())
-
-        sent_uuid = msg["uuid"]
-
-        if not msg.get("properties"):
-            msg["properties"] = {}
-        msg["properties"]["$lib"] = "posthog-python"
-        msg["properties"]["$lib_version"] = _VERSION
-
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-        if disable_geoip:
-            msg["properties"]["$geoip_disable"] = True
-
-        if self.super_properties:
-            msg["properties"] = {**msg["properties"], **self.super_properties}
-
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
-
-        msg["distinct_id"] = _stringify_id(msg.get("distinct_id", None))
-        msg = _clean(msg)
 
         if self.before_send:
             try:
