@@ -334,16 +334,14 @@ def flags(
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             if failed_attempt >= retries:
                 raise
-            time.sleep(_feature_flags_retry_delay(failed_attempt))
-            failed_attempt += 1
         except APIError as exc:
             if (
                 exc.status not in _FEATURE_FLAGS_RETRY_HTTP_STATUSES
                 or failed_attempt >= retries
             ):
                 raise
-            time.sleep(_feature_flags_retry_delay(failed_attempt))
-            failed_attempt += 1
+        time.sleep(_feature_flags_retry_delay(failed_attempt))
+        failed_attempt += 1
 
 
 def remote_config(
