@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 import requests
+from parameterized import parameterized
 
 import posthog.request as request_module
 from posthog.test.logging_helpers import capture_message_only_logs
@@ -549,17 +550,18 @@ def test_set_socket_options_is_idempotent():
 class TestFlagsSession(unittest.TestCase):
     """Tests for flags session configuration."""
 
-    def test_retry_status_forcelist_excludes_rate_limits(self):
-        """Verify 429 (rate limit) is NOT retried - need to wait, not hammer."""
-        from posthog.request import RETRY_STATUS_FORCELIST
+    def test_flags_session_disables_adapter_retries(self):
+        """HTTP adapter retries are disabled; flags() handles bounded retries."""
+        from posthog.request import _build_flags_session
 
-        self.assertNotIn(429, RETRY_STATUS_FORCELIST)
+        session = _build_flags_session()
+        adapter = session.get_adapter("https://test.posthog.com")
+        retry = adapter.max_retries
 
-    def test_retry_status_forcelist_excludes_quota_errors(self):
-        """Verify 402 (payment required/quota) is NOT retried - won't resolve."""
-        from posthog.request import RETRY_STATUS_FORCELIST
-
-        self.assertNotIn(402, RETRY_STATUS_FORCELIST)
+        self.assertEqual(retry.total, 0)
+        self.assertEqual(retry.connect, 0)
+        self.assertEqual(retry.read, 0)
+        self.assertEqual(retry.status, 0)
 
     @mock.patch("posthog.request._get_flags_session")
     def test_flags_uses_flags_session(self, mock_get_flags_session):
@@ -609,208 +611,140 @@ class TestFlagsSession(unittest.TestCase):
         self.assertEqual(mock_session.post.call_count, 1)
 
 
-class TestFlagsSessionNetworkRetries(unittest.TestCase):
-    """Tests for network failure retries in the flags session."""
+class TestFlagsRetries(unittest.TestCase):
+    """Tests for /flags retry behavior."""
 
-    def test_flags_session_retry_config_includes_connection_errors(self):
-        """
-        Verify that the flags session is configured to retry on connection errors.
+    @mock.patch("posthog.request.time.sleep")
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_retries_transport_errors_once_by_default(
+        self, mock_get_flags_session, mock_sleep
+    ):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "featureFlags": {"test-flag": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
 
-        The urllib3 Retry adapter with connect=2 and read=2 automatically
-        retries on network-level failures (DNS failures, connection refused,
-        connection reset, etc.) up to 2 times each.
-        """
-        from posthog.request import _build_flags_session
+        mock_session = mock.MagicMock()
+        mock_session.post.side_effect = [
+            requests.exceptions.ConnectionError("connection failed"),
+            mock_response,
+        ]
+        mock_get_flags_session.return_value = mock_session
 
-        session = _build_flags_session()
+        response = flags("test-key", "https://test.posthog.com", distinct_id="user123")
 
-        # Get the adapter for https://
-        adapter = session.get_adapter("https://test.posthog.com")
+        self.assertEqual(response["featureFlags"], {"test-flag": True})
+        self.assertEqual(mock_session.post.call_count, 2)
+        mock_sleep.assert_called_once_with(0.3)
 
-        # Verify retry configuration
-        retry = adapter.max_retries
-        self.assertEqual(retry.total, 2, "Should have 2 total retries")
-        self.assertEqual(retry.connect, 2, "Should retry connection errors twice")
-        self.assertEqual(retry.read, 2, "Should retry read errors twice")
-        self.assertIn("POST", retry.allowed_methods, "Should allow POST retries")
+    @mock.patch("posthog.request.time.sleep")
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_retry_count_zero_disables_retries(
+        self, mock_get_flags_session, mock_sleep
+    ):
+        mock_session = mock.MagicMock()
+        mock_session.post.side_effect = requests.exceptions.Timeout("timed out")
+        mock_get_flags_session.return_value = mock_session
 
-    def test_flags_session_retries_on_server_errors(self):
-        """
-        Verify that transient server errors (5xx) trigger retries.
+        with self.assertRaises(requests.exceptions.Timeout):
+            flags(
+                "test-key",
+                "https://test.posthog.com",
+                max_retries=0,
+                distinct_id="user123",
+            )
 
-        This tests the status_forcelist configuration which specifies
-        which HTTP status codes should trigger a retry.
-        """
-        from posthog.request import _build_flags_session, RETRY_STATUS_FORCELIST
+        self.assertEqual(mock_session.post.call_count, 1)
+        mock_sleep.assert_not_called()
 
-        session = _build_flags_session()
-        adapter = session.get_adapter("https://test.posthog.com")
-        retry = adapter.max_retries
+    @mock.patch("posthog.request.time.sleep")
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_retry_delay_starts_at_300ms_and_doubles(
+        self, mock_get_flags_session, mock_sleep
+    ):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "featureFlags": {"test-flag": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
 
-        # Verify the status codes that trigger retries
+        mock_session = mock.MagicMock()
+        mock_session.post.side_effect = [
+            requests.exceptions.ConnectionError("connection failed"),
+            requests.exceptions.Timeout("timed out"),
+            mock_response,
+        ]
+        mock_get_flags_session.return_value = mock_session
+
+        response = flags(
+            "test-key",
+            "https://test.posthog.com",
+            max_retries=2,
+            distinct_id="user123",
+        )
+
+        self.assertEqual(response["featureFlags"], {"test-flag": True})
+        self.assertEqual(mock_session.post.call_count, 3)
         self.assertEqual(
-            set(retry.status_forcelist),
-            set(RETRY_STATUS_FORCELIST),
-            "Should retry on transient server errors",
+            [call.args[0] for call in mock_sleep.call_args_list], [0.3, 0.6]
         )
 
-        # Verify specific codes are included
-        self.assertIn(500, retry.status_forcelist)
-        self.assertIn(502, retry.status_forcelist)
-        self.assertIn(503, retry.status_forcelist)
-        self.assertIn(504, retry.status_forcelist)
+    @parameterized.expand([(502,), (504,)])
+    def test_flags_retries_contract_http_status_errors(self, status_code):
+        retry_response = requests.Response()
+        retry_response.status_code = status_code
+        retry_response._content = b'{"detail": "transient error"}'
 
-        # Verify rate limits and quota errors are NOT retried
-        self.assertNotIn(429, retry.status_forcelist)
-        self.assertNotIn(402, retry.status_forcelist)
+        success_response = requests.Response()
+        success_response.status_code = 200
+        success_response._content = json.dumps(
+            {
+                "featureFlags": {f"transient-{status_code}-flag": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
 
-    def test_flags_session_has_backoff(self):
-        """
-        Verify that retries use exponential backoff to avoid thundering herd.
-        """
-        from posthog.request import _build_flags_session
+        mock_session = mock.MagicMock()
+        mock_session.post.side_effect = [retry_response, success_response]
 
-        session = _build_flags_session()
-        adapter = session.get_adapter("https://test.posthog.com")
-        retry = adapter.max_retries
+        with (
+            mock.patch("posthog.request._get_flags_session", return_value=mock_session),
+            mock.patch("posthog.request.time.sleep") as mock_sleep,
+        ):
+            response = flags(
+                "test-key", "https://test.posthog.com", distinct_id="user123"
+            )
 
         self.assertEqual(
-            retry.backoff_factor,
-            0.5,
-            "Should use 0.5s backoff factor (0.5s, 1s delays)",
+            response["featureFlags"], {f"transient-{status_code}-flag": True}
         )
+        self.assertEqual(mock_session.post.call_count, 2)
+        mock_sleep.assert_called_once_with(0.3)
 
+    @parameterized.expand([(408,), (429,), (500,), (503,)])
+    def test_flags_does_not_retry_other_http_status_errors(self, status_code):
+        mock_response = requests.Response()
+        mock_response.status_code = status_code
+        mock_response._content = b'{"detail": "Service unavailable"}'
 
-class TestFlagsSessionRetryIntegration(unittest.TestCase):
-    """Integration tests that verify actual retry behavior with a local server."""
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
 
-    def test_retries_on_503_then_succeeds(self):
-        """
-        Verify that 503 errors trigger retries and eventually succeed.
+        with mock.patch(
+            "posthog.request._get_flags_session", return_value=mock_session
+        ):
+            with self.assertRaises(APIError) as cm:
+                flags("test-key", "https://test.posthog.com", distinct_id="user123")
 
-        Uses a local HTTP server that fails twice with 503, then succeeds.
-        This tests the full retry flow including backoff timing.
-        """
-        import threading
-        from http.server import HTTPServer, BaseHTTPRequestHandler
-        from socketserver import ThreadingMixIn
-        from urllib3.util.retry import Retry
-        from posthog.request import HTTPAdapterWithSocketOptions, RETRY_STATUS_FORCELIST
-
-        request_count = 0
-
-        class RetryTestHandler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def do_POST(self):
-                nonlocal request_count
-                request_count += 1
-
-                # Read and discard request body to prevent connection issues
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length > 0:
-                    self.rfile.read(content_length)
-
-                if request_count <= 2:
-                    self.send_response(503)
-                    self.send_header("Content-Type", "application/json")
-                    body = b'{"error": "Service unavailable"}'
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                else:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    body = (
-                        b'{"featureFlags": {"test": true}, "featureFlagPayloads": {}}'
-                    )
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-
-            def log_message(self, format, *args):
-                pass  # Suppress logging
-
-        # Use ThreadingMixIn for cleaner shutdown
-        class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-            daemon_threads = True
-
-        # Start server on a random available port
-        server = ThreadedHTTPServer(("127.0.0.1", 0), RetryTestHandler)
-        port = server.server_address[1]
-        server_thread = threading.Thread(target=server.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-
-        try:
-            # Build session with same retry config as _build_flags_session
-            # but mounted on http:// for local testing
-            adapter = HTTPAdapterWithSocketOptions(
-                max_retries=Retry(
-                    total=2,
-                    connect=2,
-                    read=2,
-                    backoff_factor=0.01,  # Fast backoff for testing
-                    status_forcelist=RETRY_STATUS_FORCELIST,
-                    allowed_methods=["POST"],
-                ),
-            )
-            session = requests.Session()
-            session.mount("http://", adapter)
-
-            response = session.post(
-                f"http://127.0.0.1:{port}/flags/?v=2",
-                json={"distinct_id": "user123"},
-                timeout=5,
-            )
-
-            # Should succeed on 3rd attempt
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(request_count, 3)  # 1 initial + 2 retries
-        finally:
-            server.shutdown()
-            server.server_close()
-
-    def test_connection_errors_are_retried(self):
-        """
-        Verify that connection errors (no server) trigger retries.
-
-        Binds a socket to get a guaranteed available port, then closes it
-        so connection attempts fail with ConnectionError.
-        """
-        import socket
-        import time
-        from urllib3.util.retry import Retry
-        from posthog.request import HTTPAdapterWithSocketOptions, RETRY_STATUS_FORCELIST
-
-        # Get an available port by binding then closing a socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-        sock.close()  # Port is now available but nothing is listening
-
-        adapter = HTTPAdapterWithSocketOptions(
-            max_retries=Retry(
-                total=2,
-                connect=2,
-                read=2,
-                backoff_factor=0.05,  # Very fast for testing
-                status_forcelist=RETRY_STATUS_FORCELIST,
-                allowed_methods=["POST"],
-            ),
-        )
-        session = requests.Session()
-        session.mount("http://", adapter)
-
-        start = time.time()
-        with self.assertRaises(requests.exceptions.ConnectionError):
-            session.post(
-                f"http://127.0.0.1:{port}/flags/?v=2",
-                json={"distinct_id": "user123"},
-                timeout=1,
-            )
-        elapsed = time.time() - start
-
-        # With 3 attempts and backoff, should take more than instant
-        # but less than timeout (confirms retries happened)
-        self.assertGreater(elapsed, 0.05, "Should have some delay from retries")
+        self.assertEqual(cm.exception.status, status_code)
+        self.assertEqual(mock_session.post.call_count, 1)

@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import socket
+import time
 import zlib
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -42,8 +43,8 @@ for attr, value in [
     if hasattr(socket, attr):
         KEEP_ALIVE_SOCKET_OPTIONS.append((socket.SOL_TCP, getattr(socket, attr), value))
 
-# Status codes that indicate transient server errors worth retrying
-RETRY_STATUS_FORCELIST = [408, 500, 502, 503, 504]
+_FEATURE_FLAGS_RETRY_BACKOFF_SECONDS = 0.3
+_FEATURE_FLAGS_RETRY_HTTP_STATUSES = {502, 504}
 
 
 def _mask_tokens_in_url(url: str) -> str:
@@ -91,23 +92,13 @@ def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.S
 def _build_flags_session(
     socket_options: Optional[SocketOptions] = None,
 ) -> requests.Session:
-    """
-    Build a session for feature flag requests with POST retries.
+    """Build a session for feature flag requests.
 
-    Feature flag requests are idempotent (read-only), so retrying POST
-    requests is safe. This session retries on transient server errors
-    (408, 5xx) and network failures with exponential backoff
-    (0.5s, 1s delays between retries).
+    /flags retries are handled explicitly in ``flags()`` so that only
+    transport failures and contract-defined transient HTTP responses are retried.
     """
     adapter = HTTPAdapterWithSocketOptions(
-        max_retries=Retry(
-            total=2,
-            connect=2,
-            read=2,
-            backoff_factor=0.5,
-            status_forcelist=RETRY_STATUS_FORCELIST,
-            allowed_methods=["POST"],
-        ),
+        max_retries=Retry(total=0, connect=0, read=0, status=0),
         socket_options=socket_options,
     )
     session = requests.Session()
@@ -310,26 +301,47 @@ def _process_response(
         raise APIError(res.status_code, res.text, retry_after=retry_after)
 
 
+def _feature_flags_retry_delay(failed_attempt: int) -> float:
+    return _FEATURE_FLAGS_RETRY_BACKOFF_SECONDS * (2**failed_attempt)
+
+
 def flags(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
+    max_retries: int = 1,
     **kwargs,
 ) -> Any:
-    """Post the kwargs to the flags API endpoint with automatic retries."""
-    res = post(
-        api_key,
-        host,
-        "/flags/?v=2",
-        gzip,
-        timeout,
-        session=_get_flags_session(),
-        **kwargs,
-    )
-    return _process_response(
-        res, success_message="Feature flags evaluated successfully"
-    )
+    """Post the kwargs to the flags API endpoint with bounded transient retries."""
+    retries = max(0, max_retries)
+    failed_attempt = 0
+
+    while True:
+        try:
+            res = post(
+                api_key,
+                host,
+                "/flags/?v=2",
+                gzip,
+                timeout,
+                session=_get_flags_session(),
+                **kwargs,
+            )
+            return _process_response(
+                res, success_message="Feature flags evaluated successfully"
+            )
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            if failed_attempt >= retries:
+                raise
+        except APIError as exc:
+            if (
+                exc.status not in _FEATURE_FLAGS_RETRY_HTTP_STATUSES
+                or failed_attempt >= retries
+            ):
+                raise
+        time.sleep(_feature_flags_retry_delay(failed_attempt))
+        failed_attempt += 1
 
 
 def remote_config(
