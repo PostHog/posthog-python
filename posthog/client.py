@@ -2158,7 +2158,12 @@ class Client(object):
             distinct_id, person_properties
         )
         flag_value = self._locally_evaluate_flag(
-            key, distinct_id, groups, local_person_properties, group_properties, device_id
+            key,
+            distinct_id,
+            groups,
+            local_person_properties,
+            group_properties,
+            device_id,
         )
         flag_was_locally_evaluated = flag_value is not None
 
