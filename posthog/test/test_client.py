@@ -976,6 +976,7 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=3,
+                max_retries=1,
                 distinct_id="distinct_id",
                 groups={},
                 person_properties={},
@@ -983,6 +984,30 @@ class TestClient(unittest.TestCase):
                 geoip_disable=True,
                 device_id=None,
             )
+
+    @parameterized.expand(
+        [
+            ("default", 1),
+            ("disabled", 0),
+            ("two_retries", 2),
+        ]
+    )
+    def test_feature_flags_request_max_retries_is_forwarded(
+        self, _name, expected_max_retries
+    ):
+        with mock.patch("posthog.client.flags") as patch_flags:
+            patch_flags.return_value = {"featureFlags": {}, "featureFlagPayloads": {}}
+            client = Client(
+                FAKE_TEST_API_KEY,
+                feature_flags_request_max_retries=expected_max_retries,
+                personal_api_key=FAKE_TEST_API_KEY,
+            )
+
+            client.get_all_flags("distinct_id")
+
+        self.assertEqual(
+            patch_flags.call_args.kwargs["max_retries"], expected_max_retries
+        )
 
     @mock.patch("posthog.client.flags")
     def test_basic_capture_with_feature_flags_and_disable_geoip_returns_correctly(
@@ -1041,6 +1066,7 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=12,
+                max_retries=1,
                 distinct_id="distinct_id",
                 groups={},
                 person_properties={},
@@ -2261,9 +2287,10 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={},
-            person_properties={"distinct_id": "some_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=True,
             device_id=None,
@@ -2277,9 +2304,10 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="feature_enabled_distinct_id",
             groups={},
-            person_properties={"distinct_id": "feature_enabled_distinct_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=True,
             device_id=None,
@@ -2291,9 +2319,10 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="all_flags_payloads_id",
             groups={},
-            person_properties={"distinct_id": "all_flags_payloads_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=False,
             device_id=None,
@@ -2337,9 +2366,10 @@ class TestClient(unittest.TestCase):
             "random_key",
             "http://app2.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={"distinct_id": "some_id", "x1": "y1"},
+            person_properties={"x1": "y1"},
             group_properties={
                 "company": {"$group_key": "id:5", "x": "y"},
                 "instance": {"$group_key": "app.posthog.com"},
@@ -2365,6 +2395,7 @@ class TestClient(unittest.TestCase):
             "random_key",
             "http://app2.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
             person_properties={"distinct_id": "override"},
@@ -2386,9 +2417,10 @@ class TestClient(unittest.TestCase):
             "random_key",
             "http://app2.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={},
-            person_properties={"distinct_id": "some_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=False,
             device_id=None,
@@ -2400,22 +2432,22 @@ class TestClient(unittest.TestCase):
             (
                 "get_feature_flag",
                 ["random_key", "some_id"],
-                {"distinct_id": "some_id"},
+                {},
                 ["random_key"],
             ),
             (
                 "feature_enabled",
                 ["random_key", "some_id"],
-                {"distinct_id": "some_id"},
+                {},
                 ["random_key"],
             ),
             (
                 "get_all_flags_and_payloads",
                 ["some_id"],
-                {"distinct_id": "some_id"},
+                {},
                 None,
             ),
-            ("get_all_flags", ["some_id"], {"distinct_id": "some_id"}, None),
+            ("get_all_flags", ["some_id"], {}, None),
             ("get_flags_decision", ["some_id"], {}, None),
         ]
     )
@@ -2446,7 +2478,11 @@ class TestClient(unittest.TestCase):
             expected_call["flag_keys_to_evaluate"] = expected_flag_keys
 
         patch_flags.assert_called_with(
-            "random_key", "https://us.i.posthog.com", timeout=3, **expected_call
+            "random_key",
+            "https://us.i.posthog.com",
+            timeout=3,
+            max_retries=1,
+            **expected_call,
         )
 
     @mock.patch("posthog.client.flags")
@@ -2472,9 +2508,10 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=3,
+                max_retries=1,
                 distinct_id="some_id",
                 groups={},
-                person_properties={"distinct_id": "some_id"},
+                person_properties={},
                 group_properties={},
                 geoip_disable=True,
                 device_id="context-device-id",
@@ -2492,9 +2529,10 @@ class TestClient(unittest.TestCase):
                 "random_key",
                 "https://us.i.posthog.com",
                 timeout=3,
+                max_retries=1,
                 distinct_id="some_id",
                 groups={},
-                person_properties={"distinct_id": "some_id"},
+                person_properties={},
                 group_properties={},
                 geoip_disable=True,
                 device_id="explicit-device-id",
@@ -2521,9 +2559,10 @@ class TestClient(unittest.TestCase):
             "random_key",
             "https://us.i.posthog.com",
             timeout=3,
+            max_retries=1,
             distinct_id="some_id",
             groups={},
-            person_properties={"distinct_id": "some_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=True,
             device_id="client-context-device-id",

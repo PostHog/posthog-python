@@ -20,7 +20,7 @@ from posthog.version import VERSION
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ def init():
         api_key = data.get("api_key")
         host = data.get("host")
         flush_at = data.get("flush_at", 100)
-        flush_interval_ms = data.get("flush_interval_ms", 5000)
+        flush_interval_ms = data.get("flush_interval_ms", 500)
         max_retries = data.get("max_retries", 3)
         enable_compression = data.get("enable_compression", False)
 
@@ -245,7 +245,7 @@ def init():
             flush_interval=flush_interval,
             gzip=enable_compression,
             max_retries=max_retries,
-            debug=True,
+            debug=False,
             # Compliance tests assert the request-level default when callers omit
             # disable_geoip. Configure the adapter to exercise geoip-enabled
             # /flags requests by default while still allowing per-call overrides.

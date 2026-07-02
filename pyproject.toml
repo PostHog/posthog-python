@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.21.1"
+version = "7.21.3"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -115,6 +115,12 @@ packages = [
 [tool.uv]
 exclude-newer = "7 days"
 required-version = ">=0.8.0"
+
+# Declares a uv workspace so tooling (incl. Sampo's release flow) discovers the
+# in-repo openfeature-provider-posthog package. The main `posthog` package and
+# its build are unaffected (packages list above is explicit).
+[tool.uv.workspace]
+members = ["openfeature-provider"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

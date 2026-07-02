@@ -14,4 +14,8 @@ jobs:
             pr_number: ${{ github.event.pull_request.number }}
             pr_node_id: ${{ github.event.pull_request.node_id }}
             is_draft: ${{ github.event.pull_request.draft }}
-        secrets: inherit
+        # The central .github reusable workflow does not declare workflow_call.secrets,
+        # so explicit secret mapping makes GitHub reject this caller at startup.
+        # It gates fork/Dependabot PRs before using secrets; keep this scoped call
+        # as an intentional exception to the broad-inheritance Semgrep rule.
+        secrets: inherit # nosemgrep
