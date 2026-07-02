@@ -505,13 +505,14 @@ attribute posthog.client.Client.is_server = is_server
 attribute posthog.client.Client.log = logging.getLogger('posthog')
 attribute posthog.client.Client.log_captured_exceptions = log_captured_exceptions
 attribute posthog.client.Client.on_error = on_error
-attribute posthog.client.Client.personal_api_key = (personal_api_key.strip() if isinstance(personal_api_key, str) else personal_api_key) or None
+attribute posthog.client.Client.personal_api_key = self.secret_key
 attribute posthog.client.Client.poll_interval = poll_interval
 attribute posthog.client.Client.poller: Optional[Poller] = None
 attribute posthog.client.Client.privacy_mode = privacy_mode
 attribute posthog.client.Client.project_root = project_root
 attribute posthog.client.Client.queue: Queue = Queue(max_queue_size)
 attribute posthog.client.Client.raw_host = normalize_host(host)
+attribute posthog.client.Client.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
 attribute posthog.client.Client.send = send
 attribute posthog.client.Client.super_properties = super_properties
 attribute posthog.client.Client.sync_mode = sync_mode
@@ -708,6 +709,7 @@ attribute posthog.request.RequestsTimeout = requests.exceptions.Timeout
 attribute posthog.request.SocketOptions = List[Tuple[int, int, Union[int, bytes]]]
 attribute posthog.request.USER_AGENT = 'posthog-python/' + VERSION
 attribute posthog.request.US_INGESTION_ENDPOINT = 'https://us.i.posthog.com'
+attribute posthog.secret_key = None
 attribute posthog.send = True
 attribute posthog.super_properties = None
 attribute posthog.sync_mode = False
@@ -826,7 +828,7 @@ class posthog.ai.types.ToolInProgress
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, _dedicated_ai_endpoint=False)
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, secret_key=None, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, _dedicated_ai_endpoint=False)
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
