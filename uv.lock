@@ -2486,6 +2486,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+async = [
+    { name = "httpx" },
+]
 dev = [
     { name = "django-stubs" },
     { name = "griffe" },
@@ -2558,6 +2561,7 @@ requires-dist = [
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
     { name = "google-genai", marker = "extra == 'test'" },
     { name = "griffe", marker = "extra == 'dev'" },
+    { name = "httpx", marker = "extra == 'async'", specifier = ">=0.27,<1.0" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
     { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
@@ -2597,7 +2601,7 @@ requires-dist = [
     { name = "tzdata", marker = "extra == 'test'" },
     { name = "wheel", marker = "extra == 'dev'" },
 ]
-provides-extras = ["langchain", "otel", "dev", "test"]
+provides-extras = ["async", "langchain", "otel", "dev", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "claude-agent-sdk", specifier = ">=0.1.50" }]
