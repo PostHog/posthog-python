@@ -2767,7 +2767,7 @@ class TestLocalEvaluation(unittest.TestCase):
             client.load_feature_flags()
             self.assertIn("Unauthorized", logs.output[0])
             self.assertIn("project_api_key", logs.output[0])
-            self.assertIn("personal_api_key", logs.output[0])
+            self.assertIn("secret_key", logs.output[0])
         client.debug = True
         with self.assertRaisesRegex(APIError, "Unauthorized"):
             client.load_feature_flags()
