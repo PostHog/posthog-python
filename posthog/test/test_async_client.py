@@ -193,5 +193,6 @@ async def test_shutdown_offloads_blocking_client_cleanup():
     ):
         await client.shutdown()
 
-    assert "_join_blocking_resources" in offloaded_functions
+    assert "_stop_blocking_polling_resources" in offloaded_functions
+    assert "_unregister_duplicate_client" in offloaded_functions
     client.poller.stop.assert_called_once_with()
