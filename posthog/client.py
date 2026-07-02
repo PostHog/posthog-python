@@ -2154,8 +2154,11 @@ class Client(object):
         if device_id is None:
             device_id = get_context_device_id()
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         flag_value = self._locally_evaluate_flag(
-            key, distinct_id, groups, person_properties, group_properties, device_id
+            key, distinct_id, groups, local_person_properties, group_properties, device_id
         )
         flag_was_locally_evaluated = flag_value is not None
 
@@ -2762,10 +2765,13 @@ class Client(object):
 
         groups = groups or {}
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
@@ -2881,10 +2887,13 @@ class Client(object):
         locally_evaluated_keys: set[str] = set()
 
         # Try local evaluation first when the poller has loaded definitions.
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=dict(groups),
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
         )
@@ -3162,6 +3171,11 @@ class Client(object):
             Feature flags
         """
         return self.feature_flags
+
+    def _person_properties_for_local_evaluation(self, distinct_id, person_properties):
+        local_person_properties = dict(person_properties or {})
+        local_person_properties.setdefault("distinct_id", distinct_id)
+        return local_person_properties
 
     def _add_local_person_and_group_properties(
         self, groups, person_properties, group_properties

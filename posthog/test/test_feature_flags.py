@@ -76,6 +76,47 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
 
+    @mock.patch("posthog.client.flags")
+    def test_distinct_id_property_is_available_for_local_evaluation_only(
+        self, patch_flags
+    ):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Distinct ID Feature",
+                "key": "distinct-id-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "distinct_id",
+                                    "operator": "exact",
+                                    "value": "some-distinct-id",
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        person_properties = {"region": "USA"}
+        feature_flag_match = self.client.get_feature_flag(
+            "distinct-id-flag",
+            "some-distinct-id",
+            person_properties=person_properties,
+            only_evaluate_locally=True,
+            send_feature_flag_events=False,
+        )
+
+        self.assertTrue(feature_flag_match)
+        self.assertEqual(person_properties, {"region": "USA"})
+        self.assertEqual(patch_flags.call_count, 0)
+
     def test_case_insensitive_matching(self):
         self.client.feature_flags = [
             {
