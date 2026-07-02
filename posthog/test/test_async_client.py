@@ -179,3 +179,22 @@ async def test_capture_send_feature_flags_runs_sync_fallback_in_thread():
 
     assert event_uuid is not None
     await client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_offloads_blocking_client_cleanup():
+    client = AsyncPostHog("test-key", send=False)
+    client.poller = mock.Mock()
+    offloaded_functions = []
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        offloaded_functions.append(fn.__name__)
+        return fn(*args, **kwargs)
+
+    with mock.patch(
+        "posthog.async_client.asyncio.to_thread", side_effect=fake_to_thread
+    ):
+        await client.shutdown()
+
+    assert "_join_blocking_resources" in offloaded_functions
+    client.poller.stop.assert_called_once_with()

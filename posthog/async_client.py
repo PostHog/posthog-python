@@ -636,6 +636,9 @@ class AsyncClient(_Client):
         self._worker_tasks.clear()
         self._async_consumers.clear()
 
+        await asyncio.to_thread(self._join_blocking_resources)
+
+    def _join_blocking_resources(self) -> None:
         if self.poller:
             self.poller.stop()
 

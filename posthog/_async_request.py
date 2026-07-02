@@ -14,7 +14,6 @@ from .request import (
     DatetimeSerializer,
     GetResponse,
     QuotaLimitError,
-    _mask_tokens_in_url,
     normalize_host,
 )
 from .utils import remove_trailing_slash
@@ -95,7 +94,7 @@ async def async_post(
     url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
     data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
-    log.debug("making async request to url: %s", url)
+    log.debug("making async request")
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
         try:
@@ -231,6 +230,7 @@ async def async_get(
     host: Optional[str] = None,
     timeout: Optional[int] = None,
     etag: Optional[str] = None,
+    client: Optional[Any] = None,
 ) -> GetResponse:
     """Make an async GET request with optional ETag support."""
     log = logging.getLogger("posthog")
@@ -240,11 +240,11 @@ async def async_get(
     if etag:
         headers["If-None-Match"] = etag
 
-    res = await (await _get_client()).get(full_url, headers=headers, timeout=timeout)
-    masked_url = _mask_tokens_in_url(full_url)
+    http_client = client or await _get_client()
+    res = await http_client.get(full_url, headers=headers, timeout=timeout)
 
     if res.status_code == 304:
-        log.debug(f"GET {masked_url} returned 304 Not Modified")
+        log.debug("GET returned 304 Not Modified")
         response_etag = res.headers.get("ETag")
         return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
 
