@@ -241,6 +241,7 @@ class Client(object):
         is_server=True,
         historical_migration=False,
         feature_flags_request_timeout_seconds=3,
+        feature_flags_request_max_retries=1,
         super_properties=None,
         enable_exception_autocapture=False,
         log_captured_exceptions=False,
@@ -304,6 +305,9 @@ class Client(object):
             historical_migration: Mark events as historical migration imports.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
+            feature_flags_request_max_retries: Number of retries for feature flag
+                requests after network, transport, or timeout failures. Defaults
+                to 1. Set to 0 to disable retries.
             super_properties: Properties merged into every captured event.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
@@ -383,6 +387,9 @@ class Client(object):
         self.poll_interval = poll_interval
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
+        )
+        self.feature_flags_request_max_retries = max(
+            0, feature_flags_request_max_retries
         )
         self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
@@ -920,6 +927,7 @@ class Client(object):
             self.api_key,
             self.host,
             timeout=self.feature_flags_request_timeout_seconds,
+            max_retries=self.feature_flags_request_max_retries,
             **request_data,
         )
 
@@ -2155,7 +2163,6 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -2176,8 +2183,16 @@ class Client(object):
         if device_id is None:
             device_id = get_context_device_id()
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         flag_value = self._locally_evaluate_flag(
-            key, distinct_id, groups, person_properties, group_properties, device_id
+            key,
+            distinct_id,
+            groups,
+            local_person_properties,
+            group_properties,
+            device_id,
         )
         flag_was_locally_evaluated = flag_value is not None
 
@@ -2774,7 +2789,7 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id, groups, person_properties, group_properties
+                groups, person_properties, group_properties
             )
         )
 
@@ -2784,10 +2799,13 @@ class Client(object):
 
         groups = groups or {}
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
@@ -2888,7 +2906,6 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -2904,10 +2921,13 @@ class Client(object):
         locally_evaluated_keys: set[str] = set()
 
         # Try local evaluation first when the poller has loaded definitions.
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=dict(groups),
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
         )
@@ -3186,13 +3206,15 @@ class Client(object):
         """
         return self.feature_flags
 
+    def _person_properties_for_local_evaluation(self, distinct_id, person_properties):
+        local_person_properties = dict(person_properties or {})
+        local_person_properties.setdefault("distinct_id", distinct_id)
+        return local_person_properties
+
     def _add_local_person_and_group_properties(
-        self, distinct_id, groups, person_properties, group_properties
+        self, groups, person_properties, group_properties
     ):
-        all_person_properties = {
-            "distinct_id": distinct_id,
-            **(person_properties or {}),
-        }
+        person_properties = person_properties or {}
 
         all_group_properties = {}
         if groups:
@@ -3202,7 +3224,7 @@ class Client(object):
                     **((group_properties or {}).get(group_name) or {}),
                 }
 
-        return all_person_properties, all_group_properties
+        return person_properties, all_group_properties
 
 
 def stringify_id(val):

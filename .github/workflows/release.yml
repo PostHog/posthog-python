@@ -73,7 +73,7 @@ jobs:
     steps:
       - name: Notify Slack - Approved
         if: needs.notify-approval-needed.outputs.slack_ts != ''
-        uses: posthog/.github/.github/actions/slack-thread-reply@5fc4680761e8ac29a61b212756230eba0e276d8c
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
@@ -134,7 +134,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
         run: |
+          # Sampo writes the root package changelog to CHANGELOG.md because the
+          # posthog package metadata lives at the repository root. Keep the
+          # user-facing root changelog as a package index and store posthog's
+          # generated changelog alongside the package instead.
+          cp posthog/CHANGELOG.md CHANGELOG.md
           sampo release
+          mv CHANGELOG.md posthog/CHANGELOG.md
+          printf '%s\n' \
+            '# Changelog' \
+            '' \
+            'Package-specific changelogs live with each package:' \
+            '' \
+            '- [`posthog`](posthog/CHANGELOG.md)' \
+            '- [`openfeature-provider-posthog`](openfeature-provider/CHANGELOG.md)' \
+            > CHANGELOG.md
           new_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
 
@@ -194,21 +208,29 @@ jobs:
       # Notify in case of a failure
       - name: Send failure event to PostHog
         if: ${{ failure() }}
-        uses: PostHog/posthog-github-action@58dea254b598fb5d469c0699c98af8288a7f7650 # v1.2.0
+        continue-on-error: true
+        uses: PostHog/posthog-github-action@9a6a19d360820ab4d95ecc4a5a7564062c895f84 # v1.3.0
         with:
           posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
-          event: "posthog-python-github-release-workflow-failure"
+          event: "posthog-sdk-github-release-workflow-failure"
           properties: >-
             {
               "commitSha": "${{ github.sha }}",
               "jobStatus": "${{ job.status }}",
               "ref": "${{ github.ref }}",
-              "version": "${{ steps.sampo-release.outputs.new_version }}"
+              "repository": "${{ github.repository }}",
+              "sdk": "posthog-python",
+              "jobName": "version-bump",
+              "packageName": "posthog-python",
+              "packageVersion": "${{ steps.sampo-release.outputs.new_version || 'unknown' }}",
+              "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "alertText": ":rotating_light: Failed to prepare release posthog-python@${{ steps.sampo-release.outputs.new_version }} :rotating_light:",
+              "alertContext": "The version bump/changelog step failed before packages were published."
             }
 
       - name: Notify Slack - Failed
         if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
-        uses: posthog/.github/.github/actions/slack-thread-reply@5fc4680761e8ac29a61b212756230eba0e276d8c
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
@@ -243,7 +265,7 @@ jobs:
             build: uv run make build_release
             packages_dir: dist
             tag_prefix: "posthog-v"
-            changelog: CHANGELOG.md
+            changelog: posthog/CHANGELOG.md
             github_release: true
           # posthoganalytics is a build-time mirror of posthog (same version, no
           # separate tag/release); it always ships alongside posthog.
@@ -268,6 +290,14 @@ jobs:
           ref: ${{ needs.version-bump.outputs.commit-hash }}
           fetch-depth: 0
 
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -288,15 +318,23 @@ jobs:
         id: detect
         env:
           VERSION_FILE: ${{ matrix.package.version_file }}
+          TAG_PREFIX: ${{ matrix.package.tag_prefix }}
         run: |
           if git diff --quiet HEAD~1 HEAD -- "$VERSION_FILE"; then
             echo "has-new-version=false" >> "$GITHUB_OUTPUT"
             echo "${{ matrix.package.name }}: no version change in this release; skipping."
           else
             version=$(python3 -c "import tomllib; print(tomllib.load(open('$VERSION_FILE','rb'))['project']['version'])")
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "has-new-version=true" >> "$GITHUB_OUTPUT"
-            echo "${{ matrix.package.name }}: releasing $version"
+            tag="${TAG_PREFIX}${version}"
+            if [ -n "$TAG_PREFIX" ] && git rev-parse "$tag" >/dev/null 2>&1; then
+              echo "has-new-version=false" >> "$GITHUB_OUTPUT"
+              echo "${{ matrix.package.name }}: tag $tag already exists; skipping."
+            else
+              echo "version=$version" >> "$GITHUB_OUTPUT"
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
+              echo "has-new-version=true" >> "$GITHUB_OUTPUT"
+              echo "${{ matrix.package.name }}: releasing $version"
+            fi
           fi
 
       - name: Build ${{ matrix.package.name }}
@@ -312,52 +350,75 @@ jobs:
       - name: Tag ${{ matrix.package.name }} release
         if: steps.detect.outputs.has-new-version == 'true' && matrix.package.tag_prefix != ''
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
+          TAG: ${{ steps.detect.outputs.tag }}
           COMMIT_HASH: ${{ needs.version-bump.outputs.commit-hash }}
+          PACKAGE_NAME: ${{ matrix.package.name }}
+          VERSION: ${{ steps.detect.outputs.version }}
         run: |
-          gh api "repos/${{ github.repository }}/git/refs" \
-            -f "ref=refs/tags/${TAG}" \
-            -f "sha=${COMMIT_HASH}"
+          git tag -a "$TAG" -m "$PACKAGE_NAME $VERSION" "$COMMIT_HASH"
+          git push origin "$TAG"
 
       - name: Create ${{ matrix.package.name }} GitHub Release
         if: steps.detect.outputs.has-new-version == 'true' && matrix.package.github_release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ matrix.package.tag_prefix }}${{ steps.detect.outputs.version }}
+          TAG: ${{ steps.detect.outputs.tag }}
           CHANGELOG_FILE: ${{ matrix.package.changelog }}
         run: |
           # Use the latest changelog section (lines between the first '## ' and the
           # next '## ') as release notes. Fall back to a pointer if the file is
           # missing or has no section yet, so a release is never blocked on notes.
-          notes="See ${CHANGELOG_FILE} for details."
-          if [ -f "${CHANGELOG_FILE}" ]; then
-            entry=$(awk '/^## /{if (seen) exit; seen=1; next} seen' "${CHANGELOG_FILE}" | sed '/[^[:space:]]/,$!d')
-            if [ -n "$(printf '%s' "$entry" | tr -d '[:space:]')" ]; then
-              notes="$entry"
+          fallback="See $CHANGELOG_FILE for details."
+          if [ -f "$CHANGELOG_FILE" ]; then
+            awk '
+              /^## / { if (found_version) exit; found_version=1; next }
+              found_version { lines[++n] = $0 }
+              END {
+                start = 1
+                while (start <= n && lines[start] ~ /^[[:space:]]*$/) start++
+                end = n
+                while (end >= start && lines[end] ~ /^[[:space:]]*$/) end--
+                for (i = start; i <= end; i++) print lines[i]
+              }
+            ' "$CHANGELOG_FILE" > release-notes.md
+            if [ -z "$(tr -d '[:space:]' < release-notes.md)" ]; then
+              echo "$fallback" > release-notes.md
             fi
+          else
+            echo "$fallback" > release-notes.md
           fi
-          gh release create "$TAG" --notes "$notes"
+
+          gh release create "$TAG" \
+            --target "${{ needs.version-bump.outputs.commit-hash }}" \
+            --title "$TAG" \
+            --notes-file release-notes.md
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
         if: ${{ failure() }}
-        uses: PostHog/posthog-github-action@58dea254b598fb5d469c0699c98af8288a7f7650 # v1.2.0
+        continue-on-error: true
+        uses: PostHog/posthog-github-action@9a6a19d360820ab4d95ecc4a5a7564062c895f84 # v1.3.0
         with:
           posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
-          event: "posthog-python-github-release-workflow-failure"
+          event: "posthog-sdk-github-release-workflow-failure"
           properties: >-
             {
               "commitSha": "${{ github.sha }}",
               "jobStatus": "${{ job.status }}",
               "ref": "${{ github.ref }}",
-              "package": "${{ matrix.package.name }}",
-              "version": "${{ needs.version-bump.outputs.new_version }}"
+              "repository": "${{ github.repository }}",
+              "sdk": "posthog-python",
+              "jobName": "publish",
+              "packageName": "${{ matrix.package.name }}",
+              "packageVersion": "${{ needs.version-bump.outputs.new_version || 'unknown' }}",
+              "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "alertText": ":rotating_light: Failed to release ${{ matrix.package.name }}@${{ needs.version-bump.outputs.new_version }} :rotating_light:",
+              "alertContext": "The package publish step failed."
             }
 
       - name: Notify Slack - Failed
         if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
-        uses: posthog/.github/.github/actions/slack-thread-reply@5fc4680761e8ac29a61b212756230eba0e276d8c
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
@@ -438,7 +499,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Notify Slack - Released
-        uses: posthog/.github/.github/actions/slack-thread-reply@5fc4680761e8ac29a61b212756230eba0e276d8c
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
         with:
           slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
           slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}

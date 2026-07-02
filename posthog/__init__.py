@@ -323,6 +323,9 @@ Attributes:
         attributed to the person normally.
     feature_flags_request_timeout_seconds: Timeout in seconds for feature flag
         and remote config requests.
+    feature_flags_request_max_retries: Number of retries for feature flag
+        requests after network, transport, or timeout failures. Defaults to 1.
+        Set to 0 to disable retries.
     super_properties: Properties merged into every captured event.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
@@ -367,6 +370,7 @@ poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
 is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
+feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
 log_captured_exceptions = False  # type: bool
@@ -1159,6 +1163,7 @@ def setup() -> Client:
             disable_geoip=disable_geoip,
             is_server=is_server,
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
+            feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,

@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.21.3",
+    "version": "7.21.2",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -469,12 +469,6 @@
             {
               "name": "feature_flags_request_timeout_seconds",
               "description": "Timeout in seconds for feature         flag and remote config requests.",
-              "isOptional": false,
-              "type": "int"
-            },
-            {
-              "name": "feature_flags_request_max_retries",
-              "description": "Number of retries for feature flag         requests after network, transport, or timeout failures. Defaults         to 1. Set to 0 to disable retries.",
               "isOptional": false,
               "type": "int"
             },
