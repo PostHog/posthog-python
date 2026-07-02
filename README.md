@@ -29,6 +29,33 @@ SDK usage examples and code snippets live in the official documentation so they 
 - [Flask framework docs](https://posthog.com/docs/libraries/flask)
 - [OpenFeature provider docs](https://posthog.com/docs/feature-flags/installation/openfeature) — use PostHog flags through the [OpenFeature](https://openfeature.dev) Python SDK
 
+## Async usage
+
+Install the async extra to use the asyncio-native client:
+
+```bash
+pip install 'posthog[async]'
+```
+
+Use `AsyncPostHog` in async applications and close it with `async with` or `await shutdown()`:
+
+```python
+from posthog import AsyncPostHog
+
+async with AsyncPostHog("<ph_project_api_key>", host="<ph_client_api_host>") as posthog:
+    await posthog.capture("page_viewed", distinct_id="user_123")
+```
+
+Async feature flag evaluation uses non-blocking HTTP requests:
+
+```python
+async with AsyncPostHog("<ph_project_api_key>") as posthog:
+    flags = await posthog.evaluate_flags("user_123")
+    if flags.is_enabled("new-dashboard"):
+        ...
+    await posthog.capture("page_viewed", distinct_id="user_123", flags=flags)
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and test instructions.
