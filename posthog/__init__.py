@@ -312,8 +312,9 @@ Attributes:
     sync_mode: If True, send events synchronously instead of using background
         worker threads.
     disabled: If True, disable captures and API requests. Useful in tests.
-    personal_api_key: Personal API key used for local feature flag evaluation
-        and remote config payloads.
+    secret_key: A Personal API Key or Project Secret API Key used for local
+        feature flag evaluation and remote config payloads.
+    personal_api_key: Deprecated alias for secret_key.
     poll_interval: Seconds between local feature flag definition refreshes.
     disable_geoip: Whether to disable server-side GeoIP enrichment. Defaults to
         True.
@@ -359,7 +360,8 @@ debug = False  # type: bool
 send = True  # type: bool
 sync_mode = False  # type: bool
 disabled = False  # type: bool
-personal_api_key = None  # type: Optional[str]
+secret_key = None  # type: Optional[str]
+personal_api_key = None  # type: Optional[str]  # Deprecated: use secret_key
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
@@ -926,7 +928,7 @@ def get_remote_config_payload(
         The payload associated with the feature flag. If payload is encrypted, the return value will be decrypted
 
     Note:
-        Requires personal_api_key to be set for authentication
+        Requires secret_key to be set for authentication
     """
     return _proxy(
         "get_remote_config_payload",
@@ -1150,6 +1152,7 @@ def setup() -> Client:
             on_error=on_error,
             send=send,
             sync_mode=sync_mode,
+            secret_key=secret_key,
             personal_api_key=personal_api_key,
             poll_interval=poll_interval,
             disabled=disabled,

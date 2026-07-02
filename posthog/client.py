@@ -234,6 +234,7 @@ class Client(object):
         timeout=15,
         thread=1,
         poll_interval=30,
+        secret_key=None,
         personal_api_key=None,
         disabled=False,
         disable_geoip=True,
@@ -285,8 +286,15 @@ class Client(object):
             timeout: HTTP request timeout in seconds for event uploads.
             thread: Number of background consumer threads.
             poll_interval: Seconds between local feature flag definition refreshes.
-            personal_api_key: Personal API key used for local feature flag
-                evaluation and remote config payloads.
+            secret_key: A Personal API Key or Project Secret API Key, used to
+                authenticate local feature flag evaluation, remote config
+                payloads, and decrypted flag payloads. Example::
+
+                    posthog.Client(project_api_key, secret_key="phx_...")
+
+            personal_api_key: Deprecated alias for ``secret_key``. Still honored
+                for backwards compatibility; prefer ``secret_key``, which also
+                accepts a Project Secret API Key.
             disabled: If True, disable captures and API requests. Useful in tests.
             disable_geoip: Whether to disable server-side GeoIP enrichment.
                 Defaults to True.
@@ -440,12 +448,25 @@ class Client(object):
 
         self.project_root = project_root
 
-        # personal_api_key: This should be a generated Personal API Key, private
-        self.personal_api_key = (
-            personal_api_key.strip()
-            if isinstance(personal_api_key, str)
-            else personal_api_key
+        if personal_api_key is not None and secret_key is None:
+            warnings.warn(
+                "`personal_api_key` is deprecated; use `secret_key` instead. "
+                "`secret_key` accepts a Personal API Key or a Project Secret API Key.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif secret_key is not None and personal_api_key is not None:
+            self.log.warning(
+                "[FEATURE FLAGS] Both `secret_key` and `personal_api_key` were "
+                "provided; using `secret_key` and ignoring `personal_api_key`."
+            )
+        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
+        self.secret_key = (
+            resolved_secret_key.strip()
+            if isinstance(resolved_secret_key, str)
+            else resolved_secret_key
         ) or None
+        self.personal_api_key = self.secret_key
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
             # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
@@ -1816,7 +1837,7 @@ class Client(object):
         personal_api_key = self.personal_api_key
         if personal_api_key is None:
             self.log.warning(
-                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+                "[FEATURE FLAGS] You have to specify a secret_key to use feature flags."
             )
             return
 
@@ -1871,7 +1892,7 @@ class Client(object):
             if e.status == 401:
                 detail = (
                     f"Error loading feature flags: {e.message}. "
-                    "Please verify both your project_api_key and personal_api_key. "
+                    "Please verify both your project_api_key and secret_key. "
                     "More information: https://posthog.com/docs/api/overview"
                 )
                 self.log.error("[FEATURE FLAGS] %s", detail)
@@ -1931,7 +1952,7 @@ class Client(object):
 
         if not self.personal_api_key:
             self.log.warning(
-                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+                "[FEATURE FLAGS] You have to specify a secret_key to use feature flags."
             )
             self.feature_flags = []
             return
@@ -2618,7 +2639,7 @@ class Client(object):
             returned.
 
         Note:
-            Requires ``personal_api_key`` for authentication.
+            Requires ``secret_key`` for authentication.
 
         Category:
             Feature flags
@@ -2628,7 +2649,7 @@ class Client(object):
 
         if self.personal_api_key is None:
             self.log.warning(
-                "[FEATURE FLAGS] You have to specify a personal_api_key to fetch decrypted feature flag payloads."
+                "[FEATURE FLAGS] You have to specify a secret_key to fetch decrypted feature flag payloads."
             )
             return None
 
