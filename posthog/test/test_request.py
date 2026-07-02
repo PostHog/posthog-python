@@ -531,7 +531,7 @@ class TestFlagsSession(unittest.TestCase):
     """Tests for flags session configuration."""
 
     def test_flags_session_disables_adapter_retries(self):
-        """HTTP adapter retries are disabled; flags() retries transport errors."""
+        """HTTP adapter retries are disabled; flags() handles bounded retries."""
         from posthog.request import _build_flags_session
 
         session = _build_flags_session()
@@ -678,18 +678,58 @@ class TestFlagsRetries(unittest.TestCase):
             [call.args[0] for call in mock_sleep.call_args_list], [0.3, 0.6]
         )
 
+    @mock.patch("posthog.request.time.sleep")
     @mock.patch("posthog.request._get_flags_session")
-    def test_flags_does_not_retry_http_status_errors(self, mock_get_flags_session):
-        mock_response = requests.Response()
-        mock_response.status_code = 503
-        mock_response._content = b'{"detail": "Service unavailable"}'
+    def test_flags_retries_contract_http_status_errors(
+        self, mock_get_flags_session, mock_sleep
+    ):
+        for status_code in [502, 504]:
+            with self.subTest(status_code=status_code):
+                retry_response = requests.Response()
+                retry_response.status_code = status_code
+                retry_response._content = b'{"detail": "transient error"}'
 
-        mock_session = mock.MagicMock()
-        mock_session.post.return_value = mock_response
-        mock_get_flags_session.return_value = mock_session
+                success_response = requests.Response()
+                success_response.status_code = 200
+                success_response._content = json.dumps(
+                    {
+                        "featureFlags": {f"transient-{status_code}-flag": True},
+                        "featureFlagPayloads": {},
+                        "errorsWhileComputingFlags": False,
+                    }
+                ).encode("utf-8")
 
-        with self.assertRaises(APIError) as cm:
-            flags("test-key", "https://test.posthog.com", distinct_id="user123")
+                mock_session = mock.MagicMock()
+                mock_session.post.side_effect = [retry_response, success_response]
+                mock_get_flags_session.return_value = mock_session
 
-        self.assertEqual(cm.exception.status, 503)
-        self.assertEqual(mock_session.post.call_count, 1)
+                response = flags(
+                    "test-key", "https://test.posthog.com", distinct_id="user123"
+                )
+
+                self.assertEqual(
+                    response["featureFlags"], {f"transient-{status_code}-flag": True}
+                )
+                self.assertEqual(mock_session.post.call_count, 2)
+                mock_sleep.assert_called_once_with(0.3)
+                mock_sleep.reset_mock()
+
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_does_not_retry_other_http_status_errors(
+        self, mock_get_flags_session
+    ):
+        for status_code in [408, 429, 500, 503]:
+            with self.subTest(status_code=status_code):
+                mock_response = requests.Response()
+                mock_response.status_code = status_code
+                mock_response._content = b'{"detail": "Service unavailable"}'
+
+                mock_session = mock.MagicMock()
+                mock_session.post.return_value = mock_response
+                mock_get_flags_session.return_value = mock_session
+
+                with self.assertRaises(APIError) as cm:
+                    flags("test-key", "https://test.posthog.com", distinct_id="user123")
+
+                self.assertEqual(cm.exception.status, status_code)
+                self.assertEqual(mock_session.post.call_count, 1)

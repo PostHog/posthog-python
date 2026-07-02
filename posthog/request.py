@@ -44,6 +44,7 @@ for attr, value in [
         KEEP_ALIVE_SOCKET_OPTIONS.append((socket.SOL_TCP, getattr(socket, attr), value))
 
 _FEATURE_FLAGS_RETRY_BACKOFF_SECONDS = 0.3
+_FEATURE_FLAGS_RETRY_HTTP_STATUSES = {502, 504}
 
 
 def _mask_tokens_in_url(url: str) -> str:
@@ -94,8 +95,7 @@ def _build_flags_session(
     """Build a session for feature flag requests.
 
     /flags retries are handled explicitly in ``flags()`` so that only
-    transport failures are retried. HTTP status responses must surface as API
-    errors without retrying.
+    transport failures and contract-defined transient HTTP responses are retried.
     """
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(total=0, connect=0, read=0, status=0),
@@ -313,7 +313,7 @@ def flags(
     max_retries: int = 1,
     **kwargs,
 ) -> Any:
-    """Post the kwargs to the flags API endpoint with transport retries."""
+    """Post the kwargs to the flags API endpoint with bounded transient retries."""
     retries = max(0, max_retries)
     failed_attempt = 0
 
@@ -333,6 +333,14 @@ def flags(
             )
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             if failed_attempt >= retries:
+                raise
+            time.sleep(_feature_flags_retry_delay(failed_attempt))
+            failed_attempt += 1
+        except APIError as exc:
+            if (
+                exc.status not in _FEATURE_FLAGS_RETRY_HTTP_STATUSES
+                or failed_attempt >= retries
+            ):
                 raise
             time.sleep(_feature_flags_retry_delay(failed_attempt))
             failed_attempt += 1
