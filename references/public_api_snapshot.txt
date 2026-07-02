@@ -215,52 +215,6 @@ alias posthog.ai.utils.tag -> posthog.tag
 alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
-alias posthog.async_client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
-alias posthog.async_client.AsyncConsumer -> posthog.async_consumer.AsyncConsumer
-alias posthog.async_client.Client -> posthog.client.Client
-alias posthog.async_client.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
-alias posthog.async_client.ExceptionArg -> posthog.args.ExceptionArg
-alias posthog.async_client.OptionalCaptureArgs -> posthog.args.OptionalCaptureArgs
-alias posthog.async_client.OptionalSetArgs -> posthog.args.OptionalSetArgs
-alias posthog.async_client.VERSION -> posthog.version.VERSION
-alias posthog.async_client.add_context_tags -> posthog.client.add_context_tags
-alias posthog.async_client.async_batch_post -> posthog.async_request.async_batch_post
-alias posthog.async_client.clean -> posthog.utils.clean
-alias posthog.async_client.exc_info_from_error -> posthog.exception_utils.exc_info_from_error
-alias posthog.async_client.exception_is_already_captured -> posthog.exception_utils.exception_is_already_captured
-alias posthog.async_client.exceptions_from_error_tuple -> posthog.exception_utils.exceptions_from_error_tuple
-alias posthog.async_client.get_capture_exception_code_variables_context -> posthog.contexts.get_capture_exception_code_variables_context
-alias posthog.async_client.get_code_variables_detect_secrets_context -> posthog.contexts.get_code_variables_detect_secrets_context
-alias posthog.async_client.get_code_variables_ignore_patterns_context -> posthog.contexts.get_code_variables_ignore_patterns_context
-alias posthog.async_client.get_code_variables_mask_patterns_context -> posthog.contexts.get_code_variables_mask_patterns_context
-alias posthog.async_client.get_code_variables_mask_url_credentials_context -> posthog.contexts.get_code_variables_mask_url_credentials_context
-alias posthog.async_client.get_context_session_id -> posthog.contexts.get_context_session_id
-alias posthog.async_client.get_identity_state -> posthog.client.get_identity_state
-alias posthog.async_client.guess_timezone -> posthog.utils.guess_timezone
-alias posthog.async_client.handle_in_app -> posthog.exception_utils.handle_in_app
-alias posthog.async_client.is_ai_event -> posthog.request.is_ai_event
-alias posthog.async_client.mark_exception_as_captured -> posthog.exception_utils.mark_exception_as_captured
-alias posthog.async_client.stringify_id -> posthog.client.stringify_id
-alias posthog.async_client.system_context -> posthog.utils.system_context
-alias posthog.async_client.try_attach_code_variables_to_frames -> posthog.exception_utils.try_attach_code_variables_to_frames
-alias posthog.async_consumer.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
-alias posthog.async_consumer.AI_MAX_MSG_SIZE -> posthog.consumer.AI_MAX_MSG_SIZE
-alias posthog.async_consumer.APIError -> posthog.request.APIError
-alias posthog.async_consumer.BATCH_SIZE_LIMIT -> posthog.consumer.BATCH_SIZE_LIMIT
-alias posthog.async_consumer.DatetimeSerializer -> posthog.request.DatetimeSerializer
-alias posthog.async_consumer.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
-alias posthog.async_consumer.MAX_MSG_SIZE -> posthog.consumer.MAX_MSG_SIZE
-alias posthog.async_consumer.async_batch_post -> posthog.async_request.async_batch_post
-alias posthog.async_consumer.is_ai_event -> posthog.request.is_ai_event
-alias posthog.async_request.APIError -> posthog.request.APIError
-alias posthog.async_request.DatetimeSerializer -> posthog.request.DatetimeSerializer
-alias posthog.async_request.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
-alias posthog.async_request.GetResponse -> posthog.request.GetResponse
-alias posthog.async_request.QuotaLimitError -> posthog.request.QuotaLimitError
-alias posthog.async_request.RETRY_STATUS_FORCELIST -> posthog.request.RETRY_STATUS_FORCELIST
-alias posthog.async_request.USER_AGENT -> posthog.request.USER_AGENT
-alias posthog.async_request.normalize_host -> posthog.request.normalize_host
-alias posthog.async_request.remove_trailing_slash -> posthog.utils.remove_trailing_slash
 alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.client.APIError -> posthog.request.APIError
 alias posthog.client.Consumer -> posthog.consumer.Consumer
@@ -513,24 +467,8 @@ attribute posthog.args.OptionalSetArgs.distinct_id: NotRequired[Optional[ID_TYPE
 attribute posthog.args.OptionalSetArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalSetArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
 attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
-attribute posthog.async_client.AsyncClient.async_consumers: list[AsyncConsumer] = []
-attribute posthog.async_client.AsyncClient.log = logging.getLogger('posthog')
-attribute posthog.async_client.AsyncClient.queue: asyncio.Queue = asyncio.Queue(max_queue_size)
 attribute posthog.async_client.AsyncClient.send = send
 attribute posthog.async_client.AsyncClient.sync_mode = sync_mode
-attribute posthog.async_consumer.AsyncConsumer.api_key = api_key
-attribute posthog.async_consumer.AsyncConsumer.dedicated_ai_endpoint = dedicated_ai_endpoint
-attribute posthog.async_consumer.AsyncConsumer.flush_at = flush_at
-attribute posthog.async_consumer.AsyncConsumer.flush_interval = flush_interval
-attribute posthog.async_consumer.AsyncConsumer.gzip = gzip
-attribute posthog.async_consumer.AsyncConsumer.historical_migration = historical_migration
-attribute posthog.async_consumer.AsyncConsumer.host = host
-attribute posthog.async_consumer.AsyncConsumer.log = logging.getLogger('posthog')
-attribute posthog.async_consumer.AsyncConsumer.on_error = on_error
-attribute posthog.async_consumer.AsyncConsumer.queue = queue
-attribute posthog.async_consumer.AsyncConsumer.retries = retries
-attribute posthog.async_consumer.AsyncConsumer.running = True
-attribute posthog.async_consumer.AsyncConsumer.timeout = timeout
 attribute posthog.before_send = None
 attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
@@ -833,7 +771,7 @@ attribute posthog.utils.RedisFlagCache.version_key = f'{key_prefix}version'
 attribute posthog.utils.SizeLimitedDict.max_size = max_size
 attribute posthog.utils.log = logging.getLogger('posthog')
 attribute posthog.version.VERSION = <version>
-class posthog.AsyncPosthog 
+class posthog.AsyncPostHog 
 class posthog.Posthog 
 class posthog.ai.anthropic.anthropic.Anthropic(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.anthropic.anthropic.WrappedMessages 
@@ -892,7 +830,6 @@ class posthog.ai.types.ToolInProgress
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
 class posthog.async_client.AsyncClient(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider=None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=None, exception_autocapture_refill_rate=None, exception_autocapture_refill_interval_seconds=None, _dedicated_ai_endpoint=False)
-class posthog.async_consumer.AsyncConsumer(queue: asyncio.Queue, api_key: str, flush_at: int = 100, host: Optional[str] = None, on_error=None, flush_interval: float = 5.0, gzip: bool = False, retries: int = 10, timeout: int = 15, historical_migration: bool = False, dedicated_ai_endpoint: bool = False)
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
 class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, _dedicated_ai_endpoint=False)
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False)
@@ -1015,12 +952,6 @@ function posthog.ai.utils.sanitize_messages(data: Any, provider: str) -> Any
 function posthog.ai.utils.serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]
 function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any)
 function posthog.alias(previous_id: str, distinct_id: str, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
-function posthog.async_request.async_batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> Any
-function posthog.async_request.async_flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, **kwargs) -> Any
-function posthog.async_request.async_get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
-function posthog.async_request.async_post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: int = 15, client: Optional[Any] = None, **kwargs) -> Any
-function posthog.async_request.async_remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
-function posthog.async_request.close_async_clients() -> None
 function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.client.add_context_tags(properties)
@@ -1224,11 +1155,6 @@ method posthog.async_client.AsyncClient.join() -> None
 method posthog.async_client.AsyncClient.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.async_client.AsyncClient.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.async_client.AsyncClient.shutdown() -> None
-method posthog.async_consumer.AsyncConsumer.next() -> list[Any]
-method posthog.async_consumer.AsyncConsumer.pause() -> None
-method posthog.async_consumer.AsyncConsumer.request(batch: list[Any]) -> None
-method posthog.async_consumer.AsyncConsumer.run() -> None
-method posthog.async_consumer.AsyncConsumer.upload() -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
 method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
@@ -1384,8 +1310,6 @@ module posthog.ai.types
 module posthog.ai.utils
 module posthog.args
 module posthog.async_client
-module posthog.async_consumer
-module posthog.async_request
 module posthog.bucketed_rate_limiter
 module posthog.client
 module posthog.consumer

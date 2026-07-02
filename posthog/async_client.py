@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import asyncio
 import inspect
-import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
@@ -9,44 +10,53 @@ from uuid import UUID, uuid4
 from typing_extensions import Unpack
 
 from .args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
-from .async_consumer import AsyncConsumer
-from .async_request import async_batch_post
+from ._async_consumer import _AsyncConsumer
+from ._async_request import async_batch_post as _async_batch_post
 from .client import (
-    Client,
+    Client as _Client,
     _stringify_event_uuid,
-    add_context_tags,
-    get_identity_state,
-    stringify_id,
+    add_context_tags as _add_context_tags,
+    get_identity_state as _get_identity_state,
+    stringify_id as _stringify_id,
 )
 from .contexts import (
-    get_capture_exception_code_variables_context,
-    get_code_variables_detect_secrets_context,
-    get_code_variables_ignore_patterns_context,
-    get_code_variables_mask_patterns_context,
-    get_code_variables_mask_url_credentials_context,
-    get_context_session_id,
+    get_capture_exception_code_variables_context as _get_capture_exception_code_variables_context,
+    get_code_variables_detect_secrets_context as _get_code_variables_detect_secrets_context,
+    get_code_variables_ignore_patterns_context as _get_code_variables_ignore_patterns_context,
+    get_code_variables_mask_patterns_context as _get_code_variables_mask_patterns_context,
+    get_code_variables_mask_url_credentials_context as _get_code_variables_mask_url_credentials_context,
+    get_context_session_id as _get_context_session_id,
 )
 from .exception_utils import (
-    exc_info_from_error,
-    exception_is_already_captured,
-    exceptions_from_error_tuple,
-    handle_in_app,
-    mark_exception_as_captured,
-    try_attach_code_variables_to_frames,
+    exc_info_from_error as _exc_info_from_error,
+    exception_is_already_captured as _exception_is_already_captured,
+    exceptions_from_error_tuple as _exceptions_from_error_tuple,
+    handle_in_app as _handle_in_app,
+    mark_exception_as_captured as _mark_exception_as_captured,
+    try_attach_code_variables_to_frames as _try_attach_code_variables_to_frames,
 )
-from .request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, is_ai_event
-from .utils import clean, guess_timezone, system_context
-from .version import VERSION
+from .request import (
+    AI_EVENTS_ENDPOINT as _AI_EVENTS_ENDPOINT,
+    EVENTS_ENDPOINT as _EVENTS_ENDPOINT,
+    is_ai_event as _is_ai_event,
+)
+from .utils import (
+    clean as _clean,
+    guess_timezone as _guess_timezone,
+    system_context as _system_context,
+)
+from .version import VERSION as _VERSION
 
 
-class AsyncClient(Client):
+__all__ = ["AsyncClient"]
+
+
+class AsyncClient(_Client):
     """Asyncio-native PostHog client.
 
     This client mirrors the synchronous ``Client`` capture lifecycle but uses an
     ``asyncio.Queue`` and worker tasks instead of daemon threads.
     """
-
-    log = logging.getLogger("posthog")
 
     def __init__(
         self,
@@ -150,8 +160,8 @@ class AsyncClient(Client):
         )
         self.send = send
         self.sync_mode = sync_mode
-        self.queue: asyncio.Queue = asyncio.Queue(max_queue_size)  # type: ignore[assignment]
-        self.async_consumers: list[AsyncConsumer] = []
+        self._queue: asyncio.Queue = asyncio.Queue(max_queue_size)
+        self._async_consumers: list[_AsyncConsumer] = []
         self._worker_tasks: list[asyncio.Task] = []
         self._thread_count = thread
         self._flush_at = flush_at
@@ -172,8 +182,8 @@ class AsyncClient(Client):
             return
 
         for _ in range(self._thread_count):
-            consumer = AsyncConsumer(
-                self.queue,
+            consumer = _AsyncConsumer(
+                self._queue,
                 self.api_key,
                 host=self.host,
                 on_error=self.on_error,
@@ -185,7 +195,7 @@ class AsyncClient(Client):
                 historical_migration=self.historical_migration,
                 dedicated_ai_endpoint=self._dedicated_ai_endpoint,
             )
-            self.async_consumers.append(consumer)
+            self._async_consumers.append(consumer)
             self._worker_tasks.append(asyncio.create_task(consumer.run()))
 
     async def capture(
@@ -201,11 +211,11 @@ class AsyncClient(Client):
             send_feature_flags = kwargs.get("send_feature_flags", False)
             disable_geoip = kwargs.get("disable_geoip", None)
 
-            properties = {**(properties or {}), **system_context()}
-            properties = add_context_tags(properties)
+            properties = {**(properties or {}), **_system_context()}
+            properties = _add_context_tags(properties)
             assert properties is not None
 
-            distinct_id, personless = get_identity_state(distinct_id)
+            distinct_id, personless = _get_identity_state(distinct_id)
             if personless and "$process_person_profile" not in properties:
                 properties["$process_person_profile"] = False
 
@@ -306,8 +316,8 @@ class AsyncClient(Client):
             uuid = kwargs.get("uuid", None)
             disable_geoip = kwargs.get("disable_geoip", None)
 
-            properties = add_context_tags(properties)
-            distinct_id, personless = get_identity_state(distinct_id)
+            properties = _add_context_tags(properties)
+            distinct_id, personless = _get_identity_state(distinct_id)
             if personless or not properties:
                 return None
 
@@ -333,8 +343,8 @@ class AsyncClient(Client):
             uuid = kwargs.get("uuid", None)
             disable_geoip = kwargs.get("disable_geoip", None)
 
-            properties = add_context_tags(properties)
-            distinct_id, personless = get_identity_state(distinct_id)
+            properties = _add_context_tags(properties)
+            distinct_id, personless = _get_identity_state(distinct_id)
             if personless or not properties:
                 return None
 
@@ -363,7 +373,7 @@ class AsyncClient(Client):
         distinct_id=None,
     ) -> Optional[str]:
         try:
-            distinct_id = get_identity_state(distinct_id)[0]
+            distinct_id = _get_identity_state(distinct_id)[0]
             msg: Dict[str, Any] = {
                 "event": "$groupidentify",
                 "properties": {
@@ -375,8 +385,8 @@ class AsyncClient(Client):
                 "timestamp": timestamp,
                 "uuid": uuid,
             }
-            if get_context_session_id():
-                msg["properties"]["$session_id"] = str(get_context_session_id())
+            if _get_context_session_id():
+                msg["properties"]["$session_id"] = str(_get_context_session_id())
             return await self._enqueue(msg, disable_geoip)
         except Exception as e:
             if self.debug:
@@ -393,7 +403,7 @@ class AsyncClient(Client):
         disable_geoip: Optional[bool] = None,
     ) -> Optional[str]:
         try:
-            distinct_id, personless = get_identity_state(distinct_id)
+            distinct_id, personless = _get_identity_state(distinct_id)
             if personless:
                 return None
             msg: Dict[str, Any] = {
@@ -403,8 +413,8 @@ class AsyncClient(Client):
                 "distinct_id": previous_id,
                 "uuid": uuid,
             }
-            if get_context_session_id():
-                msg["properties"]["$session_id"] = str(get_context_session_id())
+            if _get_context_session_id():
+                msg["properties"]["$session_id"] = str(_get_context_session_id())
             return await self._enqueue(msg, disable_geoip)
         except Exception as e:
             if self.debug:
@@ -424,12 +434,12 @@ class AsyncClient(Client):
             send_feature_flags = kwargs.get("send_feature_flags", False)
             disable_geoip = kwargs.get("disable_geoip", None)
 
-            if exception is not None and exception_is_already_captured(exception):
+            if exception is not None and _exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
                 return None
 
             exc_info = (
-                exc_info_from_error(exception)
+                _exc_info_from_error(exception)
                 if exception is not None
                 else sys.exc_info()
             )
@@ -437,8 +447,8 @@ class AsyncClient(Client):
                 self.log.warning("No exception information available")
                 return None
 
-            all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
-            event = handle_in_app(
+            all_exceptions_with_trace = _exceptions_from_error_tuple(exc_info)
+            event = _handle_in_app(
                 {"exception": {"values": all_exceptions_with_trace}},
                 in_app_include=self.in_app_modules,
                 project_root=self.project_root,
@@ -449,13 +459,13 @@ class AsyncClient(Client):
                 **properties,
             }
 
-            context_enabled = get_capture_exception_code_variables_context()
-            context_mask = get_code_variables_mask_patterns_context()
-            context_ignore = get_code_variables_ignore_patterns_context()
+            context_enabled = _get_capture_exception_code_variables_context()
+            context_mask = _get_code_variables_mask_patterns_context()
+            context_ignore = _get_code_variables_ignore_patterns_context()
             context_mask_url_credentials = (
-                get_code_variables_mask_url_credentials_context()
+                _get_code_variables_mask_url_credentials_context()
             )
-            context_detect_secrets = get_code_variables_detect_secrets_context()
+            context_detect_secrets = _get_code_variables_detect_secrets_context()
 
             enabled = (
                 context_enabled
@@ -484,7 +494,7 @@ class AsyncClient(Client):
             )
 
             if enabled:
-                try_attach_code_variables_to_frames(
+                _try_attach_code_variables_to_frames(
                     all_exceptions_with_trace_and_in_app,
                     exc_info,
                     mask_patterns=mask_patterns,
@@ -508,7 +518,7 @@ class AsyncClient(Client):
                 disable_geoip=disable_geoip,
             )
             if exception is not None and res is not None:
-                mark_exception_as_captured(exception, res)
+                _mark_exception_as_captured(exception, res)
             return res
         except Exception as e:
             if self.debug:
@@ -524,7 +534,7 @@ class AsyncClient(Client):
         if timestamp is None:
             timestamp = datetime.now(tz=timezone.utc)
 
-        timestamp = guess_timezone(timestamp)
+        timestamp = _guess_timezone(timestamp)
         msg["timestamp"] = timestamp.isoformat()
 
         if "uuid" in msg:
@@ -536,14 +546,14 @@ class AsyncClient(Client):
                     self.log.error("%s Falling back to a generated UUID.", e)
 
         if "uuid" not in msg:
-            msg["uuid"] = stringify_id(uuid4())
+            msg["uuid"] = _stringify_id(uuid4())
 
         sent_uuid = msg["uuid"]
 
         if not msg.get("properties"):
             msg["properties"] = {}
         msg["properties"]["$lib"] = "posthog-python"
-        msg["properties"]["$lib_version"] = VERSION
+        msg["properties"]["$lib_version"] = _VERSION
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
@@ -556,8 +566,8 @@ class AsyncClient(Client):
         if self.is_server:
             msg["properties"]["$is_server"] = True
 
-        msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
-        msg = clean(msg)
+        msg["distinct_id"] = _stringify_id(msg.get("distinct_id", None))
+        msg = _clean(msg)
 
         if self.before_send:
             try:
@@ -579,11 +589,11 @@ class AsyncClient(Client):
         if self.sync_mode:
             self.log.debug("enqueued with async blocking %s.", msg["event"])
             path = (
-                AI_EVENTS_ENDPOINT
-                if self._dedicated_ai_endpoint and is_ai_event(msg.get("event"))
-                else EVENTS_ENDPOINT
+                _AI_EVENTS_ENDPOINT
+                if self._dedicated_ai_endpoint and _is_ai_event(msg.get("event"))
+                else _EVENTS_ENDPOINT
             )
-            await async_batch_post(
+            await _async_batch_post(
                 self.api_key,
                 self.host,
                 gzip=self.gzip,
@@ -596,7 +606,7 @@ class AsyncClient(Client):
 
         self._ensure_workers_started()
         try:
-            self.queue.put_nowait(msg)
+            self._queue.put_nowait(msg)
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
         except asyncio.QueueFull:
@@ -605,26 +615,26 @@ class AsyncClient(Client):
 
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:  # type: ignore[override]
         if timeout_seconds is None:
-            await self.queue.join()
+            await self._queue.join()
             return
         try:
-            await asyncio.wait_for(self.queue.join(), timeout=timeout_seconds)
+            await asyncio.wait_for(self._queue.join(), timeout=timeout_seconds)
         except asyncio.TimeoutError:
             self.log.warning(
                 "flush timed out after %s seconds with %s items pending.",
                 timeout_seconds,
-                self.queue.qsize(),
+                self._queue.qsize(),
             )
 
     async def join(self) -> None:  # type: ignore[override]
-        for consumer in self.async_consumers:
+        for consumer in self._async_consumers:
             consumer.pause()
         for task in self._worker_tasks:
             task.cancel()
         if self._worker_tasks:
             await asyncio.gather(*self._worker_tasks, return_exceptions=True)
         self._worker_tasks.clear()
-        self.async_consumers.clear()
+        self._async_consumers.clear()
 
         if self.poller:
             self.poller.stop()

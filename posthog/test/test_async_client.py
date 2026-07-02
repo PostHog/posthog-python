@@ -4,12 +4,12 @@ from unittest import mock
 
 import pytest
 
-from posthog import AsyncClient, AsyncPosthog
+from posthog import AsyncClient, AsyncPostHog
 
 
 @pytest.mark.asyncio
 async def test_async_posthog_exports_async_client_alias():
-    client = AsyncPosthog("test-key", send=False)
+    client = AsyncPostHog("test-key", send=False)
     assert isinstance(client, AsyncClient)
     await client.shutdown()
 
@@ -22,9 +22,9 @@ async def test_capture_enqueues_and_flushes_with_async_consumer():
         batches.append(kwargs["batch"])
 
     with mock.patch(
-        "posthog.async_consumer.async_batch_post", side_effect=mock_batch_post
+        "posthog._async_consumer.async_batch_post", side_effect=mock_batch_post
     ):
-        async with AsyncPosthog(
+        async with AsyncPostHog(
             "test-key",
             host="https://example.com",
             flush_at=1,
@@ -60,9 +60,9 @@ async def test_capture_supports_async_before_send():
         batches.append(kwargs["batch"])
 
     with mock.patch(
-        "posthog.async_consumer.async_batch_post", side_effect=mock_batch_post
+        "posthog._async_consumer.async_batch_post", side_effect=mock_batch_post
     ):
-        async with AsyncPosthog(
+        async with AsyncPostHog(
             "test-key",
             before_send=before_send,
             flush_at=1,
@@ -79,8 +79,8 @@ async def test_capture_drops_when_async_before_send_returns_none():
     async def before_send(event):
         return None
 
-    with mock.patch("posthog.async_consumer.async_batch_post") as mock_batch_post:
-        async with AsyncPosthog(
+    with mock.patch("posthog._async_consumer.async_batch_post") as mock_batch_post:
+        async with AsyncPostHog(
             "test-key",
             before_send=before_send,
             flush_at=1,
@@ -95,7 +95,7 @@ async def test_capture_drops_when_async_before_send_returns_none():
 
 @pytest.mark.asyncio
 async def test_capture_send_false_returns_uuid_without_starting_workers():
-    client = AsyncPosthog("test-key", send=False)
+    client = AsyncPostHog("test-key", send=False)
 
     event_uuid = await client.capture("async event", distinct_id="user-1")
 
@@ -112,9 +112,9 @@ async def test_sync_mode_awaits_direct_batch_post():
         batches.append(kwargs["batch"])
 
     with mock.patch(
-        "posthog.async_client.async_batch_post", side_effect=mock_batch_post
+        "posthog.async_client._async_batch_post", side_effect=mock_batch_post
     ):
-        client = AsyncPosthog("test-key", sync_mode=True)
+        client = AsyncPostHog("test-key", sync_mode=True)
         event_uuid = await client.capture("sync mode event", distinct_id="user-1")
         await client.shutdown()
 
@@ -152,9 +152,9 @@ async def test_async_identify_methods_enqueue_events(
         batches.append(kwargs["batch"])
 
     with mock.patch(
-        "posthog.async_consumer.async_batch_post", side_effect=mock_batch_post
+        "posthog._async_consumer.async_batch_post", side_effect=mock_batch_post
     ):
-        async with AsyncPosthog("test-key", flush_at=1, flush_interval=0.01) as client:
+        async with AsyncPostHog("test-key", flush_at=1, flush_interval=0.01) as client:
             method = getattr(client, method_name)
             await method(**method_kwargs)
             await client.flush(timeout_seconds=1)
@@ -168,7 +168,7 @@ async def test_capture_send_feature_flags_runs_sync_fallback_in_thread():
         assert fn.__name__ == "get_feature_variants"
         return {"beta": True}
 
-    client = AsyncPosthog("test-key", send=False)
+    client = AsyncPostHog("test-key", send=False)
 
     with mock.patch(
         "posthog.async_client.asyncio.to_thread", side_effect=fake_to_thread

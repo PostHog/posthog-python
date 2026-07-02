@@ -9,7 +9,6 @@ from typing import Any, Optional, cast
 
 from .request import (
     EVENTS_ENDPOINT,
-    RETRY_STATUS_FORCELIST,
     USER_AGENT,
     APIError,
     DatetimeSerializer,
@@ -25,6 +24,8 @@ try:  # pragma: no cover - exercised when the optional dependency is absent
 except ImportError:  # pragma: no cover
     httpx = None
 
+
+_RETRY_STATUS_FORCELIST = (408, 500, 502, 503, 504)
 
 _async_client: Optional["httpx.AsyncClient"] = None
 _async_flags_client: Optional["httpx.AsyncClient"] = None
@@ -194,7 +195,7 @@ async def async_flags(
                 client=await _get_flags_client(),
                 **kwargs,
             )
-            if res.status_code in RETRY_STATUS_FORCELIST and attempt < 2:
+            if res.status_code in _RETRY_STATUS_FORCELIST and attempt < 2:
                 await asyncio.sleep(0.5 * (2**attempt))
                 continue
             return _process_async_response(

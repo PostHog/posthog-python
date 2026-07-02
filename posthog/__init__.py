@@ -1207,11 +1207,11 @@ class Posthog(Client):
     pass
 
 
-class AsyncPosthog(AsyncClient):
+class AsyncPostHog(AsyncClient):
     """
     Public asyncio-native PostHog SDK client.
 
-    ``AsyncPosthog`` is the customer-facing alias for ``AsyncClient`` and accepts
+    ``AsyncPostHog`` is the customer-facing alias for ``AsyncClient`` and accepts
     the same constructor arguments as ``Posthog``. Use it with ``async with`` or
     call ``await shutdown()`` during application shutdown.
     """

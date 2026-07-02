@@ -12,10 +12,10 @@ from .request import (
     DatetimeSerializer,
     is_ai_event,
 )
-from .async_request import async_batch_post
+from ._async_request import async_batch_post
 
 
-class AsyncConsumer:
+class _AsyncConsumer:
     """Consumes messages from an asyncio.Queue and uploads them in batches."""
 
     log = logging.getLogger("posthog")

@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from posthog.async_request import async_post, _process_async_response
+from posthog._async_request import async_post, _process_async_response
 from posthog.request import APIError
 
 
