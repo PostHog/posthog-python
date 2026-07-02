@@ -78,6 +78,28 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.host, "https://eu.i.posthog.com")
         self.assertIsNone(client.personal_api_key)
 
+    def test_secret_key_sets_credential_and_mirrors_personal_api_key(self):
+        client = Client(FAKE_TEST_API_KEY, secret_key="phx_secret", send=False)
+
+        self.assertEqual(client.secret_key, "phx_secret")
+        self.assertEqual(client.personal_api_key, "phx_secret")
+
+    def test_personal_api_key_is_deprecated_alias_for_secret_key(self):
+        with self.assertWarns(DeprecationWarning):
+            client = Client(FAKE_TEST_API_KEY, personal_api_key="phx_legacy", send=False)
+
+        self.assertEqual(client.secret_key, "phx_legacy")
+
+    def test_secret_key_wins_when_both_provided(self):
+        client = Client(
+            FAKE_TEST_API_KEY,
+            secret_key="phx_secret",
+            personal_api_key="phx_legacy",
+            send=False,
+        )
+
+        self.assertEqual(client.secret_key, "phx_secret")
+
     def test_client_with_empty_api_key_is_noop(self):
         client = Client("", send=False)
 
