@@ -154,3 +154,85 @@ def test_excepthook(tmpdir):
         b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
         in output
     )
+
+
+class _RootError(Exception):
+    pass
+
+
+class _WrapperError(Exception):
+    pass
+
+
+class _LeafOne(Exception):
+    pass
+
+
+class _LeafTwo(Exception):
+    pass
+
+
+def test_exception_list_canonical_order_explicit_cause():
+    # Canonical ordering: $exception_list[0] is the caught/outermost exception
+    # and the root cause is last. For `raise B from A`, B is caught and A is the
+    # root cause.
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        try:
+            raise _RootError("root")
+        except _RootError as root:
+            raise _WrapperError("wrapper") from root
+    except _WrapperError:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    types = [e["type"] for e in exceptions]
+    assert types == ["_WrapperError", "_RootError"]
+    assert exceptions[0]["value"] == "wrapper"
+    assert exceptions[-1]["value"] == "root"
+
+
+def test_exception_list_canonical_order_implicit_context():
+    # Implicit chaining (an exception raised while handling another) uses
+    # `__context__`. The caught exception is still first, root cause last.
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        try:
+            raise _RootError("root")
+        except _RootError:
+            raise _WrapperError("wrapper")
+    except _WrapperError:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    types = [e["type"] for e in exceptions]
+    assert types == ["_WrapperError", "_RootError"]
+    assert exceptions[0]["value"] == "wrapper"
+    assert exceptions[-1]["value"] == "root"
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_exception_list_canonical_order_exception_group():
+    # For an ExceptionGroup the group is the caught/outermost exception and
+    # comes first, with its member exceptions following.
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        raise ExceptionGroup(  # noqa: F821 -- builtin on 3.11+
+            "group", [_LeafOne("one"), _LeafTwo("two")]
+        )
+    except BaseException:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    types = [e["type"] for e in exceptions]
+    assert types[0] == "ExceptionGroup"
+    assert types[1:] == ["_LeafOne", "_LeafTwo"]

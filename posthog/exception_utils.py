@@ -734,8 +734,11 @@ def exceptions_from_error_tuple(
                 single_exception_from_error_tuple(exc_type, exc_value, tb, mechanism)
             )
 
-    exceptions.reverse()
-
+    # Canonical ordering: $exception_list[0] is the caught/outermost exception,
+    # with each cause appended after its wrapper in unwrap order and the root
+    # cause last. Both branches above already build the list in this order
+    # (walk_exception_chain yields caught-first; exceptions_from_error keeps the
+    # parent before its children), so we intentionally do not reverse it.
     return exceptions
 
 
