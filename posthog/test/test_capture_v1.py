@@ -12,12 +12,14 @@ from posthog.capture_v1 import (
     _HEADER_ATTEMPT,
     _HEADER_REQUEST_ID,
     _HEADER_SDK_INFO,
+    RETRY_BACKOFF_CAP_SECONDS,
     CaptureV1Error,
     _build_v1_batch_body,
     parse_v1_response,
     post_v1,
     send_v1_batch,
     _to_v1_event,
+    _backoff,
     _coerce_bool,
     _coerce_str,
 )
@@ -533,17 +535,44 @@ class TestSendV1Batch(unittest.TestCase):
         )
         self.assertEqual(stub.calls[0]["compression"], CaptureCompression.DEFLATE)
 
-    def test_drop_on_2xx_is_accepted_not_raised_or_logged(self) -> None:
-        # A server-chosen drop on a successful request is not a delivery failure:
-        # the send completes without raising and without per-event WARNING noise
-        # (drops surface via CaptureV1Error only on batch-level failure).
+    def test_drop_on_2xx_surfaces_via_error(self) -> None:
+        # A server-chosen drop is terminal: even on an all-ok-otherwise 2xx with
+        # no retry events, the send raises so on_error sees the dropped uuid
+        # (matches posthog-go/posthog-rs — a 2xx is not full delivery).
         batch = [_msg("u-ok"), _msg("u-drop")]
-        with self.assertNoLogs("posthog", level="WARNING"):
-            stub = self._run(
-                batch,
-                [_results_response({"u-ok": "ok", "u-drop": ("drop", "invalid")})],
-            )
+        stub, exc = self._run_expecting_error(
+            batch,
+            [_results_response({"u-ok": "ok", "u-drop": ("drop", "invalid")})],
+        )
+        self.assertEqual(len(stub.calls), 1)  # terminal, not retried
+        self.assertEqual(exc.status, 200)
+        self.assertEqual(exc.drops, [("u-drop", "invalid")])
+        self.assertEqual(exc.retry_exhausted, [])
+
+    def test_all_ok_no_drops_does_not_raise(self) -> None:
+        # The success path is unchanged when the server drops nothing.
+        stub = self._run(
+            [_msg("u-1"), _msg("u-2")],
+            [_results_response({"u-1": "ok", "u-2": "warning"})],
+        )
         self.assertEqual(len(stub.calls), 1)
+
+    def test_drop_accumulated_across_attempts_surfaces_on_later_success(self) -> None:
+        # Attempt 1 drops one event and retries another; attempt 2 clears the
+        # retry. The earlier drop must still surface — it is not lost when the
+        # outstanding retries succeed on a later 2xx.
+        batch = [_msg("u-drop"), _msg("u-retry")]
+        stub, exc = self._run_expecting_error(
+            batch,
+            [
+                _results_response({"u-drop": ("drop", "billing"), "u-retry": "retry"}),
+                _results_response({"u-retry": "ok"}),
+            ],
+        )
+        self.assertEqual(len(stub.calls), 2)
+        self.assertEqual(stub.calls[1]["uuids"], ["u-retry"])  # only retry resent
+        self.assertEqual(exc.drops, [("u-drop", "billing")])
+        self.assertEqual(exc.retry_exhausted, [])
 
     def test_retry_exhausted_raises_with_uuids(self) -> None:
         stub, exc = self._run_expecting_error(
@@ -553,6 +582,22 @@ class TestSendV1Batch(unittest.TestCase):
         )
         self.assertEqual(len(stub.calls), 2)
         self.assertEqual(exc.retry_exhausted, ["u-1"])
+        self.assertEqual(exc.drops, [])
+
+    def test_retry_exhausted_carries_earlier_drops(self) -> None:
+        # A drop seen on attempt 1 rides along on the retry-exhaustion error.
+        batch = [_msg("u-drop"), _msg("u-retry")]
+        stub, exc = self._run_expecting_error(
+            batch,
+            [
+                _results_response({"u-drop": ("drop", "billing"), "u-retry": "retry"}),
+                _results_response({"u-retry": "retry"}),
+            ],
+            max_retries=1,
+        )
+        self.assertEqual(len(stub.calls), 2)
+        self.assertEqual(exc.retry_exhausted, ["u-retry"])
+        self.assertEqual(exc.drops, [("u-drop", "billing")])
 
     def test_malformed_2xx_is_terminal(self) -> None:
         stub, exc = self._run_expecting_error(
@@ -604,3 +649,43 @@ class TestSendV1Batch(unittest.TestCase):
                     "phc_key", "https://app.posthog.com", [_msg("u-1")], max_retries=1
                 )
         self.assertEqual(len(stub.calls), 2)
+
+    def test_small_retry_after_does_not_shorten_backoff(self) -> None:
+        # A Retry-After smaller than the configured backoff must not make the
+        # client retry earlier than its own schedule (Retry-After is a minimum).
+        # attempt_index=1 -> configured backoff 2s; Retry-After 0.5s is ignored.
+        stub = self._run(
+            [_msg("u-1")],
+            [
+                _results_response({"u-1": "retry"}),
+                _results_response({"u-1": "retry"}, headers={"Retry-After": "0.5"}),
+                _results_response({"u-1": "ok"}),
+            ],
+            max_retries=3,
+        )
+        self.assertEqual(len(stub.calls), 3)
+        # First backoff (attempt_index 0) waits 1s; second (attempt_index 1)
+        # keeps the 2s configured backoff rather than the smaller 0.5s header.
+        self.assertEqual([c.args[0] for c in self.sleep.call_args_list], [1, 2])
+
+
+class TestBackoff(unittest.TestCase):
+    """Directly exercises ``_backoff``'s Retry-After-as-minimum + cap policy."""
+
+    @parameterized.expand(
+        [
+            # (attempt_index, retry_after, expected sleep seconds)
+            ("first_no_header", 0, None, 1),
+            ("second_no_header", 1, None, 2),
+            ("exp_capped_at_30", 10, None, 30),
+            ("zero_header_uses_backoff", 0, 0, 1),
+            ("larger_header_wins", 0, 5.0, 5.0),
+            ("smaller_header_ignored", 3, 2.0, 8),  # configured 8 > 2.0
+            ("equal_header_and_backoff", 0, 1.0, 1),
+            ("absurd_header_capped", 0, 10**9, RETRY_BACKOFF_CAP_SECONDS),
+        ]
+    )
+    def test_backoff(self, _name, attempt_index, retry_after, expected) -> None:
+        with mock.patch("posthog.capture_v1.time.sleep") as sleep:
+            _backoff(attempt_index, retry_after)
+            sleep.assert_called_once_with(expected)
