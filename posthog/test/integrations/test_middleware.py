@@ -90,6 +90,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 headers={
                     "X-POSTHOG-SESSION-ID": "session-123",
                     "X-POSTHOG-DISTINCT-ID": "user-456",
+                    "User-Agent": "TestAgent/1.0",
                 },
                 method="POST",
                 path="/api/test",
@@ -103,6 +104,8 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             self.assertEqual(get_context_distinct_id(), "user-456")
             self.assertEqual(tags["$current_url"], "https://example.com/api/test")
             self.assertEqual(tags["$request_method"], "POST")
+            self.assertEqual(tags["$user_agent"], "TestAgent/1.0")
+            self.assertEqual(tags["$raw_user_agent"], "TestAgent/1.0")
 
     def test_extract_tags_missing_headers(self):
         """Test tag extraction when PostHog headers are missing"""
