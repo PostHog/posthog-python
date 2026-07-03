@@ -12,7 +12,7 @@ from posthog.capture_v1 import (
     _HEADER_ATTEMPT,
     _HEADER_REQUEST_ID,
     _HEADER_SDK_INFO,
-    RETRY_BACKOFF_CAP_SECONDS,
+    MAX_BACKOFF_SECONDS,
     CaptureV1Error,
     _build_v1_batch_body,
     parse_v1_response,
@@ -682,7 +682,9 @@ class TestBackoff(unittest.TestCase):
             ("larger_header_wins", 0, 5.0, 5.0),
             ("smaller_header_ignored", 3, 2.0, 8),  # configured 8 > 2.0
             ("equal_header_and_backoff", 0, 1.0, 1),
-            ("absurd_header_capped", 0, 10**9, RETRY_BACKOFF_CAP_SECONDS),
+            ("header_at_ceiling", 0, 30.0, 30),
+            ("header_above_ceiling_clamped", 0, 120.0, MAX_BACKOFF_SECONDS),
+            ("absurd_header_clamped", 0, 10**9, MAX_BACKOFF_SECONDS),
         ]
     )
     def test_backoff(self, _name, attempt_index, retry_after, expected) -> None:

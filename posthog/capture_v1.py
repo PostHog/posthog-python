@@ -85,10 +85,11 @@ _RESULT_RETRY = "retry"
 _RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
 _TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
 
-# Hard cap on any single backoff sleep (seconds). A hostile or buggy
-# `Retry-After` must not park the consumer thread indefinitely; 1 day is far
-# beyond any sane retry delay. Matches posthog-rs's RETRY_BACKOFF_CAP.
-RETRY_BACKOFF_CAP_SECONDS = 86_400
+# Single ceiling (seconds) for the retry backoff: caps the exponential schedule
+# and clamps a server ``Retry-After`` to the same value. Keeps the max retry
+# wait bounded (a hostile/buggy header can't park the consumer thread) and
+# unifies the default with posthog-go/posthog-rs (all 30s).
+MAX_BACKOFF_SECONDS = 30
 
 # Sentinel properties lifted to top-level string fields on the event.
 _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
@@ -413,19 +414,19 @@ def parse_v1_response(res: "requests.Response") -> V1ParsedResponse:
 def _backoff(attempt_index: int, retry_after: Optional[float]) -> None:
     """Sleep before the next attempt.
 
-    Capped exponential backoff (matching the legacy ``Consumer._send`` schedule,
-    capped at 30s) is the base. When the server sent a ``Retry-After`` it acts as
-    a *minimum*, not a replacement: the client waits the longer of the configured
-    backoff and ``Retry-After``, so a small ``Retry-After`` never retries earlier
-    than the normal schedule (matching posthog-go / posthog-rs). The result is
-    hard-capped at :data:`RETRY_BACKOFF_CAP_SECONDS` so a hostile/buggy header
-    cannot park the consumer thread indefinitely.
+    Exponential backoff capped at :data:`MAX_BACKOFF_SECONDS` is the base. When
+    the server sent a ``Retry-After`` it acts as a *minimum*, not a replacement:
+    the client waits the longer of the configured backoff and ``Retry-After``, so
+    a small ``Retry-After`` never retries earlier than the normal schedule
+    (matching posthog-go / posthog-rs). ``Retry-After`` is itself clamped to
+    :data:`MAX_BACKOFF_SECONDS`, so both sides share one ceiling and a
+    hostile/buggy header can't park the consumer thread.
     """
-    configured = min(2**attempt_index, 30)
-    delay = (
-        max(configured, retry_after) if retry_after and retry_after > 0 else configured
+    configured = min(2**attempt_index, MAX_BACKOFF_SECONDS)
+    clamped_retry_after = (
+        min(retry_after, MAX_BACKOFF_SECONDS) if retry_after and retry_after > 0 else 0
     )
-    time.sleep(min(delay, RETRY_BACKOFF_CAP_SECONDS))
+    time.sleep(max(configured, clamped_retry_after))
 
 
 def _log_result_summary(
