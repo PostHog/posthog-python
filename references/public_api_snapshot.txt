@@ -4,6 +4,7 @@
 # members. Modules with __all__ use it; other modules include non-underscore
 # names. External imports are excluded.
 alias posthog.BeforeSendCallback -> posthog.types.BeforeSendCallback
+alias posthog.CaptureCompression -> posthog.capture_compression.CaptureCompression
 alias posthog.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.Client -> posthog.client.Client
 alias posthog.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS
@@ -217,6 +218,7 @@ alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.Fe
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
 alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.client.APIError -> posthog.request.APIError
+alias posthog.client.CaptureCompression -> posthog.capture_compression.CaptureCompression
 alias posthog.client.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.client.Consumer -> posthog.consumer.Consumer
 alias posthog.client.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS
@@ -284,6 +286,7 @@ alias posthog.client.to_values -> posthog.types.to_values
 alias posthog.client.try_attach_code_variables_to_frames -> posthog.exception_utils.try_attach_code_variables_to_frames
 alias posthog.consumer.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.consumer.APIError -> posthog.request.APIError
+alias posthog.consumer.CaptureCompression -> posthog.capture_compression.CaptureCompression
 alias posthog.consumer.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.consumer.DatetimeSerializer -> posthog.request.DatetimeSerializer
 alias posthog.consumer.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
@@ -473,11 +476,21 @@ attribute posthog.before_send = None
 attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
 attribute posthog.bucketed_rate_limiter.log = logging.getLogger('posthog')
+attribute posthog.capture_compression.CAPTURE_COMPRESSION_ENV_VAR = 'POSTHOG_CAPTURE_COMPRESSION'
+attribute posthog.capture_compression.CaptureCompression.DEFLATE = 'deflate'
+attribute posthog.capture_compression.CaptureCompression.GZIP = 'gzip'
+attribute posthog.capture_compression.CaptureCompression.NONE = 'none'
+attribute posthog.capture_compression.CaptureCompression.ZSTD = 'zstd'
 attribute posthog.capture_exception_code_variables = False
 attribute posthog.capture_mode.CAPTURE_MODE_ENV_VAR = 'POSTHOG_CAPTURE_MODE'
 attribute posthog.capture_mode.CaptureMode.V0 = 'v0'
 attribute posthog.capture_mode.CaptureMode.V1 = 'v1'
+attribute posthog.capture_v1.CaptureV1Error.attempts = attempts
+attribute posthog.capture_v1.CaptureV1Error.drops = drops or []
+attribute posthog.capture_v1.CaptureV1Error.request_id = request_id
+attribute posthog.capture_v1.CaptureV1Error.retry_exhausted = retry_exhausted or []
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
+attribute posthog.client.Client.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
 attribute posthog.client.Client.capture_mode = _resolve_capture_mode(capture_mode)
 attribute posthog.client.Client.code_variables_detect_secrets = code_variables_detect_secrets if code_variables_detect_secrets is not None else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
@@ -512,6 +525,7 @@ attribute posthog.client.Client.in_app_modules = in_app_modules
 attribute posthog.client.Client.is_server = is_server
 attribute posthog.client.Client.log = logging.getLogger('posthog')
 attribute posthog.client.Client.log_captured_exceptions = log_captured_exceptions
+attribute posthog.client.Client.max_retries = max_retries
 attribute posthog.client.Client.on_error = on_error
 attribute posthog.client.Client.personal_api_key = (personal_api_key.strip() if isinstance(personal_api_key, str) else personal_api_key) or None
 attribute posthog.client.Client.poll_interval = poll_interval
@@ -532,6 +546,7 @@ attribute posthog.code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_M
 attribute posthog.consumer.AI_MAX_MSG_SIZE = 8 * 1024 * 1024
 attribute posthog.consumer.BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 attribute posthog.consumer.Consumer.api_key = api_key
+attribute posthog.consumer.Consumer.capture_compression = capture_compression
 attribute posthog.consumer.Consumer.capture_mode = capture_mode
 attribute posthog.consumer.Consumer.daemon = True
 attribute posthog.consumer.Consumer.dedicated_ai_endpoint = dedicated_ai_endpoint
@@ -835,9 +850,11 @@ class posthog.ai.types.ToolInProgress
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
+class posthog.capture_compression.CaptureCompression 
 class posthog.capture_mode.CaptureMode 
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, _dedicated_ai_endpoint=False)
-class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False, capture_mode=CaptureMode.V0)
+class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, _dedicated_ai_endpoint=False)
+class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
@@ -1306,7 +1323,9 @@ module posthog.ai.types
 module posthog.ai.utils
 module posthog.args
 module posthog.bucketed_rate_limiter
+module posthog.capture_compression
 module posthog.capture_mode
+module posthog.capture_v1
 module posthog.client
 module posthog.consumer
 module posthog.contexts

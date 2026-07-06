@@ -9,6 +9,7 @@ from posthog.args import (
     OptionalCaptureArgs,
     OptionalSetArgs,
 )
+from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
 from posthog.exception_capture import ExceptionCapture

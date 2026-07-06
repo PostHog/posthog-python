@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-06-29T19:09:37.282668Z"
 exclude-newer-span = "P7D"
 
 [manifest]
@@ -2538,6 +2538,10 @@ test = [
     { name = "python-dateutil" },
     { name = "tiktoken" },
     { name = "tzdata" },
+    { name = "zstandard" },
+]
+zstd = [
+    { name = "zstandard" },
 ]
 
 [package.dev-dependencies]
@@ -2596,8 +2600,10 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.2.0" },
     { name = "tzdata", marker = "extra == 'test'" },
     { name = "wheel", marker = "extra == 'dev'" },
+    { name = "zstandard", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "zstandard", marker = "extra == 'zstd'", specifier = ">=0.23.0" },
 ]
-provides-extras = ["langchain", "otel", "dev", "test"]
+provides-extras = ["langchain", "zstd", "otel", "dev", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "claude-agent-sdk", specifier = ">=0.1.50" }]
