@@ -11,8 +11,10 @@ try:
 except ImportError:
     from Queue import Queue
 
+from posthog.capture_compression import CaptureCompression
+from posthog.capture_mode import CaptureMode
 from posthog.consumer import MAX_MSG_SIZE, Consumer
-from posthog.request import APIError
+from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, APIError
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
 
@@ -268,3 +270,114 @@ class TestConsumer(unittest.TestCase):
         self.assertEqual(len(on_error_called), 1)
         self.assertEqual(str(on_error_called[0][0]), "request failed")
         self.assertEqual(on_error_called[0][1], [track])
+
+
+def _ai_event(event_name: str = "$ai_generation") -> dict[str, str]:
+    return {"type": "track", "event": event_name, "distinct_id": "distinct_id"}
+
+
+class TestConsumerCaptureModeRouting(unittest.TestCase):
+    """`capture_mode` selects the analytics submitter; the dedicated AI endpoint
+    has no v1 form and always uses the legacy submitter."""
+
+    @parameterized.expand(
+        [
+            ("v0", CaptureMode.V0, False),
+            ("v1", CaptureMode.V1, True),
+        ]
+    )
+    def test_capture_mode_selects_analytics_submitter(
+        self, _name, mode, expects_v1
+    ) -> None:
+        consumer = Consumer(None, TEST_API_KEY, capture_mode=mode)
+        batch = [_track_event()]
+        with (
+            mock.patch("posthog.consumer.batch_post") as mock_post,
+            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
+        ):
+            consumer.request(batch)
+        if expects_v1:
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()
+            self.assertEqual(mock_v1.call_args.args[2], batch)
+        else:
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
+            self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
+
+    def test_v1_forwards_consumer_config_to_submitter(self) -> None:
+        consumer = Consumer(
+            None,
+            TEST_API_KEY,
+            capture_mode=CaptureMode.V1,
+            capture_compression=CaptureCompression.DEFLATE,
+            timeout=7,
+            retries=4,
+            historical_migration=True,
+        )
+        with (
+            mock.patch("posthog.consumer.batch_post"),
+            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
+        ):
+            consumer.request([_track_event()])
+            kwargs = mock_v1.call_args.kwargs
+            self.assertEqual(kwargs["compression"], CaptureCompression.DEFLATE)
+            self.assertEqual(kwargs["timeout"], 7)
+            self.assertEqual(kwargs["max_retries"], 4)
+            self.assertEqual(kwargs["historical_migration"], True)
+
+    def test_v1_dedicated_ai_splits_submitters(self) -> None:
+        # Analytics -> v1 submitter; $ai_* -> legacy AI endpoint.
+        consumer = Consumer(
+            None,
+            TEST_API_KEY,
+            capture_mode=CaptureMode.V1,
+            dedicated_ai_endpoint=True,
+        )
+        analytics, ai = _track_event(), _ai_event()
+        with (
+            mock.patch("posthog.consumer.batch_post") as mock_post,
+            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
+        ):
+            consumer.request([analytics, ai])
+            mock_v1.assert_called_once()
+            self.assertEqual(mock_v1.call_args.args[2], [analytics])
+            mock_post.assert_called_once()
+            self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
+            self.assertEqual(mock_post.call_args.kwargs["batch"], [ai])
+
+    def test_v1_dedicated_ai_only_ai_events_skips_v1_submitter(self) -> None:
+        consumer = Consumer(
+            None,
+            TEST_API_KEY,
+            capture_mode=CaptureMode.V1,
+            dedicated_ai_endpoint=True,
+        )
+        with (
+            mock.patch("posthog.consumer.batch_post") as mock_post,
+            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
+        ):
+            consumer.request([_ai_event()])
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
+            self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
+
+    def test_v1_without_dedicated_ai_endpoint_routes_ai_events_through_v1(self) -> None:
+        # The dedicated AI endpoint is the only v1 gate: with it off, $ai_* events
+        # follow `capture_mode` like any analytics event and ride the v1 submitter
+        # (matching legacy, where they ship to the standard analytics endpoint).
+        consumer = Consumer(
+            None,
+            TEST_API_KEY,
+            capture_mode=CaptureMode.V1,
+            dedicated_ai_endpoint=False,
+        )
+        batch = [_ai_event(), _track_event()]
+        with (
+            mock.patch("posthog.consumer.batch_post") as mock_post,
+            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
+        ):
+            consumer.request(batch)
+            mock_v1.assert_called_once()
+            self.assertEqual(mock_v1.call_args.args[2], batch)
+            mock_post.assert_not_called()
