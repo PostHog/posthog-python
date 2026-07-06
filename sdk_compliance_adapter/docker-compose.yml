@@ -1,13 +1,23 @@
 version: "3.8"
 
 services:
-  # PostHog Python SDK adapter
+  # PostHog Python SDK adapter (capture v0)
   sdk-adapter:
     build:
       context: ..
       dockerfile: sdk_compliance_adapter/Dockerfile
     ports:
       - "8080:8080"
+    networks:
+      - test-network
+
+  # PostHog Python SDK adapter (capture v1)
+  sdk-adapter-v1:
+    build:
+      context: ..
+      dockerfile: sdk_compliance_adapter/Dockerfile.v1
+    ports:
+      - "8082:8080"
     networks:
       - test-network
 

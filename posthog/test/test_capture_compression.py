@@ -9,7 +9,10 @@ from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
 )
+from posthog.client import Client
+from posthog.consumer import Consumer
 from posthog.test.logging_helpers import capture_message_only_logs
+from posthog.test.test_utils import TEST_API_KEY
 
 
 class TestResolveCaptureCompression(unittest.TestCase):
@@ -118,3 +121,48 @@ class TestResolveCaptureCompression(unittest.TestCase):
                         CaptureCompression.GZIP,
                     )
         self.assertIn("posthog[zstd]", stream.getvalue())
+
+
+class TestCaptureCompressionPlumbing(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop(CAPTURE_COMPRESSION_ENV_VAR, None)
+
+    def test_client_defaults_to_none(self) -> None:
+        client = Client(TEST_API_KEY, sync_mode=True)
+        self.assertIs(client.capture_compression, CaptureCompression.NONE)
+
+    def test_client_gzip_flag_falls_back_to_gzip(self) -> None:
+        client = Client(TEST_API_KEY, sync_mode=True, gzip=True)
+        self.assertIs(client.capture_compression, CaptureCompression.GZIP)
+
+    @parameterized.expand(
+        [
+            ("enum_deflate", CaptureCompression.DEFLATE, CaptureCompression.DEFLATE),
+            ("str_gzip", "gzip", CaptureCompression.GZIP),
+            ("str_none", "none", CaptureCompression.NONE),
+        ]
+    )
+    def test_client_kwarg_overrides_gzip_flag(self, _name, kwarg, expected) -> None:
+        # Even with the legacy gzip flag on, the explicit kwarg wins.
+        client = Client(
+            TEST_API_KEY, sync_mode=True, gzip=True, capture_compression=kwarg
+        )
+        self.assertIs(client.capture_compression, expected)
+
+    def test_client_propagates_to_consumers(self) -> None:
+        client = Client(
+            TEST_API_KEY,
+            capture_compression=CaptureCompression.DEFLATE,
+            send=False,
+            thread=2,
+        )
+        self.assertEqual(len(client.consumers), 2)
+        for consumer in client.consumers:
+            self.assertIs(consumer.capture_compression, CaptureCompression.DEFLATE)
+
+    def test_consumer_defaults_to_none(self) -> None:
+        consumer = Consumer(None, TEST_API_KEY)
+        self.assertIs(consumer.capture_compression, CaptureCompression.NONE)
