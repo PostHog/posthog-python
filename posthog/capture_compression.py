@@ -105,8 +105,8 @@ def _resolve_capture_compression(
     if raw is None or raw.strip() == "":
         return fallback
 
-    resolved = _ALIASES.get(raw.strip().lower())
-    if resolved is None:
+    env_resolved = _ALIASES.get(raw.strip().lower())
+    if env_resolved is None:
         log.warning(
             "Unrecognized %s=%r; falling back to %s. Expected one of %s.",
             CAPTURE_COMPRESSION_ENV_VAR,
@@ -115,7 +115,7 @@ def _resolve_capture_compression(
             sorted(_ALIASES),
         )
         return fallback
-    if resolved is CaptureCompression.ZSTD and not _zstd_available():
+    if env_resolved is CaptureCompression.ZSTD and not _zstd_available():
         log.warning(
             "%s=%r requires the zstandard package (install posthog[zstd]); "
             "falling back to %s.",
@@ -124,4 +124,4 @@ def _resolve_capture_compression(
             fallback.value,
         )
         return fallback
-    return resolved
+    return env_resolved
