@@ -16,7 +16,7 @@ from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
-from posthog.capture_mode import CaptureMode, resolve_capture_mode
+from posthog.capture_mode import CaptureMode, _resolve_capture_mode
 from posthog.consumer import Consumer
 from posthog.contexts import (
     _get_current_context,
@@ -408,7 +408,7 @@ class Client(object):
         # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
         # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
         # applied once; V0 is the default and keeps upgrades transparent.
-        self.capture_mode = resolve_capture_mode(capture_mode)
+        self.capture_mode = _resolve_capture_mode(capture_mode)
         # Internal, not ready for use: routes `$ai_*` events to a dedicated
         # capture-ai endpoint while the backend route + ingress roll out.
         self._dedicated_ai_endpoint = _dedicated_ai_endpoint

@@ -3,6 +3,8 @@ import os
 from enum import Enum
 from typing import Optional, Union
 
+__all__ = ["CAPTURE_MODE_ENV_VAR", "CaptureMode"]
+
 log = logging.getLogger("posthog")
 
 CAPTURE_MODE_ENV_VAR = "POSTHOG_CAPTURE_MODE"
@@ -53,7 +55,7 @@ def _coerce_explicit(value: Union[CaptureMode, str]) -> CaptureMode:
     )
 
 
-def resolve_capture_mode(
+def _resolve_capture_mode(
     capture_mode: Optional[Union[CaptureMode, str]] = None,
 ) -> CaptureMode:
     """Resolve the effective capture mode.

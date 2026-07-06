@@ -7,7 +7,7 @@ from parameterized import parameterized
 from posthog.capture_mode import (
     CAPTURE_MODE_ENV_VAR,
     CaptureMode,
-    resolve_capture_mode,
+    _resolve_capture_mode,
 )
 from posthog.client import Client
 from posthog.consumer import Consumer
@@ -19,7 +19,7 @@ class TestResolveCaptureMode(unittest.TestCase):
     def test_defaults_to_v0_with_no_kwarg_and_no_env(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop(CAPTURE_MODE_ENV_VAR, None)
-            self.assertIs(resolve_capture_mode(None), CaptureMode.V0)
+            self.assertIs(_resolve_capture_mode(None), CaptureMode.V0)
 
     @parameterized.expand(
         [
@@ -38,14 +38,14 @@ class TestResolveCaptureMode(unittest.TestCase):
         self, _name, kwarg, expected, opposite_env
     ) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: opposite_env}):
-            self.assertIs(resolve_capture_mode(kwarg), expected)
+            self.assertIs(_resolve_capture_mode(kwarg), expected)
 
     def test_invalid_kwarg_raises_even_with_valid_env(self) -> None:
         # The kwarg path is consulted before the env, so an invalid kwarg raises
         # rather than silently falling back to a valid env value.
         with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: "v1"}):
             with self.assertRaises(ValueError):
-                resolve_capture_mode("bogus")
+                _resolve_capture_mode("bogus")
 
     @parameterized.expand(
         [
@@ -59,23 +59,23 @@ class TestResolveCaptureMode(unittest.TestCase):
     )
     def test_env_var_resolution(self, _name, env_value, expected) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: env_value}):
-            self.assertIs(resolve_capture_mode(None), expected)
+            self.assertIs(_resolve_capture_mode(None), expected)
 
     @parameterized.expand([("empty", ""), ("whitespace", "   ")])
     def test_blank_env_var_defaults_to_v0(self, _name, env_value) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: env_value}):
-            self.assertIs(resolve_capture_mode(None), CaptureMode.V0)
+            self.assertIs(_resolve_capture_mode(None), CaptureMode.V0)
 
     def test_unrecognized_env_var_warns_and_defaults_to_v0(self) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_MODE_ENV_VAR: "bogus"}):
             with capture_message_only_logs() as stream:
-                self.assertIs(resolve_capture_mode(None), CaptureMode.V0)
+                self.assertIs(_resolve_capture_mode(None), CaptureMode.V0)
         self.assertIn("bogus", stream.getvalue())
 
     @parameterized.expand([("bad_str", "bogus"), ("wrong_type", 1)])
     def test_invalid_explicit_kwarg_raises(self, _name, value) -> None:
         with self.assertRaises(ValueError):
-            resolve_capture_mode(value)
+            _resolve_capture_mode(value)
 
 
 class TestCaptureModePlumbing(unittest.TestCase):
