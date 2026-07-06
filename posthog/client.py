@@ -16,6 +16,12 @@ from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.capture_compression import (
+    CaptureCompression,
+    _resolve_capture_compression,
+)
+from posthog.capture_mode import CaptureMode, _resolve_capture_mode
+from posthog.capture_v1 import _send_v1_batch
 from posthog.consumer import Consumer
 from posthog.contexts import (
     _get_current_context,
@@ -260,6 +266,8 @@ class Client(object):
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
+        capture_mode: Optional[Union[CaptureMode, str]] = None,
+        capture_compression: Optional[Union[CaptureCompression, str]] = None,
         _dedicated_ai_endpoint=False,
     ):
         """
@@ -343,6 +351,16 @@ class Client(object):
                 interval for each exception type's bucket.
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
+            capture_mode: Capture wire protocol to use. Defaults to
+                ``CaptureMode.V0`` (legacy ``/batch/``). Set ``CaptureMode.V1``
+                (or pass the string ``"v1"``) to opt into
+                ``/i/v1/analytics/events``. When omitted, the
+                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V0``.
+            capture_compression: Request-body compression for capture-v1 uploads
+                (ignored in V0, which uses ``gzip``). ``CaptureCompression.GZIP``
+                or ``DEFLATE`` (or the strings ``"gzip"``/``"deflate"``). When
+                omitted, the ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted,
+                then the legacy ``gzip`` flag, then no compression.
 
         Examples:
             ```python
@@ -370,6 +388,7 @@ class Client(object):
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self.gzip = gzip
         self.timeout = timeout
+        self.max_retries = max_retries
         self._feature_flags: Optional[list[Any]] = (
             None  # private variable to store flags
         )
@@ -398,6 +417,15 @@ class Client(object):
         self.disable_geoip = disable_geoip
         self.is_server = is_server
         self.historical_migration = historical_migration
+        # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
+        # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
+        # applied once; V0 is the default and keeps upgrades transparent.
+        self.capture_mode = _resolve_capture_mode(capture_mode)
+        # v1-only request compression; falls back to the legacy `gzip` flag when
+        # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
+        self.capture_compression = _resolve_capture_compression(
+            capture_compression, gzip_fallback=gzip
+        )
         # Internal, not ready for use: routes `$ai_*` events to a dedicated
         # capture-ai endpoint while the backend route + ingress roll out.
         self._dedicated_ai_endpoint = _dedicated_ai_endpoint
@@ -503,6 +531,8 @@ class Client(object):
                     timeout=timeout,
                     historical_migration=historical_migration,
                     dedicated_ai_endpoint=self._dedicated_ai_endpoint,
+                    capture_mode=self.capture_mode,
+                    capture_compression=self.capture_compression,
                 )
                 self.consumers.append(consumer)
 
@@ -1525,6 +1555,8 @@ class Client(object):
                     timeout=old.timeout,
                     historical_migration=old.historical_migration,
                     dedicated_ai_endpoint=old.dedicated_ai_endpoint,
+                    capture_mode=old.capture_mode,
+                    capture_compression=old.capture_compression,
                 )
                 new_consumers.append(consumer)
 
@@ -1624,11 +1656,24 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            path = (
-                AI_EVENTS_ENDPOINT
-                if self._dedicated_ai_endpoint and is_ai_event(msg.get("event"))
-                else EVENTS_ENDPOINT
+            is_dedicated_ai = self._dedicated_ai_endpoint and is_ai_event(
+                msg.get("event")
             )
+            # Analytics events follow `capture_mode`; the dedicated AI endpoint
+            # has no v1 form and always uses the legacy submitter.
+            if not is_dedicated_ai and self.capture_mode == CaptureMode.V1:
+                _send_v1_batch(
+                    self.api_key,
+                    self.host,
+                    [msg],
+                    compression=self.capture_compression,
+                    timeout=self.timeout,
+                    max_retries=self.max_retries,
+                    historical_migration=self.historical_migration,
+                )
+                return sent_uuid
+
+            path = AI_EVENTS_ENDPOINT if is_dedicated_ai else EVENTS_ENDPOINT
             batch_post(
                 self.api_key,
                 self.host,
