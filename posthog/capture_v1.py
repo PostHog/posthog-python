@@ -25,26 +25,30 @@ from typing import Any, Optional
 
 from posthog.utils import guess_timezone as _guess_timezone
 
-CAPTURE_V1_PATH = "/i/v1/analytics/events"
+# Everything here is transform plumbing for the v1 submitter; nothing is
+# public API yet (the transport layer contributes the user-visible error type).
+__all__: list[str] = []
+
+_CAPTURE_V1_PATH = "/i/v1/analytics/events"
 
 # Required request/response headers for the v1 endpoint. Defined here as the
 # single source of truth; the transport layer builds requests from them.
-HEADER_SDK_INFO = "PostHog-Sdk-Info"
-HEADER_ATTEMPT = "PostHog-Attempt"
-HEADER_REQUEST_ID = "PostHog-Request-Id"
-HEADER_REQUEST_TIMESTAMP = "PostHog-Request-Timestamp"
+_HEADER_SDK_INFO = "PostHog-Sdk-Info"
+_HEADER_ATTEMPT = "PostHog-Attempt"
+_HEADER_REQUEST_ID = "PostHog-Request-Id"
+_HEADER_REQUEST_TIMESTAMP = "PostHog-Request-Timestamp"
 
 # Per-event result codes the backend emits (rust EventResult). `ok`/`warning`
 # are terminal-success; `drop` terminal-failure; `retry` is safe to resend.
-RESULT_OK = "ok"
-RESULT_WARNING = "warning"
-RESULT_DROP = "drop"
-RESULT_RETRY = "retry"
+_RESULT_OK = "ok"
+_RESULT_WARNING = "warning"
+_RESULT_DROP = "drop"
+_RESULT_RETRY = "retry"
 
 # HTTP status classification. 429 is terminal in v1 (unlike v0, where it is
 # retried) — the backend signals overload via retryable 5xx + Retry-After.
-RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
-TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
+_RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
+_TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
 
 # Sentinel properties lifted to top-level string fields on the event.
 _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
@@ -115,7 +119,7 @@ def _v1_timestamp(timestamp: Any) -> str:
     return timestamp
 
 
-def to_v1_event(msg: dict) -> dict:
+def _to_v1_event(msg: dict) -> dict:
     """Transform a legacy-shaped queued message into a v1 wire event.
 
     Pure: the input ``msg`` is not mutated (a fresh ``properties`` dict is
@@ -170,7 +174,9 @@ def to_v1_event(msg: dict) -> dict:
     return event
 
 
-def build_v1_batch_body(events: list[dict], historical_migration: bool = False) -> dict:
+def _build_v1_batch_body(
+    events: list[dict], historical_migration: bool = False
+) -> dict:
     """Assemble the v1 batch envelope.
 
     Carries no ``api_key`` (Bearer auth) and no ``sent_at``.

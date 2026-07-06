@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from parameterized import parameterized
 
 from posthog.capture_v1 import (
-    build_v1_batch_body,
-    to_v1_event,
+    _build_v1_batch_body,
+    _to_v1_event,
     _coerce_bool,
     _coerce_str,
 )
@@ -67,24 +67,24 @@ class TestCoercion(unittest.TestCase):
 
 class TestToV1Event(unittest.TestCase):
     def test_required_fields_preserved(self) -> None:
-        event = to_v1_event(_legacy_msg(event="signed_up"))
+        event = _to_v1_event(_legacy_msg(event="signed_up"))
         self.assertEqual(event["event"], "signed_up")
         self.assertEqual(event["uuid"], "0190000000007000800000000000000a")
         self.assertEqual(event["distinct_id"], "user-1")
         self.assertEqual(event["timestamp"], "2026-06-27T12:00:00+00:00")
 
     def test_strips_lib_and_lib_version(self) -> None:
-        event = to_v1_event(_legacy_msg())
+        event = _to_v1_event(_legacy_msg())
         self.assertNotIn("$lib", event["properties"])
         self.assertNotIn("$lib_version", event["properties"])
 
     def test_options_empty_dict_when_no_sentinels(self) -> None:
-        event = to_v1_event(_legacy_msg(properties={"plain": "value"}))
+        event = _to_v1_event(_legacy_msg(properties={"plain": "value"}))
         self.assertEqual(event["options"], {})
         self.assertEqual(event["properties"], {"plain": "value"})
 
     def test_does_not_leak_non_wire_top_level_keys(self) -> None:
-        event = to_v1_event(_legacy_msg())
+        event = _to_v1_event(_legacy_msg())
         # `type` is legacy-only; the v1 event carries only documented fields.
         self.assertEqual(
             set(event),
@@ -97,7 +97,7 @@ class TestToV1Event(unittest.TestCase):
             **{"$set": {"name": "Max"}},
         )
         original_properties = dict(msg["properties"])
-        to_v1_event(msg)
+        _to_v1_event(msg)
         self.assertEqual(msg["properties"], original_properties)
         self.assertIn("$set", msg)  # top-level $set untouched on the original
 
@@ -130,7 +130,7 @@ class TestToV1Event(unittest.TestCase):
     def test_option_sentinels_lifted_renamed_and_coerced(
         self, _name, prop_key, wire_key, raw, expected
     ) -> None:
-        event = to_v1_event(_legacy_msg(properties={prop_key: raw}))
+        event = _to_v1_event(_legacy_msg(properties={prop_key: raw}))
         self.assertEqual(event["options"], {wire_key: expected})
         self.assertNotIn(prop_key, event["properties"])
 
@@ -143,7 +143,7 @@ class TestToV1Event(unittest.TestCase):
     def test_option_sentinel_removed_but_omitted_on_bad_coercion(
         self, _name, prop_key, raw
     ) -> None:
-        event = to_v1_event(_legacy_msg(properties={prop_key: raw}))
+        event = _to_v1_event(_legacy_msg(properties={prop_key: raw}))
         # Removed from properties (sentinels must never reach v1 props) but not
         # emitted as an option, so a wrong type cannot 400 the whole batch.
         self.assertNotIn(prop_key, event["properties"])
@@ -156,17 +156,17 @@ class TestToV1Event(unittest.TestCase):
         ]
     )
     def test_top_level_string_sentinels(self, _name, prop_key, field_name, raw) -> None:
-        event = to_v1_event(_legacy_msg(properties={prop_key: raw}))
+        event = _to_v1_event(_legacy_msg(properties={prop_key: raw}))
         self.assertEqual(event[field_name], raw)
         self.assertNotIn(prop_key, event["properties"])
 
     def test_top_level_sentinel_omitted_but_removed_when_not_string(self) -> None:
-        event = to_v1_event(_legacy_msg(properties={"$session_id": 42}))
+        event = _to_v1_event(_legacy_msg(properties={"$session_id": 42}))
         self.assertNotIn("session_id", event)
         self.assertNotIn("$session_id", event["properties"])
 
     def test_all_sentinels_together(self) -> None:
-        event = to_v1_event(
+        event = _to_v1_event(
             _legacy_msg(
                 properties={
                     "$cookieless_mode": True,
@@ -199,7 +199,7 @@ class TestToV1Event(unittest.TestCase):
     @parameterized.expand([("set", "$set"), ("set_once", "$set_once")])
     def test_top_level_set_relocated_into_properties(self, _name, key) -> None:
         msg = _legacy_msg(properties={}, **{key: {"email": "a@b.com"}})
-        event = to_v1_event(msg)
+        event = _to_v1_event(msg)
         self.assertEqual(event["properties"][key], {"email": "a@b.com"})
         self.assertNotIn(key, event)  # not a top-level v1 field
 
@@ -209,23 +209,23 @@ class TestToV1Event(unittest.TestCase):
             properties={"$set": {"a": "from_props", "b": "props_only"}},
             **{"$set": {"a": "from_top", "c": "top_only"}},
         )
-        event = to_v1_event(msg)
+        event = _to_v1_event(msg)
         self.assertEqual(
             event["properties"]["$set"],
             {"a": "from_props", "b": "props_only", "c": "top_only"},
         )
 
     def test_groups_left_in_properties(self) -> None:
-        event = to_v1_event(_legacy_msg(properties={"$groups": {"company": "ph"}}))
+        event = _to_v1_event(_legacy_msg(properties={"$groups": {"company": "ph"}}))
         self.assertEqual(event["properties"]["$groups"], {"company": "ph"})
 
     def test_timestamp_naive_datetime_made_tz_aware(self) -> None:
-        event = to_v1_event(_legacy_msg(timestamp=datetime(2026, 6, 27, 12, 0, 0)))
+        event = _to_v1_event(_legacy_msg(timestamp=datetime(2026, 6, 27, 12, 0, 0)))
         parsed = datetime.fromisoformat(event["timestamp"])
         self.assertIsNotNone(parsed.tzinfo)
 
     def test_timestamp_none_defaults_to_utc_now(self) -> None:
-        event = to_v1_event(_legacy_msg(timestamp=None))
+        event = _to_v1_event(_legacy_msg(timestamp=None))
         parsed = datetime.fromisoformat(event["timestamp"])
         self.assertEqual(parsed.tzinfo, timezone.utc)
 
@@ -233,19 +233,19 @@ class TestToV1Event(unittest.TestCase):
 class TestBuildV1BatchBody(unittest.TestCase):
     def test_envelope_shape_and_no_legacy_fields(self) -> None:
         events = [{"event": "e"}]
-        body = build_v1_batch_body(events)
+        body = _build_v1_batch_body(events)
         self.assertEqual(body["batch"], events)
         self.assertNotIn("api_key", body)
         self.assertNotIn("sent_at", body)
 
     def test_created_at_is_tz_aware_rfc3339(self) -> None:
-        body = build_v1_batch_body([])
+        body = _build_v1_batch_body([])
         parsed = datetime.fromisoformat(body["created_at"])
         self.assertIsNotNone(parsed.tzinfo)
 
     def test_historical_migration_omitted_when_false(self) -> None:
-        self.assertNotIn("historical_migration", build_v1_batch_body([]))
+        self.assertNotIn("historical_migration", _build_v1_batch_body([]))
 
     def test_historical_migration_present_when_true(self) -> None:
-        body = build_v1_batch_body([], historical_migration=True)
+        body = _build_v1_batch_body([], historical_migration=True)
         self.assertIs(body["historical_migration"], True)
