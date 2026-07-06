@@ -20,7 +20,7 @@ encodes:
 
 The response is per-event: a 200 carries a ``results`` map keyed by event uuid,
 each tagged ``ok``/``warning`` (terminal-success), ``drop`` (terminal-failure),
-or ``retry``. :func:`send_v1_batch` resends only the ``retry`` events on the next
+or ``retry``. :func:`_send_v1_batch` resends only the ``retry`` events on the next
 attempt, holding the ``PostHog-Request-Id`` and batch ``created_at`` stable
 across attempts while incrementing ``PostHog-Attempt``. ``ok``/``warning``/absent
 events succeed; ``drop`` and retry-exhaustion are carried on the
@@ -60,9 +60,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("posthog")
 
-# Everything here is transform plumbing for the v1 submitter; nothing is
-# public API yet (the transport layer contributes the user-visible error type).
-__all__: list[str] = []
+# Only the error type is public API: it reaches user code through `on_error`
+# callbacks, so callers may want to catch/inspect it. Everything else is
+# submitter plumbing.
+__all__ = ["CaptureV1Error"]
 
 _CAPTURE_V1_PATH = "/i/v1/analytics/events"
 
@@ -89,7 +90,7 @@ _TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
 # and clamps a server ``Retry-After`` to the same value. Keeps the max retry
 # wait bounded (a hostile/buggy header can't park the consumer thread) and
 # unifies the default with posthog-go/posthog-rs (all 30s).
-MAX_BACKOFF_SECONDS = 30
+_MAX_BACKOFF_SECONDS = 30
 
 # Sentinel properties lifted to top-level string fields on the event.
 _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
@@ -224,7 +225,7 @@ def _build_v1_batch_body(
 
     Carries no ``api_key`` (Bearer auth) and no ``sent_at``.
     ``historical_migration`` is omitted when False (the server defaults it).
-    ``created_at`` defaults to now in UTC; :func:`send_v1_batch` passes a value
+    ``created_at`` defaults to now in UTC; :func:`_send_v1_batch` passes a value
     hoisted once so it stays stable across retry attempts.
     """
     body: dict[str, Any] = {
@@ -237,7 +238,7 @@ def _build_v1_batch_body(
 
 
 @dataclass
-class V1EventResult:
+class _V1EventResult:
     """A single event's directive from a 2xx ``results`` map."""
 
     result: Optional[str]
@@ -245,7 +246,7 @@ class V1EventResult:
 
 
 @dataclass
-class V1ParsedResponse:
+class _V1ParsedResponse:
     """Classified outcome of one v1 HTTP attempt.
 
     ``is_success`` is the 2xx classification. On success ``results`` holds the
@@ -257,7 +258,7 @@ class V1ParsedResponse:
     status_code: int
     is_success: bool
     retry_after: Optional[float] = None
-    results: Optional[dict[str, V1EventResult]] = None
+    results: Optional[dict[str, _V1EventResult]] = None
     malformed: bool = False
     error_message: str = ""
 
@@ -330,7 +331,7 @@ def _compress_v1(
     return data, None
 
 
-def post_v1(
+def _post_v1(
     api_key: str,
     host: Optional[str],
     batch_body: dict,
@@ -372,7 +373,7 @@ def post_v1(
     )
 
 
-def parse_v1_response(res: "requests.Response") -> V1ParsedResponse:
+def _parse_v1_response(res: "requests.Response") -> _V1ParsedResponse:
     """Read and classify a v1 response without raising."""
     status = res.status_code
     retry_after = _parse_retry_after(res.headers.get("Retry-After"))
@@ -382,17 +383,17 @@ def parse_v1_response(res: "requests.Response") -> V1ParsedResponse:
             payload = res.json()
             raw_results = payload["results"]
             results = {
-                uid: V1EventResult(
+                uid: _V1EventResult(
                     result=(r or {}).get("result"),
                     details=(r or {}).get("details"),
                 )
                 for uid, r in raw_results.items()
             }
-            return V1ParsedResponse(status, True, retry_after, results=results)
+            return _V1ParsedResponse(status, True, retry_after, results=results)
         except (ValueError, KeyError, AttributeError, TypeError):
             # 2xx with a body we can't read as a results map: terminal, so we
             # don't loop forever re-sending against a broken success.
-            return V1ParsedResponse(status, True, retry_after, malformed=True)
+            return _V1ParsedResponse(status, True, retry_after, malformed=True)
 
     message = ""
     try:
@@ -408,29 +409,29 @@ def parse_v1_response(res: "requests.Response") -> V1ParsedResponse:
         pass
     if not message:
         message = res.text or f"capture v1 request failed with status {status}"
-    return V1ParsedResponse(status, False, retry_after, error_message=message)
+    return _V1ParsedResponse(status, False, retry_after, error_message=message)
 
 
 def _backoff(attempt_index: int, retry_after: Optional[float]) -> None:
     """Sleep before the next attempt.
 
-    Exponential backoff capped at :data:`MAX_BACKOFF_SECONDS` is the base. When
+    Exponential backoff capped at :data:`_MAX_BACKOFF_SECONDS` is the base. When
     the server sent a ``Retry-After`` it acts as a *minimum*, not a replacement:
     the client waits the longer of the configured backoff and ``Retry-After``, so
     a small ``Retry-After`` never retries earlier than the normal schedule
     (matching posthog-go / posthog-rs). ``Retry-After`` is itself clamped to
-    :data:`MAX_BACKOFF_SECONDS`, so both sides share one ceiling and a
+    :data:`_MAX_BACKOFF_SECONDS`, so both sides share one ceiling and a
     hostile/buggy header can't park the consumer thread.
     """
-    configured = min(2**attempt_index, MAX_BACKOFF_SECONDS)
+    configured = min(2**attempt_index, _MAX_BACKOFF_SECONDS)
     clamped_retry_after = (
-        min(retry_after, MAX_BACKOFF_SECONDS) if retry_after and retry_after > 0 else 0
+        min(retry_after, _MAX_BACKOFF_SECONDS) if retry_after and retry_after > 0 else 0
     )
     time.sleep(max(configured, clamped_retry_after))
 
 
 def _log_result_summary(
-    request_id: str, attempt: int, results: dict[str, V1EventResult]
+    request_id: str, attempt: int, results: dict[str, _V1EventResult]
 ) -> None:
     tally = {_RESULT_OK: 0, _RESULT_WARNING: 0, _RESULT_DROP: 0, _RESULT_RETRY: 0}
     other = 0
@@ -452,7 +453,7 @@ def _log_result_summary(
     )
 
 
-def send_v1_batch(
+def _send_v1_batch(
     api_key: str,
     host: Optional[str],
     batch: list[dict],
@@ -502,7 +503,7 @@ def send_v1_batch(
         )
 
         try:
-            res = post_v1(
+            res = _post_v1(
                 api_key,
                 host,
                 body,
@@ -520,7 +521,7 @@ def send_v1_batch(
             _backoff(attempt_index, None)
             continue
 
-        parsed = parse_v1_response(res)
+        parsed = _parse_v1_response(res)
 
         if parsed.is_success:
             if parsed.malformed:

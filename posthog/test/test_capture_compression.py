@@ -7,7 +7,7 @@ from parameterized import parameterized
 from posthog.capture_compression import (
     CAPTURE_COMPRESSION_ENV_VAR,
     CaptureCompression,
-    resolve_capture_compression,
+    _resolve_capture_compression,
 )
 from posthog.test.logging_helpers import capture_message_only_logs
 
@@ -20,11 +20,11 @@ class TestResolveCaptureCompression(unittest.TestCase):
         os.environ.pop(CAPTURE_COMPRESSION_ENV_VAR, None)
 
     def test_defaults_to_none_with_no_kwarg_env_or_gzip(self) -> None:
-        self.assertIs(resolve_capture_compression(None), CaptureCompression.NONE)
+        self.assertIs(_resolve_capture_compression(None), CaptureCompression.NONE)
 
     def test_gzip_fallback_used_when_nothing_else_set(self) -> None:
         self.assertIs(
-            resolve_capture_compression(None, gzip_fallback=True),
+            _resolve_capture_compression(None, gzip_fallback=True),
             CaptureCompression.GZIP,
         )
 
@@ -47,18 +47,18 @@ class TestResolveCaptureCompression(unittest.TestCase):
         # the explicit kwarg wins over both lower-precedence sources.
         with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: "deflate"}):
             self.assertIs(
-                resolve_capture_compression(kwarg, gzip_fallback=True), expected
+                _resolve_capture_compression(kwarg, gzip_fallback=True), expected
             )
 
     def test_invalid_kwarg_raises_even_with_valid_env(self) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: "gzip"}):
             with self.assertRaises(ValueError):
-                resolve_capture_compression("bogus")
+                _resolve_capture_compression("bogus")
 
     @parameterized.expand([("bad_str", "bogus"), ("wrong_type", 1)])
     def test_invalid_explicit_kwarg_raises(self, _name, value) -> None:
         with self.assertRaises(ValueError):
-            resolve_capture_compression(value)
+            _resolve_capture_compression(value)
 
     @parameterized.expand(
         [
@@ -72,21 +72,21 @@ class TestResolveCaptureCompression(unittest.TestCase):
     )
     def test_env_var_resolution(self, _name, env_value, expected) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: env_value}):
-            self.assertIs(resolve_capture_compression(None), expected)
+            self.assertIs(_resolve_capture_compression(None), expected)
 
     def test_env_var_takes_precedence_over_gzip_fallback(self) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: "deflate"}):
             self.assertIs(
-                resolve_capture_compression(None, gzip_fallback=True),
+                _resolve_capture_compression(None, gzip_fallback=True),
                 CaptureCompression.DEFLATE,
             )
 
     @parameterized.expand([("empty", ""), ("whitespace", "   ")])
     def test_blank_env_var_falls_through_to_fallback(self, _name, env_value) -> None:
         with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: env_value}):
-            self.assertIs(resolve_capture_compression(None), CaptureCompression.NONE)
+            self.assertIs(_resolve_capture_compression(None), CaptureCompression.NONE)
             self.assertIs(
-                resolve_capture_compression(None, gzip_fallback=True),
+                _resolve_capture_compression(None, gzip_fallback=True),
                 CaptureCompression.GZIP,
             )
 
@@ -94,7 +94,7 @@ class TestResolveCaptureCompression(unittest.TestCase):
         with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: "bogus"}):
             with capture_message_only_logs() as stream:
                 self.assertIs(
-                    resolve_capture_compression(None, gzip_fallback=True),
+                    _resolve_capture_compression(None, gzip_fallback=True),
                     CaptureCompression.GZIP,
                 )
         self.assertIn("bogus", stream.getvalue())

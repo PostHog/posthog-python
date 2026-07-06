@@ -3,6 +3,8 @@ import os
 from enum import Enum
 from typing import Optional, Union
 
+__all__ = ["CAPTURE_COMPRESSION_ENV_VAR", "CaptureCompression"]
+
 log = logging.getLogger("posthog")
 
 CAPTURE_COMPRESSION_ENV_VAR = "POSTHOG_CAPTURE_COMPRESSION"
@@ -56,7 +58,7 @@ def _coerce_explicit(
     )
 
 
-def resolve_capture_compression(
+def _resolve_capture_compression(
     capture_compression: Optional[Union[CaptureCompression, str]] = None,
     *,
     gzip_fallback: bool = False,

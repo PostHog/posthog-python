@@ -12,12 +12,12 @@ from posthog.capture_v1 import (
     _HEADER_ATTEMPT,
     _HEADER_REQUEST_ID,
     _HEADER_SDK_INFO,
-    MAX_BACKOFF_SECONDS,
+    _MAX_BACKOFF_SECONDS,
     CaptureV1Error,
     _build_v1_batch_body,
-    parse_v1_response,
-    post_v1,
-    send_v1_batch,
+    _parse_v1_response,
+    _post_v1,
+    _send_v1_batch,
     _to_v1_event,
     _backoff,
     _coerce_bool,
@@ -58,7 +58,7 @@ class _RecordingSession:
 
 
 class _PostV1Stub:
-    """Drop-in for ``post_v1`` that records calls and replays canned outcomes.
+    """Drop-in for ``_post_v1`` that records calls and replays canned outcomes.
 
     Each item in ``outcomes`` is either a ``_FakeResponse`` to return or an
     ``Exception`` instance to raise (simulating a transport failure).
@@ -354,7 +354,7 @@ class TestBuildV1BatchBody(unittest.TestCase):
         self.assertIsNotNone(parsed.tzinfo)
 
     def test_created_at_passthrough_used_verbatim(self) -> None:
-        # send_v1_batch hoists created_at and passes it in so it stays stable
+        # _send_v1_batch hoists created_at and passes it in so it stays stable
         # across retry attempts.
         body = _build_v1_batch_body([], created_at="2026-06-27T12:00:00+00:00")
         self.assertEqual(body["created_at"], "2026-06-27T12:00:00+00:00")
@@ -371,7 +371,7 @@ class TestPostV1(unittest.TestCase):
     def _post(self, response, **kwargs):
         session = _RecordingSession(response)
         body = _build_v1_batch_body([_to_v1_event(_msg("u-1"))])
-        post_v1(
+        _post_v1(
             "phc_key",
             "https://app.posthog.com/",
             body,
@@ -429,7 +429,7 @@ class TestParseV1Response(unittest.TestCase):
             200,
             json_body={"results": {"u-1": {"result": "drop", "details": "spam"}}},
         )
-        parsed = parse_v1_response(res)
+        parsed = _parse_v1_response(res)
         self.assertTrue(parsed.is_success)
         self.assertEqual(parsed.results["u-1"].result, "drop")
         self.assertEqual(parsed.results["u-1"].details, "spam")
@@ -441,7 +441,7 @@ class TestParseV1Response(unittest.TestCase):
         ]
     )
     def test_success_with_bad_body_is_malformed(self, _name, res) -> None:
-        parsed = parse_v1_response(res)
+        parsed = _parse_v1_response(res)
         self.assertTrue(parsed.is_success)
         self.assertTrue(parsed.malformed)
 
@@ -453,23 +453,23 @@ class TestParseV1Response(unittest.TestCase):
         ]
     )
     def test_error_message_extracted_from_body(self, _name, body, expected) -> None:
-        parsed = parse_v1_response(_FakeResponse(400, json_body=body))
+        parsed = _parse_v1_response(_FakeResponse(400, json_body=body))
         self.assertFalse(parsed.is_success)
         self.assertEqual(parsed.error_message, expected)
 
     def test_error_message_falls_back_to_text(self) -> None:
-        parsed = parse_v1_response(_FakeResponse(400, raise_json=True, text="boom"))
+        parsed = _parse_v1_response(_FakeResponse(400, raise_json=True, text="boom"))
         self.assertEqual(parsed.error_message, "boom")
 
     @parameterized.expand([("numeric", "2", 2.0), ("absent", None, None)])
     def test_retry_after_header(self, _name, header_value, expected) -> None:
         headers = {"Retry-After": header_value} if header_value is not None else {}
-        parsed = parse_v1_response(_FakeResponse(503, headers=headers))
+        parsed = _parse_v1_response(_FakeResponse(503, headers=headers))
         self.assertEqual(parsed.retry_after, expected)
 
 
 class TestSendV1Batch(unittest.TestCase):
-    """Drives ``send_v1_batch`` with a stubbed ``post_v1`` and no real sleeps."""
+    """Drives ``_send_v1_batch`` with a stubbed ``_post_v1`` and no real sleeps."""
 
     def setUp(self) -> None:
         sleep_patch = mock.patch("posthog.capture_v1.time.sleep")
@@ -478,15 +478,15 @@ class TestSendV1Batch(unittest.TestCase):
 
     def _run(self, batch, outcomes, **kwargs):
         stub = _PostV1Stub(outcomes)
-        with mock.patch("posthog.capture_v1.post_v1", stub):
-            send_v1_batch("phc_key", "https://app.posthog.com", batch, **kwargs)
+        with mock.patch("posthog.capture_v1._post_v1", stub):
+            _send_v1_batch("phc_key", "https://app.posthog.com", batch, **kwargs)
         return stub
 
     def _run_expecting_error(self, batch, outcomes, **kwargs):
         stub = _PostV1Stub(outcomes)
-        with mock.patch("posthog.capture_v1.post_v1", stub):
+        with mock.patch("posthog.capture_v1._post_v1", stub):
             with self.assertRaises(CaptureV1Error) as ctx:
-                send_v1_batch("phc_key", "https://app.posthog.com", batch, **kwargs)
+                _send_v1_batch("phc_key", "https://app.posthog.com", batch, **kwargs)
         return stub, ctx.exception
 
     def test_all_ok_sends_once(self) -> None:
@@ -643,9 +643,9 @@ class TestSendV1Batch(unittest.TestCase):
 
     def test_transport_error_exhausted_reraises_original(self) -> None:
         stub = _PostV1Stub([ConnectionError("boom"), ConnectionError("boom")])
-        with mock.patch("posthog.capture_v1.post_v1", stub):
+        with mock.patch("posthog.capture_v1._post_v1", stub):
             with self.assertRaises(ConnectionError):
-                send_v1_batch(
+                _send_v1_batch(
                     "phc_key", "https://app.posthog.com", [_msg("u-1")], max_retries=1
                 )
         self.assertEqual(len(stub.calls), 2)
@@ -683,8 +683,8 @@ class TestBackoff(unittest.TestCase):
             ("smaller_header_ignored", 3, 2.0, 8),  # configured 8 > 2.0
             ("equal_header_and_backoff", 0, 1.0, 1),
             ("header_at_ceiling", 0, 30.0, 30),
-            ("header_above_ceiling_clamped", 0, 120.0, MAX_BACKOFF_SECONDS),
-            ("absurd_header_clamped", 0, 10**9, MAX_BACKOFF_SECONDS),
+            ("header_above_ceiling_clamped", 0, 120.0, _MAX_BACKOFF_SECONDS),
+            ("absurd_header_clamped", 0, 10**9, _MAX_BACKOFF_SECONDS),
         ]
     )
     def test_backoff(self, _name, attempt_index, retry_after, expected) -> None:
