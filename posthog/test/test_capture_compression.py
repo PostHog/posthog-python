@@ -33,9 +33,11 @@ class TestResolveCaptureCompression(unittest.TestCase):
             ("enum_gzip", CaptureCompression.GZIP, CaptureCompression.GZIP),
             ("enum_deflate", CaptureCompression.DEFLATE, CaptureCompression.DEFLATE),
             ("enum_none", CaptureCompression.NONE, CaptureCompression.NONE),
+            ("enum_zstd", CaptureCompression.ZSTD, CaptureCompression.ZSTD),
             ("str_gzip", "gzip", CaptureCompression.GZIP),
             ("str_deflate", "deflate", CaptureCompression.DEFLATE),
             ("str_none", "none", CaptureCompression.NONE),
+            ("str_zstd", "zstd", CaptureCompression.ZSTD),
             ("str_identity_alias", "identity", CaptureCompression.NONE),
             ("str_upper_and_padded", "  GZIP  ", CaptureCompression.GZIP),
         ]
@@ -65,6 +67,7 @@ class TestResolveCaptureCompression(unittest.TestCase):
             ("gzip", "gzip", CaptureCompression.GZIP),
             ("deflate", "deflate", CaptureCompression.DEFLATE),
             ("none", "none", CaptureCompression.NONE),
+            ("zstd", "zstd", CaptureCompression.ZSTD),
             ("identity", "identity", CaptureCompression.NONE),
             ("uppercase", "GZIP", CaptureCompression.GZIP),
             ("padded", "  deflate ", CaptureCompression.DEFLATE),
@@ -98,3 +101,20 @@ class TestResolveCaptureCompression(unittest.TestCase):
                     CaptureCompression.GZIP,
                 )
         self.assertIn("bogus", stream.getvalue())
+
+    @parameterized.expand([("enum", CaptureCompression.ZSTD), ("str", "zstd")])
+    def test_explicit_zstd_without_package_raises(self, _name, kwarg) -> None:
+        with mock.patch("posthog.capture_compression._zstandard", None):
+            with self.assertRaises(ValueError) as ctx:
+                _resolve_capture_compression(kwarg)
+        self.assertIn("posthog[zstd]", str(ctx.exception))
+
+    def test_env_zstd_without_package_warns_and_uses_fallback(self) -> None:
+        with mock.patch("posthog.capture_compression._zstandard", None):
+            with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: "zstd"}):
+                with capture_message_only_logs() as stream:
+                    self.assertIs(
+                        _resolve_capture_compression(None, gzip_fallback=True),
+                        CaptureCompression.GZIP,
+                    )
+        self.assertIn("posthog[zstd]", stream.getvalue())

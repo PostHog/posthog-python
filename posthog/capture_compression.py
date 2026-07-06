@@ -3,6 +3,13 @@ import os
 from enum import Enum
 from typing import Optional, Union
 
+try:
+    # Optional dependency (install `posthog[zstd]`): Python has no stdlib zstd
+    # until 3.14, so ZSTD is only usable when the zstandard package is present.
+    import zstandard as _zstandard
+except ImportError:
+    _zstandard = None  # type: ignore[assignment]
+
 __all__ = ["CAPTURE_COMPRESSION_ENV_VAR", "CaptureCompression"]
 
 log = logging.getLogger("posthog")
@@ -15,16 +22,19 @@ class CaptureCompression(str, Enum):
 
     Only honored when ``capture_mode`` is ``V1``; the legacy ``/batch/`` path
     keeps using its own ``gzip`` flag. ``NONE`` sends the body uncompressed.
-    ``GZIP`` and ``DEFLATE`` (zlib, RFC 1950) are both stdlib / zero-dependency
-    and map to the matching ``Content-Encoding`` token the v1 server decodes
-    (``br``/``zstd`` are accepted by the server too but need extra dependencies,
-    so they are intentionally left out for now). Inheriting from ``str`` keeps
-    the members comparable to and serializable as their token values.
+    ``GZIP`` and ``DEFLATE`` (zlib, RFC 1950) are both stdlib / zero-dependency;
+    ``ZSTD`` is faster and compresses better but needs the optional zstandard
+    package (``pip install posthog[zstd]``) until stdlib support lands in
+    Python 3.14. Each maps to the matching ``Content-Encoding`` token the v1
+    server decodes (``br`` is accepted by the server too but is intentionally
+    left out for now). Inheriting from ``str`` keeps the members comparable to
+    and serializable as their token values.
     """
 
     NONE = "none"
     GZIP = "gzip"
     DEFLATE = "deflate"
+    ZSTD = "zstd"
 
 
 # Accepted spellings for both the kwarg and the env var. ``identity`` mirrors
@@ -34,7 +44,12 @@ _ALIASES: dict[str, CaptureCompression] = {
     "identity": CaptureCompression.NONE,
     "gzip": CaptureCompression.GZIP,
     "deflate": CaptureCompression.DEFLATE,
+    "zstd": CaptureCompression.ZSTD,
 }
+
+
+def _zstd_available() -> bool:
+    return _zstandard is not None
 
 
 def _coerce_explicit(
@@ -69,9 +84,20 @@ def _resolve_capture_compression(
     ``POSTHOG_CAPTURE_COMPRESSION`` env var > the legacy ``gzip`` flag
     (``GZIP`` when set) > ``NONE``. An unrecognized env value logs a warning and
     falls back to the ``gzip`` flag, so a typo never silently changes encoding.
+
+    ``ZSTD`` requires the optional zstandard package: explicitly requesting it
+    without the package raises ``ValueError`` (programming error, fail loud),
+    while requesting it via the env var warns and falls back (operator-supplied
+    config must never silently break capture).
     """
     if capture_compression is not None:
-        return _coerce_explicit(capture_compression)
+        resolved = _coerce_explicit(capture_compression)
+        if resolved is CaptureCompression.ZSTD and not _zstd_available():
+            raise ValueError(
+                "capture_compression 'zstd' requires the zstandard package; "
+                "install posthog[zstd]"
+            )
+        return resolved
 
     fallback = CaptureCompression.GZIP if gzip_fallback else CaptureCompression.NONE
 
@@ -87,6 +113,15 @@ def _resolve_capture_compression(
             raw,
             fallback.value,
             sorted(_ALIASES),
+        )
+        return fallback
+    if resolved is CaptureCompression.ZSTD and not _zstd_available():
+        log.warning(
+            "%s=%r requires the zstandard package (install posthog[zstd]); "
+            "falling back to %s.",
+            CAPTURE_COMPRESSION_ENV_VAR,
+            raw,
+            fallback.value,
         )
         return fallback
     return resolved

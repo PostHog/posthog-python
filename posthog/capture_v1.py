@@ -45,7 +45,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
-from posthog.capture_compression import CaptureCompression
+from posthog.capture_compression import CaptureCompression, _zstandard
 from posthog.request import (
     DatetimeSerializer,
     USER_AGENT,
@@ -318,7 +318,8 @@ def _compress_v1(
     ``GZIP`` emits a gzip stream; ``DEFLATE`` emits a *zlib-wrapped* deflate
     stream (RFC 1950, leading ``0x78``) to match posthog-go / posthog-rs and the
     server's zlib decoder for ``Content-Encoding: deflate`` — raw, headerless
-    deflate would be misrouted. ``NONE`` returns the string body and no token.
+    deflate would be misrouted. ``ZSTD`` emits a standard zstd frame via the
+    optional zstandard package. ``NONE`` returns the string body and no token.
     """
     if compression == CaptureCompression.GZIP:
         buf = BytesIO()
@@ -328,6 +329,15 @@ def _compress_v1(
         return buf.getvalue(), "gzip"
     if compression == CaptureCompression.DEFLATE:
         return zlib.compress(data.encode("utf-8")), "deflate"
+    if compression == CaptureCompression.ZSTD:
+        # _resolve_capture_compression only yields ZSTD when zstandard is
+        # importable; this guard covers direct Consumer construction.
+        if _zstandard is None:
+            raise ValueError(
+                "capture_compression 'zstd' requires the zstandard package; "
+                "install posthog[zstd]"
+            )
+        return _zstandard.ZstdCompressor().compress(data.encode("utf-8")), "zstd"
     return data, None
 
 

@@ -36,6 +36,11 @@ Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
 langchain = ["langchain>=0.2.0"]
+# Opt-in zstd support for capture-v1 request compression. Kept out of the core
+# dependencies so existing installs are unaffected; Python gains stdlib zstd
+# only in 3.14 (compression.zstd), so the third-party package is needed until
+# then.
+zstd = ["zstandard>=0.23.0"]
 # Note: the MCP SDK (`mcp`) is intentionally NOT an extra. It's a peer dependency of
 # `instrument()` — anyone wrapping a FastMCP/Server already has it — so it's imported
 # lazily and version-checked at runtime, not installed by posthog. `PostHogMCP` (custom
@@ -89,6 +94,7 @@ test = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "pytest-bdd>=8.1.0",
+    "zstandard>=0.23.0",
 ]
 
 [tool.setuptools]

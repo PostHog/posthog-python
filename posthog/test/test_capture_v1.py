@@ -4,6 +4,8 @@ import zlib
 from datetime import datetime, timezone
 from unittest import mock
 
+import zstandard
+
 from parameterized import parameterized
 
 from posthog.capture_compression import CaptureCompression
@@ -421,6 +423,22 @@ class TestPostV1(unittest.TestCase):
         self.assertEqual(call["data"][0], 0x78)  # zlib header
         roundtripped = zlib.decompress(call["data"]).decode("utf-8")
         self.assertNotIn("api_key", json.loads(roundtripped))
+
+    def test_zstd_sets_encoding_header_and_emits_standard_frame(self) -> None:
+        call = self._post(_results_response({}), compression=CaptureCompression.ZSTD)
+        self.assertEqual(call["headers"]["Content-Encoding"], "zstd")
+        self.assertIsInstance(call["data"], bytes)
+        self.assertEqual(call["data"][:4], b"\x28\xb5\x2f\xfd")  # zstd frame magic
+        roundtripped = zstandard.ZstdDecompressor().decompress(call["data"])
+        body = json.loads(roundtripped.decode("utf-8"))
+        self.assertNotIn("api_key", body)
+        self.assertEqual(len(body["batch"]), 1)
+
+    def test_zstd_without_package_raises_actionable_error(self) -> None:
+        with mock.patch("posthog.capture_v1._zstandard", None):
+            with self.assertRaises(ValueError) as ctx:
+                self._post(_results_response({}), compression=CaptureCompression.ZSTD)
+        self.assertIn("posthog[zstd]", str(ctx.exception))
 
 
 class TestParseV1Response(unittest.TestCase):

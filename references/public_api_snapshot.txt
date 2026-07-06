@@ -478,6 +478,7 @@ attribute posthog.capture_compression.CAPTURE_COMPRESSION_ENV_VAR = 'POSTHOG_CAP
 attribute posthog.capture_compression.CaptureCompression.DEFLATE = 'deflate'
 attribute posthog.capture_compression.CaptureCompression.GZIP = 'gzip'
 attribute posthog.capture_compression.CaptureCompression.NONE = 'none'
+attribute posthog.capture_compression.CaptureCompression.ZSTD = 'zstd'
 attribute posthog.capture_exception_code_variables = False
 attribute posthog.capture_mode.CAPTURE_MODE_ENV_VAR = 'POSTHOG_CAPTURE_MODE'
 attribute posthog.capture_mode.CaptureMode.V0 = 'v0'
