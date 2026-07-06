@@ -1,14 +1,15 @@
 import logging
 import os
 from enum import Enum
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
+_zstandard: Any | None
 try:
-    # Optional dependency (install `posthog[zstd]`): Python has no stdlib zstd
-    # until 3.14, so ZSTD is only usable when the zstandard package is present.
-    import zstandard as _zstandard
+    import zstandard
+
+    _zstandard = zstandard
 except ImportError:
-    _zstandard = None  # type: ignore[assignment]
+    _zstandard = None
 
 __all__ = ["CAPTURE_COMPRESSION_ENV_VAR", "CaptureCompression"]
 
