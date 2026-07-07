@@ -234,7 +234,6 @@ class Client(object):
         timeout=15,
         thread=1,
         poll_interval=30,
-        secret_key=None,
         personal_api_key=None,
         disabled=False,
         disable_geoip=True,
@@ -261,6 +260,7 @@ class Client(object):
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
+        secret_key=None,
         _dedicated_ai_endpoint=False,
     ):
         """
