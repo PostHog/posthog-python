@@ -32,7 +32,7 @@ load_env_file()
 
 # Get configuration
 project_key = os.getenv("POSTHOG_PROJECT_API_KEY", "")
-personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "")
+secret_key = os.getenv("POSTHOG_SECRET_KEY", "")
 host = os.getenv("POSTHOG_HOST", "http://localhost:8010")
 
 # Check if project key is provided (required)
@@ -50,9 +50,9 @@ posthog.host = host
 posthog.poll_interval = 10
 
 # Check if personal API key is available for local evaluation
-local_eval_available = bool(personal_api_key)
-if personal_api_key:
-    posthog.personal_api_key = personal_api_key
+local_eval_available = bool(secret_key)
+if secret_key:
+    posthog.secret_key = secret_key
 
 print("🔑 PostHog Configuration:")
 print(f"   Project API Key: {project_key[:9]}...")
@@ -135,10 +135,8 @@ if choice == "1":
 
 elif choice == "2":
     if not local_eval_available:
-        print("\n❌ This example requires a personal API key for local evaluation.")
-        print(
-            "   Set POSTHOG_PERSONAL_API_KEY environment variable to run this example."
-        )
+        print("\n❌ This example requires a secret API key for local evaluation.")
+        print("   Set POSTHOG_SECRET_KEY environment variable to run this example.")
         posthog.shutdown()
         exit(1)
 
@@ -210,10 +208,8 @@ elif choice == "3":
 
 elif choice == "4":
     if not local_eval_available:
-        print("\n❌ This example requires a personal API key for local evaluation.")
-        print(
-            "   Set POSTHOG_PERSONAL_API_KEY environment variable to run this example."
-        )
+        print("\n❌ This example requires a secret API key for local evaluation.")
+        print("   Set POSTHOG_SECRET_KEY environment variable to run this example.")
         posthog.shutdown()
         exit(1)
 

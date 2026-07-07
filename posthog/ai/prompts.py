@@ -84,7 +84,7 @@ class Prompts:
         from posthog.ai.prompts import Prompts
 
         # With PostHog client
-        posthog = Posthog('phc_xxx', host='https://us.posthog.com', personal_api_key='phx_xxx')
+        posthog = Posthog('phc_xxx', host='https://us.posthog.com', secret_key='phx_xxx')
         prompts = Prompts(posthog)
 
         # Or with direct options (no PostHog client needed)

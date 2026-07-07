@@ -41,7 +41,7 @@ class PostHogProvider(AbstractProvider):
     """OpenFeature provider backed by a configured :class:`posthog.Posthog` client.
 
     The caller owns the PostHog client lifecycle: construct and configure the
-    client yourself (project key, ``personal_api_key`` for local evaluation,
+    client yourself (project key, ``secret_key`` for local evaluation,
     ``host``, ...), then hand it to this provider.
 
     Evaluation-context mapping:
@@ -90,13 +90,13 @@ class PostHogProvider(AbstractProvider):
         # client is configured for local evaluation. We do not otherwise mutate
         # the caller-owned client, and a preload failure must not make the
         # OpenFeature client un-ready (remote evaluation still works).
-        if getattr(self._client, "personal_api_key", None):
+        if getattr(self._client, "secret_key", None):
             try:
                 self._client.load_feature_flags()
             except Exception:
                 # Don't block the OpenFeature client on a preload failure
                 # (remote evaluation still works), but surface it: an invalid
-                # personal_api_key, unreachable host, or missing permissions
+                # secret_key, unreachable host, or missing permissions
                 # would otherwise silently disable local evaluation.
                 _logger.warning(
                     "PostHogProvider: failed to preload feature flag "
