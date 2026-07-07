@@ -2,6 +2,7 @@ import logging
 import asyncio
 import time
 import unittest
+import warnings
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -78,6 +79,30 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.raw_host, "https://eu.posthog.com/")
         self.assertEqual(client.host, "https://eu.i.posthog.com")
         self.assertIsNone(client.personal_api_key)
+
+    @parameterized.expand(
+        [
+            ("secret_key_only", "phx_secret", None, "phx_secret", False),
+            ("personal_api_key_alias", None, "phx_legacy", "phx_legacy", True),
+            ("secret_key_wins", "phx_secret", "phx_legacy", "phx_secret", False),
+        ]
+    )
+    def test_secret_key_resolution(
+        self, _, secret_key, personal_api_key, expected, expect_deprecation
+    ):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            client = Client(
+                FAKE_TEST_API_KEY,
+                secret_key=secret_key,
+                personal_api_key=personal_api_key,
+                send=False,
+            )
+
+        self.assertEqual(client.secret_key, expected)
+        self.assertEqual(client.personal_api_key, expected)
+        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        self.assertEqual(bool(deprecations), expect_deprecation)
 
     def test_client_with_empty_api_key_is_noop(self):
         client = Client("", send=False)
@@ -811,7 +836,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.cohorts, {})
             self.assertIn("Unauthorized", logs.output[0])
             self.assertIn("project_api_key", logs.output[0])
-            self.assertIn("personal_api_key", logs.output[0])
+            self.assertIn("secret_key", logs.output[0])
 
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):
