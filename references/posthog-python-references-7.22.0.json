@@ -438,7 +438,7 @@
             },
             {
               "name": "personal_api_key",
-              "description": "Personal API key used for local feature flag         evaluation and remote config payloads.",
+              "description": "Deprecated alias for ``secret_key``. Still honored         for backwards compatibility; prefer ``secret_key``, which also         accepts a Project Secret API Key.",
               "isOptional": false,
               "type": "any"
             },
@@ -603,6 +603,12 @@
               "description": "Request-body compression for capture-v1 uploads         (ignored in V0, which uses ``gzip``). ``CaptureCompression.GZIP``         or ``DEFLATE`` (or the strings ``\"gzip\"``/``\"deflate\"``). When         omitted, the ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted,         then the legacy ``gzip`` flag, then no compression.",
               "isOptional": false,
               "type": "CaptureCompression"
+            },
+            {
+              "name": "secret_key",
+              "description": "A Personal API Key or Project Secret API Key, used to         authenticate local feature flag evaluation, remote config         payloads, and decrypted flag payloads. Example::              posthog.Client(project_api_key, secret_key=\"phx_...\")",
+              "isOptional": false,
+              "type": "any"
             },
             {
               "name": "_dedicated_ai_endpoint",
