@@ -1,5 +1,11 @@
 # posthog
 
+## 7.22.1 — 2026-07-10
+
+### Patch changes
+
+- [650d107](https://github.com/posthog/posthog-python/commit/650d107665207e5239b8613e19bcba76695076ee) Fix local evaluation of flag dependencies with a `flag_evaluates_to: false` condition: such conditions never matched, forcing the dependent flag to `false` for every locally-evaluated user. — Thanks @matheus-vb!
+
 ## 7.22.0 — 2026-07-06
 
 ### Minor changes
