@@ -13,6 +13,7 @@ except ImportError:
 
 from posthog.ai.utils import (
     call_llm_and_track_usage,
+    _capture_ai_event,
     extract_available_tool_calls,
     merge_usage_stats,
     with_privacy_mode,
@@ -36,7 +37,12 @@ class OpenAI(openai.OpenAI):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -47,6 +53,7 @@ class OpenAI(openai.OpenAI):
 
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)
@@ -87,6 +94,7 @@ def _parse_and_track(
         posthog_groups,
         wrapper._client.base_url,
         wrapper._original.parse,
+        _dedicated_ai_endpoint=wrapper._client._dedicated_ai_endpoint,
         **kwargs,
     )
 
@@ -140,6 +148,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             posthog_groups,
             self._client.base_url,
             self._original.create,
+            _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
             **kwargs,
         )
 
@@ -267,7 +276,11 @@ class WrappedResponses(_OpenAIWrapperResource):
         )
 
         # Use the common capture function
-        capture_streaming_event(self._client._ph_client, event_data)
+        capture_streaming_event(
+            self._client._ph_client,
+            event_data,
+            _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
+        )
 
     def parse(
         self,
@@ -394,6 +407,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             posthog_groups,
             self._client.base_url,
             self._original.create,
+            _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
             **kwargs,
         )
 
@@ -536,7 +550,11 @@ class WrappedCompletions(_OpenAIWrapperResource):
         )
 
         # Use the common capture function
-        capture_streaming_event(self._client._ph_client, event_data)
+        capture_streaming_event(
+            self._client._ph_client,
+            event_data,
+            _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
+        )
 
 
 class WrappedEmbeddings(_OpenAIWrapperResource):
@@ -605,9 +623,11 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
 
         # Send capture event for embeddings
         if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
+            _capture_ai_event(
+                self._client._ph_client,
+                "$ai_embedding",
+                _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
                 distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_embedding",
                 properties=event_properties,
                 groups=posthog_groups,
             )

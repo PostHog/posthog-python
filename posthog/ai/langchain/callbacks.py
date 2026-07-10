@@ -44,7 +44,7 @@ from pydantic import BaseModel
 from posthog import setup
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import sanitize_langchain
-from posthog.ai.utils import get_model_params, with_privacy_mode
+from posthog.ai.utils import _capture_ai_event, get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -129,6 +129,7 @@ class CallbackHandler(BaseCallbackHandler):
         properties: Optional[Dict[str, Any]] = None,
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
+        _dedicated_ai_endpoint: bool = False,
     ):
         """
         Args:
@@ -140,6 +141,7 @@ class CallbackHandler(BaseCallbackHandler):
             groups: Optional additional PostHog groups to use for the trace.
         """
         self._ph_client = client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self._distinct_id = distinct_id
         self._trace_id = trace_id
         self._properties = properties or {}
@@ -567,9 +569,11 @@ class CallbackHandler(BaseCallbackHandler):
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
 
-        self._ph_client.capture(
+        _capture_ai_event(
+            self._ph_client,
+            event_name,
+            _dedicated_ai_endpoint=self._dedicated_ai_endpoint,
             distinct_id=self._distinct_id or run_id,
-            event=event_name,
             properties=event_properties,
             groups=self._groups,
         )
@@ -685,9 +689,11 @@ class CallbackHandler(BaseCallbackHandler):
                     if finish_reason is not None:
                         event_properties["$ai_stop_reason"] = finish_reason
 
-        self._ph_client.capture(
+        _capture_ai_event(
+            self._ph_client,
+            "$ai_generation",
+            _dedicated_ai_endpoint=self._dedicated_ai_endpoint,
             distinct_id=self._distinct_id or trace_id,
-            event="$ai_generation",
             properties=event_properties,
             groups=self._groups,
         )

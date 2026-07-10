@@ -36,6 +36,24 @@ def _get_tokens_source(
     return "sdk"
 
 
+def _capture_ai_event(
+    ph_client, event: str, _dedicated_ai_endpoint: bool = False, **kwargs
+):
+    """Capture a wrapper-emitted AI event.
+
+    `_dedicated_ai_endpoint` is the wrappers' internal, unstable opt-in
+    (threaded from their constructor kwarg of the same name): when set, the
+    event rides the client's dedicated AI lane via `_capture_ai`. Off by
+    default, and for duck-typed client-likes without the lane, events keep
+    the plain `capture()` path they have today.
+    """
+    if _dedicated_ai_endpoint:
+        capture_ai = getattr(ph_client, "_capture_ai", None)
+        if callable(capture_ai):
+            return capture_ai(event=event, **kwargs)
+    return ph_client.capture(event=event, **kwargs)
+
+
 def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
     """
     Convert raw provider usage objects to JSON-serializable dicts.
@@ -348,6 +366,7 @@ def call_llm_and_track_usage(
     posthog_groups: Optional[Dict[str, Any]],
     base_url: str,
     call_method: Callable[..., Any],
+    _dedicated_ai_endpoint: bool = False,
     **kwargs: Any,
 ) -> Any:
     """
@@ -479,9 +498,11 @@ def call_llm_and_track_usage(
                 merged_properties["$ai_tokens_source"] = _get_tokens_source(
                     sdk_tags, posthog_properties
                 )
-                ph_client.capture(
+                _capture_ai_event(
+                    ph_client,
+                    "$ai_generation",
+                    _dedicated_ai_endpoint=_dedicated_ai_endpoint,
                     distinct_id=contexts.get_context_distinct_id(),
-                    event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
                 )
@@ -502,6 +523,7 @@ async def call_llm_and_track_usage_async(
     posthog_groups: Optional[Dict[str, Any]],
     base_url: str,
     call_async_method: Callable[..., Any],
+    _dedicated_ai_endpoint: bool = False,
     **kwargs: Any,
 ) -> Any:
     start_time = time.time()
@@ -629,9 +651,11 @@ async def call_llm_and_track_usage_async(
                 merged_properties["$ai_tokens_source"] = _get_tokens_source(
                     sdk_tags, posthog_properties
                 )
-                ph_client.capture(
+                _capture_ai_event(
+                    ph_client,
+                    "$ai_generation",
+                    _dedicated_ai_endpoint=_dedicated_ai_endpoint,
                     distinct_id=contexts.get_context_distinct_id(),
-                    event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
                 )
@@ -664,6 +688,7 @@ def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
 def capture_streaming_event(
     ph_client: PostHogClient,
     event_data: StreamingEventData,
+    _dedicated_ai_endpoint: bool = False,
 ):
     """
     Unified streaming event capture for all LLM providers.
@@ -786,9 +811,11 @@ def capture_streaming_event(
 
     # Send event to PostHog
     if hasattr(ph_client, "capture"):
-        ph_client.capture(
+        _capture_ai_event(
+            ph_client,
+            "$ai_generation",
+            _dedicated_ai_endpoint=_dedicated_ai_endpoint,
             distinct_id=event_data.get("distinct_id") or trace_id,
-            event="$ai_generation",
             properties=event_properties,
             groups=event_data.get("groups"),
         )

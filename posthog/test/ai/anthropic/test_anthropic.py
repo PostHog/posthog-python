@@ -1493,3 +1493,23 @@ async def test_async_messages_streaming_early_exit_closes_provider_stream(mock_c
 
     assert source.closed is True
     assert mock_client.capture.call_count == 1
+
+
+def test_dedicated_ai_endpoint_routes_through_capture_ai(
+    mock_client, mock_anthropic_response
+):
+    with patch(
+        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
+    ):
+        client = Anthropic(
+            api_key="test-key", posthog_client=mock_client, _dedicated_ai_endpoint=True
+        )
+        client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+    mock_client.capture.assert_not_called()
+    assert mock_client._capture_ai.call_count == 1
+    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"

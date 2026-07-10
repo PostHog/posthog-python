@@ -21,6 +21,7 @@ from agents.tracing.span_data import (
 )
 
 from posthog import setup
+from posthog.ai.utils import _capture_ai_event
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -86,6 +87,7 @@ class PostHogTracingProcessor(TracingProcessor):
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        _dedicated_ai_endpoint: bool = False,
     ):
         """
         Initialize the PostHog tracing processor.
@@ -99,6 +101,7 @@ class PostHogTracingProcessor(TracingProcessor):
             properties: Optional additional properties to include with all events.
         """
         self._client = client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
@@ -192,9 +195,11 @@ class PostHogTracingProcessor(TracingProcessor):
                 **self._properties,
             }
 
-            self._client.capture(
+            _capture_ai_event(
+                self._client,
+                event,
+                _dedicated_ai_endpoint=self._dedicated_ai_endpoint,
                 distinct_id=distinct_id or "unknown",
-                event=event,
                 properties=final_properties,
                 groups=self._groups,
             )

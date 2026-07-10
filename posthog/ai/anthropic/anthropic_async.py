@@ -35,7 +35,12 @@ class AsyncAnthropic(anthropic.AsyncAnthropic):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: PostHog client for tracking usage
@@ -43,6 +48,7 @@ class AsyncAnthropic(anthropic.AsyncAnthropic):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.messages = AsyncWrappedMessages(self)
 
 
@@ -93,6 +99,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups,
             self._client.base_url,
             super().create,
+            _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
             **kwargs,
         )
 
@@ -273,4 +280,8 @@ class AsyncWrappedMessages(AsyncMessages):
         )
 
         # Use the common capture function
-        capture_streaming_event(self._client._ph_client, event_data)
+        capture_streaming_event(
+            self._client._ph_client,
+            event_data,
+            _dedicated_ai_endpoint=self._client._dedicated_ai_endpoint,
+        )

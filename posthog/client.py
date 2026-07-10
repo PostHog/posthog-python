@@ -23,7 +23,7 @@ from posthog.capture_compression import (
 )
 from posthog.capture_mode import CaptureMode, _resolve_capture_mode
 from posthog.capture_v1 import _send_v1_batch
-from posthog.consumer import Consumer
+from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer
 from posthog.contexts import (
     _get_current_context,
     get_capture_exception_code_variables_context,
@@ -83,7 +83,6 @@ from posthog.request import (
     determine_server_host,
     flags,
     get,
-    is_ai_event,
     normalize_host,
     remote_config,
     reset_sessions,
@@ -198,6 +197,157 @@ def no_throw(default_return=None):
     return decorator
 
 
+class _Lane:
+    """A capture lane: a queue drained by its own consumer pool, posting to one endpoint.
+
+    Internal and unexported. The client owns one lane per traffic class
+    (analytics, AI) so each gets its own backpressure, flush cadence,
+    per-event size cap, and wire protocol without lane-conditional branches
+    in shared consumer code.
+    """
+
+    log = logging.getLogger("posthog")
+
+    def __init__(
+        self,
+        *,
+        name,
+        api_key,
+        host,
+        on_error,
+        max_queue_size,
+        thread_count,
+        send,
+        flush_at,
+        flush_interval,
+        gzip,
+        max_retries,
+        timeout,
+        historical_migration,
+        endpoint,
+        max_msg_size,
+        capture_mode,
+        capture_compression,
+        eager_start,
+    ):
+        self.name = name
+        self.api_key = api_key
+        self.host = host
+        self.on_error = on_error
+        self.send = send
+        self.flush_at = flush_at
+        self.flush_interval = flush_interval
+        self.gzip = gzip
+        self.max_retries = max_retries
+        self.timeout = timeout
+        self.historical_migration = historical_migration
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
+        self.capture_mode = capture_mode
+        self.capture_compression = capture_compression
+        self._max_queue_size = max_queue_size
+        self._thread_count = thread_count
+        self._eager_start = eager_start
+        self.queue: Queue = Queue(max_queue_size)
+        self.consumers: List[Consumer] = []
+        self._started = False
+        self._start_lock = threading.Lock()
+        if eager_start:
+            self.start()
+
+    def start(self):
+        """Construct this lane's consumer pool, starting its threads when sending is enabled.
+
+        Idempotent and thread-safe, so concurrent first captures start exactly
+        one pool.
+        """
+        with self._start_lock:
+            if self._started:
+                return
+            for _ in range(self._thread_count):
+                consumer = Consumer(
+                    self.queue,
+                    self.api_key,
+                    host=self.host,
+                    on_error=self.on_error,
+                    flush_at=self.flush_at,
+                    flush_interval=self.flush_interval,
+                    gzip=self.gzip,
+                    retries=self.max_retries,
+                    timeout=self.timeout,
+                    historical_migration=self.historical_migration,
+                    endpoint=self.endpoint,
+                    max_msg_size=self.max_msg_size,
+                    capture_mode=self.capture_mode,
+                    capture_compression=self.capture_compression,
+                )
+                self.consumers.append(consumer)
+
+                if self.send:
+                    consumer.start()
+            self._started = True
+
+    def enqueue(self, msg) -> bool:
+        """Queue `msg` for upload, starting the lane on its first event."""
+        if not self._started:
+            self.start()
+        try:
+            self.queue.put(msg, block=False)
+            return True
+        except Full:
+            return False
+
+    def flush(self, timeout_seconds: Optional[float]) -> None:
+        """Block until this lane's queue drains, or until `timeout_seconds` elapse."""
+        queue = self.queue
+        size = queue.qsize()
+        if timeout_seconds is None:
+            queue.join()
+        else:
+            deadline = time.monotonic() + timeout_seconds
+            with queue.all_tasks_done:
+                while queue.unfinished_tasks:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.log.warning(
+                            "%s lane flush timed out after %s seconds with %s items pending.",
+                            self.name,
+                            timeout_seconds,
+                            queue.unfinished_tasks,
+                        )
+                        return
+                    queue.all_tasks_done.wait(remaining)
+
+        # Note that this message may not be precise, because of threading.
+        self.log.debug("successfully flushed about %s items.", size)
+
+    def join(self) -> None:
+        """Pause this lane's consumers and wait for them to exit; a never-started lane is a no-op."""
+        for consumer in self.consumers:
+            consumer.pause()
+            try:
+                consumer.join()
+            except RuntimeError:
+                # consumer thread has not started
+                pass
+
+    def rebuild_after_fork(self) -> None:
+        """Replace fork-unsafe lane state in a forked child.
+
+        Threads do not survive fork() and queue.Queue internal locks may be in
+        an inconsistent state, so the queue, lock, and consumer pool are
+        replaced. Inherited queue items are not retained as they'll be handled
+        by the parent process's consumers. An eager lane restarts immediately;
+        a lazy lane returns to not-started and restarts on next use.
+        """
+        self.queue = Queue(self._max_queue_size)
+        self._start_lock = threading.Lock()
+        self.consumers = []
+        self._started = False
+        if self._eager_start:
+            self.start()
+
+
 class Client(object):
     """
     This is the SDK reference for the PostHog Python SDK.
@@ -270,7 +420,6 @@ class Client(object):
         capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
-        _dedicated_ai_endpoint=False,
         metrics: Optional[dict] = None,
     ):
         """
@@ -383,7 +532,6 @@ class Client(object):
             Initialization
         """
         self._max_queue_size = max_queue_size
-        self.queue: Queue = Queue(max_queue_size)
 
         # api_key: This should be the Team API Key (token), public
         self.api_key = (project_api_key or "").strip()
@@ -439,9 +587,6 @@ class Client(object):
         self.capture_compression = _resolve_capture_compression(
             capture_compression, gzip_fallback=gzip
         )
-        # Internal, not ready for use: routes `$ai_*` events to a dedicated
-        # capture-ai endpoint while the backend route + ingress roll out.
-        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
@@ -531,40 +676,54 @@ class Client(object):
                 refill_interval_seconds=self.exception_autocapture_refill_interval_seconds,
             )
 
-        if sync_mode:
-            self.consumers = None
-        else:
-            # On program exit, allow the consumer thread to exit cleanly.
+        if not sync_mode and send:
+            # On program exit, allow the consumer threads to exit cleanly.
             # This prevents exceptions and a messy shutdown when the
-            # interpreter is destroyed before the daemon thread finishes
+            # interpreter is destroyed before the daemon threads finish
             # execution. However, it is *not* the same as flushing the queue!
             # To guarantee all messages have been delivered, you'll still need
             # to call flush().
-            if send:
-                atexit.register(self.join)
+            atexit.register(self.join)
 
-            self.consumers = []
-            for _ in range(thread):
-                consumer = Consumer(
-                    self.queue,
-                    self.api_key,
-                    host=self.host,
-                    on_error=on_error,
-                    flush_at=flush_at,
-                    flush_interval=flush_interval,
-                    gzip=gzip,
-                    retries=max_retries,
-                    timeout=timeout,
-                    historical_migration=historical_migration,
-                    dedicated_ai_endpoint=self._dedicated_ai_endpoint,
-                    capture_mode=self.capture_mode,
-                    capture_compression=self.capture_compression,
-                )
-                self.consumers.append(consumer)
-
-                # if we've disabled sending, just don't start the consumer
-                if send:
-                    consumer.start()
+        lane_defaults = dict(
+            api_key=self.api_key,
+            host=self.host,
+            on_error=on_error,
+            max_queue_size=max_queue_size,
+            thread_count=thread,
+            send=send,
+            flush_at=flush_at,
+            flush_interval=flush_interval,
+            gzip=gzip,
+            max_retries=max_retries,
+            timeout=timeout,
+            historical_migration=historical_migration,
+        )
+        self._analytics_lane = _Lane(
+            name="analytics",
+            **lane_defaults,
+            endpoint=EVENTS_ENDPOINT,
+            max_msg_size=MAX_MSG_SIZE,
+            capture_mode=self.capture_mode,
+            capture_compression=self.capture_compression,
+            eager_start=not sync_mode,
+        )
+        # The AI lane is pinned to the v0 submitter: the AI endpoint has no v1
+        # form, and this keeps multi-MB AI events away from capture v1's
+        # smaller caps. The `capture_compression` pin is inert on v0 — its wire
+        # compression is the `gzip` flag, inherited from client config. Lazy
+        # start, so the many clients that never emit AI events pay for no
+        # extra threads.
+        self._ai_lane = _Lane(
+            name="ai",
+            **lane_defaults,
+            endpoint=AI_EVENTS_ENDPOINT,
+            max_msg_size=AI_MAX_MSG_SIZE,
+            capture_mode=CaptureMode.V0,
+            capture_compression=CaptureCompression.NONE,
+            eager_start=False,
+        )
+        self._lanes = [self._analytics_lane, self._ai_lane]
 
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
@@ -573,6 +732,18 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+
+    @property
+    def queue(self) -> Queue:
+        """The analytics lane's queue (kept for backwards compatibility)."""
+        return self._analytics_lane.queue
+
+    @property
+    def consumers(self) -> Optional[List[Consumer]]:
+        """Flat list of the lanes' consumers, analytics first (kept for backwards compatibility)."""
+        if self.sync_mode:
+            return None
+        return [consumer for lane in self._lanes for consumer in lane.consumers]
 
     def _warn_if_duplicate_async_client(self):
         if self.disabled or not self.send or self.sync_mode or not self.api_key:
@@ -1025,6 +1196,33 @@ class Client(object):
         Category:
             Capture
         """
+        return self._capture(event, self._analytics_lane, **kwargs)
+
+    @no_throw()
+    def _capture_ai(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Capture an AI event on the dedicated AI lane.
+
+        Internal and experimental, with no stability guarantees: the signature
+        and lane behavior may change while the AI capture lane is validated on
+        PostHog's own traffic.
+
+        Takes the same arguments and returns the same value as `capture()`,
+        but the event is queued on the AI lane, which posts to the dedicated
+        AI endpoint with its own consumer pool and per-event size cap.
+        """
+        if not event.startswith("$ai_"):
+            self.log.debug(
+                "_capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
+                event,
+            )
+        return self._capture(event, self._ai_lane, **kwargs)
+
+    def _capture(
+        self, event: str, lane: _Lane, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Shared message-building body of `capture()` and `_capture_ai()`; `lane` picks the wire destination."""
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
@@ -1146,7 +1344,7 @@ class Client(object):
             properties = {**extra_properties, **properties}
             msg["properties"] = properties
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(msg, disable_geoip, lane)
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
         """
@@ -1559,37 +1757,12 @@ class Client(object):
         exactly once in each child, before any user code, covering all code
         paths (capture, flush, join, etc.).
 
-        Python threads do not survive fork() and queue.Queue internal locks
-        may be in an inconsistent state, so the event queue, consumer threads
-        and other state are replaced. Inherited queue items are not retained
-        as they'll be handled by the parent process's consumers.
+        Python threads do not survive fork(), so each lane's queue and
+        consumer pool are rebuilt (see `_Lane.rebuild_after_fork`).
         """
-        if self.consumers:
-            self.queue = Queue(self._max_queue_size)
-
-            new_consumers = []
-            for old in self.consumers:
-                consumer = Consumer(
-                    self.queue,
-                    old.api_key,
-                    flush_at=old.flush_at,
-                    host=old.host,
-                    on_error=old.on_error,
-                    flush_interval=old.flush_interval,
-                    gzip=old.gzip,
-                    retries=old.retries,
-                    timeout=old.timeout,
-                    historical_migration=old.historical_migration,
-                    dedicated_ai_endpoint=old.dedicated_ai_endpoint,
-                    capture_mode=old.capture_mode,
-                    capture_compression=old.capture_compression,
-                )
-                new_consumers.append(consumer)
-
-                if self.send:
-                    consumer.start()
-
-            self.consumers = new_consumers
+        if not self.sync_mode:
+            for lane in self._lanes:
+                lane.rebuild_after_fork()
 
         if self.enable_local_evaluation:
             self.poller = Poller(
@@ -1617,9 +1790,12 @@ class Client(object):
 
         reset_sessions()
 
-    def _enqueue(self, msg, disable_geoip):
+    def _enqueue(self, msg, disable_geoip, lane=None):
         # type: (...) -> Optional[str]
-        """Push a new `msg` onto the queue, return `(success, msg)`"""
+        """Push a new `msg` onto a lane's queue (analytics when unspecified), return `(success, msg)`"""
+
+        if lane is None:
+            lane = self._analytics_lane
 
         if self.disabled:
             return None
@@ -1688,12 +1864,10 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            is_dedicated_ai = self._dedicated_ai_endpoint and is_ai_event(
-                msg.get("event")
-            )
-            # Analytics events follow `capture_mode`; the dedicated AI endpoint
-            # has no v1 form and always uses the legacy submitter.
-            if not is_dedicated_ai and self.capture_mode == CaptureMode.V1:
+            # Sync mode bypasses the lane's queue but keeps its wire config:
+            # the AI lane is pinned to v0, so its events post to the AI
+            # endpoint regardless of `capture_mode`.
+            if lane.capture_mode == CaptureMode.V1:
                 _send_v1_batch(
                     self.api_key,
                     self.host,
@@ -1705,7 +1879,6 @@ class Client(object):
                 )
                 return sent_uuid
 
-            path = AI_EVENTS_ENDPOINT if is_dedicated_ai else EVENTS_ENDPOINT
             batch_post(
                 self.api_key,
                 self.host,
@@ -1713,18 +1886,17 @@ class Client(object):
                 timeout=self.timeout,
                 batch=[msg],
                 historical_migration=self.historical_migration,
-                path=path,
+                path=lane.endpoint,
             )
 
             return sent_uuid
 
-        try:
-            self.queue.put(msg, block=False)
+        if lane.enqueue(msg):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
-        except Full:
-            self.log.warning("analytics-python queue is full")
-            return None
+
+        self.log.warning("%s lane queue is full", lane.name)
+        return None
 
     @property
     def metrics(self) -> PostHogMetrics:
@@ -1764,30 +1936,20 @@ class Client(object):
             posthog.flush()  # Ensures the event is sent immediately
             ```
         """
-        queue = self.queue
-        size = queue.qsize()
         try:
             if timeout_seconds is None:
-                queue.join()
-            else:
-                deadline = time.monotonic() + timeout_seconds
-                with queue.all_tasks_done:
-                    while queue.unfinished_tasks:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            self.log.warning(
-                                "flush timed out after %s seconds with %s items pending.",
-                                timeout_seconds,
-                                queue.unfinished_tasks,
-                            )
-                            return
-                        queue.all_tasks_done.wait(remaining)
+                for lane in self._lanes:
+                    lane.flush(None)
+                return
+
+            # The timeout is a total budget shared by the lanes, so flush()
+            # returns within roughly `timeout_seconds` overall.
+            deadline = time.monotonic() + timeout_seconds
+            for lane in self._lanes:
+                lane.flush(max(0.0, deadline - time.monotonic()))
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
-
-        # Note that this message may not be precise, because of threading.
-        self.log.debug("successfully flushed about %s items.", size)
 
     def join(self) -> None:
         """
@@ -1798,14 +1960,8 @@ class Client(object):
             posthog.join()
             ```
         """
-        if self.consumers:
-            for consumer in self.consumers:
-                consumer.pause()
-                try:
-                    consumer.join()
-                except RuntimeError:
-                    # consumer thread has not started
-                    pass
+        for lane in self._lanes:
+            lane.join()
 
         if self.poller:
             self.poller.stop()

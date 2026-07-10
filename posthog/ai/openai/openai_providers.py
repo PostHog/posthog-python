@@ -28,7 +28,12 @@ class AzureOpenAI(openai.AzureOpenAI):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -38,6 +43,7 @@ class AzureOpenAI(openai.AzureOpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)
@@ -66,7 +72,12 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -76,6 +87,7 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
 
         # Store original objects after parent initialization (only if they exist)
         self._original_chat = getattr(self, "chat", None)

@@ -16,6 +16,7 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage,
+    _capture_ai_event,
     capture_streaming_event,
     merge_usage_stats,
 )
@@ -65,6 +66,7 @@ class Client:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        _dedicated_ai_endpoint: bool = False,
         **kwargs,
     ):
         """
@@ -102,6 +104,7 @@ class Client:
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
             posthog_groups=posthog_groups,
+            _dedicated_ai_endpoint=_dedicated_ai_endpoint,
             **kwargs,
         )
 
@@ -127,6 +130,7 @@ class Models:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        _dedicated_ai_endpoint: bool = False,
         **kwargs,
     ):
         """
@@ -156,6 +160,7 @@ class Models:
         self._default_properties = posthog_properties or {}
         self._default_privacy_mode = posthog_privacy_mode
         self._default_groups = posthog_groups
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
 
         # Build genai.Client arguments
         client_args: Dict[str, Any] = {}
@@ -284,6 +289,7 @@ class Models:
             groups,
             self._base_url,
             self._client.models.generate_content,
+            _dedicated_ai_endpoint=self._dedicated_ai_endpoint,
             **kwargs_with_contents,
         )
 
@@ -390,7 +396,11 @@ class Models:
         )
 
         # Use the common capture function
-        capture_streaming_event(self._ph_client, event_data)
+        capture_streaming_event(
+            self._ph_client,
+            event_data,
+            _dedicated_ai_endpoint=self._dedicated_ai_endpoint,
+        )
 
     def _format_input(self, contents, **kwargs):
         """Format input contents for PostHog tracking"""
@@ -522,9 +532,11 @@ class Models:
             if distinct_id is None:
                 event_properties["$process_person_profile"] = False
 
-            self._ph_client.capture(
+            _capture_ai_event(
+                self._ph_client,
+                "$ai_embedding",
+                _dedicated_ai_endpoint=self._dedicated_ai_endpoint,
                 distinct_id=distinct_id or trace_id,
-                event="$ai_embedding",
                 properties=event_properties,
                 groups=groups,
             )

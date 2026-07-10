@@ -24,7 +24,7 @@ Where the pieces live:
 - `posthog/capture_compression.py` — the `CaptureCompression` enum and `_resolve_capture_compression()` precedence logic (with `gzip` fallback).
 - `posthog/capture_v1.py` — pure transforms (`_to_v1_event`, `_build_v1_batch_body`) and transport (`_post_v1`, `_compress_v1`, `_parse_v1_response`, `_send_v1_batch`, `CaptureV1Error`).
 - Public API surface (enforced by `references/public_api_snapshot.txt`): `CaptureMode`, `CaptureCompression` (both re-exported from `posthog`), `CaptureV1Error`, and the two env var names. Everything else in these modules is underscore-private plumbing.
-- Routing: `Consumer._send_analytics` (async) and `Client._enqueue` (sync) pick the analytics submitter by `capture_mode`. The dedicated `$ai_*` endpoint has no v1 form and always uses the legacy submitter.
+- Routing: `Consumer.request` (async) and `Client._enqueue` (sync) pick the submitter by `capture_mode`.
 
 v1-specific behavior to preserve when editing: sentinel `$`-properties are lifted into `options` (coerced to native JSON types or omitted — a wrong type 400s the whole batch); top-level `$set`/`$set_once` are relocated into `properties`; only events the server tags `retry` are resent (stable `PostHog-Request-Id`/`created_at`, incrementing `PostHog-Attempt`); a server `drop` is a terminal per-event rejection — drops are accumulated across attempts and surfaced via `CaptureV1Error`/`on_error` even on a 2xx with no retries (a success status is not full delivery); `Retry-After` is a *minimum*, not a replacement (the client waits `max(configured_backoff, min(Retry-After, _MAX_BACKOFF_SECONDS))`); `_MAX_BACKOFF_SECONDS` (30s) is the single ceiling for both the exponential backoff and the `Retry-After` clamp; `429` is terminal.
 

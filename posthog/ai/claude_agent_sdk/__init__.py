@@ -34,6 +34,7 @@ def instrument(
     privacy_mode: bool = False,
     groups: Optional[Dict[str, Any]] = None,
     properties: Optional[Dict[str, Any]] = None,
+    _dedicated_ai_endpoint: bool = False,
 ) -> PostHogClaudeAgentProcessor:
     """
     Create a PostHog-instrumented query wrapper for the Claude Agent SDK.
@@ -69,6 +70,7 @@ def instrument(
         privacy_mode=privacy_mode,
         groups=groups,
         properties=properties,
+        _dedicated_ai_endpoint=_dedicated_ai_endpoint,
     )
 
 
@@ -85,6 +87,7 @@ async def query(
     posthog_properties: Optional[Dict[str, Any]] = None,
     posthog_privacy_mode: bool = False,
     posthog_groups: Optional[Dict[str, Any]] = None,
+    _dedicated_ai_endpoint: bool = False,
 ):
     """
     Drop-in replacement for claude_agent_sdk.query() with PostHog instrumentation.
@@ -125,6 +128,7 @@ async def query(
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             properties={},
+            _dedicated_ai_endpoint=_dedicated_ai_endpoint,
         )
     except ValueError as e:
         # PostHog is not configured (missing API key); fall back to the

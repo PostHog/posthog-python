@@ -58,6 +58,7 @@ class PostHogClaudeSDKClient:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        _dedicated_ai_endpoint: bool = False,
     ):
         """
         Initialize a stateful Claude Agent SDK client with PostHog instrumentation.
@@ -90,6 +91,7 @@ class PostHogClaudeSDKClient:
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             properties=posthog_properties or {},
+            _dedicated_ai_endpoint=_dedicated_ai_endpoint,
         )
         self._trace_id = posthog_trace_id or str(uuid.uuid4())
         self._distinct_id = posthog_distinct_id

@@ -20,7 +20,12 @@ class AnthropicBedrock(anthropic.AnthropicBedrock):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -29,6 +34,7 @@ class AnthropicBedrock(anthropic.AnthropicBedrock):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.messages = WrappedMessages(self)
 
 
@@ -39,7 +45,12 @@ class AsyncAnthropicBedrock(anthropic.AsyncAnthropicBedrock):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -48,6 +59,7 @@ class AsyncAnthropicBedrock(anthropic.AsyncAnthropicBedrock):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.messages = AsyncWrappedMessages(self)
 
 
@@ -58,7 +70,12 @@ class AnthropicVertex(anthropic.AnthropicVertex):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -67,6 +84,7 @@ class AnthropicVertex(anthropic.AnthropicVertex):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.messages = WrappedMessages(self)
 
 
@@ -77,7 +95,12 @@ class AsyncAnthropicVertex(anthropic.AsyncAnthropicVertex):
 
     _ph_client: PostHogClient
 
-    def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
+    def __init__(
+        self,
+        posthog_client: Optional[PostHogClient] = None,
+        _dedicated_ai_endpoint: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             posthog_client: If provided, events will be captured via this client
@@ -86,4 +109,5 @@ class AsyncAnthropicVertex(anthropic.AsyncAnthropicVertex):
         """
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
+        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.messages = AsyncWrappedMessages(self)
