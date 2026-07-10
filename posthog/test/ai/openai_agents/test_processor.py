@@ -2,6 +2,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai.types.responses.response_usage import ResponseUsage
 
 try:
     from agents.tracing.span_data import (
@@ -533,9 +534,16 @@ class TestPostHogTracingProcessor:
         mock_response.id = "resp_123"
         mock_response.model = "gpt-4o"
         mock_response.output = [{"type": "message", "content": "Hello!"}]
-        mock_response.usage = MagicMock()
-        mock_response.usage.input_tokens = 25
-        mock_response.usage.output_tokens = 10
+        mock_response.usage = ResponseUsage.model_validate(
+            {
+                "input_tokens": 25,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 10,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 35,
+                "cost": 0.01234,
+            }
+        )
 
         span_data = ResponseSpanData(
             response=mock_response,
@@ -554,6 +562,49 @@ class TestPostHogTracingProcessor:
             {"type": "message", "content": "Hello!"}
         ]
         assert call_kwargs["properties"]["$ai_response_id"] == "resp_123"
+        assert call_kwargs["properties"]["$ai_total_cost_usd"] == 0.01234
+
+    def test_response_span_preserves_zero_total_cost(
+        self, processor, mock_client, mock_span
+    ):
+        """Test ResponseSpanData preserves an explicit zero total cost."""
+        mock_response = MagicMock()
+        mock_response.id = "resp_123"
+        mock_response.model = "gpt-4o"
+        mock_response.output = []
+        mock_response.usage = MagicMock()
+        mock_response.usage.input_tokens = 25
+        mock_response.usage.output_tokens = 10
+        mock_response.usage.cost = 0
+
+        mock_span.span_data = ResponseSpanData(response=mock_response)
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        properties = mock_client.capture.call_args[1]["properties"]
+        assert properties["$ai_total_cost_usd"] == 0
+
+    def test_response_span_omits_total_cost_when_not_provided(
+        self, processor, mock_client, mock_span
+    ):
+        """Test ResponseSpanData omits total cost when usage does not provide it."""
+        mock_response = MagicMock()
+        mock_response.id = "resp_123"
+        mock_response.model = "gpt-4o"
+        mock_response.output = []
+        mock_response.usage = MagicMock()
+        mock_response.usage.input_tokens = 25
+        mock_response.usage.output_tokens = 10
+        mock_response.usage.cost = None
+
+        mock_span.span_data = ResponseSpanData(response=mock_response)
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        properties = mock_client.capture.call_args[1]["properties"]
+        assert "$ai_total_cost_usd" not in properties
 
     def test_speech_span_with_pass_through_properties(
         self, processor, mock_client, mock_span
