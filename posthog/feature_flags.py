@@ -115,7 +115,13 @@ def evaluate_flag_dependency(
     device_id=None,
 ):
     """
-    Evaluate a flag dependency property according to the dependency chain algorithm.
+    Evaluate a flag dependency condition under local evaluation.
+
+    The dependency_chain only establishes the order in which flags are evaluated
+    and cached (the referenced flag itself is always the last member). The
+    outcome is decided solely by comparing the referenced flag's evaluated value
+    against the condition's expected value; ancestors influence it only through
+    the referenced flag's own recursive evaluation.
 
     Args:
         property: Flag property with type="flag" and dependency_chain
@@ -127,7 +133,12 @@ def evaluate_flag_dependency(
         device_id: The device ID for bucketing (optional)
 
     Returns:
-        bool: True if all dependencies in the chain evaluate to True, False otherwise
+        bool: Whether the referenced flag's evaluated value matches the
+            condition's expected value.
+
+    Raises:
+        InconclusiveMatchError: If the condition is malformed or the chain
+            cannot be conclusively evaluated locally.
     """
     if flags_by_key is None or evaluation_cache is None:
         # Cannot evaluate flag dependencies without required context
@@ -151,93 +162,81 @@ def evaluate_flag_dependency(
             f"Circular dependency detected for flag '{property.get('key', 'unknown')}'"
         )
 
-    # Evaluate all dependencies in the chain order
-    for dep_flag_key in dependency_chain:
-        if dep_flag_key not in evaluation_cache:
-            # Need to evaluate this dependency first
-            dep_flag = flags_by_key.get(dep_flag_key)
-            if not dep_flag:
-                # Missing flag dependency - cannot evaluate locally
-                evaluation_cache[dep_flag_key] = None
-                raise InconclusiveMatchError(
-                    f"Cannot evaluate flag dependency '{dep_flag_key}' - flag not found in local flags"
-                )
-            else:
-                # Check if the flag is active (same check as in client._compute_flag_locally)
-                if not dep_flag.get("active"):
-                    evaluation_cache[dep_flag_key] = False
-                else:
-                    # Recursively evaluate the dependency
-                    try:
-                        dep_flag_filters = dep_flag.get("filters") or {}
-                        dep_aggregation_group_type_index = dep_flag_filters.get(
-                            "aggregation_group_type_index"
-                        )
-                        if dep_aggregation_group_type_index is not None:
-                            # Group flags should continue bucketing by the group key
-                            # from the current evaluation context.
-                            dep_bucketing_value = distinct_id
-                        else:
-                            dep_bucketing_value = resolve_bucketing_value(
-                                dep_flag, distinct_id, device_id
-                            )
-                        dep_result = match_feature_flag_properties(
-                            dep_flag,
-                            distinct_id,
-                            properties,
-                            cohort_properties=cohort_properties,
-                            flags_by_key=flags_by_key,
-                            evaluation_cache=evaluation_cache,
-                            device_id=device_id,
-                            bucketing_value=dep_bucketing_value,
-                        )
-                        evaluation_cache[dep_flag_key] = dep_result
-                    except InconclusiveMatchError as e:
-                        # If we can't evaluate a dependency, store None and propagate the error
-                        evaluation_cache[dep_flag_key] = None
-                        raise InconclusiveMatchError(
-                            f"Cannot evaluate flag dependency '{dep_flag_key}': {e}"
-                        ) from e
-
-        # Check the cached result
-        cached_result = evaluation_cache[dep_flag_key]
-        if cached_result is None:
-            # Previously inconclusive - raise error again
-            raise InconclusiveMatchError(
-                f"Flag dependency '{dep_flag_key}' was previously inconclusive"
-            )
-        elif not cached_result:
-            # Definitive False result - dependency failed
-            return False
-
-    # All dependencies in the chain have been evaluated successfully
-    # Now check if the final flag value matches the expected value in the property
+    # Validate the condition shape before walking the chain. Test `is None`, not
+    # truthiness: `False` is a valid expected value (the case this exists for).
     flag_key = property.get("key")
     expected_value = property.get("value")
     operator = property.get("operator", "exact")
 
-    if flag_key and expected_value is not None:
-        # Get the actual value of the flag we're checking
-        actual_value = evaluation_cache.get(flag_key)
+    if operator != "flag_evaluates_to":
+        raise InconclusiveMatchError(
+            f"Flag dependency property for '{flag_key or 'unknown'}' has invalid operator '{operator}'"
+        )
+    if not flag_key or expected_value is None:
+        raise InconclusiveMatchError(
+            f"Flag dependency property for '{flag_key or 'unknown'}' is missing a key or value"
+        )
 
-        if actual_value is None:
-            # Flag wasn't evaluated - this shouldn't happen if dependency chain is correct
+    # Evaluate and cache each flag in the chain; members already cached are
+    # skipped. This does not decide the outcome — it only populates the cache.
+    for dep_flag_key in dependency_chain:
+        if dep_flag_key in evaluation_cache:
+            continue
+
+        dep_flag = flags_by_key.get(dep_flag_key)
+        if not dep_flag:
+            # Missing flag dependency - cannot evaluate locally
+            evaluation_cache[dep_flag_key] = None
             raise InconclusiveMatchError(
-                f"Flag '{flag_key}' was not evaluated despite being in dependency chain"
+                f"Cannot evaluate flag dependency '{dep_flag_key}' - flag not found in local flags"
             )
 
-        # For flag dependencies, we need to compare the actual flag result with expected value
-        # using the flag_evaluates_to operator logic
-        if operator == "flag_evaluates_to":
-            return matches_dependency_value(expected_value, actual_value)
-        else:
-            # This should never happen, but just to be defensive.
-            raise InconclusiveMatchError(
-                f"Flag dependency property for '{property.get('key', 'unknown')}' has invalid operator '{operator}'"
-            )
+        # Check if the flag is active (same check as in client._compute_flag_locally)
+        if not dep_flag.get("active"):
+            evaluation_cache[dep_flag_key] = False
+            continue
 
-    # If no value check needed, return True (all dependencies passed)
-    return True
+        # Recursively evaluate the dependency
+        try:
+            dep_flag_filters = dep_flag.get("filters") or {}
+            dep_aggregation_group_type_index = dep_flag_filters.get(
+                "aggregation_group_type_index"
+            )
+            if dep_aggregation_group_type_index is not None:
+                # Group flags should continue bucketing by the group key
+                # from the current evaluation context.
+                dep_bucketing_value = distinct_id
+            else:
+                dep_bucketing_value = resolve_bucketing_value(
+                    dep_flag, distinct_id, device_id
+                )
+            dep_result = match_feature_flag_properties(
+                dep_flag,
+                distinct_id,
+                properties,
+                cohort_properties=cohort_properties,
+                flags_by_key=flags_by_key,
+                evaluation_cache=evaluation_cache,
+                device_id=device_id,
+                bucketing_value=dep_bucketing_value,
+            )
+            evaluation_cache[dep_flag_key] = dep_result
+        except InconclusiveMatchError as e:
+            # If we can't evaluate a dependency, store None and propagate the error
+            evaluation_cache[dep_flag_key] = None
+            raise InconclusiveMatchError(
+                f"Cannot evaluate flag dependency '{dep_flag_key}': {e}"
+            ) from e
+
+    # The condition matches iff the referenced flag's value matches the expected
+    # value. None means inconclusive or not evaluated — distinct from a
+    # definitive False, which must be allowed to match `expected_value=False`.
+    actual_value = evaluation_cache.get(flag_key)
+    if actual_value is None:
+        raise InconclusiveMatchError(
+            f"Flag dependency '{flag_key}' was inconclusive or not evaluated"
+        )
+    return matches_dependency_value(expected_value, actual_value)
 
 
 def matches_dependency_value(expected_value, actual_value):
