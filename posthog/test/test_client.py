@@ -2114,9 +2114,11 @@ class TestClient(unittest.TestCase):
         for i in range(10):
             client.capture("test event", distinct_id="distinct_id")
 
-        msg_uuid = client.capture("test event", distinct_id="distinct_id")
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            msg_uuid = client.capture("test event", distinct_id="distinct_id")
         # Make sure we are informed that the queue is at capacity
         self.assertIsNone(msg_uuid)
+        self.assertIn("dropping event", logs.output[0])
 
     def test_unicode(self):
         Client("unicode_key")
