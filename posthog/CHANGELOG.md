@@ -1,5 +1,11 @@
 # posthog
 
+## 7.22.2 — 2026-07-13
+
+### Patch changes
+
+- [4d61b18](https://github.com/posthog/posthog-python/commit/4d61b18415b752eefb935d42121708578f9c2575) Capture pre-calculated total cost from OpenAI Agents Responses API usage. — Thanks @fuchengwarrenzhu for your first contribution 🎉!
+
 ## 7.22.1 — 2026-07-10
 
 ### Patch changes
