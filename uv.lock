@@ -137,7 +137,7 @@ wheels = [
 
 [[package]]
 name = "anthropic"
-version = "0.112.0"
+version = "0.116.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -149,9 +149,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/dd/808c144d4a883fcfd12fe0d7689b1d86bbbea6666c1cc957ad19f1017c22/anthropic-0.112.0.tar.gz", hash = "sha256:e180cd91aa5b9b32e4007fe69892ab128d8a86b9f90825103b1903fbc977d0af", size = 937460, upload-time = "2026-06-24T18:45:56.844Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/a2/d31f14e28d49bae983a3634e38dfb4b31c50110b5e403596c5c6a20b23f8/anthropic-0.116.0.tar.gz", hash = "sha256:5fc248fbb9fe03ef686f8a774f81586bca31a043260aab88b387ea3660f4a396", size = 949149, upload-time = "2026-07-02T19:08:10.534Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/26/ea71185027956325be1903d4fcaf7461d5ef40ca8f0e64f992e24ea9db0e/anthropic-0.112.0-py3-none-any.whl", hash = "sha256:bcc6268612c716dbb77133dd60fc41d26016d1b81dee9a52314d210193638751", size = 931954, upload-time = "2026-06-24T18:45:58.205Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/dd/2a1e81cf1b163acc340afc4ec74ed1d86f5eed1a809fabdeed3e0997b346/anthropic-0.116.0-py3-none-any.whl", hash = "sha256:6c0a7698e8d652455da3499978279bb2588c7264d0a35be3666009a4258c8256", size = 956896, upload-time = "2026-07-02T19:08:08.756Z" },
 ]
 
 [[package]]
@@ -178,7 +178,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version != '3.11.*'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/68/fb4fb78c9eac59d5e819108a57664737f855c5a8e9b76aec1738bb137f9e/asgiref-3.9.0.tar.gz", hash = "sha256:3dd2556d0f08c4fab8a010d9ab05ef8c34565f6bf32381d17505f7ca5b273767", size = 36772, upload-time = "2025-07-03T13:25:01.491Z" }
 wheels = [
@@ -1387,7 +1387,7 @@ wheels = [
 
 [[package]]
 name = "langgraph"
-version = "1.2.6"
+version = "1.2.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
@@ -1397,9 +1397,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/02/7a/ea09b05bb0cbddfa43bd34fc581357e87fc3f21a751cc0d419688c3106da/langgraph-1.2.6.tar.gz", hash = "sha256:f9b45a34f13930c94d96cdb76277447ad2cc70ec2d18cd2764d7fdadb36cdc1b", size = 714400, upload-time = "2026-06-18T20:58:21.514Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/11/c3961537ac7577125aabba68effc33ecc3dc0962e2d287d734dbd61caad7/langgraph-1.2.7.tar.gz", hash = "sha256:dcdf5b441bf8c7c7c154e603b302c9dbfbfd2d11e1b7ae7d93a5aba979dc87bd", size = 721385, upload-time = "2026-06-30T01:24:12.528Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/32/772db1b00a9fe42f50320d1aa20caefb76e621eff1f7218b9918093d631d/langgraph-1.2.6-py3-none-any.whl", hash = "sha256:1cf94d3ca124f84f77ce408fa1b06c3dee680a8aafffe364a8fd5d7d03eb8695", size = 246132, upload-time = "2026-06-18T20:58:20.335Z" },
+    { url = "https://files.pythonhosted.org/packages/16/5d/19de0c674cf2d8bc95b25cdb4c13ba3f4fbe0f35bf2224ef19cc46bbb4cd/langgraph-1.2.7-py3-none-any.whl", hash = "sha256:249349a5d6a32cb0aa2304a8fb6529bd0cf56db8780d21db9e086e5383668f89", size = 246930, upload-time = "2026-06-30T01:24:11.15Z" },
 ]
 
 [[package]]
