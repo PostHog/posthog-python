@@ -376,14 +376,27 @@ class PostHogMetrics:
             self._fold(state, float(value))
             self._arm_flush_timer()
 
+    def _reinit_after_fork(self) -> None:
+        # Runs in a forked child (via the client's os.register_at_fork hook) before
+        # user code. The inherited locks may be held by parent threads that do not
+        # exist in the child, so replace them without ever acquiring them.
+        self._lock = threading.Lock()
+        self._flush_lock = threading.Lock()
+        self._pid = os.getpid()
+        self._drop_inherited_window()
+
     def _reset_after_fork_locked(self) -> None:
-        # A forked child inherits the parent's window and a timer handle whose thread does
-        # not exist in the child — without this, the child never flushes (silent total
-        # loss) and would duplicate the parent's samples if it ever did. Drop both.
+        # PID-guard fallback for platforms without os.register_at_fork: a forked child
+        # inherits the parent's window and a timer handle whose thread does not exist
+        # in the child — without this, the child never flushes (silent total loss) and
+        # would duplicate the parent's samples if it ever did. Drop both.
         pid = os.getpid()
         if pid == self._pid:
             return
         self._pid = pid
+        self._drop_inherited_window()
+
+    def _drop_inherited_window(self) -> None:
         self._flush_timer = None
         self._series = {}
         self._series_cap_warned = False
@@ -446,6 +459,11 @@ class PostHogMetrics:
             self._series_cap_warned = False
             self._type_by_name = {}
             self._type_collision_warned = set()
+
+        # send=False mirrors event capture: recording succeeds locally, but
+        # nothing is transmitted — the flushed window is discarded.
+        if not getattr(self._client, "send", True):
+            return
 
         payload = self._build_payload(window)
         outcome = self._send(payload)

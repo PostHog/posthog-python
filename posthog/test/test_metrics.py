@@ -5,6 +5,7 @@ from unittest import mock
 
 import pytest
 
+import posthog
 from posthog.client import Client
 from posthog.metrics_capture import DEFAULT_HISTOGRAM_BOUNDS
 from posthog.version import VERSION
@@ -241,6 +242,27 @@ class TestMetricsDelivery:
         (dp,) = metric["sum"]["dataPoints"]
         assert dp["asDouble"] == 7.0
 
+    @pytest.mark.parametrize(
+        "flush_via",
+        [
+            lambda m: m.flush(),  # manual flush
+            lambda m: m._timer_flush(),  # what the flush timer invokes
+        ],
+        ids=["manual", "timer"],
+    )
+    def test_send_false_aggregates_but_never_posts(self, flush_via):
+        # send=False documents "queueing succeeds but events are not sent"; metrics
+        # must mirror that: fold locally, never hit the transport.
+        c = Client(FAKE_API_KEY, host="https://us.example.com", send=False, thread=0)
+        c.metrics.count("jobs.processed")
+
+        session = mock_session()
+        with mock.patch("posthog.metrics_capture._get_session", return_value=session):
+            flush_via(c.metrics)
+        c.metrics.reset()
+
+        assert not session.post.called
+
     def test_shutdown_flushes_pending_metrics(self):
         c = Client(FAKE_API_KEY, host="https://us.example.com", sync_mode=True)
         c.metrics.count("m", 1)
@@ -253,6 +275,43 @@ class TestMetricsDelivery:
         payload = sent_payload(session)
         (metric,) = metrics_from(payload)
         assert metric["name"] == "m"
+
+    def test_module_shutdown_flushes_default_client_metrics(self):
+        # Module-level shutdown() must delegate to Client.shutdown(), or the default
+        # client from posthog.setup() loses its final metrics window.
+        saved = (
+            posthog.default_client,
+            posthog.api_key,
+            posthog.host,
+            posthog.sync_mode,
+        )
+        posthog.default_client = None
+        posthog.api_key = FAKE_API_KEY
+        posthog.host = "https://us.example.com"
+        posthog.sync_mode = True
+        try:
+            posthog.setup().metrics.count("m", 1)
+
+            session = mock_session()
+            with mock.patch(
+                "posthog.metrics_capture._get_session", return_value=session
+            ):
+                posthog.shutdown()
+
+            assert session.post.called
+            (metric,) = metrics_from(sent_payload(session))
+            assert metric["name"] == "m"
+
+            # The window was flushed and cleared, not left pending.
+            payload, _, _ = flush_and_capture(posthog.default_client)
+            assert payload is None
+        finally:
+            (
+                posthog.default_client,
+                posthog.api_key,
+                posthog.host,
+                posthog.sync_mode,
+            ) = saved
 
 
 class TestMetricsCrashSafety:

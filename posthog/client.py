@@ -1604,6 +1604,12 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
 
+        # Metrics locks may have been held by a parent thread at fork time; replace
+        # them (never acquire them) so the child can't deadlock on a vanished holder.
+        self._metrics_lock = threading.Lock()
+        if self._metrics is not None:
+            self._metrics._reinit_after_fork()
+
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
         if isinstance(self.flag_cache, RedisFlagCache):
