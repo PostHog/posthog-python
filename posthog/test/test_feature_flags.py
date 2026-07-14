@@ -9,6 +9,7 @@ from freezegun import freeze_time
 from parameterized import parameterized
 
 from posthog.client import Client
+import posthog.feature_flags
 from posthog.feature_flags import (
     InconclusiveMatchError,
     match_property,
@@ -38,6 +39,9 @@ class TestLocalEvaluation(unittest.TestCase):
     def setUp(self):
         self.failed = False
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        # Reset the process-wide malformed-dependency warning dedup set so tests
+        # asserting on the warning stay order-independent.
+        posthog.feature_flags._warned_malformed_flag_dependencies.clear()
 
     @mock.patch("posthog.client.get")
     def test_flag_person_properties(self, patch_get):
@@ -2310,8 +2314,10 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
-    def test_flag_dependencies_null_value_falls_back(self, patch_get, patch_flags):
-        """A malformed `value: null` condition is inconclusive and falls back to /flags rather than silently matching."""
+    def test_flag_dependencies_null_value_no_match_locally(
+        self, patch_get, patch_flags
+    ):
+        """A malformed `value: null` condition is a definitive local no-match (False), never falling back to /flags."""
         patch_flags.return_value = {"featureFlags": {}}
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
@@ -2346,9 +2352,228 @@ class TestLocalEvaluation(unittest.TestCase):
             },
         ]
 
+        # The malformed condition does not match, so the only group fails and the
+        # flag resolves to False locally - no billable /flags fallback.
         result = client.get_feature_flag("dependent-flag", "user-1")
-        self.assertIsNone(result)
-        self.assertEqual(patch_flags.call_count, 1)
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_missing_key_no_match_locally(
+        self, patch_get, patch_flags
+    ):
+        """A dependency condition with an empty/missing `key` is a definitive local no-match (False)."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "",
+                                    "operator": "flag_evaluates_to",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        result = client.get_feature_flag("dependent-flag", "user-1")
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_wrong_operator_no_match_locally(
+        self, patch_get, patch_flags
+    ):
+        """A dependency condition with the wrong operator is a definitive local no-match (False)."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        result = client.get_feature_flag("dependent-flag", "user-1")
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_malformed_condition_warns_once(
+        self, patch_get, patch_flags
+    ):
+        """A malformed dependency condition warns on first eval, then stays quiet (dedup)."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # First evaluation emits exactly one warning naming the malformed flag.
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            self.assertFalse(client.get_feature_flag("dependent-flag", "user-1"))
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("base-flag", logs.output[0])
+        self.assertIn("malformed", logs.output[0])
+
+        # Second evaluation of the same malformed condition stays silent (dedup).
+        # assertLogs fails if nothing is logged, so log a sentinel to prove the
+        # malformed-dependency warning itself did not fire again.
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            self.assertFalse(client.get_feature_flag("dependent-flag", "user-2"))
+            posthog.feature_flags.log.warning("sentinel")
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("sentinel", logs.output[0])
+
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_malformed_condition_falls_through_to_other_group(
+        self, patch_get, patch_flags
+    ):
+        """A malformed dependency condition no-matches its group, but a second matching group still resolves the flag locally."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            # Only condition is the malformed dependency -> resolves to False locally.
+            {
+                "id": 2,
+                "name": "Malformed Only Flag",
+                "key": "malformed-only-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            # Malformed dependency group no-matches, but the second group matches.
+            {
+                "id": 3,
+                "name": "Malformed Plus Matching Flag",
+                "key": "malformed-plus-matching-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {"properties": [], "rollout_percentage": 100},
+                    ],
+                },
+            },
+        ]
+
+        self.assertFalse(client.get_feature_flag("malformed-only-flag", "user-1"))
+        self.assertTrue(
+            client.get_feature_flag("malformed-plus-matching-flag", "user-1")
+        )
+        self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
@@ -5906,6 +6131,9 @@ class TestConsistency(unittest.TestCase):
     def setUp(self):
         self.failed = False
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        # Reset the process-wide malformed-dependency warning dedup set so tests
+        # asserting on the warning stay order-independent.
+        posthog.feature_flags._warned_malformed_flag_dependencies.clear()
 
     @mock.patch("posthog.client.get")
     def test_simple_flag_consistency(self, patch_get):
