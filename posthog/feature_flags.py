@@ -15,7 +15,32 @@ __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
 log = logging.getLogger("posthog")
 
+# Tracks (flag_key, reason) pairs already warned about for malformed flag
+# dependency conditions, so the warning fires at most once per process instead
+# of on every get_feature_flag call. A plain set is safe under the GIL; a rare
+# duplicate warning from a race is acceptable.
+_warned_malformed_flag_dependencies: set = set()
+
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
+
+
+def _warn_malformed_flag_dependency_once(flag_key, reason):
+    """Emit a throttled warning for a malformed flag dependency condition.
+
+    Mirrors the server-side Rust evaluator, which logs before treating the
+    condition as not matching, so customers can discover broken flag
+    definitions locally. Deduplicated on (flag_key, reason) to avoid spamming
+    hot evaluation paths.
+    """
+    key = (flag_key, reason)
+    if key in _warned_malformed_flag_dependencies:
+        return
+    _warned_malformed_flag_dependencies.add(key)
+    log.warning(
+        f"Flag dependency condition on '{flag_key or 'unknown'}' is malformed "
+        f"({reason}); treating as not matching during local evaluation. "
+        f"Fix this condition in the PostHog UI."
+    )
 
 
 class ConditionMatch(Enum):
@@ -160,8 +185,12 @@ def evaluate_flag_dependency(
     operator = property.get("operator", "exact")
 
     if operator != "flag_evaluates_to":
+        _warn_malformed_flag_dependency_once(
+            flag_key, f"invalid operator '{operator}'"
+        )
         return False
     if not flag_key or expected_value is None:
+        _warn_malformed_flag_dependency_once(flag_key, "missing key or value")
         return False
 
     # Check if dependency_chain is present - it should always be provided for flag dependencies
