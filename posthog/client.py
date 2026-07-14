@@ -16,6 +16,7 @@ from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.metrics_capture import PostHogMetrics
 from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
@@ -270,6 +271,7 @@ class Client(object):
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
         _dedicated_ai_endpoint=False,
+        metrics: Optional[dict] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -423,6 +425,9 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
         self.disabled = disabled or not self.api_key
         self.disable_geoip = disable_geoip
+        self._metrics_config = metrics
+        self._metrics: Optional[PostHogMetrics] = None
+        self._metrics_lock = threading.Lock()
         self.is_server = is_server
         self.historical_migration = historical_migration
         # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
@@ -1715,6 +1720,30 @@ class Client(object):
             self.log.warning("analytics-python queue is full")
             return None
 
+    @property
+    def metrics(self) -> PostHogMetrics:
+        """
+        The `posthog.metrics` API: a statsd-style pre-aggregating metrics client — alpha.
+
+        Samples fold into per-series aggregates in memory and flush as one OTLP
+        data point per series per window, so recording from hot paths is cheap.
+        Configure via the ``metrics`` client option; pending metrics flush on
+        ``shutdown()``.
+
+        Examples:
+            ```python
+            client = Posthog("<ph_project_api_key>", metrics={"service_name": "billing-worker"})
+            client.metrics.count("invoices.processed", 1, attributes={"plan": "pro"})
+            client.metrics.gauge("queue.depth", 42)
+            client.metrics.histogram("job.duration", 187, unit="ms")
+            ```
+        """
+        if self._metrics is None:
+            with self._metrics_lock:
+                if self._metrics is None:
+                    self._metrics = PostHogMetrics(self, self._metrics_config)
+        return self._metrics
+
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
@@ -1789,6 +1818,12 @@ class Client(object):
             ```
         """
         self.flush(timeout_seconds=None)
+        if self._metrics is not None:
+            try:
+                self._metrics.flush()
+            except Exception:
+                self.log.exception("Failed to flush metrics on shutdown")
+            self._metrics.reset()
         self.join()
         self.distinct_ids_feature_flags_reported.clear()
 
