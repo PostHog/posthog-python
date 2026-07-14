@@ -134,17 +134,35 @@ def evaluate_flag_dependency(
 
     Returns:
         bool: Whether the referenced flag's evaluated value matches the
-            condition's expected value.
+            condition's expected value. A malformed condition shape (wrong
+            operator, missing key, or missing value) is a definitive local
+            no-match and returns False, mirroring the server-side evaluator.
 
     Raises:
-        InconclusiveMatchError: If the condition is malformed or the chain
-            cannot be conclusively evaluated locally.
+        InconclusiveMatchError: If the chain cannot be conclusively evaluated
+            locally (referenced flag missing, an inconclusive dependency,
+            circular dependency, or missing evaluation context).
     """
     if flags_by_key is None or evaluation_cache is None:
         # Cannot evaluate flag dependencies without required context
         raise InconclusiveMatchError(
             f"Cannot evaluate flag dependency on '{property.get('key', 'unknown')}' without flags_by_key and evaluation_cache"
         )
+
+    # Validate the condition shape before walking the chain. A malformed shape
+    # is a definitive no-match (return False), mirroring the server-side Rust
+    # evaluator (match_flag_value_to_flag_filter). Raising InconclusiveMatchError
+    # here would force a billable /flags network fallback on every evaluation of
+    # the affected flag. Test `is None`, not truthiness: `False` is a valid
+    # expected value (the case flag dependencies exist for).
+    flag_key = property.get("key")
+    expected_value = property.get("value")
+    operator = property.get("operator", "exact")
+
+    if operator != "flag_evaluates_to":
+        return False
+    if not flag_key or expected_value is None:
+        return False
 
     # Check if dependency_chain is present - it should always be provided for flag dependencies
     if "dependency_chain" not in property:
@@ -160,21 +178,6 @@ def evaluate_flag_dependency(
         log.debug(f"Circular dependency detected for flag: {property.get('key')}")
         raise InconclusiveMatchError(
             f"Circular dependency detected for flag '{property.get('key', 'unknown')}'"
-        )
-
-    # Validate the condition shape before walking the chain. Test `is None`, not
-    # truthiness: `False` is a valid expected value (the case this exists for).
-    flag_key = property.get("key")
-    expected_value = property.get("value")
-    operator = property.get("operator", "exact")
-
-    if operator != "flag_evaluates_to":
-        raise InconclusiveMatchError(
-            f"Flag dependency property for '{flag_key or 'unknown'}' has invalid operator '{operator}'"
-        )
-    if not flag_key or expected_value is None:
-        raise InconclusiveMatchError(
-            f"Flag dependency property for '{flag_key or 'unknown'}' is missing a key or value"
         )
 
     # Evaluate and cache each flag in the chain; members already cached are
