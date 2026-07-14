@@ -11,17 +11,26 @@ SDK speaks the same wire shape.
 Deliberately unlike event capture, no per-user context (distinct ID, session)
 is attached: every attribute value creates a new series, and per-user series
 are the canonical metrics-cardinality explosion.
+
+Delivery is at-least-once: a request that succeeds server-side but fails
+client-side (e.g. a read timeout) is retried with the next window, which can
+double-count that window's deltas. Windows are dropped loudly after
+``_MAX_CONSECUTIVE_SEND_FAILURES`` failed flushes.
 """
 
+import gzip
 import json
 import logging
 import math
+import os
 import threading
 import time
 from typing import Any, Callable, Optional, Union
+from urllib.parse import quote
 
 import requests
 
+from posthog.request import _get_session
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
@@ -50,6 +59,10 @@ DEFAULT_HISTOGRAM_BOUNDS = [
 ]
 
 _OTLP_TEMPORALITY_DELTA = 1
+_VALID_METRIC_TYPES = ("count", "gauge", "histogram")
+# Consecutive failed flushes before the buffered window is dropped (loudly) — bounds
+# memory and payload growth against a permanently unreachable endpoint.
+_MAX_CONSECUTIVE_SEND_FAILURES = 3
 _DEFAULT_FLUSH_INTERVAL_SECONDS = 10.0
 _DEFAULT_MAX_SERIES_PER_FLUSH = 1000
 _SCOPE_NAME = "posthog-python"
@@ -62,10 +75,15 @@ def _to_otlp_any_value(value: Any) -> dict:
     if isinstance(value, int):
         return {"intValue": value}
     if isinstance(value, float):
-        # proto3 JSON has no representation for non-finite floats; keep the
-        # human-readable signal as a string regardless of downstream parser.
+        # proto3 JSON has no representation for non-finite floats; encode the proto3
+        # literal strings (not Python's "inf"/"nan") so both SDKs emit identical bytes.
         if not math.isfinite(value):
-            return {"stringValue": str(value)}
+            if math.isnan(value):
+                return {"stringValue": "NaN"}
+            return {"stringValue": "Infinity" if value > 0 else "-Infinity"}
+        # Integral floats encode as intValue, matching the JS Number.isInteger branch.
+        if value.is_integer():
+            return {"intValue": int(value)}
         return {"doubleValue": value}
     if isinstance(value, str):
         return {"stringValue": value}
@@ -95,6 +113,24 @@ def _bucket_index_for(value: float, bounds: list) -> int:
         if value <= bound:
             return i
     return len(bounds)
+
+
+def _series_key(
+    metric_type: str, name: str, unit: Optional[str], attributes: Optional[dict]
+) -> str:
+    """Canonical, total series identity: JSON-encoded like the JS core's seriesKey, so any
+    attribute value the encoder accepts (lists, dicts, mixed keys) produces a hashable key,
+    and bool/int values stay distinct (json encodes true vs 1)."""
+    attrs_part = ""
+    if attributes:
+        items = sorted(
+            ((str(k), v) for k, v in attributes.items()), key=lambda kv: kv[0]
+        )
+        attrs_part = ",".join(
+            f"{json.dumps(k)}:{json.dumps(v, sort_keys=True, default=str)}"
+            for k, v in items
+        )
+    return "\x00".join((metric_type, name, unit or "", attrs_part))
 
 
 class _SeriesState:
@@ -132,7 +168,8 @@ class PostHogMetrics:
     """The ``client.metrics`` API: ``count``, ``gauge``, ``histogram``, ``flush``.
 
     Thread-safe; safe to call from hot paths. Configure via the ``metrics``
-    client option::
+    client option (``flush_interval`` is in seconds, matching the client's own
+    ``flush_interval`` — unlike posthog-js, whose ``flushIntervalMs`` is milliseconds)::
 
         client = Client("phc_...", metrics={"service_name": "billing-worker"})
         client.metrics.count("invoices.processed", 1, attributes={"plan": "pro"})
@@ -162,7 +199,10 @@ class PostHogMetrics:
         )
         self._before_send: Optional[Callable] = config.get("before_send")
 
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
+        self._pid = os.getpid()
+        self._consecutive_send_failures = 0
+        self._capture_error_warned = False
         # Serializes flushes so a manual flush() can't race a timer flush for the same window.
         self._flush_lock = threading.Lock()
         self._series: dict = {}
@@ -179,7 +219,7 @@ class PostHogMetrics:
         attributes: Optional[dict] = None,
     ) -> None:
         """Record an increment for a monotonic counter (things that only go up)."""
-        self._capture("count", name, value, unit, attributes)
+        self._guarded_capture("count", name, value, unit, attributes)
 
     def gauge(
         self,
@@ -189,7 +229,7 @@ class PostHogMetrics:
         attributes: Optional[dict] = None,
     ) -> None:
         """Record the current value of something that goes up and down."""
-        self._capture("gauge", name, value, unit, attributes)
+        self._guarded_capture("gauge", name, value, unit, attributes)
 
     def histogram(
         self,
@@ -199,7 +239,7 @@ class PostHogMetrics:
         attributes: Optional[dict] = None,
     ) -> None:
         """Record one observation of a distribution (durations, sizes)."""
-        self._capture("histogram", name, value, unit, attributes)
+        self._guarded_capture("histogram", name, value, unit, attributes)
 
     def flush(self) -> None:
         """Sends everything aggregated so far without waiting for the flush interval."""
@@ -214,6 +254,22 @@ class PostHogMetrics:
             self._series_cap_warned = False
             self._type_by_name = {}
             self._type_collision_warned = set()
+
+    def _guarded_capture(
+        self,
+        metric_type: str,
+        name: str,
+        value: float,
+        unit: Optional[str],
+        attributes: Optional[dict],
+    ) -> None:
+        # A telemetry call must never raise into the host application, whatever the input.
+        try:
+            self._capture(metric_type, name, value, unit, attributes)
+        except Exception as e:
+            if not self._capture_error_warned:
+                self._capture_error_warned = True
+                log.warning("Dropping metric '%s': %s", name, e)
 
     def _capture(
         self,
@@ -241,12 +297,23 @@ class PostHogMetrics:
                 return
             if not filtered:
                 return
+            if not isinstance(filtered, dict):
+                log.warning(
+                    "Dropping metric: before_send must return the sample dict or a falsy value"
+                )
+                return
             sample = filtered
             name = sample.get("name")
             metric_type = sample.get("type", metric_type)
             value = sample.get("value")
             unit = sample.get("unit")
             attributes = sample.get("attributes")
+
+        if metric_type not in _VALID_METRIC_TYPES:
+            log.warning(
+                "Dropping metric '%s': unknown metric type '%s'", name, metric_type
+            )
+            return
 
         if not name or not isinstance(name, str):
             log.warning("Dropping metric with empty name")
@@ -264,22 +331,14 @@ class PostHogMetrics:
             )
             return
 
-        attrs_key = tuple(sorted(attributes.items())) if attributes else ()
-        key = (metric_type, name, unit or "", attrs_key)
+        if attributes:
+            # None-valued attributes are stripped from the wire, so strip them from the
+            # series identity too — otherwise two indistinguishable data points emit.
+            attributes = {k: v for k, v in attributes.items() if v is not None}
+        key = _series_key(metric_type, name, unit, attributes)
 
         with self._lock:
-            seen_type = self._type_by_name.get(name)
-            if seen_type is None:
-                self._type_by_name[name] = metric_type
-            elif seen_type != metric_type and name not in self._type_collision_warned:
-                self._type_collision_warned.add(name)
-                log.warning(
-                    "Metric name '%s' is already used as a %s; recording it as a %s too will blend "
-                    "both series in charts. Use a distinct name.",
-                    name,
-                    seen_type,
-                    metric_type,
-                )
+            self._reset_after_fork_locked()
 
             state = self._series.get(key)
             if state is None:
@@ -295,8 +354,38 @@ class PostHogMetrics:
                 state = _SeriesState(name, metric_type, unit, attributes)
                 self._series[key] = state
 
+            # Bookkeeping only for admitted samples, so name-cardinality misuse (IDs in
+            # metric names) can't grow this map past the series cap.
+            seen_type = self._type_by_name.get(name)
+            if seen_type is None:
+                self._type_by_name[name] = metric_type
+            elif seen_type != metric_type and name not in self._type_collision_warned:
+                self._type_collision_warned.add(name)
+                log.warning(
+                    "Metric name '%s' is already used as a %s; recording it as a %s too will blend "
+                    "both series in charts. Use a distinct name.",
+                    name,
+                    seen_type,
+                    metric_type,
+                )
+
             self._fold(state, float(value))
             self._arm_flush_timer()
+
+    def _reset_after_fork_locked(self) -> None:
+        # A forked child inherits the parent's window and a timer handle whose thread does
+        # not exist in the child — without this, the child never flushes (silent total
+        # loss) and would duplicate the parent's samples if it ever did. Drop both.
+        pid = os.getpid()
+        if pid == self._pid:
+            return
+        self._pid = pid
+        self._flush_timer = None
+        self._series = {}
+        self._series_cap_warned = False
+        self._type_by_name = {}
+        self._type_collision_warned = set()
+        self._consecutive_send_failures = 0
 
     def _fold(self, state: _SeriesState, value: float) -> None:
         if state.type == "count":
@@ -357,22 +446,58 @@ class PostHogMetrics:
         payload = self._build_payload(window)
         outcome = self._send(payload)
         if outcome == "retry-later":
-            # Transient failure: merge the unsent window back so the data rides
-            # the next flush instead of being lost — and re-arm the timer, since
-            # with no new captures nothing else would schedule that flush.
             with self._lock:
+                self._consecutive_send_failures += 1
+                if self._consecutive_send_failures > _MAX_CONSECUTIVE_SEND_FAILURES:
+                    # A persistently unreachable endpoint must not buffer forever: drop the
+                    # window loudly instead of growing until a too-large drop loses more.
+                    log.error(
+                        "Dropping %s metric series after %s consecutive failed flushes — "
+                        "check the endpoint and network configuration",
+                        len(window),
+                        self._consecutive_send_failures,
+                    )
+                    self._consecutive_send_failures = 0
+                    return
+                # Transient failure: merge the unsent window back so the data rides the
+                # next flush instead of being lost — and re-arm the timer, since with no
+                # new captures nothing else would schedule that flush.
+                log.warning(
+                    "Metrics flush failed (attempt %s of %s); will retry with the next window",
+                    self._consecutive_send_failures,
+                    _MAX_CONSECUTIVE_SEND_FAILURES + 1,
+                )
                 self._merge_window_back(window)
                 self._arm_flush_timer()
         elif outcome == "too-large":
-            log.warning("Metrics batch exceeded the server size limit and was dropped")
+            log.warning(
+                "Metrics batch exceeded the server size limit and was dropped. "
+                "Reduce series count or attribute cardinality."
+            )
+            with self._lock:
+                self._consecutive_send_failures = 0
+        else:
+            with self._lock:
+                self._consecutive_send_failures = 0
 
     def _send(self, payload: dict) -> str:
         url = "{}/i/v1/metrics?token={}".format(
-            remove_trailing_slash(self._client.host), self._client.api_key
+            remove_trailing_slash(self._client.host),
+            quote(self._client.api_key, safe=""),
         )
+        body = gzip.compress(json.dumps(payload).encode("utf-8"))
+        timeout = getattr(self._client, "timeout", 15) or 15
         try:
-            response = requests.post(
-                url, json=payload, timeout=getattr(self._client, "timeout", 15)
+            # The shared pooled session: keepalive between the 10s flushes, fork-safe
+            # reset, and the same adapter/proxy configuration as event capture.
+            response = _get_session().post(
+                url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                timeout=timeout,
             )
         except requests.RequestException:
             return "retry-later"
@@ -386,9 +511,15 @@ class PostHogMetrics:
         return "fatal"
 
     def _merge_window_back(self, window: dict) -> None:
+        dropped = 0
         for key, old in window.items():
             current = self._series.get(key)
             if current is None:
+                # The cap applies through merge-back too, or a long outage with attribute
+                # churn grows the live window (and the retried payload) without bound.
+                if len(self._series) >= self._max_series_per_flush:
+                    dropped += 1
+                    continue
                 self._series[key] = old
                 continue
             current.window_start_ms = min(current.window_start_ms, old.window_start_ms)
@@ -405,6 +536,12 @@ class PostHogMetrics:
                     for i, count in enumerate(old.hist["bucket_counts"]):
                         current.hist["bucket_counts"][i] += count
             # Gauge: the live window's value is newer — keep it.
+        if dropped:
+            log.warning(
+                "Dropped %s unsent metric series while merging a failed flush back (series cap %s)",
+                dropped,
+                self._max_series_per_flush,
+            )
 
     def _build_payload(self, window: dict) -> dict:
         # User resource attributes first, SDK-controlled keys layered on top so

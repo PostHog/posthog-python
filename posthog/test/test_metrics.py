@@ -1,3 +1,5 @@
+import gzip
+import json
 import math
 from unittest import mock
 
@@ -17,15 +19,28 @@ def client():
     c.metrics.reset()
 
 
+def mock_session(status_code=200):
+    session = mock.Mock()
+    session.post.return_value = mock.Mock(status_code=status_code)
+    return session
+
+
+def sent_payload(session):
+    """Decode the gzipped OTLP/JSON body of the last send through the mocked session."""
+    args, kwargs = session.post.call_args
+    body = kwargs.get("data")
+    return json.loads(gzip.decompress(body).decode("utf-8"))
+
+
 def flush_and_capture(client):
     """Flush metrics with the HTTP boundary mocked; returns (payload, url, kwargs) of the send."""
-    with mock.patch("posthog.metrics_capture.requests.post") as post:
-        post.return_value = mock.Mock(status_code=200)
+    session = mock_session()
+    with mock.patch("posthog.metrics_capture._get_session", return_value=session):
         client.metrics.flush()
-        if not post.called:
+        if not session.post.called:
             return None, None, None
-        args, kwargs = post.call_args
-        return kwargs.get("json"), args[0] if args else kwargs.get("url"), kwargs
+        args, kwargs = session.post.call_args
+        return sent_payload(session), args[0] if args else kwargs.get("url"), kwargs
 
 
 def metrics_from(payload):
@@ -214,8 +229,9 @@ class TestMetricsDelivery:
     def test_transient_failure_merges_window_back(self, client):
         # A 5xx must not lose the window: the counts ride the next flush, summed with new samples.
         client.metrics.count("m", 3)
-        with mock.patch("posthog.metrics_capture.requests.post") as post:
-            post.return_value = mock.Mock(status_code=503)
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
             client.metrics.flush()
 
         client.metrics.count("m", 4)
@@ -229,11 +245,169 @@ class TestMetricsDelivery:
         c = Client(FAKE_API_KEY, host="https://us.example.com", sync_mode=True)
         c.metrics.count("m", 1)
 
-        with mock.patch("posthog.metrics_capture.requests.post") as post:
-            post.return_value = mock.Mock(status_code=200)
+        session = mock_session()
+        with mock.patch("posthog.metrics_capture._get_session", return_value=session):
             c.shutdown()
 
-        assert post.called
-        payload = post.call_args.kwargs.get("json")
+        assert session.post.called
+        payload = sent_payload(session)
         (metric,) = metrics_from(payload)
         assert metric["name"] == "m"
+
+
+class TestMetricsCrashSafety:
+    # A telemetry SDK must never raise into the host application — these inputs all
+    # crashed the capture hot path before the series key became JSON-based and
+    # _capture gained validation (QA findings, reproduced).
+
+    @pytest.mark.parametrize(
+        "attributes",
+        [
+            {"tags": ["a", "b"]},  # unhashable value
+            {"nested": {"k": "v"}},  # unhashable value
+            {"a": 1, 2: "x"},  # unsortable mixed-type keys
+        ],
+    )
+    def test_hostile_attributes_do_not_raise(self, client, attributes):
+        client.metrics.count("hostile", 1, attributes=attributes)  # must not raise
+
+    def test_list_attribute_records_as_array_value(self, client):
+        client.metrics.count("arr", 1, attributes={"tags": ["a", "b"]})
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        (attr,) = dp["attributes"]
+        assert attr["value"] == {
+            "arrayValue": {"values": [{"stringValue": "a"}, {"stringValue": "b"}]}
+        }
+
+    @pytest.mark.parametrize(
+        "hook",
+        [
+            lambda s: True,  # truthy non-dict return
+            lambda s: {**s, "type": "guage"},  # typo'd type must not fold as histogram
+        ],
+    )
+    def test_misbehaving_before_send_drops_sample(self, hook):
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"before_send": hook},
+        )
+        c.metrics.count("m", 1)
+
+        payload, _, _ = flush_and_capture(c)
+        c.metrics.reset()
+
+        assert payload is None
+
+    def test_bool_and_int_attribute_values_are_distinct_series(self, client):
+        # Python True == 1 collapsed these into one series with a tuple-based key.
+        client.metrics.count("m", 1, attributes={"k": True})
+        client.metrics.count("m", 1, attributes={"k": 1})
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        assert len(metric["sum"]["dataPoints"]) == 2
+
+    def test_none_attribute_values_dropped_before_keying(self, client):
+        # A None-valued attribute split the series key but was stripped from the wire,
+        # emitting two indistinguishable data points.
+        client.metrics.count("m", 1, attributes={"k": None})
+        client.metrics.count("m", 1)
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        assert dp["asDouble"] == 2.0
+
+
+class TestMetricsEncodingParity:
+    # The two SDKs must emit byte-identical AnyValues for the same logical input.
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (
+                math.inf,
+                {"stringValue": "Infinity"},
+            ),  # proto3 JSON literal, not Python's "inf"
+            (-math.inf, {"stringValue": "-Infinity"}),
+            (math.nan, {"stringValue": "NaN"}),
+            (
+                2.0,
+                {"intValue": 2},
+            ),  # integral floats encode as intValue, matching JS Number.isInteger
+            (2.5, {"doubleValue": 2.5}),
+        ],
+    )
+    def test_any_value_encoding_matches_js(self, client, value, expected):
+        client.metrics.count("enc", 1, attributes={"v": value})
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        (attr,) = dp["attributes"]
+        assert attr["value"] == expected
+
+
+class TestMetricsFailureHandling:
+    def test_fork_drops_inherited_window_and_rearms(self, client):
+        # A forked child inherits a dead timer thread and the parent's window; without the
+        # PID guard it never flushes again and duplicates the parent's samples.
+        client.metrics.count("m", 1)
+        assert client.metrics._flush_timer is not None
+        client.metrics._pid -= 1  # simulate being in a fork child
+
+        client.metrics.count("m", 5)
+
+        payload, _, _ = flush_and_capture(client)
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        assert (
+            dp["asDouble"] == 5.0
+        )  # inherited window dropped, only the child's sample remains
+
+    def test_merge_back_respects_series_cap(self):
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"max_series_per_flush": 2},
+        )
+        c.metrics.count("m", 1, attributes={"k": "a"})
+        c.metrics.count("m", 1, attributes={"k": "b"})
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            c.metrics.flush()
+        # Attribute churn: two NEW series in the fresh window, then the failed window merges back.
+        c.metrics.count("m", 1, attributes={"k": "c"})
+        c.metrics.count("m", 1, attributes={"k": "d"})
+
+        assert (
+            len(c.metrics._series) <= 2
+        )  # cap holds through merge-back; no unbounded backlog
+        c.metrics.reset()
+
+    def test_window_dropped_after_consecutive_failures(self, client):
+        # A permanently-down endpoint must not buffer forever: after the retry budget the
+        # window is dropped loudly instead of growing until a 413 destroys everything.
+        client.metrics.count("m", 3)
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            for _ in range(4):
+                client.metrics.flush()
+
+        payload, _, _ = flush_and_capture(client)
+
+        assert (
+            payload is None
+        )  # budget exhausted → window dropped, nothing left to send
