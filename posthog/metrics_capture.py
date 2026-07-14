@@ -302,12 +302,14 @@ class PostHogMetrics:
                     "Dropping metric: before_send must return the sample dict or a falsy value"
                 )
                 return
-            sample = filtered
-            name = sample.get("name")
-            metric_type = sample.get("type", metric_type)
-            value = sample.get("value")
-            unit = sample.get("unit")
-            attributes = sample.get("attributes")
+            sample_dict: dict[str, Any] = filtered
+            # Defaults keep the static types closed; a hook that removed the field
+            # produces a value the validation below drops.
+            name = sample_dict.get("name", "")
+            metric_type = sample_dict.get("type", metric_type)
+            value = sample_dict.get("value", math.nan)
+            unit = sample_dict.get("unit")
+            attributes = sample_dict.get("attributes")
 
         if metric_type not in _VALID_METRIC_TYPES:
             log.warning(
@@ -499,7 +501,7 @@ class PostHogMetrics:
                 },
                 timeout=timeout,
             )
-        except requests.RequestException:
+        except requests.exceptions.RequestException:
             return "retry-later"
         if response.status_code < 300:
             return "ok"
