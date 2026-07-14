@@ -1,5 +1,11 @@
 # posthog
 
+## 7.22.3 — 2026-07-14
+
+### Patch changes
+
+- [ae3c4e5](https://github.com/posthog/posthog-python/commit/ae3c4e5d53741b2a895c1b3759d14f92f27259b7) Malformed flag-dependency conditions (missing key, null value, or wrong operator) now evaluate locally as no-match (false), matching the server, instead of falling back to the `/flags` endpoint on every evaluation. 7.22.1 made these conditions fall back to the server, which could massively increase billable `/flags` request volume for flag definitions containing legacy/malformed dependency conditions. — Thanks @patricio-posthog!
+
 ## 7.22.2 — 2026-07-13
 
 ### Patch changes
