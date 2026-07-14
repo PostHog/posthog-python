@@ -185,9 +185,7 @@ def evaluate_flag_dependency(
     operator = property.get("operator", "exact")
 
     if operator != "flag_evaluates_to":
-        _warn_malformed_flag_dependency_once(
-            flag_key, f"invalid operator '{operator}'"
-        )
+        _warn_malformed_flag_dependency_once(flag_key, f"invalid operator '{operator}'")
         return False
     if not flag_key or expected_value is None:
         _warn_malformed_flag_dependency_once(flag_key, "missing key or value")
