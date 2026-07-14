@@ -1,5 +1,11 @@
 # posthog
 
+## 7.22.4 — 2026-07-14
+
+### Patch changes
+
+- [eb025c8](https://github.com/posthog/posthog-python/commit/eb025c81bed39d8aeff6698879a37ac4e895eb1b) Django middleware also sends the request user agent as `$raw_user_agent`, the standardized property PostHog's server-side classification (e.g. bot detection) reads — Thanks @lricoy!
+
 ## 7.22.3 — 2026-07-14
 
 ### Patch changes
