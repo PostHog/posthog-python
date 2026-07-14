@@ -202,10 +202,12 @@ class PosthogContextMiddleware:
         if ip_address:
             tags["$ip"] = ip_address
 
-        # Extract user agent
+        # Extract user agent, mirrored into $raw_user_agent — the standardized
+        # property PostHog's server-side classification (e.g. bot detection) reads
         user_agent = request.headers.get("User-Agent")
         if user_agent:
             tags["$user_agent"] = user_agent
+            tags["$raw_user_agent"] = user_agent
 
         # Apply extra tags if configured
         if self.extra_tags:
