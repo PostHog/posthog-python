@@ -271,6 +271,19 @@ class TestMetricsCrashSafety:
     def test_hostile_attributes_do_not_raise(self, client, attributes):
         client.metrics.count("hostile", 1, attributes=attributes)  # must not raise
 
+    def test_non_string_attribute_keys_stringify_on_the_wire(self, client):
+        # Series identity str()s keys, but the wire must too — OTLP KeyValue.key is a
+        # string field and strict decoders reject numeric keys.
+        client.metrics.count("m", 1, attributes={"a": 1, 2: "x"})
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        keys = {attr["key"] for attr in dp["attributes"]}
+        assert keys == {"a", "2"}
+        assert all(isinstance(attr["key"], str) for attr in dp["attributes"])
+
     def test_list_attribute_records_as_array_value(self, client):
         client.metrics.count("arr", 1, attributes={"tags": ["a", "b"]})
 

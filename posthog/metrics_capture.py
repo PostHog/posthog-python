@@ -96,8 +96,10 @@ def _to_otlp_any_value(value: Any) -> dict:
 
 
 def _to_otlp_key_value_list(attributes: dict) -> list:
+    # str(key): OTLP KeyValue.key is a string field — strict decoders reject numeric
+    # keys — and the series identity already stringifies keys the same way.
     return [
-        {"key": key, "value": _to_otlp_any_value(value)}
+        {"key": str(key), "value": _to_otlp_any_value(value)}
         for key, value in attributes.items()
         if value is not None
     ]
