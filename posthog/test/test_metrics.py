@@ -7,7 +7,12 @@ import pytest
 
 import posthog
 from posthog.client import Client
-from posthog.metrics_capture import DEFAULT_HISTOGRAM_BOUNDS
+from posthog.metrics_capture import (
+    _DEFAULT_FLUSH_INTERVAL_SECONDS,
+    _DEFAULT_MAX_SERIES_PER_FLUSH,
+    _MAX_CONSECUTIVE_SEND_FAILURES,
+    DEFAULT_HISTOGRAM_BOUNDS,
+)
 from posthog.version import VERSION
 
 FAKE_API_KEY = "phc_test_key"
@@ -343,6 +348,66 @@ class TestMetricsCrashSafety:
         assert keys == {"a", "2"}
         assert all(isinstance(attr["key"], str) for attr in dp["attributes"])
 
+    def test_nested_attribute_values_snapshot_at_capture(self, client):
+        # The series key is computed at capture time; a caller mutating a nested
+        # value afterwards must not rewrite the stored series' attributes, or the
+        # wire payload diverges from the identity the series was keyed under.
+        tags = ["a"]
+        client.metrics.count("m", 1, attributes={"tags": tags})
+        tags.append("b")
+        client.metrics.count("m", 1, attributes={"tags": tags})
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        points = metric["sum"]["dataPoints"]
+        assert len(points) == 2
+        wire_tags = sorted(
+            [
+                v["stringValue"]
+                for v in dp["attributes"][0]["value"]["arrayValue"]["values"]
+            ]
+            for dp in points
+        )
+        assert wire_tags == [["a"], ["a", "b"]]
+
+    @pytest.mark.parametrize(
+        "bad_config",
+        [
+            "not-a-dict",
+            {"resource_attributes": "bad"},
+            {"flush_interval": "10"},
+            {"max_series_per_flush": "many"},
+            {"before_send": "not-callable"},
+        ],
+        ids=[
+            "config-not-dict",
+            "resource-attributes-not-dict",
+            "flush-interval-not-number",
+            "series-cap-not-int",
+            "before-send-not-callable",
+        ],
+    )
+    def test_hostile_metrics_config_does_not_raise_and_still_records(self, bad_config):
+        # client.metrics is reached before the guarded capture path, so bad nested
+        # config must fall back to defaults instead of raising into the host app.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics=bad_config,
+        )
+        c.metrics.count("m", 1)  # the complete public call must not raise
+
+        assert c.metrics._flush_interval == _DEFAULT_FLUSH_INTERVAL_SECONDS
+        assert c.metrics._max_series_per_flush == _DEFAULT_MAX_SERIES_PER_FLUSH
+
+        payload, _, _ = flush_and_capture(c)
+        c.metrics.reset()
+
+        (metric,) = metrics_from(payload)
+        assert metric["name"] == "m"
+
     def test_list_attribute_records_as_array_value(self, client):
         client.metrics.count("arr", 1, attributes={"tags": ["a", "b"]})
 
@@ -475,7 +540,7 @@ class TestMetricsFailureHandling:
         with mock.patch(
             "posthog.metrics_capture._get_session", return_value=mock_session(503)
         ):
-            for _ in range(4):
+            for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES):
                 client.metrics.flush()
 
         payload, _, _ = flush_and_capture(client)
@@ -483,3 +548,47 @@ class TestMetricsFailureHandling:
         assert (
             payload is None
         )  # budget exhausted → window dropped, nothing left to send
+
+    def test_window_survives_failures_until_the_drop_limit(self, client):
+        # One failure short of the budget the window must still deliver in full —
+        # dropping earlier than documented silently loses data during outages.
+        client.metrics.count("m", 3)
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES - 1):
+                client.metrics.flush()
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        assert dp["asDouble"] == 3.0
+
+    def test_failed_flushes_back_off_exponentially_capped(self):
+        # Retrying a down endpoint at the fixed cadence hammers it for the whole
+        # outage; retry delays must grow exponentially and cap at 64x the base
+        # interval (matching the shared JS logs policy), then reset on success.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"flush_interval": 1.0},
+        )
+        c.metrics.count("m", 1)
+
+        intervals = []
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES - 1):
+                c.metrics._timer_flush()  # what the flush timer thread invokes
+                intervals.append(c.metrics._flush_timer.interval)
+        assert intervals == [2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 64.0]
+
+        # A successful flush resets the backoff: the next capture arms the base interval.
+        flush_and_capture(c)
+        c.metrics.reset()
+        c.metrics.count("m", 1)
+        assert c.metrics._flush_timer.interval == 1.0
+        c.metrics.reset()

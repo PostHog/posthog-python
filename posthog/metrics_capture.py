@@ -14,10 +14,13 @@ are the canonical metrics-cardinality explosion.
 
 Delivery is at-least-once: a request that succeeds server-side but fails
 client-side (e.g. a read timeout) is retried with the next window, which can
-double-count that window's deltas. Windows are dropped loudly after
-``_MAX_CONSECUTIVE_SEND_FAILURES`` failed flushes.
+double-count that window's deltas. Failed flushes retry with exponential
+backoff capped at ``_MAX_RETRY_BACKOFF_MULTIPLIER`` times the flush interval
+(the policy the shared JS logs implementation uses); the window is dropped
+loudly once ``_MAX_CONSECUTIVE_SEND_FAILURES`` consecutive flushes have failed.
 """
 
+import copy
 import gzip
 import json
 import logging
@@ -61,8 +64,13 @@ DEFAULT_HISTOGRAM_BOUNDS = [
 _OTLP_TEMPORALITY_DELTA = 1
 _VALID_METRIC_TYPES = ("count", "gauge", "histogram")
 # Consecutive failed flushes before the buffered window is dropped (loudly) — bounds
-# memory and payload growth against a permanently unreachable endpoint.
-_MAX_CONSECUTIVE_SEND_FAILURES = 3
+# memory and payload growth against a permanently unreachable endpoint. The series
+# cap already bounds the buffered window, and backoff spaces the attempts out, so
+# the budget covers a real outage (~21 min at the default 10s interval).
+_MAX_CONSECUTIVE_SEND_FAILURES = 8
+# Retry delays grow 2x per consecutive failure, capped at this multiple of the
+# flush interval — the same ceiling the shared JS logs implementation uses.
+_MAX_RETRY_BACKOFF_MULTIPLIER = 64
 _DEFAULT_FLUSH_INTERVAL_SECONDS = 10.0
 _DEFAULT_MAX_SERIES_PER_FLUSH = 1000
 _SCOPE_NAME = "posthog-python"
@@ -157,9 +165,18 @@ class _SeriesState:
         self.name = name
         self.type = metric_type
         self.unit = unit
-        # Snapshot: the series key was computed from these values, so a caller
-        # mutating the dict after capture must not change the stored series.
-        self.attributes = dict(attributes) if attributes else None
+        # Deep snapshot: the series key was computed from these values, so a caller
+        # mutating the dict — or a nested list/dict value — after capture must not
+        # change the stored series.
+        if attributes:
+            try:
+                self.attributes: Optional[dict] = copy.deepcopy(attributes)
+            except Exception:
+                # Un-copyable exotic values: a shallow snapshot still isolates the
+                # top-level dict, and the encoder stringifies whatever remains.
+                self.attributes = dict(attributes)
+        else:
+            self.attributes = None
         self.window_start_ms = int(time.time() * 1000)
         self.total: Optional[float] = None
         self.last: Optional[float] = None
@@ -181,8 +198,27 @@ class PostHogMetrics:
 
     def __init__(self, client, config: Optional[dict] = None):
         self._client = client
-        config = config or {}
-        resource_attributes = config.get("resource_attributes") or {}
+        # client.metrics sits outside the client's no-throw guards, so invalid nested
+        # config must degrade to defaults (with a warning) instead of raising into
+        # the host application from the first metrics.count() call. The Any-typed
+        # local keeps the runtime defense visible to mypy despite the annotation.
+        raw_config: Any = config
+        if not isinstance(raw_config, dict):
+            if raw_config is not None:
+                log.warning(
+                    "Ignoring metrics config: expected a dict, got %s",
+                    type(raw_config).__name__,
+                )
+            raw_config = {}
+        config = raw_config
+        resource_attributes = config.get("resource_attributes")
+        if not isinstance(resource_attributes, dict):
+            if resource_attributes is not None:
+                log.warning(
+                    "Ignoring metrics resource_attributes: expected a dict, got %s",
+                    type(resource_attributes).__name__,
+                )
+            resource_attributes = {}
         self._service_name: Optional[str] = resource_attributes.get(
             "service.name"
         ) or config.get("service_name")
@@ -193,13 +229,35 @@ class PostHogMetrics:
             "deployment.environment"
         ) or config.get("environment")
         self._resource_attributes: dict = resource_attributes
-        self._flush_interval: float = config.get(
-            "flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS
-        )
-        self._max_series_per_flush: int = config.get(
-            "max_series_per_flush", _DEFAULT_MAX_SERIES_PER_FLUSH
-        )
-        self._before_send: Optional[Callable] = config.get("before_send")
+        flush_interval = config.get("flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS)
+        if (
+            not isinstance(flush_interval, (int, float))
+            or isinstance(flush_interval, bool)
+            or not flush_interval > 0
+        ):
+            log.warning(
+                "Ignoring metrics flush_interval %r: expected a positive number of seconds",
+                flush_interval,
+            )
+            flush_interval = _DEFAULT_FLUSH_INTERVAL_SECONDS
+        self._flush_interval: float = float(flush_interval)
+        max_series = config.get("max_series_per_flush", _DEFAULT_MAX_SERIES_PER_FLUSH)
+        if (
+            not isinstance(max_series, int)
+            or isinstance(max_series, bool)
+            or max_series <= 0
+        ):
+            log.warning(
+                "Ignoring metrics max_series_per_flush %r: expected a positive integer",
+                max_series,
+            )
+            max_series = _DEFAULT_MAX_SERIES_PER_FLUSH
+        self._max_series_per_flush: int = max_series
+        before_send = config.get("before_send")
+        if before_send is not None and not callable(before_send):
+            log.warning("Ignoring metrics before_send: expected a callable")
+            before_send = None
+        self._before_send: Optional[Callable] = before_send
 
         self._lock = threading.Lock()
         self._pid = os.getpid()
@@ -427,10 +485,12 @@ class PostHogMetrics:
                 _bucket_index_for(value, DEFAULT_HISTOGRAM_BOUNDS)
             ] += 1
 
-    def _arm_flush_timer(self) -> None:
+    def _arm_flush_timer(self, delay: Optional[float] = None) -> None:
         if self._flush_timer is not None:
             return
-        timer = threading.Timer(self._flush_interval, self._timer_flush)
+        timer = threading.Timer(
+            delay if delay is not None else self._flush_interval, self._timer_flush
+        )
         timer.daemon = True
         self._flush_timer = timer
         timer.start()
@@ -470,7 +530,7 @@ class PostHogMetrics:
         if outcome == "retry-later":
             with self._lock:
                 self._consecutive_send_failures += 1
-                if self._consecutive_send_failures > _MAX_CONSECUTIVE_SEND_FAILURES:
+                if self._consecutive_send_failures >= _MAX_CONSECUTIVE_SEND_FAILURES:
                     # A persistently unreachable endpoint must not buffer forever: drop the
                     # window loudly instead of growing until a too-large drop loses more.
                     log.error(
@@ -482,15 +542,20 @@ class PostHogMetrics:
                     self._consecutive_send_failures = 0
                     return
                 # Transient failure: merge the unsent window back so the data rides the
-                # next flush instead of being lost — and re-arm the timer, since with no
-                # new captures nothing else would schedule that flush.
+                # next flush instead of being lost — and re-arm the timer with capped
+                # exponential backoff, so a real outage isn't hammered at the base
+                # cadence. New captures see the armed timer and don't shorten it.
+                delay = self._flush_interval * min(
+                    2**self._consecutive_send_failures, _MAX_RETRY_BACKOFF_MULTIPLIER
+                )
                 log.warning(
-                    "Metrics flush failed (attempt %s of %s); will retry with the next window",
+                    "Metrics flush failed (attempt %s of %s); retrying in %.0fs",
                     self._consecutive_send_failures,
-                    _MAX_CONSECUTIVE_SEND_FAILURES + 1,
+                    _MAX_CONSECUTIVE_SEND_FAILURES,
+                    delay,
                 )
                 self._merge_window_back(window)
-                self._arm_flush_timer()
+                self._arm_flush_timer(delay)
         elif outcome == "too-large":
             log.warning(
                 "Metrics batch exceeded the server size limit and was dropped. "
