@@ -762,6 +762,7 @@ attribute posthog.types.FeatureFlagResult.payload: Optional[Any]
 attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
 attribute posthog.types.FlagMetadata.description: str
+attribute posthog.types.FlagMetadata.has_experiment: bool = False
 attribute posthog.types.FlagMetadata.id: int
 attribute posthog.types.FlagMetadata.payload: Optional[str]
 attribute posthog.types.FlagMetadata.version: int
@@ -895,7 +896,7 @@ class posthog.request.QuotaLimitError
 class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata])
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str)
+class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: bool = False)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
