@@ -1132,8 +1132,7 @@ def shutdown() -> None:
     Category:
         Client management
     """
-    _proxy("flush")
-    _proxy("join")
+    _proxy("shutdown")
 
 
 def setup() -> Client:
