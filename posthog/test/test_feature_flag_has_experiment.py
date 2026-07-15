@@ -1,9 +1,10 @@
 """Tests for the ``$feature_flag_has_experiment`` property on ``$feature_flag_called``.
 
 The server reports ``has_experiment`` in the flag definition and in the ``/flags``
-response metadata. Every ``$feature_flag_called`` event carries the signal as a
-``$feature_flag_has_experiment`` boolean property. When the server does not report the
-field (older deployments), it defaults to ``False``.
+response metadata. When the server explicitly reported the signal, the
+``$feature_flag_called`` event carries it as a ``$feature_flag_has_experiment`` boolean
+property. When the server does not report the field (older deployments), the property
+is omitted.
 """
 
 import unittest
@@ -64,14 +65,14 @@ class TestFeatureFlagHasExperimentRemoteEval(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
-    def test_missing_has_experiment_sends_false(self, patch_capture, patch_flags):
-        # A server that does not report the field (older deployment) defaults to False.
+    def test_missing_has_experiment_omits_property(self, patch_capture, patch_flags):
+        # A server that does not report the field (older deployment) omits the property.
         patch_flags.return_value = _flags_response(has_experiment=None)
 
         self.client.get_feature_flag_result("person-flag", "some-distinct-id")
 
         properties = self._captured_properties(patch_capture)
-        self.assertIs(properties["$feature_flag_has_experiment"], False)
+        self.assertNotIn("$feature_flag_has_experiment", properties)
 
 
 class TestFeatureFlagHasExperimentLocalEval(unittest.TestCase):
@@ -118,14 +119,14 @@ class TestFeatureFlagHasExperimentLocalEval(unittest.TestCase):
         self.assertIs(properties["$feature_flag_has_experiment"], False)
 
     @mock.patch.object(Client, "capture")
-    def test_local_missing_has_experiment_sends_false(self, patch_capture):
+    def test_local_missing_has_experiment_omits_property(self, patch_capture):
         client = Client(FAKE_TEST_API_KEY)
         client.feature_flags = [self._local_flag(has_experiment=None)]
 
         client.get_feature_flag_result("person-flag", "some-distinct-id")
 
         properties = self._captured_properties(patch_capture)
-        self.assertIs(properties["$feature_flag_has_experiment"], False)
+        self.assertNotIn("$feature_flag_has_experiment", properties)
 
 
 class TestFeatureFlagHasExperimentEvaluateFlags(unittest.TestCase):
@@ -180,14 +181,14 @@ class TestFeatureFlagHasExperimentEvaluateFlags(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
-    def test_missing_has_experiment_sends_false(self, patch_capture, patch_flags):
+    def test_missing_has_experiment_omits_property(self, patch_capture, patch_flags):
         patch_flags.return_value = self._flags_response(has_experiment=None)
         flags = Client(FAKE_TEST_API_KEY).evaluate_flags("user-1")
 
         flags.get_flag("variant-flag")
 
         properties = self._called_properties(patch_capture)
-        self.assertIs(properties["$feature_flag_has_experiment"], False)
+        self.assertNotIn("$feature_flag_has_experiment", properties)
 
     @mock.patch.object(Client, "capture")
     def test_local_evaluation_snapshot_sends_signal(self, patch_capture):

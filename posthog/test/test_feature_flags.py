@@ -5605,7 +5605,6 @@ class TestCaptureCalls(unittest.TestCase):
             properties={
                 "$feature_flag": "complex-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
             },
@@ -5640,7 +5639,6 @@ class TestCaptureCalls(unittest.TestCase):
             properties={
                 "$feature_flag": "complex-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
             },
@@ -5679,7 +5677,6 @@ class TestCaptureCalls(unittest.TestCase):
             properties={
                 "$feature_flag": "flags-flag",
                 "$feature_flag_response": "flags-value",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/flags-flag": "flags-value",
             },
@@ -5734,7 +5731,6 @@ class TestCaptureCalls(unittest.TestCase):
             properties={
                 "$feature_flag": "flags-flag",
                 "$feature_flag_response": "flags-variant",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/flags-flag": "flags-variant",
                 "$feature_flag_reason": "Matched condition set 1",
@@ -5789,7 +5785,6 @@ class TestCaptureCalls(unittest.TestCase):
             properties={
                 "$feature_flag": "flags-flag-with-payload",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/flags-flag-with-payload": True,
                 "$feature_flag_reason": "Matched condition set 1",
@@ -5984,7 +5979,6 @@ class TestCaptureCalls(unittest.TestCase):
             properties={
                 "$feature_flag": "complex-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
             },
@@ -6106,7 +6100,6 @@ class TestCaptureCalls(unittest.TestCase):
                 properties={
                     "$feature_flag": "complex-flag",
                     "$feature_flag_response": True,
-                    "$feature_flag_has_experiment": False,
                     "locally_evaluated": True,
                     "$feature/complex-flag": True,
                 },

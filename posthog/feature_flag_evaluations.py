@@ -24,8 +24,8 @@ class _EvaluatedFlagRecord:
     reason: Optional[str]
     locally_evaluated: bool
     # Server-reported signal for whether the flag is linked to an experiment.
-    # Defaults to ``False`` when the server did not report it (older deployments).
-    has_experiment: bool = False
+    # ``None`` when the server did not report it (older deployments).
+    has_experiment: Optional[bool] = None
 
 
 @dataclass
@@ -261,5 +261,5 @@ class FeatureFlagEvaluations:
             groups=self._groups,
             disable_geoip=self._disable_geoip,
             properties=properties,
-            has_experiment=flag.has_experiment if flag else False,
+            has_experiment=flag.has_experiment if flag else None,
         )

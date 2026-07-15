@@ -238,7 +238,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": True,
                 "$feature/person-flag": True,
                 "$feature_flag_payload": 300,
@@ -296,7 +295,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": "variant-1",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": True,
                 "$feature/person-flag": "variant-1",
                 "$feature_flag_payload": {"some": "value"},
@@ -322,7 +320,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": "variant-2",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": True,
                 "$feature/person-flag": "variant-2",
             },
@@ -363,7 +360,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/person-flag": True,
                 "$feature_flag_reason": "Matched condition set 1",
@@ -410,7 +406,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "person-flag",
                 "$feature_flag_response": "variant-1",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/person-flag": "variant-1",
                 "$feature_flag_reason": "Matched condition set 1",
@@ -457,7 +452,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "no-person-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/no-person-flag": None,
                 "$feature_flag_error": FeatureFlagError.FLAG_MISSING,
@@ -500,7 +494,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": True,
                 "$feature_flag_request_id": "test-request-id-789",
@@ -546,7 +539,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "missing-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/missing-flag": None,
                 "$feature_flag_request_id": "test-request-id-456",
@@ -583,7 +575,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "missing-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/missing-flag": None,
                 "$feature_flag_request_id": "test-request-id-999",
@@ -608,7 +599,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": FeatureFlagError.UNKNOWN_ERROR,
@@ -634,7 +624,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": FeatureFlagError.TIMEOUT,
@@ -660,7 +649,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": FeatureFlagError.CONNECTION_ERROR,
@@ -686,7 +674,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": FeatureFlagError.api_error(500),
@@ -712,7 +699,6 @@ class TestGetFeatureFlagResult(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": FeatureFlagError.QUOTA_LIMITED,
@@ -783,7 +769,6 @@ class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": "cached-variant",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": "cached-variant",
                 "$feature_flag_payload": {"from": "cache"},
@@ -822,7 +807,6 @@ class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": True,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": True,
                 "$feature_flag_error": FeatureFlagError.CONNECTION_ERROR,
@@ -859,7 +843,6 @@ class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": "control",
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": "control",
                 "$feature_flag_error": FeatureFlagError.api_error(503),
@@ -890,7 +873,6 @@ class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
             properties={
                 "$feature_flag": "my-flag",
                 "$feature_flag_response": None,
-                "$feature_flag_has_experiment": False,
                 "locally_evaluated": False,
                 "$feature/my-flag": None,
                 "$feature_flag_error": FeatureFlagError.TIMEOUT,
