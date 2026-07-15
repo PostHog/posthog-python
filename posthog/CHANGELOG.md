@@ -1,5 +1,11 @@
 # posthog
 
+## 7.24.0 — 2026-07-15
+
+### Minor changes
+
+- [556c134](https://github.com/posthog/posthog-python/commit/556c134b9e6e017c7f4a5deeebc13a09b18f45d4) `$feature_flag_called` events now carry a `$feature_flag_has_experiment` boolean property when the server reports whether the flag is linked to an experiment. When the server does not report the signal (older deployments), the property is omitted. — Thanks @haacked!
+
 ## 7.23.0 — 2026-07-15
 
 ### Minor changes
