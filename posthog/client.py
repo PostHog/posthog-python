@@ -2360,6 +2360,19 @@ class Client(object):
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
 
         if send_feature_flag_events:
+            # Locally-evaluated flags carry has_experiment in the stored definition;
+            # remotely-evaluated flags carry it in the response metadata. None when
+            # the server (older deployment) does not report it.
+            has_experiment: Optional[bool] = None
+            if flag_was_locally_evaluated:
+                local_def = (self.feature_flags_by_key or {}).get(key)
+                if isinstance(local_def, dict):
+                    has_experiment = local_def.get("has_experiment")
+            elif isinstance(flag_details, FeatureFlag) and isinstance(
+                flag_details.metadata, FlagMetadata
+            ):
+                has_experiment = flag_details.metadata.has_experiment
+
             self._capture_feature_flag_called(
                 distinct_id,
                 key,
@@ -2372,6 +2385,7 @@ class Client(object):
                 evaluated_at,
                 flag_details,
                 feature_flag_error,
+                has_experiment,
             )
 
         return flag_result
@@ -2651,6 +2665,7 @@ class Client(object):
         evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
+        has_experiment: Optional[bool] = None,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -2685,6 +2700,7 @@ class Client(object):
             properties=properties,
             groups=groups,
             disable_geoip=disable_geoip,
+            has_experiment=has_experiment,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -2696,6 +2712,7 @@ class Client(object):
         properties: dict[str, Any],
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
+        has_experiment: Optional[bool] = None,
     ) -> None:
         """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
         groups) tuple hasn't already been reported on this client. Group context is
@@ -2703,6 +2720,10 @@ class Client(object):
         user is evaluated under. Shared by the single-flag evaluation path and
         ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
         identically.
+
+        ``has_experiment`` is the server-reported signal for whether the flag is linked
+        to an experiment; when the server reported it, it is recorded on the event as
+        ``$feature_flag_has_experiment``. ``None`` (unknown) omits the property.
         """
         groups_key = (
             tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
@@ -2716,6 +2737,11 @@ class Client(object):
 
         if feature_flag_reported_key in reported_flags:
             return
+
+        # Record the server's experiment signal so the server can optimize ingestion.
+        # Omitted when unknown (older servers that don't report has_experiment).
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
 
         self.capture(
             "$feature_flag_called",
@@ -3034,6 +3060,7 @@ class Client(object):
                 version=None,
                 reason="Evaluated locally",
                 locally_evaluated=True,
+                has_experiment=flag_def.get("has_experiment"),
             )
             locally_evaluated_keys.add(key)
 
@@ -3096,6 +3123,11 @@ class Client(object):
                             else None
                         ),
                         locally_evaluated=False,
+                        has_experiment=(
+                            detail.metadata.has_experiment
+                            if isinstance(detail.metadata, FlagMetadata)
+                            else None
+                        ),
                     )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
