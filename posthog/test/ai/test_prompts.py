@@ -159,6 +159,76 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual(mock_get.call_count, 2)
 
     @patch("posthog.ai.prompts._get_session")
+    def test_fetch_by_label_passes_param_and_returns_label_metadata(
+        self, mock_get_session
+    ):
+        """Should send the label query param and surface label metadata."""
+        mock_get = mock_get_session.return_value.get
+        labeled_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Production prompt",
+            "version": 3,
+            "label": "production",
+        }
+        mock_get.return_value = MockResponse(json_data=labeled_prompt_response)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        result = prompts.get("test-prompt", label="production", with_metadata=True)
+
+        called_url = mock_get.call_args[0][0]
+        self.assertIn("label=production", called_url)
+        self.assertNotIn("version=", called_url)
+        self.assertEqual(result.prompt, "Production prompt")
+        self.assertEqual(result.version, 3)
+        self.assertEqual(result.label, "production")
+
+    def test_version_and_label_together_raises(self):
+        """Should reject version and label passed together."""
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(ValueError):
+            prompts.get("test-prompt", version=1, label="production")
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_cache_labeled_and_latest_prompts_separately(self, mock_get_session):
+        """Should cache labeled fetches separately from latest fetches."""
+        mock_get = mock_get_session.return_value.get
+        latest_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Latest prompt",
+            "version": 4,
+        }
+        labeled_prompt_response = {
+            **self.mock_prompt_response,
+            "prompt": "Production prompt",
+            "version": 2,
+            "label": "production",
+        }
+        mock_get.side_effect = [
+            MockResponse(json_data=latest_prompt_response),
+            MockResponse(json_data=labeled_prompt_response),
+        ]
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        # A labeled fetch after a latest fetch must not be served from the
+        # latest cache entry — that would silently return the wrong version.
+        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
+        self.assertEqual(
+            prompts.get("test-prompt", label="production"),
+            labeled_prompt_response["prompt"],
+        )
+        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
+        self.assertEqual(
+            prompts.get("test-prompt", label="production"),
+            labeled_prompt_response["prompt"],
+        )
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
     def test_refetch_when_cache_is_stale(self, mock_time, mock_get_session):
         """Should refetch when cache is stale."""
