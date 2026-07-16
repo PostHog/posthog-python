@@ -1,5 +1,11 @@
 # posthog
 
+## 7.25.0 — 2026-07-16
+
+### Minor changes
+
+- [5ab6318](https://github.com/posthog/posthog-python/commit/5ab6318d0fe71cfead25a6baf4d6a74704379603) Add the active OpenTelemetry span's `$trace_id` and `$span_id` to events captured with `capture_exception`. — Thanks @hpouillot!
+
 ## 7.24.0 — 2026-07-15
 
 ### Minor changes
