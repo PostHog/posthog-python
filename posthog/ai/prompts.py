@@ -28,7 +28,11 @@ PromptSource = Literal["api", "cache", "stale_cache", "code_fallback"]
 
 @dataclass(frozen=True)
 class PromptResult:
-    """Result of a prompt fetch with metadata about its source."""
+    """Result of a prompt fetch with metadata about its source.
+
+    ``label`` is the label the prompt resolved through, populated from the API
+    response when fetching with the ``label`` option; ``None`` otherwise.
+    """
 
     source: PromptSource
     prompt: str
@@ -339,7 +343,7 @@ class Prompts:
             )
 
         except Exception as error:
-            self._maybe_capture_error(error, name=name, version=version)
+            self._maybe_capture_error(error, name=name, version=version, label=label)
 
             prompt_reference = _prompt_reference(name, version, label)
             # Return stale cache (with warning)
@@ -410,7 +414,12 @@ class Prompts:
             self._cache.pop(key, None)
 
     def _maybe_capture_error(
-        self, error: Exception, *, name: str, version: Optional[int]
+        self,
+        error: Exception,
+        *,
+        name: str,
+        version: Optional[int],
+        label: Optional[str] = None,
     ) -> None:
         """Report a prompt fetch error to PostHog error tracking if enabled."""
         if not self._capture_errors or self._client is None:
@@ -424,6 +433,7 @@ class Prompts:
                     "$lib_feature": "ai.prompts",
                     "prompt_name": name,
                     "prompt_version": version,
+                    "prompt_label": label,
                     "posthog_host": self._host,
                 },
             )
@@ -448,7 +458,8 @@ class Prompts:
                 label is given, fetches the latest
 
         Returns:
-            The validated API response dict containing prompt, name, and version
+            The validated API response dict containing prompt, name, version,
+            and label (when fetched by label)
 
         Raises:
             Exception: If the prompt cannot be fetched
