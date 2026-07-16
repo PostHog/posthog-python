@@ -2788,6 +2788,7 @@ class Client(object):
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: Optional[bool] = None,
     ) -> None:
         """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
         groups) tuple hasn't already been reported on this client. Group context is
@@ -2822,8 +2823,17 @@ class Client(object):
 
         # Minimize iff the server-controlled gate is on AND the flag is known to have
         # no linked experiment. Any missing signal (gate absent, has_experiment
-        # missing) fails safe to the full legacy shape.
-        should_minimize = self._minimal_flag_called_events and has_experiment is False
+        # missing) fails safe to the full legacy shape. Snapshots pass the gate value
+        # pinned at their creation, so a deferred flag access is shaped by the
+        # evaluation that produced it, not the client-wide gate at send time; the
+        # single-flag path fires immediately after evaluation, so the live client
+        # gate IS that evaluation's gate.
+        gate = (
+            minimal_flag_called_events
+            if minimal_flag_called_events is not None
+            else self._minimal_flag_called_events
+        )
+        should_minimize = gate and has_experiment is False
         # Only thread the internal allowlist through when minimizing, so the
         # full-property path's capture() call signature stays unchanged.
         extra_capture_kwargs: dict[str, Any] = {}
@@ -3233,6 +3243,10 @@ class Client(object):
             evaluated_at=evaluated_at,
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
+            # Pin the gate as of this evaluation. When a remote fallback ran, the
+            # /flags response has just written it; local-only snapshots carry the
+            # poller's current gate. Both sources derive from the same team config.
+            minimal_flag_called_events=self._minimal_flag_called_events,
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None

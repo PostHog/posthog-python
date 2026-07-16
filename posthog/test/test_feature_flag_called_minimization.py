@@ -421,3 +421,40 @@ class TestMinimizationViaEvaluateFlagsSnapshot(_CapturedEventsMixin, unittest.Te
         self.assertEqual(properties["$feature/variant-flag"], "variant-value")
         self.assertEqual(properties["$feature_flag_payload"], {"key": "value"})
         self.assertEqual(properties["app_version"], "1.2.3")
+
+    @mock.patch("posthog.client.flags")
+    def test_snapshot_pins_gate_at_creation_not_at_access(self, patch_flags):
+        # The gate is pinned when the snapshot is created: a gate change learned from
+        # a LATER response must not reshape events for flags evaluated earlier.
+        patch_flags.return_value = self._snapshot_response(
+            has_experiment=False, gate=None
+        )
+        client, captured = self._make_client()
+
+        flags = client.evaluate_flags("user-1")
+        # A later response enables the gate before the snapshot is accessed.
+        client._minimal_flag_called_events = True
+        flags.get_flag("variant-flag")
+
+        properties = self._flag_called_properties(captured)
+        self.assertEqual(properties["$feature/variant-flag"], "variant-value")
+        self.assertEqual(properties["app_version"], "1.2.3")
+
+    @mock.patch("posthog.client.flags")
+    def test_snapshot_keeps_pinned_gate_when_later_response_disables_it(
+        self, patch_flags
+    ):
+        patch_flags.return_value = self._snapshot_response(
+            has_experiment=False, gate=True
+        )
+        client, captured = self._make_client()
+
+        flags = client.evaluate_flags("user-1")
+        # A later response disables the gate; this snapshot's evaluation authorized
+        # minimization, so its events stay minimal.
+        client._minimal_flag_called_events = False
+        flags.get_flag("variant-flag")
+
+        properties = self._flag_called_properties(captured)
+        self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self.assertIs(properties["$feature_flag_has_experiment"], False)
