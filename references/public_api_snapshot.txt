@@ -404,11 +404,13 @@ attribute posthog.ai.otel.spans.AI_SPAN_PREFIXES = ('gen_ai.', 'llm.', 'ai.', 't
 attribute posthog.ai.otel.spans.DEFAULT_HOST = 'https://us.i.posthog.com'
 attribute posthog.ai.prompts.APP_ENDPOINT = 'https://us.posthog.com'
 attribute posthog.ai.prompts.CachedPrompt.fetched_at = fetched_at
+attribute posthog.ai.prompts.CachedPrompt.label = label
 attribute posthog.ai.prompts.CachedPrompt.name = name
 attribute posthog.ai.prompts.CachedPrompt.prompt = prompt
 attribute posthog.ai.prompts.CachedPrompt.version = version
 attribute posthog.ai.prompts.DEFAULT_CACHE_TTL_SECONDS = 300
-attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int]]
+attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int], Optional[str]]
+attribute posthog.ai.prompts.PromptResult.label: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.name: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.prompt: str
 attribute posthog.ai.prompts.PromptResult.source: PromptSource
@@ -844,8 +846,8 @@ class posthog.ai.openai.openai_providers.AzureOpenAI(posthog_client: Optional[Po
 class posthog.ai.openai_agents.processor.PostHogTracingProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
 class posthog.ai.otel.exporter.PostHogTraceExporter(api_key: str, host: str = DEFAULT_HOST)
 class posthog.ai.otel.processor.PostHogSpanProcessor(api_key: str, host: str = DEFAULT_HOST)
-class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int)
-class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None)
+class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int, label: Optional[str] = None)
+class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None)
 class posthog.ai.prompts.Prompts(posthog: Optional[Any] = None, *, personal_api_key: Optional[str] = None, project_api_key: Optional[str] = None, host: Optional[str] = None, default_cache_ttl_seconds: Optional[int] = None, capture_errors: bool = False)
 class posthog.ai.stream.AsyncStreamWrapper(generator: AsyncGenerator[T, None], stream: Optional[Any] = None)
 class posthog.ai.types.FormattedFunctionCall 
@@ -1178,7 +1180,7 @@ method posthog.ai.otel.processor.PostHogSpanProcessor.on_start(span: Span, paren
 method posthog.ai.otel.processor.PostHogSpanProcessor.shutdown() -> None
 method posthog.ai.prompts.Prompts.clear_cache(name: Optional[str] = None, *, version: Optional[int] = None) -> None
 method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariables) -> str
-method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None) -> Union[str, PromptResult]
+method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
 method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
