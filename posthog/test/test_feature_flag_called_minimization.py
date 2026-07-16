@@ -118,10 +118,12 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
                 "locally_evaluated",
                 "$lib",
                 "$lib_version",
+                "$is_server",
                 "$geoip_disable",
             },
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self.assertIs(properties["$is_server"], True)
         self.assertEqual(properties["$feature_flag"], "person-flag")
         self.assertEqual(properties["$feature_flag_response"], True)
         self.assertIs(properties["$feature_flag_has_experiment"], False)
@@ -130,6 +132,24 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
         self.assertEqual(properties["$feature_flag_reason"], "Matched condition set 1")
         self.assertEqual(properties["$feature_flag_request_id"], "req-1")
         self.assertEqual(properties["$feature_flag_evaluated_at"], 1640995200000)
+
+    @mock.patch("posthog.client.flags")
+    def test_gated_non_experiment_flag_with_groups_keeps_group_context(
+        self, patch_flags
+    ):
+        # $groups and $process_person_profile are "correctness-required" allowlist
+        # entries: this pins that they actually survive minimization rather than
+        # just being present in the allowlist with no test ever exercising them.
+        patch_flags.return_value = _flags_response(has_experiment=False, gate=True)
+        client, captured = self._make_client()
+
+        client.get_feature_flag_result(
+            "person-flag", "some-distinct-id", groups={"organization": "org-1"}
+        )
+
+        properties = self._flag_called_properties(captured)
+        self.assertEqual(properties["$groups"], {"organization": "org-1"})
+        self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
 
     @mock.patch("posthog.client.flags")
     def test_gated_experiment_flag_sends_full_event(self, patch_flags):
@@ -248,6 +268,7 @@ class TestMinimizationViaLocalEvaluationPayload(
                 "locally_evaluated",
                 "$lib",
                 "$lib_version",
+                "$is_server",
                 "$geoip_disable",
             },
         )
@@ -361,6 +382,7 @@ class TestMinimizationViaEvaluateFlagsSnapshot(_CapturedEventsMixin, unittest.Te
                 "locally_evaluated",
                 "$lib",
                 "$lib_version",
+                "$is_server",
                 "$geoip_disable",
             },
         )

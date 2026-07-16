@@ -223,6 +223,7 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$session_id",
         "$lib",
         "$lib_version",
+        "$is_server",
         # Processing-control sentinel this SDK sets to deliver the event correctly
         "$geoip_disable",
     }
@@ -232,6 +233,12 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
 def _parse_has_experiment(value: Any) -> Optional[bool]:
     """Server-reported experiment linkage; anything but an explicit bool means unknown."""
     return value if isinstance(value, bool) else None
+
+
+def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
+    """Server-reported experiment linkage from flag metadata; ``None`` when absent
+    (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
+    return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
 
 
 class Client(object):
@@ -2438,10 +2445,8 @@ class Client(object):
                     has_experiment = _parse_has_experiment(
                         local_def.get("has_experiment")
                     )
-            elif isinstance(flag_details, FeatureFlag) and isinstance(
-                flag_details.metadata, FlagMetadata
-            ):
-                has_experiment = flag_details.metadata.has_experiment
+            elif isinstance(flag_details, FeatureFlag):
+                has_experiment = _metadata_has_experiment(flag_details.metadata)
 
             self._capture_feature_flag_called(
                 distinct_id,
@@ -3208,11 +3213,7 @@ class Client(object):
                             else None
                         ),
                         locally_evaluated=False,
-                        has_experiment=(
-                            detail.metadata.has_experiment
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
+                        has_experiment=_metadata_has_experiment(detail.metadata),
                     )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
