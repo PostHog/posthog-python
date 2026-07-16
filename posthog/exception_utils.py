@@ -98,6 +98,24 @@ _URL_CREDENTIALS_RE = re.compile(
 )
 
 
+def get_current_otel_span_properties() -> Dict[str, str]:
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        return {}
+
+    try:
+        span_context = trace.get_current_span().get_span_context()
+        if not span_context.is_valid:
+            return {}
+        return {
+            "$trace_id": f"{span_context.trace_id:032x}",
+            "$span_id": f"{span_context.span_id:016x}",
+        }
+    except Exception:
+        return {}
+
+
 def _redact_url_credentials(value):
     if "://" not in value:
         return value
