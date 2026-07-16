@@ -98,7 +98,7 @@ _URL_CREDENTIALS_RE = re.compile(
 )
 
 
-def get_current_otel_span_properties() -> Dict[str, str]:
+def _get_current_otel_span_properties() -> Dict[str, str]:
     try:
         from opentelemetry import trace
     except ImportError:

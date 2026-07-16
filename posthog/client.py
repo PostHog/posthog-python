@@ -52,7 +52,7 @@ from posthog.exception_utils import (
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
-    get_current_otel_span_properties,
+    _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
@@ -1471,7 +1471,7 @@ class Client(object):
 
             properties = {
                 "$exception_list": all_exceptions_with_trace_and_in_app,
-                **get_current_otel_span_properties(),
+                **_get_current_otel_span_properties(),
                 **properties,
             }
 
