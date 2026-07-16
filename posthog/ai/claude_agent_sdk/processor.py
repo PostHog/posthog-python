@@ -39,6 +39,7 @@ class _GenerationData:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    raw_usage: Optional[Dict[str, Any]] = None
     start_time: float = 0.0
     end_time: float = 0.0
     span_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -76,9 +77,11 @@ class _GenerationTracker:
             self._current.cache_creation_input_tokens = usage.get(
                 "cache_creation_input_tokens", 0
             )
+            self._current.raw_usage = dict(usage)
 
         elif event_type == "message_delta" and self._current is not None:
             usage = raw.get("usage", {})
+            self._current.raw_usage = {**(self._current.raw_usage or {}), **usage}
             # message_delta usage reports cumulative output tokens
             if usage.get("output_tokens"):
                 self._current.output_tokens = usage["output_tokens"]
@@ -450,6 +453,8 @@ class PostHogClaudeAgentProcessor:
             properties["$ai_cache_creation_input_tokens"] = (
                 gen.cache_creation_input_tokens
             )
+        if gen.raw_usage:
+            properties["$ai_usage"] = gen.raw_usage
 
         if gen.stop_reason is not None:
             properties["$ai_stop_reason"] = gen.stop_reason
@@ -509,6 +514,8 @@ class PostHogClaudeAgentProcessor:
             properties["$ai_cache_read_input_tokens"] = cache_read
         if cache_creation:
             properties["$ai_cache_creation_input_tokens"] = cache_creation
+        if usage:
+            properties["$ai_usage"] = usage
 
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd

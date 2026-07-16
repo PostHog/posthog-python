@@ -101,7 +101,17 @@ def _make_result_message(
     is_error: bool = False,
     cache_read: int = 0,
     cache_creation: int = 0,
+    cache_creation_ttl: Optional[Dict[str, int]] = None,
 ) -> ResultMessage:
+    usage: Dict[str, Any] = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+    }
+    if cache_creation_ttl is not None:
+        usage["cache_creation"] = cache_creation_ttl
+
     return ResultMessage(
         subtype="success" if not is_error else "error",
         duration_ms=duration_ms,
@@ -110,12 +120,7 @@ def _make_result_message(
         num_turns=num_turns,
         session_id="sess_123",
         total_cost_usd=total_cost_usd,
-        usage={
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_read_input_tokens": cache_read,
-            "cache_creation_input_tokens": cache_creation,
-        },
+        usage=usage,
     )
 
 
@@ -213,6 +218,44 @@ class TestGenerationEmission:
         assert props["$ai_cache_read_input_tokens"] == 20
 
     @pytest.mark.asyncio
+    async def test_emits_cache_creation_ttl_breakdown_from_stream_events(
+        self, processor, mock_client
+    ):
+        message_start = _make_message_start(input_tokens=100, cache_creation=800)
+        message_start.event["message"]["usage"]["cache_creation"] = {
+            "ephemeral_5m_input_tokens": 300,
+            "ephemeral_1h_input_tokens": 500,
+        }
+        messages = [
+            message_start,
+            _make_message_delta(output_tokens=50),
+            _make_message_stop(),
+            _make_assistant_message(),
+            _make_result_message(),
+        ]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
+                pass
+
+        generation_call = next(
+            call
+            for call in mock_client.capture.call_args_list
+            if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
+        )
+        props = generation_call.kwargs.get("properties") or generation_call[1].get(
+            "properties"
+        )
+        assert props["$ai_cache_creation_input_tokens"] == 800
+        assert props["$ai_usage"]["cache_creation"] == {
+            "ephemeral_5m_input_tokens": 300,
+            "ephemeral_1h_input_tokens": 500,
+        }
+
+    @pytest.mark.asyncio
     async def test_emits_multiple_generations_for_multi_turn(
         self, processor, mock_client
     ):
@@ -251,7 +294,15 @@ class TestGenerationEmission:
         """When StreamEvents are not available, fall back to ResultMessage data."""
         messages = [
             _make_assistant_message(),
-            _make_result_message(input_tokens=200, output_tokens=100),
+            _make_result_message(
+                input_tokens=200,
+                output_tokens=100,
+                cache_creation=800,
+                cache_creation_ttl={
+                    "ephemeral_5m_input_tokens": 300,
+                    "ephemeral_1h_input_tokens": 500,
+                },
+            ),
         ]
 
         with patch(
@@ -272,6 +323,11 @@ class TestGenerationEmission:
         )
         assert props["$ai_input_tokens"] == 200
         assert props["$ai_output_tokens"] == 100
+        assert props["$ai_cache_creation_input_tokens"] == 800
+        assert props["$ai_usage"]["cache_creation"] == {
+            "ephemeral_5m_input_tokens": 300,
+            "ephemeral_1h_input_tokens": 500,
+        }
 
 
 class TestToolSpanEmission:
@@ -379,8 +435,13 @@ class TestPrivacyMode:
             distinct_id="user",
             privacy_mode=True,
         )
+        message_start = _make_message_start(cache_creation=800)
+        message_start.event["message"]["usage"]["cache_creation"] = {
+            "ephemeral_5m_input_tokens": 300,
+            "ephemeral_1h_input_tokens": 500,
+        }
         messages = [
-            _make_message_start(),
+            message_start,
             _make_message_stop(),
             _make_assistant_message(
                 tool_uses=[
@@ -413,6 +474,21 @@ class TestPrivacyMode:
             "properties"
         )
         assert "$ai_input_state" not in props
+
+        generation_call = next(
+            call
+            for call in mock_client.capture.call_args_list
+            if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
+        )
+        generation_props = generation_call.kwargs.get("properties") or generation_call[
+            1
+        ].get("properties")
+        assert generation_props["$ai_input"] is None
+        assert generation_props.get("$ai_output_choices") is None
+        assert generation_props["$ai_usage"]["cache_creation"] == {
+            "ephemeral_5m_input_tokens": 300,
+            "ephemeral_1h_input_tokens": 500,
+        }
 
 
 class TestPersonlessMode:

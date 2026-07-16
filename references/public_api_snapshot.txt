@@ -364,6 +364,8 @@ attribute posthog.ai.langchain.callbacks.GenerationMetadata.posthog_properties: 
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.provider: Optional[str] = None
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.tools: Optional[List[Dict[str, Any]]] = None
 attribute posthog.ai.langchain.callbacks.ModelUsage.cache_read_tokens: Optional[int]
+attribute posthog.ai.langchain.callbacks.ModelUsage.cache_write_1h_tokens: Optional[int] = None
+attribute posthog.ai.langchain.callbacks.ModelUsage.cache_write_5m_tokens: Optional[int] = None
 attribute posthog.ai.langchain.callbacks.ModelUsage.cache_write_tokens: Optional[int]
 attribute posthog.ai.langchain.callbacks.ModelUsage.input_tokens: Optional[int]
 attribute posthog.ai.langchain.callbacks.ModelUsage.output_tokens: Optional[int]
@@ -821,7 +823,7 @@ class posthog.ai.gemini.gemini_converter.GeminiMessage
 class posthog.ai.gemini.gemini_converter.GeminiPart 
 class posthog.ai.langchain.callbacks.CallbackHandler(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[Dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None)
 class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None)
-class posthog.ai.langchain.callbacks.ModelUsage(input_tokens: Optional[int], output_tokens: Optional[int], cache_write_tokens: Optional[int], cache_read_tokens: Optional[int], reasoning_tokens: Optional[int])
+class posthog.ai.langchain.callbacks.ModelUsage(input_tokens: Optional[int], output_tokens: Optional[int], cache_write_tokens: Optional[int], cache_read_tokens: Optional[int], reasoning_tokens: Optional[int], cache_write_5m_tokens: Optional[int] = None, cache_write_1h_tokens: Optional[int] = None)
 class posthog.ai.langchain.callbacks.SpanMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any])
 class posthog.ai.openai.openai.OpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.openai.openai.WrappedBeta 
