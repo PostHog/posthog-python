@@ -16,6 +16,7 @@ from parameterized import parameterized
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
 from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.utils import system_context
 
 
 def _flags_response(has_experiment, gate):
@@ -102,8 +103,8 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
 
         properties = self._flag_called_properties(captured)
         # The event shape is exactly the allowlist intersection of what the full
-        # event would have carried: no $feature/<key>, no payload, no system
-        # context, no super properties.
+        # event would have carried: no $feature/<key>, no payload, no super
+        # properties. Static platform/runtime identity (system_context()) survives.
         self.assertEqual(
             set(properties),
             {
@@ -120,7 +121,8 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
                 "$lib_version",
                 "$is_server",
                 "$geoip_disable",
-            },
+            }
+            | set(system_context()),
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
         self.assertIs(properties["$is_server"], True)
@@ -270,7 +272,8 @@ class TestMinimizationViaLocalEvaluationPayload(
                 "$lib_version",
                 "$is_server",
                 "$geoip_disable",
-            },
+            }
+            | set(system_context()),
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
         self.assertEqual(properties["$feature_flag_response"], True)
@@ -384,7 +387,8 @@ class TestMinimizationViaEvaluateFlagsSnapshot(_CapturedEventsMixin, unittest.Te
                 "$lib_version",
                 "$is_server",
                 "$geoip_disable",
-            },
+            }
+            | set(system_context()),
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
         self.assertEqual(properties["$feature_flag_response"], "variant-value")

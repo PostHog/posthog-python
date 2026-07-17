@@ -201,7 +201,10 @@ def no_throw(default_return=None):
 
 # Strict allowlist for minimal ``$feature_flag_called`` events, per the cross-SDK
 # contract: everything else — customer-passed properties, super properties, context
-# tags, system context — is stripped from the fully-enriched properties dict.
+# tags, and the richer parts of system context — is stripped from the
+# fully-enriched properties dict. The static platform/runtime identity keys below
+# are the exception: they're cheap and useful for debugging flag behavior by
+# platform, so they survive minimization.
 _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
     {
         # Identity
@@ -226,6 +229,13 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$is_server",
         # Processing-control sentinel this SDK sets to deliver the event correctly
         "$geoip_disable",
+        # Static platform/runtime identity: cheap, low-cardinality dimensions kept
+        # for platform/runtime breakdowns on flag-call debugging.
+        "$os",
+        "$os_version",
+        "$os_distro",
+        "$python_runtime",
+        "$python_version",
     }
 )
 
