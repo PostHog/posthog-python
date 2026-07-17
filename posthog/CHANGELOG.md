@@ -1,5 +1,11 @@
 # posthog
 
+## 7.26.0 — 2026-07-17
+
+### Minor changes
+
+- [1653bcb](https://github.com/posthog/posthog-python/commit/1653bcb7e96eee616ce7f72ffb98a9609f06ca9c) Add a `label` option to `Prompts.get()` to fetch the prompt version a label (e.g. `production`) currently points to. Labeled fetches are cached separately, and `PromptResult` carries the resolved `label`. Requires a PostHog version with prompt labels; older servers ignore the parameter and return the latest version. — Thanks @jurajmajerik!
+
 ## 7.25.0 — 2026-07-16
 
 ### Minor changes
