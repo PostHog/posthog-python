@@ -871,7 +871,7 @@ class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_ex
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
-class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, accessed: Optional[Set[str]] = None)
+class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None)
 class posthog.feature_flags.ConditionMatch 
 class posthog.feature_flags.InconclusiveMatchError 
 class posthog.feature_flags.RequiresServerEvaluation 
