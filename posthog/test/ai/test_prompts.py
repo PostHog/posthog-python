@@ -184,6 +184,23 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual(result.version, 3)
         self.assertEqual(result.label, "production")
 
+    @patch("posthog.ai.prompts._get_session")
+    @patch("posthog.ai.prompts.log")
+    def test_warn_when_server_does_not_resolve_requested_label(
+        self, mock_log, mock_get_session
+    ):
+        """Should warn when a labeled fetch gets a response without that label (old server)."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+
+        prompts = Prompts(self.create_mock_posthog())
+        result = prompts.get("test-prompt", label="production", with_metadata=True)
+
+        self.assertEqual(result.prompt, self.mock_prompt_response["prompt"])
+        self.assertIsNone(result.label)
+        mock_log.warning.assert_called_once()
+        self.assertIn("may not support prompt labels", mock_log.warning.call_args[0][0])
+
     def test_version_and_label_together_raises(self):
         """Should reject version and label passed together."""
         prompts = Prompts(self.create_mock_posthog())

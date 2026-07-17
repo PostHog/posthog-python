@@ -325,6 +325,18 @@ class Prompts:
         try:
             data = self._fetch_prompt_from_api(name, version, label)
 
+            # An older PostHog server ignores the label param and returns the latest
+            # version with no label field — surface that instead of failing silently.
+            if label is not None and data.get("label") != label:
+                log.warning(
+                    "[PostHog Prompts] Requested label %r for prompt %r but the server "
+                    "resolved %r. It may not support prompt labels yet and returned the "
+                    "latest version instead.",
+                    label,
+                    name,
+                    data.get("label"),
+                )
+
             # Update cache
             self._cache[cache_key] = CachedPrompt(
                 prompt=data["prompt"],
