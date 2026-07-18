@@ -3160,6 +3160,11 @@ class Client(object):
         errors_while_computing = False
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
+        # Source the gate the same way as has_experiment below; see
+        # _capture_feature_flag_called_if_needed for why. Defaults to the poller's
+        # current state; a successful remote fallback overwrites it with that
+        # response's own field below.
+        minimal_flag_called_events = self._minimal_flag_called_events
 
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
@@ -3214,6 +3219,9 @@ class Client(object):
                 )
                 errors_while_computing = bool(
                     response.get("errorsWhileComputingFlags", False)
+                )
+                minimal_flag_called_events = (
+                    response.get("minimalFlagCalledEvents") is True
                 )
                 for key, detail in response.get("flags", {}).items():
                     if key in locally_evaluated_keys:
@@ -3272,10 +3280,7 @@ class Client(object):
             evaluated_at=evaluated_at,
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
-            # Pin the gate as of this evaluation. When a remote fallback ran, the
-            # /flags response has just written it; local-only snapshots carry the
-            # poller's current gate. Both sources derive from the same team config.
-            minimal_flag_called_events=self._minimal_flag_called_events,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None

@@ -493,3 +493,35 @@ class TestMinimizationViaEvaluateFlagsSnapshot(_CapturedEventsMixin, unittest.Te
         properties = self._flag_called_properties(captured)
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
         self.assertIs(properties["$feature_flag_has_experiment"], False)
+
+    @mock.patch("posthog.client.flags")
+    def test_snapshot_uses_this_responses_gate_not_a_concurrent_update_during_construction(
+        self, patch_flags
+    ):
+        # This response's gate is off. Simulate a concurrent poller refresh (or
+        # another /flags call) flipping the client-wide gate on, in the gap between
+        # the remote fallback landing and the snapshot being constructed at the end
+        # of evaluate_flags(). The snapshot must pin the gate from its own response,
+        # not whatever the client-wide attribute reads at construction time.
+        patch_flags.return_value = self._snapshot_response(
+            has_experiment=False, gate=False
+        )
+        client, captured = self._make_client()
+
+        original_get_flags_decision = client._get_flags_decision
+
+        def get_flags_decision_then_concurrent_gate_flip(*args, **kwargs):
+            result = original_get_flags_decision(*args, **kwargs)
+            client._minimal_flag_called_events = True
+            return result
+
+        client._get_flags_decision = get_flags_decision_then_concurrent_gate_flip
+
+        flags = client.evaluate_flags("user-1")
+        flags.get_flag("variant-flag")
+
+        properties = self._flag_called_properties(captured)
+        # Had the snapshot re-read the (now-flipped) client-wide gate at
+        # construction time instead of this response's own field, it would have
+        # minimized instead.
+        self.assertEqual(properties["$feature/variant-flag"], "variant-value")
