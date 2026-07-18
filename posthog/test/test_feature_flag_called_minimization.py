@@ -154,6 +154,37 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
 
     @mock.patch("posthog.client.flags")
+    def test_remote_evaluation_uses_this_responses_gate_not_a_concurrent_update(
+        self, patch_flags
+    ):
+        # This response's gate is off. Simulate a concurrent poller refresh (or
+        # another /flags call on another thread) flipping the client-wide gate on,
+        # in the gap between this response landing and the event being captured.
+        # The single-flag path must shape the event from this response's own gate,
+        # not whatever the client-wide attribute reads at capture time.
+        patch_flags.return_value = _flags_response(has_experiment=False, gate=False)
+        client, captured = self._make_client()
+
+        original_get_details = client._get_feature_flag_details_from_server
+
+        def get_details_then_concurrent_gate_flip(*args, **kwargs):
+            result = original_get_details(*args, **kwargs)
+            client._minimal_flag_called_events = True
+            return result
+
+        client._get_feature_flag_details_from_server = (
+            get_details_then_concurrent_gate_flip
+        )
+
+        client.get_feature_flag_result("person-flag", "some-distinct-id")
+
+        properties = self._flag_called_properties(captured)
+        # Had the single-flag path re-read the (now-flipped) client-wide gate at
+        # capture time, this would have minimized instead.
+        self.assertEqual(properties["$feature/person-flag"], True)
+        self.assertIn("$python_version", properties)
+
+    @mock.patch("posthog.client.flags")
     def test_gated_experiment_flag_sends_full_event(self, patch_flags):
         patch_flags.return_value = _flags_response(has_experiment=True, gate=True)
         client, captured = self._make_client()
