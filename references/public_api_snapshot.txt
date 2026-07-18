@@ -638,6 +638,7 @@ attribute posthog.feature_flags_request_timeout_seconds = 3
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.cohorts: Required[Dict[str, Any]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.flags: Required[List[Dict[str, Any]]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.group_type_mapping: Required[Dict[str, str]]
+attribute posthog.flag_definition_cache.FlagDefinitionCacheData.minimal_flag_called_events: NotRequired[bool]
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
@@ -777,6 +778,7 @@ attribute posthog.types.FlagsAndPayloads.featureFlags: Optional[dict[str, FlagVa
 attribute posthog.types.FlagsResponse.errorsWhileComputingFlags: bool
 attribute posthog.types.FlagsResponse.evaluatedAt: Optional[int]
 attribute posthog.types.FlagsResponse.flags: dict[str, FeatureFlag]
+attribute posthog.types.FlagsResponse.minimalFlagCalledEvents: bool
 attribute posthog.types.FlagsResponse.quotaLimit: Optional[List[str]]
 attribute posthog.types.FlagsResponse.requestId: str
 attribute posthog.types.LegacyFlagMetadata.payload: Any
@@ -871,7 +873,7 @@ class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_ex
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
-class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, accessed: Optional[Set[str]] = None)
+class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None)
 class posthog.feature_flags.ConditionMatch 
 class posthog.feature_flags.InconclusiveMatchError 
 class posthog.feature_flags.RequiresServerEvaluation 

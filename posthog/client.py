@@ -199,6 +199,58 @@ def no_throw(default_return=None):
     return decorator
 
 
+# Strict allowlist for minimal ``$feature_flag_called`` events, per the cross-SDK
+# contract: everything else — customer-passed properties, super properties, context
+# tags, and the richer parts of system context — is stripped from the
+# fully-enriched properties dict. The static platform/runtime identity keys below
+# are the exception: they're cheap and useful for debugging flag behavior by
+# platform, so they survive minimization.
+_MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
+    {
+        # Identity
+        "$feature_flag",
+        "$feature_flag_response",
+        "$feature_flag_has_experiment",
+        # Evaluation debug
+        "$feature_flag_id",
+        "$feature_flag_version",
+        "$feature_flag_reason",
+        "$feature_flag_request_id",
+        "$feature_flag_evaluated_at",
+        "$feature_flag_error",
+        "locally_evaluated",
+        # Correctness-required
+        "$groups",
+        "$process_person_profile",
+        # Linkage / SDK identity
+        "$session_id",
+        "$lib",
+        "$lib_version",
+        "$is_server",
+        # Processing-control sentinel this SDK sets to deliver the event correctly
+        "$geoip_disable",
+        # Static platform/runtime identity: cheap, low-cardinality dimensions kept
+        # for platform/runtime breakdowns on flag-call debugging.
+        "$os",
+        "$os_version",
+        "$os_distro",
+        "$python_runtime",
+        "$python_version",
+    }
+)
+
+
+def _parse_has_experiment(value: Any) -> Optional[bool]:
+    """Server-reported experiment linkage; anything but an explicit bool means unknown."""
+    return value if isinstance(value, bool) else None
+
+
+def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
+    """Server-reported experiment linkage from flag metadata; ``None`` when absent
+    (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
+    return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
+
+
 class Client(object):
     """
     This is the SDK reference for the PostHog Python SDK.
@@ -457,6 +509,10 @@ class Client(object):
         self.exception_capture = None
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
+        # Server-controlled gate for minimal $feature_flag_called events, read from
+        # the /flags v2 response and the local-evaluation payload. False until the
+        # server reports it, so full events are the fail-safe.
+        self._minimal_flag_called_events: bool = False
 
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -967,7 +1023,14 @@ class Client(object):
             **request_data,
         )
 
-        return normalize_flags_response(resp_data)
+        response = normalize_flags_response(resp_data)
+        # Server-controlled gate for minimal $feature_flag_called events. Only the
+        # v2 response shape carries it; absent (legacy shape, older server, team
+        # not gated) means False.
+        self._minimal_flag_called_events = (
+            response.get("minimalFlagCalledEvents") is True
+        )
+        return response
 
     @no_throw()
     def capture(
@@ -1034,6 +1097,9 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
+        # Internal, set for minimal $feature_flag_called events: a strict allowlist
+        # applied to the fully-enriched properties dict just before enqueueing.
+        property_allowlist = kwargs.get("_property_allowlist", None)
 
         properties = {**(properties or {}), **system_context()}
 
@@ -1147,7 +1213,7 @@ class Client(object):
             properties = {**extra_properties, **properties}
             msg["properties"] = properties
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(msg, disable_geoip, property_allowlist=property_allowlist)
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
         """
@@ -1622,7 +1688,7 @@ class Client(object):
 
         reset_sessions()
 
-    def _enqueue(self, msg, disable_geoip):
+    def _enqueue(self, msg, disable_geoip, property_allowlist=None):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto the queue, return `(success, msg)`"""
 
@@ -1669,6 +1735,14 @@ class Client(object):
         # can't be silently overridden by a user-provided super property.
         if self.is_server:
             msg["properties"]["$is_server"] = True
+
+        # Applied after every enrichment step (system context, context tags, super
+        # properties, $lib/$lib_version) so the final event shape is exactly the
+        # allowlist regardless of where a property came from.
+        if property_allowlist is not None:
+            msg["properties"] = {
+                k: v for k, v in msg["properties"].items() if k in property_allowlist
+            }
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
@@ -1875,6 +1949,11 @@ class Client(object):
         self.feature_flags = data["flags"]
         self.group_type_mapping = data["group_type_mapping"]
         self.cohorts = data["cohorts"]
+        # Server-controlled gate for minimal $feature_flag_called events; the
+        # local-evaluation payload carries it as a top-level key. Absent means False.
+        self._minimal_flag_called_events = (
+            data.get("minimal_flag_called_events") is True
+        )
 
         # Invalidate evaluation cache if flag definitions changed
         if (
@@ -1980,6 +2059,7 @@ class Client(object):
                                 "flags": self.feature_flags or [],
                                 "group_type_mapping": self.group_type_mapping or {},
                                 "cohorts": self.cohorts or {},
+                                "minimal_flag_called_events": self._minimal_flag_called_events,
                             }
                         )
                     )
@@ -2269,6 +2349,7 @@ class Client(object):
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
+        remote_minimal_flag_called_events = False
 
         # Resolve device_id from context if not provided
         if device_id is None:
@@ -2311,16 +2392,20 @@ class Client(object):
                 )
         else:
             try:
-                flag_details, request_id, evaluated_at, errors_while_computing = (
-                    self._get_feature_flag_details_from_server(
-                        key,
-                        distinct_id,
-                        groups,
-                        person_properties,
-                        group_properties,
-                        disable_geoip,
-                        device_id=device_id,
-                    )
+                (
+                    flag_details,
+                    request_id,
+                    evaluated_at,
+                    errors_while_computing,
+                    remote_minimal_flag_called_events,
+                ) = self._get_feature_flag_details_from_server(
+                    key,
+                    distinct_id,
+                    groups,
+                    person_properties,
+                    group_properties,
+                    disable_geoip,
+                    device_id=device_id,
                 )
                 errors = []
                 if errors_while_computing:
@@ -2369,14 +2454,18 @@ class Client(object):
             # remotely-evaluated flags carry it in the response metadata. None when
             # the server (older deployment) does not report it.
             has_experiment: Optional[bool] = None
+            # Source the gate the same way as has_experiment above; see
+            # _capture_feature_flag_called_if_needed for why.
+            minimal_flag_called_events = self._minimal_flag_called_events
             if flag_was_locally_evaluated:
                 local_def = (self.feature_flags_by_key or {}).get(key)
                 if isinstance(local_def, dict):
-                    has_experiment = local_def.get("has_experiment")
-            elif isinstance(flag_details, FeatureFlag) and isinstance(
-                flag_details.metadata, FlagMetadata
-            ):
-                has_experiment = flag_details.metadata.has_experiment
+                    has_experiment = _parse_has_experiment(
+                        local_def.get("has_experiment")
+                    )
+            elif isinstance(flag_details, FeatureFlag):
+                has_experiment = _metadata_has_experiment(flag_details.metadata)
+                minimal_flag_called_events = remote_minimal_flag_called_events
 
             self._capture_feature_flag_called(
                 distinct_id,
@@ -2391,6 +2480,7 @@ class Client(object):
                 flag_details,
                 feature_flag_error,
                 has_experiment,
+                minimal_flag_called_events,
             )
 
         return flag_result
@@ -2636,10 +2726,12 @@ class Client(object):
         group_properties: dict[str, dict[str, Any]],
         disable_geoip: Optional[bool],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool, bool]:
         """
         Calls /flags and returns the flag details, request id, evaluated at timestamp,
-        and whether there were errors while computing flags.
+        whether there were errors while computing flags, and this response's own
+        minimal-flag-called-events gate (see _capture_feature_flag_called_if_needed
+        for why the caller should use this over the client-wide gate).
         """
         resp_data = self._get_flags_decision(
             distinct_id,
@@ -2653,9 +2745,16 @@ class Client(object):
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
         errors_while_computing = resp_data.get("errorsWhileComputingFlags", False)
+        minimal_flag_called_events = resp_data.get("minimalFlagCalledEvents") is True
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
-        return flag_details, request_id, evaluated_at, errors_while_computing
+        return (
+            flag_details,
+            request_id,
+            evaluated_at,
+            errors_while_computing,
+            minimal_flag_called_events,
+        )
 
     def _capture_feature_flag_called(
         self,
@@ -2671,6 +2770,7 @@ class Client(object):
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -2706,6 +2806,7 @@ class Client(object):
             groups=groups,
             disable_geoip=disable_geoip,
             has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -2718,17 +2819,27 @@ class Client(object):
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ) -> None:
         """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
         groups) tuple hasn't already been reported on this client. Group context is
-        included so that group-scoped flags fire a separate event for each group a
-        user is evaluated under. Shared by the single-flag evaluation path and
+        included so that group-scoped flags fire a separate event for each group a user
+        is evaluated under. Shared by the single-flag evaluation path and
         ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
         identically.
 
         ``has_experiment`` is the server-reported signal for whether the flag is linked
-        to an experiment; when the server reported it, it is recorded on the event as
-        ``$feature_flag_has_experiment``. ``None`` (unknown) omits the property.
+        to an experiment (``None`` when the server did not report it). When the
+        server-controlled gate is on and the flag is known non-experiment, the event is
+        trimmed to a strict allowlist; any missing signal sends the full legacy shape,
+        and experiment-linked flags keep the full set for exposure analysis.
+
+        ``minimal_flag_called_events`` is the gate as observed by the evaluation that
+        produced ``response``, not a fresh read of client-wide state: both callers
+        resolve it themselves (the snapshot pins it at construction; the single-flag
+        path reads it from the specific local/remote source that produced the value)
+        so a concurrent poller refresh or another ``/flags`` call can't reshape an
+        event after the fact.
         """
         groups_key = (
             tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
@@ -2743,10 +2854,22 @@ class Client(object):
         if feature_flag_reported_key in reported_flags:
             return
 
-        # Record the server's experiment signal so the server can optimize ingestion.
-        # Omitted when unknown (older servers that don't report has_experiment).
+        # Record the server's experiment signal when known, so minimization's impact
+        # can be measured by segmenting on it.
         if has_experiment is not None:
             properties["$feature_flag_has_experiment"] = has_experiment
+
+        # Minimize iff the server-controlled gate is on AND the flag is known to have
+        # no linked experiment. Any missing signal (gate absent, has_experiment
+        # missing) fails safe to the full legacy shape.
+        should_minimize = minimal_flag_called_events and has_experiment is False
+        # Only thread the internal allowlist through when minimizing, so the
+        # full-property path's capture() call signature stays unchanged.
+        extra_capture_kwargs: dict[str, Any] = {}
+        if should_minimize:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
 
         self.capture(
             "$feature_flag_called",
@@ -2754,6 +2877,7 @@ class Client(object):
             properties=properties,
             groups=groups or {},
             disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
         )
         reported_flags.add(feature_flag_reported_key)
 
@@ -3036,6 +3160,11 @@ class Client(object):
         errors_while_computing = False
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
+        # Source the gate the same way as has_experiment below; see
+        # _capture_feature_flag_called_if_needed for why. Defaults to the poller's
+        # current state; a successful remote fallback overwrites it with that
+        # response's own field below.
+        minimal_flag_called_events = self._minimal_flag_called_events
 
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
@@ -3065,7 +3194,7 @@ class Client(object):
                 version=None,
                 reason="Evaluated locally",
                 locally_evaluated=True,
-                has_experiment=flag_def.get("has_experiment"),
+                has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
             )
             locally_evaluated_keys.add(key)
 
@@ -3090,6 +3219,9 @@ class Client(object):
                 )
                 errors_while_computing = bool(
                     response.get("errorsWhileComputingFlags", False)
+                )
+                minimal_flag_called_events = (
+                    response.get("minimalFlagCalledEvents") is True
                 )
                 for key, detail in response.get("flags", {}).items():
                     if key in locally_evaluated_keys:
@@ -3128,11 +3260,7 @@ class Client(object):
                             else None
                         ),
                         locally_evaluated=False,
-                        has_experiment=(
-                            detail.metadata.has_experiment
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
+                        has_experiment=_metadata_has_experiment(detail.metadata),
                     )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
@@ -3152,6 +3280,7 @@ class Client(object):
             evaluated_at=evaluated_at,
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None
