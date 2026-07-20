@@ -313,6 +313,78 @@ class TestMetricsDelivery:
                 posthog.sync_mode,
             ) = saved
 
+    def test_module_metrics_config_flows_to_default_client(self):
+        # Module-level `posthog.metrics = {...}` must reach the client built by
+        # posthog.setup(), or apps configured via module settings get
+        # 'unknown_service' as service.name on every series.
+        saved = (
+            posthog.default_client,
+            posthog.api_key,
+            posthog.host,
+            posthog.sync_mode,
+            getattr(posthog, "metrics", None),
+        )
+        posthog.default_client = None
+        posthog.api_key = FAKE_API_KEY
+        posthog.host = "https://us.example.com"
+        posthog.sync_mode = True
+        posthog.metrics = {"service_name": "module-configured"}
+        try:
+            client = posthog.setup()
+            client.metrics.count("m", 1)
+            payload, _, _ = flush_and_capture(client)
+            resource_attrs = {
+                kv["key"]: kv["value"]
+                for kv in payload["resourceMetrics"][0]["resource"]["attributes"]
+            }
+            assert resource_attrs["service.name"] == {
+                "stringValue": "module-configured"
+            }
+        finally:
+            (
+                posthog.default_client,
+                posthog.api_key,
+                posthog.host,
+                posthog.sync_mode,
+                posthog.metrics,
+            ) = saved
+
+    def test_module_metrics_config_set_after_setup_applies_until_first_use(self):
+        # Django-style apps set module attrs in a ready() hook that can run after
+        # something else has already forced setup(). As long as `.metrics` hasn't
+        # been touched yet, a repeat setup() call must pick up the new config.
+        saved = (
+            posthog.default_client,
+            posthog.api_key,
+            posthog.host,
+            posthog.sync_mode,
+            getattr(posthog, "metrics", None),
+        )
+        posthog.default_client = None
+        posthog.api_key = FAKE_API_KEY
+        posthog.host = "https://us.example.com"
+        posthog.sync_mode = True
+        posthog.metrics = None
+        try:
+            posthog.setup()
+            posthog.metrics = {"service_name": "late-configured"}
+            client = posthog.setup()
+            client.metrics.count("m", 1)
+            payload, _, _ = flush_and_capture(client)
+            resource_attrs = {
+                kv["key"]: kv["value"]
+                for kv in payload["resourceMetrics"][0]["resource"]["attributes"]
+            }
+            assert resource_attrs["service.name"] == {"stringValue": "late-configured"}
+        finally:
+            (
+                posthog.default_client,
+                posthog.api_key,
+                posthog.host,
+                posthog.sync_mode,
+                posthog.metrics,
+            ) = saved
+
 
 class TestMetricsCrashSafety:
     # A telemetry SDK must never raise into the host application — these inputs all
