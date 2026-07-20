@@ -76,6 +76,16 @@ _DEFAULT_MAX_SERIES_PER_FLUSH = 1000
 _SCOPE_NAME = "posthog-python"
 
 
+def _snapshot_attribute_value(value: Any) -> Any:
+    # Per-value fallback: one un-deepcopyable exotic value must not degrade the
+    # whole snapshot to shallow, leaving the other (mutable) values shared with
+    # the caller after the series key was computed.
+    try:
+        return copy.deepcopy(value)
+    except Exception:
+        return value
+
+
 def _to_otlp_any_value(value: Any) -> dict:
     # bool before int: Python bool is an int subclass and must not encode as intValue.
     if isinstance(value, bool):
@@ -170,10 +180,14 @@ class _SeriesState:
         # change the stored series.
         if attributes:
             try:
-                self.attributes: Optional[dict] = copy.deepcopy(attributes)
+                self.attributes: Optional[dict] = {
+                    key: _snapshot_attribute_value(value)
+                    for key, value in attributes.items()
+                }
             except Exception:
-                # Un-copyable exotic values: a shallow snapshot still isolates the
-                # top-level dict, and the encoder stringifies whatever remains.
+                # A hostile mapping whose iteration itself raises: a shallow
+                # snapshot still isolates the top-level dict, and the encoder
+                # stringifies whatever remains.
                 self.attributes = dict(attributes)
         else:
             self.attributes = None
@@ -485,9 +499,16 @@ class PostHogMetrics:
                 _bucket_index_for(value, DEFAULT_HISTOGRAM_BOUNDS)
             ] += 1
 
-    def _arm_flush_timer(self, delay: Optional[float] = None) -> None:
+    def _arm_flush_timer(
+        self, delay: Optional[float] = None, replace: bool = False
+    ) -> None:
         if self._flush_timer is not None:
-            return
+            if not replace:
+                return
+            # A failed explicit flush must reschedule the already-armed timer,
+            # or it fires at the base cadence and bypasses the retry backoff.
+            self._flush_timer.cancel()
+            self._flush_timer = None
         timer = threading.Timer(
             delay if delay is not None else self._flush_interval, self._timer_flush
         )
@@ -555,7 +576,7 @@ class PostHogMetrics:
                     delay,
                 )
                 self._merge_window_back(window)
-                self._arm_flush_timer(delay)
+                self._arm_flush_timer(delay, replace=True)
         elif outcome == "too-large":
             log.warning(
                 "Metrics batch exceeded the server size limit and was dropped. "

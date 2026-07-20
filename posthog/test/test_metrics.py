@@ -348,6 +348,26 @@ class TestMetricsCrashSafety:
         assert keys == {"a", "2"}
         assert all(isinstance(attr["key"], str) for attr in dp["attributes"])
 
+    def test_uncopyable_attribute_does_not_unshare_other_values(self, client):
+        # One un-deepcopyable value must not degrade the whole snapshot to a
+        # shallow copy: the other, perfectly copyable values would then stay
+        # shared with the caller and mutate after the series key was computed.
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("nope")
+
+        tags = ["a"]
+        client.metrics.count("m", 1, attributes={"bad": Uncopyable(), "tags": tags})
+        tags.append("b")
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        attrs = {a["key"]: a["value"] for a in dp["attributes"]}
+        wire_tags = [v["stringValue"] for v in attrs["tags"]["arrayValue"]["values"]]
+        assert wire_tags == ["a"]
+
     def test_nested_attribute_values_snapshot_at_capture(self, client):
         # The series key is computed at capture time; a caller mutating a nested
         # value afterwards must not rewrite the stored series' attributes, or the
@@ -564,6 +584,28 @@ class TestMetricsFailureHandling:
         (metric,) = metrics_from(payload)
         (dp,) = metric["sum"]["dataPoints"]
         assert dp["asDouble"] == 3.0
+
+    def test_explicit_flush_failure_reschedules_armed_timer_with_backoff(self):
+        # A capture arms the base-interval timer; if an explicit flush() then
+        # fails, the retry must happen at the backoff delay — the already-armed
+        # timer has to be rescheduled, not left to fire at the base cadence.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"flush_interval": 1.0},
+        )
+        c.metrics.count("m", 1)
+        assert c.metrics._flush_timer.interval == 1.0
+
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            c.metrics.flush()
+
+        assert c.metrics._flush_timer is not None
+        assert c.metrics._flush_timer.interval == 2.0
+        c.metrics.reset()
 
     def test_failed_flushes_back_off_exponentially_capped(self):
         # Retrying a down endpoint at the fixed cadence hammers it for the whole
