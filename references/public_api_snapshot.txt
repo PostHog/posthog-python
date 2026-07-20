@@ -404,11 +404,13 @@ attribute posthog.ai.otel.spans.AI_SPAN_PREFIXES = ('gen_ai.', 'llm.', 'ai.', 't
 attribute posthog.ai.otel.spans.DEFAULT_HOST = 'https://us.i.posthog.com'
 attribute posthog.ai.prompts.APP_ENDPOINT = 'https://us.posthog.com'
 attribute posthog.ai.prompts.CachedPrompt.fetched_at = fetched_at
+attribute posthog.ai.prompts.CachedPrompt.label = label
 attribute posthog.ai.prompts.CachedPrompt.name = name
 attribute posthog.ai.prompts.CachedPrompt.prompt = prompt
 attribute posthog.ai.prompts.CachedPrompt.version = version
 attribute posthog.ai.prompts.DEFAULT_CACHE_TTL_SECONDS = 300
-attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int]]
+attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int], Optional[str]]
+attribute posthog.ai.prompts.PromptResult.label: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.name: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.prompt: str
 attribute posthog.ai.prompts.PromptResult.source: PromptSource
@@ -636,6 +638,7 @@ attribute posthog.feature_flags_request_timeout_seconds = 3
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.cohorts: Required[Dict[str, Any]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.flags: Required[List[Dict[str, Any]]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.group_type_mapping: Required[Dict[str, str]]
+attribute posthog.flag_definition_cache.FlagDefinitionCacheData.minimal_flag_called_events: NotRequired[bool]
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
@@ -762,6 +765,7 @@ attribute posthog.types.FeatureFlagResult.payload: Optional[Any]
 attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
 attribute posthog.types.FlagMetadata.description: str
+attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
 attribute posthog.types.FlagMetadata.id: int
 attribute posthog.types.FlagMetadata.payload: Optional[str]
 attribute posthog.types.FlagMetadata.version: int
@@ -774,6 +778,7 @@ attribute posthog.types.FlagsAndPayloads.featureFlags: Optional[dict[str, FlagVa
 attribute posthog.types.FlagsResponse.errorsWhileComputingFlags: bool
 attribute posthog.types.FlagsResponse.evaluatedAt: Optional[int]
 attribute posthog.types.FlagsResponse.flags: dict[str, FeatureFlag]
+attribute posthog.types.FlagsResponse.minimalFlagCalledEvents: bool
 attribute posthog.types.FlagsResponse.quotaLimit: Optional[List[str]]
 attribute posthog.types.FlagsResponse.requestId: str
 attribute posthog.types.LegacyFlagMetadata.payload: Any
@@ -843,8 +848,8 @@ class posthog.ai.openai.openai_providers.AzureOpenAI(posthog_client: Optional[Po
 class posthog.ai.openai_agents.processor.PostHogTracingProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
 class posthog.ai.otel.exporter.PostHogTraceExporter(api_key: str, host: str = DEFAULT_HOST)
 class posthog.ai.otel.processor.PostHogSpanProcessor(api_key: str, host: str = DEFAULT_HOST)
-class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int)
-class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None)
+class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int, label: Optional[str] = None)
+class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None)
 class posthog.ai.prompts.Prompts(posthog: Optional[Any] = None, *, personal_api_key: Optional[str] = None, project_api_key: Optional[str] = None, host: Optional[str] = None, default_cache_ttl_seconds: Optional[int] = None, capture_errors: bool = False)
 class posthog.ai.stream.AsyncStreamWrapper(generator: AsyncGenerator[T, None], stream: Optional[Any] = None)
 class posthog.ai.types.FormattedFunctionCall 
@@ -868,7 +873,7 @@ class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_ex
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
-class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, accessed: Optional[Set[str]] = None)
+class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None)
 class posthog.feature_flags.ConditionMatch 
 class posthog.feature_flags.InconclusiveMatchError 
 class posthog.feature_flags.RequiresServerEvaluation 
@@ -895,7 +900,7 @@ class posthog.request.QuotaLimitError
 class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata])
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str)
+class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
@@ -1177,7 +1182,7 @@ method posthog.ai.otel.processor.PostHogSpanProcessor.on_start(span: Span, paren
 method posthog.ai.otel.processor.PostHogSpanProcessor.shutdown() -> None
 method posthog.ai.prompts.Prompts.clear_cache(name: Optional[str] = None, *, version: Optional[int] = None) -> None
 method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariables) -> str
-method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None) -> Union[str, PromptResult]
+method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
 method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]

@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.27.0",
+    "version": "7.25.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -179,11 +179,6 @@
           "name": "evaluatedAt",
           "type": "Optional[int]",
           "description": "Field: evaluatedAt"
-        },
-        {
-          "name": "minimalFlagCalledEvents",
-          "type": "bool",
-          "description": "Field: minimalFlagCalledEvents"
         }
       ],
       "example": ""
@@ -278,11 +273,6 @@
           "name": "disable_geoip",
           "type": "NotRequired[Optional[bool]]",
           "description": "Field: disable_geoip"
-        },
-        {
-          "name": "_property_allowlist",
-          "type": "NotRequired[Optional[frozenset[str]]]",
-          "description": "Field: _property_allowlist"
         }
       ],
       "example": ""

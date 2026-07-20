@@ -1,4 +1,14 @@
-from typing import TYPE_CHECKING, TypedDict, Optional, Any, Dict, Union, Tuple, Type
+from typing import (
+    TYPE_CHECKING,
+    TypedDict,
+    Optional,
+    Any,
+    Dict,
+    FrozenSet,
+    Union,
+    Tuple,
+    Type,
+)
 from types import TracebackType
 from typing_extensions import NotRequired  # For Python < 3.11 compatibility
 from datetime import datetime
@@ -50,6 +60,9 @@ class OptionalCaptureArgs(TypedDict):
     disable_geoip: NotRequired[
         Optional[bool]
     ]  # As above, optional so we can tell if the user is intentionally overriding a client setting or not
+    _property_allowlist: NotRequired[
+        Optional[FrozenSet[str]]
+    ]  # Internal: strict allowlist applied to the fully-enriched event properties. Used by minimal $feature_flag_called events.
 
 
 class OptionalSetArgs(TypedDict):

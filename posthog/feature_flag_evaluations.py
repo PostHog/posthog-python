@@ -23,6 +23,9 @@ class _EvaluatedFlagRecord:
     version: Optional[int]
     reason: Optional[str]
     locally_evaluated: bool
+    # Server-reported signal for whether the flag is linked to an experiment.
+    # ``None`` when the server did not report it (older deployments).
+    has_experiment: Optional[bool] = None
 
 
 @dataclass
@@ -68,6 +71,7 @@ class FeatureFlagEvaluations:
         evaluated_at: Optional[int] = None,
         errors_while_computing: bool = False,
         quota_limited: bool = False,
+        minimal_flag_called_events: bool = False,
         accessed: Optional[Set[str]] = None,
     ) -> None:
         """Internal — instances are created by the SDK via ``Client.evaluate_flags()``."""
@@ -80,6 +84,10 @@ class FeatureFlagEvaluations:
         self._evaluated_at = evaluated_at
         self._errors_while_computing = errors_while_computing
         self._quota_limited = quota_limited
+        # Pinned at snapshot creation: the gate value from the evaluation that produced
+        # these records. Deferred flag accesses fire events shaped by THIS evaluation's
+        # server response, not whatever the client-wide gate happens to be at send time.
+        self._minimal_flag_called_events = minimal_flag_called_events
         self._accessed: Set[str] = set(accessed) if accessed is not None else set()
 
     def is_enabled(self, key: str) -> bool:
@@ -193,6 +201,7 @@ class FeatureFlagEvaluations:
             evaluated_at=self._evaluated_at,
             errors_while_computing=self._errors_while_computing,
             quota_limited=self._quota_limited,
+            minimal_flag_called_events=self._minimal_flag_called_events,
             # Copy the accessed set so the child tracks further access independently
             # of the parent. Callers expect ``only_accessed()`` on the parent to reflect
             # only what the parent saw, not what happened on filtered views.
@@ -258,4 +267,6 @@ class FeatureFlagEvaluations:
             groups=self._groups,
             disable_geoip=self._disable_geoip,
             properties=properties,
+            has_experiment=flag.has_experiment if flag else None,
+            minimal_flag_called_events=self._minimal_flag_called_events,
         )

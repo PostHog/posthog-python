@@ -1,5 +1,35 @@
 # posthog
 
+## 7.27.0 — 2026-07-18
+
+### Minor changes
+
+- [5ef2c23](https://github.com/posthog/posthog-python/commit/5ef2c239879424717b4da8237e918c4bc9f9fcc1) `$feature_flag_called` events are now minimized for non-experiment flags when the server enables it. When the `/flags` v2 response (`minimalFlagCalledEvents`) or the local-evaluation payload (`minimal_flag_called_events`) reports the gate as enabled and the evaluated flag has no linked experiment (`has_experiment` is `false`), the event's properties are reduced to a strict allowlist (`$feature_flag`, `$feature_flag_response`, `$feature_flag_has_experiment`, the `$feature_flag_*` debug scalars, `locally_evaluated`, `$groups`, `$process_person_profile`, `$session_id`, `$lib`, `$lib_version`, `$is_server`, `$geoip_disable`, `$os`, `$os_version`, `$os_distro`, `$python_runtime`, `$python_version`). Everything else — including super properties and custom event properties — is stripped from those events.
+  
+  If the server does not report the gate, if the flag's `has_experiment` signal is missing, or if the flag is linked to an experiment, the full property set is sent unchanged. There is no SDK-side configuration; the gate is controlled per-team by the server. For `evaluate_flags()` snapshots, the gate is pinned when the snapshot is created, so deferred flag accesses are shaped by the evaluation that produced them.
+  
+  Custom `flag_definition_cache` providers now receive an additional `minimal_flag_called_events` key in the definitions payload, so the gate survives external cache round-trips.
+  
+  When the server reports `has_experiment` for a flag, every `$feature_flag_called` event also carries a `$feature_flag_has_experiment` boolean property. — Thanks @haacked!
+
+## 7.26.0 — 2026-07-17
+
+### Minor changes
+
+- [1653bcb](https://github.com/posthog/posthog-python/commit/1653bcb7e96eee616ce7f72ffb98a9609f06ca9c) Add a `label` option to `Prompts.get()` to fetch the prompt version a label (e.g. `production`) currently points to. Labeled fetches are cached separately, and `PromptResult` carries the resolved `label`. Requires a PostHog version with prompt labels; older servers ignore the parameter and return the latest version. — Thanks @jurajmajerik!
+
+## 7.25.0 — 2026-07-16
+
+### Minor changes
+
+- [5ab6318](https://github.com/posthog/posthog-python/commit/5ab6318d0fe71cfead25a6baf4d6a74704379603) Add the active OpenTelemetry span's `$trace_id` and `$span_id` to events captured with `capture_exception`. — Thanks @hpouillot!
+
+## 7.24.0 — 2026-07-15
+
+### Minor changes
+
+- [556c134](https://github.com/posthog/posthog-python/commit/556c134b9e6e017c7f4a5deeebc13a09b18f45d4) `$feature_flag_called` events now carry a `$feature_flag_has_experiment` boolean property when the server reports whether the flag is linked to an experiment. When the server does not report the signal (older deployments), the property is omitted. — Thanks @haacked!
+
 ## 7.23.0 — 2026-07-15
 
 ### Minor changes

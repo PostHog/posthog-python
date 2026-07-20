@@ -4,9 +4,10 @@ import time
 import unittest
 import warnings
 from datetime import datetime
+from unittest import mock
 from uuid import UUID, uuid4
 
-from unittest import mock
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, use_span
 from parameterized import parameterized
 
 from posthog.capture_compression import CaptureCompression
@@ -486,6 +487,58 @@ class TestClient(unittest.TestCase):
             capture_call = patch_capture.call_args
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
+
+    @parameterized.expand(
+        [
+            (
+                "active_context",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "explicit_properties",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("invalid_context", 0, 0, {}, None, None),
+        ]
+    )
+    def test_capture_exception_uses_current_otel_span_context(
+        self,
+        _,
+        context_trace_id,
+        context_span_id,
+        properties,
+        expected_trace_id,
+        expected_span_id,
+    ):
+        span_context = SpanContext(
+            trace_id=context_trace_id,
+            span_id=context_span_id,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            client.capture_exception(Exception("test exception"), properties=properties)
+
+        event = mock_post.call_args.kwargs["batch"][0]
+        if expected_trace_id is None:
+            self.assertNotIn("$trace_id", event["properties"])
+            self.assertNotIn("$span_id", event["properties"])
+        else:
+            self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
+            self.assertEqual(event["properties"]["$span_id"], expected_span_id)
 
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
