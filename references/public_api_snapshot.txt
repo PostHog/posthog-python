@@ -708,6 +708,7 @@ attribute posthog.mcp.types.UserIdentity.distinct_id: str
 attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
 attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
 attribute posthog.mcp.version.__version__ = '0.1.0'
+attribute posthog.metrics = None
 attribute posthog.metrics_capture.DEFAULT_HISTOGRAM_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
 attribute posthog.metrics_capture.MetricAttributeValue = Union[str, int, float, bool]
 attribute posthog.metrics_capture.log = logging.getLogger('posthog')
