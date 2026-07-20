@@ -602,9 +602,37 @@ class TestMetricsFailureHandling:
             "posthog.metrics_capture._get_session", return_value=mock_session(503)
         ):
             c.metrics.flush()
+            c.metrics.flush()
 
         assert c.metrics._flush_timer is not None
         assert c.metrics._flush_timer.interval == 2.0
+        c.metrics.reset()
+
+    def test_stale_timer_callback_does_not_clobber_newer_timer(self):
+        # A timer whose thread already started can't be cancelled; when its body
+        # runs late it must not clear (and duplicate-flush over) a newer backoff
+        # timer armed in the meantime by a failed explicit flush.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"flush_interval": 1.0},
+        )
+        c.metrics.count("m", 1)
+        stale = c.metrics._flush_timer
+
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ) as session:
+            c.metrics.flush()  # cancels `stale`, arms the backoff timer
+            newer = c.metrics._flush_timer
+            assert newer is not stale
+            sends_before = session.post.call_count
+
+            c.metrics._timer_flush(stale)  # the already-started stale thread body
+
+            assert c.metrics._flush_timer is newer
+            assert session.post.call_count == sends_before
         c.metrics.reset()
 
     def test_failed_flushes_back_off_exponentially_capped(self):
@@ -626,7 +654,10 @@ class TestMetricsFailureHandling:
             for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES - 1):
                 c.metrics._timer_flush()  # what the flush timer thread invokes
                 intervals.append(c.metrics._flush_timer.interval)
-        assert intervals == [2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 64.0]
+        # First retry at the base interval, then doubling to the 64x cap — the
+        # shared JS logs ramp (exponent is failures - 1), giving the documented
+        # ~21 minute outage budget at the default 10s interval.
+        assert intervals == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]
 
         # A successful flush resets the backoff: the next capture arms the base interval.
         flush_and_capture(c)

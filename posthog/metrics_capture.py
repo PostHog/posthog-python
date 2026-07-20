@@ -510,14 +510,20 @@ class PostHogMetrics:
             self._flush_timer.cancel()
             self._flush_timer = None
         timer = threading.Timer(
-            delay if delay is not None else self._flush_interval, self._timer_flush
+            delay if delay is not None else self._flush_interval,
+            lambda: self._timer_flush(timer),
         )
         timer.daemon = True
         self._flush_timer = timer
         timer.start()
 
-    def _timer_flush(self) -> None:
+    def _timer_flush(self, fired: Optional[threading.Timer] = None) -> None:
         with self._lock:
+            # A timer whose thread already started can't be cancelled: if a newer
+            # timer replaced this one meanwhile (failed explicit flush arming the
+            # backoff timer), the stale body must not clear it or flush again.
+            if fired is not None and fired is not self._flush_timer:
+                return
             self._flush_timer = None
         try:
             self.flush()
@@ -566,8 +572,12 @@ class PostHogMetrics:
                 # next flush instead of being lost — and re-arm the timer with capped
                 # exponential backoff, so a real outage isn't hammered at the base
                 # cadence. New captures see the armed timer and don't shorten it.
+                # First retry at the base interval, then doubling — the shared JS
+                # logs ramp (exponent is failures - 1), so the drop budget works
+                # out to the documented ~21 minutes at the default 10s interval.
                 delay = self._flush_interval * min(
-                    2**self._consecutive_send_failures, _MAX_RETRY_BACKOFF_MULTIPLIER
+                    2 ** (self._consecutive_send_failures - 1),
+                    _MAX_RETRY_BACKOFF_MULTIPLIER,
                 )
                 log.warning(
                     "Metrics flush failed (attempt %s of %s); retrying in %.0fs",
