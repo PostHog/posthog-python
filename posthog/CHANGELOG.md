@@ -1,5 +1,19 @@
 # posthog
 
+## 7.28.0 — 2026-07-21
+
+### Minor changes
+
+- [2d7f8cc](https://github.com/posthog/posthog-python/commit/2d7f8cc1e2443794d4c375003fcd22136509b430) The `client.metrics` config can now be set through module-level settings: assign `posthog.metrics = {"service_name": ..., ...}` alongside `posthog.api_key` and the dict is applied when `setup()` builds the global client. Previously module-configured apps had no way to pass the metrics config, so every series recorded through the global client shipped `service.name='unknown_service'`. Late assignment (e.g. a Django `ready()` hook running after an early `setup()`) still applies on the next `setup()` call, as long as the metrics API hasn't been used yet. — Thanks @DanielVisca!
+
+### Patch changes
+
+- [6766309](https://github.com/posthog/posthog-python/commit/67663099b27da7d1ae800d4129da2908f034daa6) Harden the alpha `posthog.metrics` client based on review follow-ups.
+  
+  - Metric attributes are now deep-snapshotted at capture time, so mutating a nested list/dict value after `count()`/`gauge()`/`histogram()` can no longer rewrite an already-recorded series' attributes on the wire.
+  - Failed metric flushes now retry with exponential backoff (first retry at the base interval, then doubling per consecutive failure, capped at 64x the flush interval — the shared JS logs ramp) instead of the fixed cadence, and the buffered window is dropped loudly after 8 consecutive failed flushes — previously documented as 3 but effectively 4.
+  - Invalid `metrics` client config (non-dict config or `resource_attributes`, non-numeric `flush_interval`, non-integer `max_series_per_flush`, non-callable `before_send`) now degrades to defaults with a warning instead of raising from the first `client.metrics.count()` call, matching the client's no-throw contract. — Thanks @DanielVisca!
+
 ## 7.27.1 — 2026-07-21
 
 ### Patch changes
