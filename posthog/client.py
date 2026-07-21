@@ -1802,7 +1802,11 @@ class Client(object):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
         except Full:
-            self.log.warning("analytics-python queue is full")
+            self.log.warning(
+                "event queue is full (maxsize %d), dropping event %s",
+                self.queue.maxsize,
+                msg["event"],
+            )
             return None
 
     @property
