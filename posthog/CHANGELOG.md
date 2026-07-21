@@ -1,5 +1,11 @@
 # posthog
 
+## 7.27.1 — 2026-07-21
+
+### Patch changes
+
+- [ca5e883](https://github.com/posthog/posthog-python/commit/ca5e883d61384c9087bb7b9331072e8c098ce6bb) Clarify the queue-full warning to say the event is being dropped, instead of only reporting that the queue is full. — Thanks @emmayusufu for your first contribution 🎉!
+
 ## 7.27.0 — 2026-07-18
 
 ### Minor changes
