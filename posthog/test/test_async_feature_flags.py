@@ -61,6 +61,19 @@ async def test_evaluate_flags_uses_async_flags_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_flags_response_updates_minimal_flag_called_events_gate():
+    response = {**_flags_response_fixture(), "minimalFlagCalledEvents": True}
+
+    with mock.patch(
+        "posthog.async_client._async_flags", new=mock.AsyncMock(return_value=response)
+    ):
+        client = AsyncPostHog("test-key", send=False)
+        await client.evaluate_flags("user-1")
+        assert client._minimal_flag_called_events is True
+        await client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_feature_flag_access_schedules_feature_flag_called_capture():
     batches = []
 
@@ -161,6 +174,41 @@ async def test_load_feature_flags_uses_async_get_and_starts_async_poller():
     assert patch_get.call_count == 1
     assert client.feature_flags == []
     assert client._flags_etag == '"etag"'
+
+
+@pytest.mark.asyncio
+async def test_load_feature_flags_writes_minimization_gate_to_external_cache():
+    provider = mock.Mock()
+    provider.should_fetch_flag_definitions = mock.AsyncMock(return_value=True)
+    provider.get_flag_definitions = mock.AsyncMock(return_value=None)
+    provider.on_flag_definitions_received = mock.AsyncMock()
+    provider.shutdown = mock.AsyncMock()
+    response_data = {
+        "flags": [],
+        "group_type_mapping": {},
+        "cohorts": {},
+        "minimal_flag_called_events": True,
+    }
+
+    with mock.patch(
+        "posthog.async_client._async_get",
+        new=mock.AsyncMock(
+            return_value=GetResponse(
+                data=response_data, etag='"etag"', not_modified=False
+            )
+        ),
+    ):
+        client = AsyncPostHog(
+            "test-key",
+            personal_api_key="personal-key",
+            flag_definition_cache_provider=provider,
+            poll_interval=60,
+            send=False,
+        )
+        await client.load_feature_flags()
+        await client.shutdown()
+
+    provider.on_flag_definitions_received.assert_awaited_once_with(response_data)
 
 
 @pytest.mark.asyncio
