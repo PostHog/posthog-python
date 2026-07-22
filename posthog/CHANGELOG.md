@@ -1,5 +1,112 @@
 # posthog
 
+## 7.28.0 — 2026-07-21
+
+### Minor changes
+
+- [2d7f8cc](https://github.com/posthog/posthog-python/commit/2d7f8cc1e2443794d4c375003fcd22136509b430) The `client.metrics` config can now be set through module-level settings: assign `posthog.metrics = {"service_name": ..., ...}` alongside `posthog.api_key` and the dict is applied when `setup()` builds the global client. Previously module-configured apps had no way to pass the metrics config, so every series recorded through the global client shipped `service.name='unknown_service'`. Late assignment (e.g. a Django `ready()` hook running after an early `setup()`) still applies on the next `setup()` call, as long as the metrics API hasn't been used yet. — Thanks @DanielVisca!
+
+### Patch changes
+
+- [6766309](https://github.com/posthog/posthog-python/commit/67663099b27da7d1ae800d4129da2908f034daa6) Harden the alpha `posthog.metrics` client based on review follow-ups.
+  
+  - Metric attributes are now deep-snapshotted at capture time, so mutating a nested list/dict value after `count()`/`gauge()`/`histogram()` can no longer rewrite an already-recorded series' attributes on the wire.
+  - Failed metric flushes now retry with exponential backoff (first retry at the base interval, then doubling per consecutive failure, capped at 64x the flush interval — the shared JS logs ramp) instead of the fixed cadence, and the buffered window is dropped loudly after 8 consecutive failed flushes — previously documented as 3 but effectively 4.
+  - Invalid `metrics` client config (non-dict config or `resource_attributes`, non-numeric `flush_interval`, non-integer `max_series_per_flush`, non-callable `before_send`) now degrades to defaults with a warning instead of raising from the first `client.metrics.count()` call, matching the client's no-throw contract. — Thanks @DanielVisca!
+
+## 7.27.1 — 2026-07-21
+
+### Patch changes
+
+- [ca5e883](https://github.com/posthog/posthog-python/commit/ca5e883d61384c9087bb7b9331072e8c098ce6bb) Clarify the queue-full warning to say the event is being dropped, instead of only reporting that the queue is full. — Thanks @emmayusufu for your first contribution 🎉!
+
+## 7.27.0 — 2026-07-18
+
+### Minor changes
+
+- [5ef2c23](https://github.com/posthog/posthog-python/commit/5ef2c239879424717b4da8237e918c4bc9f9fcc1) `$feature_flag_called` events are now minimized for non-experiment flags when the server enables it. When the `/flags` v2 response (`minimalFlagCalledEvents`) or the local-evaluation payload (`minimal_flag_called_events`) reports the gate as enabled and the evaluated flag has no linked experiment (`has_experiment` is `false`), the event's properties are reduced to a strict allowlist (`$feature_flag`, `$feature_flag_response`, `$feature_flag_has_experiment`, the `$feature_flag_*` debug scalars, `locally_evaluated`, `$groups`, `$process_person_profile`, `$session_id`, `$lib`, `$lib_version`, `$is_server`, `$geoip_disable`, `$os`, `$os_version`, `$os_distro`, `$python_runtime`, `$python_version`). Everything else — including super properties and custom event properties — is stripped from those events.
+  
+  If the server does not report the gate, if the flag's `has_experiment` signal is missing, or if the flag is linked to an experiment, the full property set is sent unchanged. There is no SDK-side configuration; the gate is controlled per-team by the server. For `evaluate_flags()` snapshots, the gate is pinned when the snapshot is created, so deferred flag accesses are shaped by the evaluation that produced them.
+  
+  Custom `flag_definition_cache` providers now receive an additional `minimal_flag_called_events` key in the definitions payload, so the gate survives external cache round-trips.
+  
+  When the server reports `has_experiment` for a flag, every `$feature_flag_called` event also carries a `$feature_flag_has_experiment` boolean property. — Thanks @haacked!
+
+## 7.26.0 — 2026-07-17
+
+### Minor changes
+
+- [1653bcb](https://github.com/posthog/posthog-python/commit/1653bcb7e96eee616ce7f72ffb98a9609f06ca9c) Add a `label` option to `Prompts.get()` to fetch the prompt version a label (e.g. `production`) currently points to. Labeled fetches are cached separately, and `PromptResult` carries the resolved `label`. Requires a PostHog version with prompt labels; older servers ignore the parameter and return the latest version. — Thanks @jurajmajerik!
+
+## 7.25.0 — 2026-07-16
+
+### Minor changes
+
+- [5ab6318](https://github.com/posthog/posthog-python/commit/5ab6318d0fe71cfead25a6baf4d6a74704379603) Add the active OpenTelemetry span's `$trace_id` and `$span_id` to events captured with `capture_exception`. — Thanks @hpouillot!
+
+## 7.24.0 — 2026-07-15
+
+### Minor changes
+
+- [556c134](https://github.com/posthog/posthog-python/commit/556c134b9e6e017c7f4a5deeebc13a09b18f45d4) `$feature_flag_called` events now carry a `$feature_flag_has_experiment` boolean property when the server reports whether the flag is linked to an experiment. When the server does not report the signal (older deployments), the property is omitted. — Thanks @haacked!
+
+## 7.23.0 — 2026-07-15
+
+### Minor changes
+
+- [5e42b1e](https://github.com/posthog/posthog-python/commit/5e42b1e2dc5d6a25e364417f6f6a9f13449991a6) Add the `posthog.metrics` API (`count`, `gauge`, `histogram`) — alpha.
+  
+  Backend services can now record metrics through the same statsd-style pre-aggregating client the browser SDK ships, with no OpenTelemetry setup:
+  
+  ```python
+  client = Posthog("<ph_project_api_key>", metrics={"service_name": "billing-worker"})
+  client.metrics.count("invoices.processed", 1, attributes={"plan": "pro"})
+  client.metrics.gauge("queue.depth", 42)
+  client.metrics.histogram("job.duration", 187, unit="ms")
+  ```
+  
+  Samples aggregate in memory and flush as OTLP/JSON to `/i/v1/metrics` (one data point per series per window, delta temporality). Pending metrics are flushed on `shutdown()`; buffered windows are retried on transient failures and dropped loudly after 3 consecutive failed flushes. The `metrics` client option accepts `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (seconds), `max_series_per_flush` (cardinality guardrail, default 1000), and a `before_send` hook. — Thanks @DanielVisca!
+
+## 7.22.4 — 2026-07-14
+
+### Patch changes
+
+- [eb025c8](https://github.com/posthog/posthog-python/commit/eb025c81bed39d8aeff6698879a37ac4e895eb1b) Django middleware also sends the request user agent as `$raw_user_agent`, the standardized property PostHog's server-side classification (e.g. bot detection) reads — Thanks @lricoy!
+
+## 7.22.3 — 2026-07-14
+
+### Patch changes
+
+- [ae3c4e5](https://github.com/posthog/posthog-python/commit/ae3c4e5d53741b2a895c1b3759d14f92f27259b7) Malformed flag-dependency conditions (missing key, null value, or wrong operator) now evaluate locally as no-match (false), matching the server, instead of falling back to the `/flags` endpoint on every evaluation. 7.22.1 made these conditions fall back to the server, which could massively increase billable `/flags` request volume for flag definitions containing legacy/malformed dependency conditions. — Thanks @patricio-posthog!
+
+## 7.22.2 — 2026-07-13
+
+### Patch changes
+
+- [4d61b18](https://github.com/posthog/posthog-python/commit/4d61b18415b752eefb935d42121708578f9c2575) Capture pre-calculated total cost from OpenAI Agents Responses API usage. — Thanks @fuchengwarrenzhu for your first contribution 🎉!
+
+## 7.22.1 — 2026-07-10
+
+### Patch changes
+
+- [650d107](https://github.com/posthog/posthog-python/commit/650d107665207e5239b8613e19bcba76695076ee) Fix local evaluation of flag dependencies with a `flag_evaluates_to: false` condition: such conditions never matched, forcing the dependent flag to `false` for every locally-evaluated user. — Thanks @matheus-vb!
+
+## 7.22.0 — 2026-07-06
+
+### Minor changes
+
+- [d459b57](https://github.com/posthog/posthog-python/commit/d459b5710bcc1333ef49f89da681b9bf2aac9109) Add an opt-in `capture_mode` for the Capture V1 ingestion protocol (`POST /i/v1/analytics/events`). Set `capture_mode="v1"` on the client (or the `POSTHOG_CAPTURE_MODE=v1` environment variable) to use Bearer auth, per-event results, and partial retry. Defaults to `"v0"` (the legacy `/batch/` endpoint), so existing setups are unaffected.
+  
+  When using `capture_mode="v1"`, request bodies can be compressed via `capture_compression` (or `POSTHOG_CAPTURE_COMPRESSION`): `"gzip"`, `"deflate"`, `"zstd"` (requires the optional `posthog[zstd]` extra), or `"none"` (default). The legacy `gzip=True` flag is honored as a fallback.
+  
+  Per-event server verdicts are surfaced through the existing `on_error` handler: events the backend explicitly drops, or fails to accept after retries, raise a `CaptureV1Error` carrying the affected event UUIDs — so a rejection is never silently lost, even when the HTTP request itself succeeded. — Thanks @eli-r-ph for your first contribution 🎉!
+
+## 7.21.3 — 2026-07-02
+
+### Patch changes
+
+- [30c184f](https://github.com/posthog/posthog-python/commit/30c184f4c8a9fe390f621d529fffe1ce533277e8) Stop duplicating distinct_id inside /flags person properties — Thanks @marandaneto!
+
 ## 7.21.2 — 2026-07-01
 
 ### Patch changes

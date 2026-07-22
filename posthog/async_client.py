@@ -29,7 +29,12 @@ from ._async_request import (
     async_get as _async_get,
     async_remote_config as _async_remote_config,
 )
-from .client import Client as _Client
+from .client import (
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
+    Client as _Client,
+    _metadata_has_experiment,
+    _parse_has_experiment,
+)
 from .contexts import (
     get_capture_exception_code_variables_context as _get_capture_exception_code_variables_context,
     get_code_variables_detect_secrets_context as _get_code_variables_detect_secrets_context,
@@ -224,6 +229,7 @@ class AsyncClient(_Client):
             flags_snapshot = kwargs.get("flags", None)
             send_feature_flags = kwargs.get("send_feature_flags", False)
             disable_geoip = kwargs.get("disable_geoip", None)
+            property_allowlist = kwargs.get("_property_allowlist", None)
 
             msg, distinct_id = self._build_capture_message(
                 event, distinct_id, properties, timestamp, uuid, groups
@@ -252,7 +258,9 @@ class AsyncClient(_Client):
 
             self._apply_capture_properties(msg, extra_properties)
 
-            return await self._enqueue(msg, disable_geoip)
+            return await self._enqueue(
+                msg, disable_geoip, property_allowlist=property_allowlist
+            )
         except Exception as e:
             if self.debug:
                 raise
@@ -480,8 +488,12 @@ class AsyncClient(_Client):
             self.log.exception(f"Failed to capture exception: {e}")
             return None
 
-    async def _enqueue(self, msg, disable_geoip) -> Optional[str]:  # type: ignore[override]
-        msg, sent_uuid = self._prepare_enqueue_message(msg, disable_geoip)
+    async def _enqueue(  # type: ignore[override]
+        self, msg, disable_geoip, property_allowlist=None
+    ) -> Optional[str]:
+        msg, sent_uuid = self._prepare_enqueue_message(
+            msg, disable_geoip, property_allowlist=property_allowlist
+        )
         if msg is None or sent_uuid is None:
             return None
 
@@ -774,7 +786,7 @@ class AsyncClient(_Client):
         group_properties: dict[str, dict[str, Any]],
         disable_geoip: Optional[bool],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool, bool]:
         resp_data = await self._get_flags_decision(
             distinct_id,
             groups,
@@ -787,9 +799,16 @@ class AsyncClient(_Client):
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
         errors_while_computing = resp_data.get("errorsWhileComputingFlags", False)
+        minimal_flag_called_events = resp_data.get("minimalFlagCalledEvents") is True
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
-        return flag_details, request_id, evaluated_at, errors_while_computing
+        return (
+            flag_details,
+            request_id,
+            evaluated_at,
+            errors_while_computing,
+            minimal_flag_called_events,
+        )
 
     async def get_feature_flag_result(  # type: ignore[override]
         self,
@@ -836,7 +855,6 @@ class AsyncClient(_Client):
         await self._ensure_feature_flags_loaded_for_local_evaluation()
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -856,9 +874,18 @@ class AsyncClient(_Client):
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
+        remote_minimal_flag_called_events = False
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         flag_value = self._locally_evaluate_flag(
-            key, distinct_id, groups, person_properties, group_properties, device_id
+            key,
+            distinct_id,
+            groups,
+            local_person_properties,
+            group_properties,
+            device_id,
         )
         flag_was_locally_evaluated = flag_value is not None
 
@@ -889,6 +916,7 @@ class AsyncClient(_Client):
                     request_id,
                     evaluated_at,
                     errors_while_computing,
+                    remote_minimal_flag_called_events,
                 ) = await self._get_feature_flag_details_from_server(
                     key,
                     distinct_id,
@@ -927,6 +955,18 @@ class AsyncClient(_Client):
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
 
         if send_feature_flag_events:
+            has_experiment: Optional[bool] = None
+            minimal_flag_called_events = self._minimal_flag_called_events
+            if flag_was_locally_evaluated:
+                local_def = (self.feature_flags_by_key or {}).get(key)
+                if isinstance(local_def, dict):
+                    has_experiment = _parse_has_experiment(
+                        local_def.get("has_experiment")
+                    )
+            elif isinstance(flag_details, FeatureFlag):
+                has_experiment = _metadata_has_experiment(flag_details.metadata)
+                minimal_flag_called_events = remote_minimal_flag_called_events
+
             await self._capture_feature_flag_called_async(
                 distinct_id,
                 key,
@@ -939,6 +979,8 @@ class AsyncClient(_Client):
                 evaluated_at,
                 flag_details,
                 feature_flag_error,
+                has_experiment,
+                minimal_flag_called_events,
             )
 
         return flag_result
@@ -1064,7 +1106,7 @@ class AsyncClient(_Client):
         await self._ensure_feature_flags_loaded_for_local_evaluation()
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id, groups, person_properties, group_properties
+                groups or {}, person_properties or {}, group_properties or {}
             )
         )
 
@@ -1074,10 +1116,13 @@ class AsyncClient(_Client):
             device_id = get_context_device_id()
         groups = groups or {}
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
@@ -1126,7 +1171,6 @@ class AsyncClient(_Client):
         await self._ensure_feature_flags_loaded_for_local_evaluation()
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -1138,11 +1182,15 @@ class AsyncClient(_Client):
         evaluated_at: Optional[int] = None
         errors_while_computing = False
         quota_limited = False
+        minimal_flag_called_events = self._minimal_flag_called_events
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=dict(groups),
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
             device_id=device_id,
@@ -1161,6 +1209,9 @@ class AsyncClient(_Client):
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys,
                     device_id=device_id,
+                )
+                minimal_flag_called_events = (
+                    response.get("minimalFlagCalledEvents") is True
                 )
                 (
                     remote_records,
@@ -1187,6 +1238,7 @@ class AsyncClient(_Client):
             evaluated_at=evaluated_at,
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     async def get_remote_config_payload(self, key: str):
@@ -1247,6 +1299,8 @@ class AsyncClient(_Client):
         evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ) -> None:
         flag_id, flag_version, flag_reason = _flag_details_metadata(flag_details)
         properties = _feature_flag_called_properties(
@@ -1269,6 +1323,8 @@ class AsyncClient(_Client):
             properties=properties,
             groups=groups,
             disable_geoip=disable_geoip,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     async def _capture_feature_flag_called_if_needed_async(
@@ -1280,6 +1336,8 @@ class AsyncClient(_Client):
         properties: dict[str, Any],
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ) -> None:
         groups_key = (
             tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
@@ -1292,12 +1350,22 @@ class AsyncClient(_Client):
         if feature_flag_reported_key in reported_flags:
             return
 
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+
+        extra_capture_kwargs: dict[str, Any] = {}
+        if minimal_flag_called_events and has_experiment is False:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
+
         await self.capture(
             "$feature_flag_called",
             distinct_id=distinct_id,
             properties=properties,
             groups={str(k): str(v) for k, v in (groups or {}).items()},
             disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
         )
         reported_flags.add(feature_flag_reported_key)
 

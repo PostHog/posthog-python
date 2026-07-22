@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openfeature-provider-posthog"
-version = "0.1.2"
+version = "0.1.16"
 description = "Official PostHog provider for the OpenFeature Python SDK."
+readme = "README.md"
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
 license = { text = "MIT" }

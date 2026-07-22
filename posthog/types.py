@@ -79,22 +79,29 @@ class FlagMetadata:
         payload: Payload configured for the matched flag value, if any.
         version: Feature flag version.
         description: Feature flag description.
+        has_experiment: Whether the flag has a linked experiment. ``None`` when
+            the server does not report the field (older deployments).
     """
 
     id: int
     payload: Optional[str]
     version: int
     description: str
+    has_experiment: Optional[bool] = None
 
     @classmethod
     def from_json(cls, resp: Any) -> Union["FlagMetadata", LegacyFlagMetadata]:
         if not resp:
             return LegacyFlagMetadata(payload=None)
+        raw_has_experiment = resp.get("has_experiment")
         return cls(
             id=resp.get("id", 0),
             payload=resp.get("payload"),
             version=resp.get("version", 0),
             description=resp.get("description", ""),
+            has_experiment=raw_has_experiment
+            if isinstance(raw_has_experiment, bool)
+            else None,
         )
 
 
@@ -163,6 +170,7 @@ class FlagsResponse(TypedDict, total=False):
     requestId: str
     quotaLimit: Optional[List[str]]
     evaluatedAt: Optional[int]
+    minimalFlagCalledEvents: bool
 
 
 class FlagsAndPayloads(TypedDict, total=True):

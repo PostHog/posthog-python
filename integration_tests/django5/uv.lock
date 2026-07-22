@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-05-14T13:57:04.541357Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -136,16 +136,16 @@ wheels = [
 
 [[package]]
 name = "django"
-version = "5.2.14"
+version = "5.2.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "sqlparse" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/65/95/95f7faa0950867afaa0bef2460c6263afd6a2c78cc9434046ed28160b015/django-5.2.14.tar.gz", hash = "sha256:58a63ba841662e5c686b57ba1fec52ddd68c0b93bd96ac3029d55728f00bf8a2", size = 10895118, upload-time = "2026-05-05T13:57:31.104Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/e3/31722f7284c9f43333daff9aee9184678e4487adcb5506af0db8cea09ce1/django-5.2.15.tar.gz", hash = "sha256:5154a9bf84ac01dde011e367f355c07dbb329532e06810dcf3ef2af269e236e7", size = 10873669, upload-time = "2026-06-03T13:03:35.892Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/44/f172870cf87aa25afef48fb72adba89ee8b77fcab6f3b23d240b923f1528/django-5.2.14-py3-none-any.whl", hash = "sha256:6f712143bd3064310d1f50fac859c3e9a274bdcfc9595339853be7779297fc76", size = 8311320, upload-time = "2026-05-05T13:57:25.795Z" },
+    { url = "https://files.pythonhosted.org/packages/92/b5/38140b1643c00d5c46ce69c78e6980fd285aee223100319631bedee4f5e7/django-5.2.15-py3-none-any.whl", hash = "sha256:0eb4a9bb1853a35b0286dbc6d916bd352c8c2687195a7f2d6f80cefd840e4970", size = 8311957, upload-time = "2026-06-03T13:03:31.329Z" },
 ]
 
 [[package]]
@@ -252,7 +252,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.15.2"
+version = "7.22.2"
 source = { editable = "../../" }
 dependencies = [
     { name = "backoff" },
@@ -268,18 +268,21 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'test'" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "distro", specifier = ">=1.5.0" },
-    { name = "django", marker = "extra == 'test'", specifier = ">=5.2.8,<6.0" },
+    { name = "django", marker = "extra == 'test'", specifier = ">=5.2.15,<6.0" },
     { name = "django-stubs", marker = "extra == 'dev'" },
+    { name = "fastmcp", marker = "extra == 'test'", specifier = ">=2.0" },
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
     { name = "google-genai", marker = "extra == 'test'" },
+    { name = "griffe", marker = "extra == 'dev'" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
     { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
     { name = "langchain-core", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
-    { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=3.0.1" },
+    { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=4.1.1" },
     { name = "lxml", marker = "extra == 'dev'" },
+    { name = "mcp", marker = "extra == 'test'", specifier = ">=1.26.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
     { name = "openai", marker = "extra == 'test'", specifier = ">=2.0" },
@@ -294,6 +297,7 @@ requires-dist = [
     { name = "pydantic", marker = "extra == 'test'", specifier = ">=2.12.0" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "pytest-bdd", marker = "extra == 'test'", specifier = ">=8.1.0" },
     { name = "pytest-timeout", marker = "extra == 'test'" },
     { name = "python-dateutil", marker = "extra == 'test'", specifier = ">=2.9.0.post0" },
     { name = "requests", specifier = ">=2.7,<3.0" },
@@ -308,8 +312,10 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.2.0" },
     { name = "tzdata", marker = "extra == 'test'" },
     { name = "wheel", marker = "extra == 'dev'" },
+    { name = "zstandard", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "zstandard", marker = "extra == 'zstd'", specifier = ">=0.23.0" },
 ]
-provides-extras = ["langchain", "otel", "dev", "test"]
+provides-extras = ["langchain", "zstd", "otel", "dev", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "claude-agent-sdk", specifier = ">=0.1.50" }]
@@ -468,7 +474,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "django", specifier = "~=5.2.8" },
+    { name = "django", specifier = "~=5.2.15" },
     { name = "httpx", specifier = "~=0.28.1" },
     { name = "posthog", editable = "../../" },
     { name = "pytest", specifier = "~=8.4.2" },

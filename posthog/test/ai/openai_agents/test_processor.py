@@ -536,6 +536,7 @@ class TestPostHogTracingProcessor:
         mock_response.usage = MagicMock()
         mock_response.usage.input_tokens = 25
         mock_response.usage.output_tokens = 10
+        mock_response.usage.cost = None
 
         span_data = ResponseSpanData(
             response=mock_response,
@@ -554,6 +555,29 @@ class TestPostHogTracingProcessor:
             {"type": "message", "content": "Hello!"}
         ]
         assert call_kwargs["properties"]["$ai_response_id"] == "resp_123"
+        assert "$ai_total_cost_usd" not in call_kwargs["properties"]
+
+    @pytest.mark.parametrize("total_cost_usd", [0.01234, 0.0])
+    def test_response_span_includes_total_cost(
+        self, processor, mock_client, mock_span, total_cost_usd
+    ):
+        """Test ResponseSpanData includes a pre-calculated total cost."""
+        mock_response = MagicMock()
+        mock_response.id = "resp_123"
+        mock_response.model = "gpt-4o"
+        mock_response.output = []
+        mock_response.usage = MagicMock()
+        mock_response.usage.input_tokens = 25
+        mock_response.usage.output_tokens = 10
+        mock_response.usage.cost = total_cost_usd
+
+        mock_span.span_data = ResponseSpanData(response=mock_response)
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_total_cost_usd"] == total_cost_usd
 
     def test_speech_span_with_pass_through_properties(
         self, processor, mock_client, mock_span

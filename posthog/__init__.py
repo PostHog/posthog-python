@@ -9,6 +9,8 @@ from posthog.args import (
     OptionalCaptureArgs,
     OptionalSetArgs,
 )
+from posthog.capture_compression import CaptureCompression as CaptureCompression
+from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
 from posthog.async_client import AsyncClient
 from posthog.exception_capture import ExceptionCapture
@@ -313,8 +315,9 @@ Attributes:
     sync_mode: If True, send events synchronously instead of using background
         worker threads.
     disabled: If True, disable captures and API requests. Useful in tests.
-    personal_api_key: Personal API key used for local feature flag evaluation
-        and remote config payloads.
+    secret_key: A Personal API Key or Project Secret API Key used for local
+        feature flag evaluation and remote config payloads.
+    personal_api_key: Deprecated alias for secret_key.
     poll_interval: Seconds between local feature flag definition refreshes.
     disable_geoip: Whether to disable server-side GeoIP enrichment. Defaults to
         True.
@@ -327,6 +330,10 @@ Attributes:
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
     super_properties: Properties merged into every captured event.
+    metrics: Config dict for the ``client.metrics`` API (``service_name``,
+        ``service_version``, ``environment``, ``flush_interval``, ...). Applied
+        when ``setup()`` builds the global client, or on a later ``setup()``
+        call if the metrics API hasn't been used yet.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
     before_send: Optional callback that can modify or drop events before upload.
@@ -363,7 +370,8 @@ debug = False  # type: bool
 send = True  # type: bool
 sync_mode = False  # type: bool
 disabled = False  # type: bool
-personal_api_key = None  # type: Optional[str]
+secret_key = None  # type: Optional[str]
+personal_api_key = None  # type: Optional[str]  # Deprecated: use secret_key
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
@@ -371,6 +379,7 @@ is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
+metrics = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
 log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
@@ -382,6 +391,9 @@ before_send = None  # type: Optional[BeforeSendCallback]
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
 flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvider]
+# Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
+# then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
+capture_mode = None  # type: Optional[CaptureMode]
 
 default_client = None  # type: Optional[Client]
 
@@ -931,7 +943,7 @@ def get_remote_config_payload(
         The payload associated with the feature flag. If payload is encrypted, the return value will be decrypted
 
     Note:
-        Requires personal_api_key to be set for authentication
+        Requires secret_key to be set for authentication
     """
     return _proxy(
         "get_remote_config_payload",
@@ -1126,8 +1138,7 @@ def shutdown() -> None:
     Category:
         Client management
     """
-    _proxy("flush")
-    _proxy("join")
+    _proxy("shutdown")
 
 
 def setup() -> Client:
@@ -1155,6 +1166,7 @@ def setup() -> Client:
             on_error=on_error,
             send=send,
             sync_mode=sync_mode,
+            secret_key=secret_key,
             personal_api_key=personal_api_key,
             poll_interval=poll_interval,
             disabled=disabled,
@@ -1163,6 +1175,7 @@ def setup() -> Client:
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
+            metrics=metrics,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
@@ -1181,6 +1194,7 @@ def setup() -> Client:
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,
             exception_autocapture_refill_rate=exception_autocapture_refill_rate,
             exception_autocapture_refill_interval_seconds=exception_autocapture_refill_interval_seconds,
+            capture_mode=capture_mode,
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state
@@ -1188,6 +1202,11 @@ def setup() -> Client:
     default_client.disabled = disabled or not default_client.api_key
     default_client.debug = debug
     default_client._set_before_send(before_send)
+    # Metrics config is consumed lazily on first `.metrics` access, so late
+    # module-attr assignment (e.g. a Django ready() hook running after something
+    # already forced setup()) still applies until the metrics API is first used.
+    if default_client._metrics is None:
+        default_client._metrics_config = metrics
 
     return default_client
 
