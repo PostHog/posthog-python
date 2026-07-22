@@ -24,6 +24,7 @@ from .types import (
 )
 from ._async_consumer import _AsyncConsumer
 from ._async_request import (
+    _build_client,
     async_batch_post as _async_batch_post,
     async_flags as _async_flags,
     async_get as _async_get,
@@ -184,6 +185,7 @@ class AsyncClient(_Client):
         self._flush_at = flush_at
         self._flush_interval = flush_interval
         self._max_retries = max_retries
+        self._http_client: Optional[Any] = None
         self._closed = False
         self._flag_poll_task: Optional[asyncio.Task] = None
         self._pending_feature_flag_capture_tasks: set[asyncio.Task] = set()
@@ -195,6 +197,17 @@ class AsyncClient(_Client):
     async def __aexit__(self, exc_type, exc, tb):
         await self.shutdown()
         return False
+
+    def _get_http_client(self):
+        if self._http_client is None:
+            self._http_client = _build_client()
+        return self._http_client
+
+    async def _close_http_client(self) -> None:
+        http_client = self._http_client
+        self._http_client = None
+        if http_client is not None:
+            await http_client.aclose()
 
     def _ensure_workers_started(self) -> None:
         if self.disabled or not self.send or self.sync_mode or self._worker_tasks:
@@ -213,6 +226,7 @@ class AsyncClient(_Client):
                 timeout=self.timeout,
                 historical_migration=self.historical_migration,
                 dedicated_ai_endpoint=self._dedicated_ai_endpoint,
+                client=self._get_http_client(),
             )
             self._async_consumers.append(consumer)
             self._worker_tasks.append(asyncio.create_task(consumer.run()))
@@ -491,6 +505,9 @@ class AsyncClient(_Client):
     async def _enqueue(  # type: ignore[override]
         self, msg, disable_geoip, property_allowlist=None
     ) -> Optional[str]:
+        if self._closed:
+            return None
+
         msg, sent_uuid = self._prepare_enqueue_message(
             msg, disable_geoip, property_allowlist=property_allowlist
         )
@@ -529,6 +546,7 @@ class AsyncClient(_Client):
                 batch=[msg],
                 historical_migration=self.historical_migration,
                 path=path,
+                client=self._get_http_client(),
             )
             return sent_uuid
 
@@ -606,6 +624,7 @@ class AsyncClient(_Client):
             self.api_key,
             self.host,
             timeout=self.feature_flags_request_timeout_seconds,
+            client=self._get_http_client(),
             **request_data,
         )
         response = normalize_flags_response(resp_data)
@@ -686,6 +705,7 @@ class AsyncClient(_Client):
                 self.host,
                 timeout=10,
                 etag=self._flags_etag,
+                client=self._get_http_client(),
             )
             self._flags_etag = response.etag
             if response.not_modified:
@@ -1261,6 +1281,7 @@ class AsyncClient(_Client):
                 self.host,
                 key,
                 timeout=self.feature_flags_request_timeout_seconds,
+                client=self._get_http_client(),
             )
         except Exception as e:
             self.log.exception(
@@ -1408,6 +1429,7 @@ class AsyncClient(_Client):
             await asyncio.gather(self._flag_poll_task, return_exceptions=True)
             self._flag_poll_task = None
 
+        await self._close_http_client()
         await asyncio.to_thread(self._stop_blocking_polling_resources)
         await self._shutdown_flag_definition_cache_provider_async()
         await asyncio.to_thread(self._unregister_duplicate_client)
