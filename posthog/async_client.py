@@ -608,7 +608,11 @@ class AsyncClient(_Client):
             timeout=self.feature_flags_request_timeout_seconds,
             **request_data,
         )
-        return normalize_flags_response(resp_data)
+        response = normalize_flags_response(resp_data)
+        self._minimal_flag_called_events = (
+            response.get("minimalFlagCalledEvents") is True
+        )
+        return response
 
     async def _resolve_flag_definition_cache_provider_result_async(self, result):
         if inspect.isawaitable(result):
@@ -705,6 +709,7 @@ class AsyncClient(_Client):
                                 "flags": self.feature_flags or [],
                                 "group_type_mapping": self.group_type_mapping or {},
                                 "cohorts": self.cohorts or {},
+                                "minimal_flag_called_events": self._minimal_flag_called_events,
                             }
                         )
                     )
