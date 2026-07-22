@@ -3,16 +3,39 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sys
-from datetime import datetime
-from typing import Any, Dict, Optional, Union
+import warnings
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional, Union
 from uuid import UUID
 
 from typing_extensions import Unpack
 
 from .args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from .feature_flag_evaluations import FeatureFlagEvaluations
+from .types import (
+    FeatureFlag,
+    FeatureFlagError,
+    FeatureFlagResult,
+    FlagsAndPayloads,
+    FlagsResponse,
+    FlagValue,
+    normalize_flags_response,
+    to_flags_and_payloads,
+)
 from ._async_consumer import _AsyncConsumer
-from ._async_request import _build_client, async_batch_post as _async_batch_post
-from .client import Client as _Client
+from ._async_request import (
+    _build_client,
+    async_batch_post as _async_batch_post,
+    async_flags as _async_flags,
+    async_get as _async_get,
+    async_remote_config as _async_remote_config,
+)
+from .client import (
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
+    Client as _Client,
+    _metadata_has_experiment,
+    _parse_has_experiment,
+)
 from .contexts import (
     get_capture_exception_code_variables_context as _get_capture_exception_code_variables_context,
     get_code_variables_detect_secrets_context as _get_code_variables_detect_secrets_context,
@@ -31,7 +54,16 @@ from .exception_utils import (
 from .request import (
     AI_EVENTS_ENDPOINT as _AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT as _EVENTS_ENDPOINT,
+    APIError as _APIError,
+    QuotaLimitError as _QuotaLimitError,
     is_ai_event as _is_ai_event,
+)
+from .feature_flag_evaluations import (
+    _FeatureFlagEvaluationsHost,
+    _feature_flag_called_properties,
+    _flag_details_metadata,
+    _local_evaluation_records,
+    _remote_evaluation_records,
 )
 
 __all__ = ["AsyncClient"]
@@ -87,7 +119,7 @@ class AsyncClient(_Client):
         exception_autocapture_refill_interval_seconds=None,
         _dedicated_ai_endpoint=False,
     ):
-        # Initialize the shared Client state without starting thread consumers.
+        # Initialize the shared _Client state without starting thread consumers.
         from .exception_capture import ExceptionCapture
 
         super().__init__(
@@ -155,6 +187,8 @@ class AsyncClient(_Client):
         self._max_retries = max_retries
         self._http_client: Optional[Any] = None
         self._closed = False
+        self._flag_poll_task: Optional[asyncio.Task] = None
+        self._pending_feature_flag_capture_tasks: set[asyncio.Task] = set()
 
     async def __aenter__(self):
         self._ensure_workers_started()
@@ -209,6 +243,7 @@ class AsyncClient(_Client):
             flags_snapshot = kwargs.get("flags", None)
             send_feature_flags = kwargs.get("send_feature_flags", False)
             disable_geoip = kwargs.get("disable_geoip", None)
+            property_allowlist = kwargs.get("_property_allowlist", None)
 
             msg, distinct_id = self._build_capture_message(
                 event, distinct_id, properties, timestamp, uuid, groups
@@ -224,11 +259,10 @@ class AsyncClient(_Client):
                 extra_properties = flags_snapshot._get_event_properties()
             elif send_feature_flags:
                 self.log.warning(
-                    "AsyncClient.capture(send_feature_flags=...) will use the synchronous "
-                    "feature flag path until async feature flags are enabled. Prefer passing "
+                    "`send_feature_flags` is deprecated. Prefer passing "
                     "flags=await client.evaluate_flags(...)."
                 )
-                return await self._capture_with_sync_feature_flags(
+                return await self._capture_with_feature_flags(
                     msg,
                     distinct_id,
                     groups,
@@ -238,14 +272,16 @@ class AsyncClient(_Client):
 
             self._apply_capture_properties(msg, extra_properties)
 
-            return await self._enqueue(msg, disable_geoip)
+            return await self._enqueue(
+                msg, disable_geoip, property_allowlist=property_allowlist
+            )
         except Exception as e:
             if self.debug:
                 raise
             self.log.exception(f"Error in capture: {e}")
             return None
 
-    async def _capture_with_sync_feature_flags(
+    async def _capture_with_feature_flags(
         self,
         msg: dict[str, Any],
         distinct_id: str,
@@ -257,8 +293,7 @@ class AsyncClient(_Client):
         feature_variants: Optional[dict[str, Union[bool, str]]] = {}
         try:
             if flag_options["only_evaluate_locally"] is True:
-                feature_variants = await asyncio.to_thread(
-                    self.get_all_flags,
+                feature_variants = await self.get_all_flags(
                     distinct_id,
                     groups=(groups or {}),
                     person_properties=flag_options["person_properties"],
@@ -268,13 +303,13 @@ class AsyncClient(_Client):
                     flag_keys_to_evaluate=flag_options["flag_keys_filter"],
                 )
             else:
-                feature_variants = await asyncio.to_thread(
-                    self.get_feature_variants,
+                feature_variants = await self.get_all_flags(
                     distinct_id,
-                    groups,
+                    groups=(groups or {}),
                     person_properties=flag_options["person_properties"],
                     group_properties=flag_options["group_properties"],
                     disable_geoip=disable_geoip,
+                    only_evaluate_locally=False,
                     flag_keys_to_evaluate=flag_options["flag_keys_filter"],
                 )
         except Exception as e:
@@ -467,11 +502,15 @@ class AsyncClient(_Client):
             self.log.exception(f"Failed to capture exception: {e}")
             return None
 
-    async def _enqueue(self, msg, disable_geoip) -> Optional[str]:  # type: ignore[override]
+    async def _enqueue(  # type: ignore[override]
+        self, msg, disable_geoip, property_allowlist=None
+    ) -> Optional[str]:
         if self._closed:
             return None
 
-        msg, sent_uuid = self._prepare_enqueue_message(msg, disable_geoip)
+        msg, sent_uuid = self._prepare_enqueue_message(
+            msg, disable_geoip, property_allowlist=property_allowlist
+        )
         if msg is None or sent_uuid is None:
             return None
 
@@ -520,7 +559,849 @@ class AsyncClient(_Client):
             self.log.warning("analytics-python async queue is full")
             return None
 
+    async def get_flags_decision(  # type: ignore[override]
+        self,
+        distinct_id=None,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
+        flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FlagsResponse:
+        try:
+            return await self._get_flags_decision(
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties,
+                disable_geoip,
+                flag_keys_to_evaluate,
+                device_id=device_id,
+            )
+        except Exception as err:
+            self.log.exception("Unable to get feature flags: %s", err)
+            return normalize_flags_response({})
+
+    async def _get_flags_decision(  # type: ignore[override]
+        self,
+        distinct_id=None,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
+        flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FlagsResponse:
+        if self.disabled:
+            return normalize_flags_response({})
+
+        from .contexts import get_context_device_id, get_context_distinct_id
+
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+        if device_id is None:
+            device_id = get_context_device_id()
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
+
+        request_data: Dict[str, Any] = {
+            "distinct_id": distinct_id,
+            "groups": groups,
+            "person_properties": person_properties,
+            "group_properties": group_properties,
+            "geoip_disable": disable_geoip,
+            "device_id": device_id,
+        }
+        if flag_keys_to_evaluate:
+            request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
+
+        resp_data = await _async_flags(
+            self.api_key,
+            self.host,
+            timeout=self.feature_flags_request_timeout_seconds,
+            client=self._get_http_client(),
+            **request_data,
+        )
+        response = normalize_flags_response(resp_data)
+        self._minimal_flag_called_events = (
+            response.get("minimalFlagCalledEvents") is True
+        )
+        return response
+
+    async def _resolve_flag_definition_cache_provider_result_async(self, result):
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    async def _shutdown_flag_definition_cache_provider_async(self) -> None:
+        if not self._flag_definition_cache_provider:
+            return
+        try:
+            await self._resolve_flag_definition_cache_provider_result_async(
+                self._flag_definition_cache_provider.shutdown()
+            )
+        except Exception as e:
+            self.log.error(f"[FEATURE FLAGS] Cache provider shutdown error: {e}")
+
+    async def _load_feature_flags_async(self) -> None:
+        should_fetch = True
+        if self._flag_definition_cache_provider:
+            try:
+                should_fetch = await self._resolve_flag_definition_cache_provider_result_async(
+                    self._flag_definition_cache_provider.should_fetch_flag_definitions()
+                )
+            except Exception as e:
+                self.log.error(
+                    f"[FEATURE FLAGS] Cache provider should_fetch error: {e}"
+                )
+                should_fetch = True
+
+        if not should_fetch and self._flag_definition_cache_provider:
+            try:
+                cached_data = (
+                    await self._resolve_flag_definition_cache_provider_result_async(
+                        self._flag_definition_cache_provider.get_flag_definitions()
+                    )
+                )
+                if cached_data:
+                    self.log.debug(
+                        "[FEATURE FLAGS] Using cached flag definitions from external cache"
+                    )
+                    self._update_flag_state(
+                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
+                    )
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                    return
+                if not self.feature_flags:
+                    self.log.debug(
+                        "[FEATURE FLAGS] Cache empty and no flags loaded, falling back to API fetch"
+                    )
+                    should_fetch = True
+            except Exception as e:
+                self.log.error(f"[FEATURE FLAGS] Cache provider get error: {e}")
+                should_fetch = True
+
+        if should_fetch:
+            await self._fetch_feature_flags_from_api_async()
+
+    async def _fetch_feature_flags_from_api_async(self) -> None:
+        personal_api_key = self.personal_api_key
+        if personal_api_key is None:
+            self.log.warning(
+                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+            )
+            return
+
+        try:
+            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+            response = await _async_get(
+                personal_api_key,
+                f"/flags/definitions?token={self.api_key}&send_cohorts",
+                self.host,
+                timeout=10,
+                etag=self._flags_etag,
+                client=self._get_http_client(),
+            )
+            self._flags_etag = response.etag
+            if response.not_modified:
+                self.log.debug(
+                    "[FEATURE FLAGS] Flags not modified (304), using cached data"
+                )
+                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                return
+            if response.data is None:
+                self.log.error(
+                    "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
+                )
+                return
+
+            self._update_flag_state(response.data, old_flags_by_key=old_flags_by_key)
+            if self._flag_definition_cache_provider:
+                try:
+                    await self._resolve_flag_definition_cache_provider_result_async(
+                        self._flag_definition_cache_provider.on_flag_definitions_received(
+                            {
+                                "flags": self.feature_flags or [],
+                                "group_type_mapping": self.group_type_mapping or {},
+                                "cohorts": self.cohorts or {},
+                                "minimal_flag_called_events": self._minimal_flag_called_events,
+                            }
+                        )
+                    )
+                except Exception as e:
+                    self.log.error(f"[FEATURE FLAGS] Cache provider store error: {e}")
+        except _APIError as e:
+            if e.status == 401:
+                detail = (
+                    f"Error loading feature flags: {e.message}. "
+                    "Please verify both your project_api_key and personal_api_key. "
+                    "More information: https://posthog.com/docs/api/overview"
+                )
+                self.log.error("[FEATURE FLAGS] %s", detail)
+                self.feature_flags = []
+                self.group_type_mapping = {}
+                self.cohorts = {}
+                if self.flag_cache:
+                    self.flag_cache.clear()
+                if self.debug:
+                    raise _APIError(status=401, message=detail)
+            elif e.status == 402:
+                self.log.warning(
+                    "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
+                )
+                self.feature_flags = []
+                self.group_type_mapping = {}
+                self.cohorts = {}
+                if self.flag_cache:
+                    self.flag_cache.clear()
+                if self.debug:
+                    raise _APIError(
+                        status=402, message="PostHog feature flags quota limited"
+                    )
+            else:
+                self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
+        except Exception as e:
+            self.log.warning(
+                "[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds."
+                % self.poll_interval
+            )
+            self.log.warning(e)
+
+        self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+
+    async def load_feature_flags(self) -> None:
+        if self.disabled:
+            self.feature_flags = []
+            return
+        if not self.personal_api_key:
+            self.log.warning(
+                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+            )
+            self.feature_flags = []
+            return
+
+        await self._load_feature_flags_async()
+
+        if self.enable_local_evaluation and self._flag_poll_task is None:
+            self._flag_poll_task = asyncio.create_task(self._poll_feature_flags())
+
+    async def _poll_feature_flags(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.poll_interval)
+                await self._load_feature_flags_async()
+        except asyncio.CancelledError:
+            raise
+
+    async def _ensure_feature_flags_loaded_for_local_evaluation(self) -> None:
+        if self.feature_flags is None and self.personal_api_key:
+            await self.load_feature_flags()
+
+    async def _get_feature_flag_details_from_server(  # type: ignore[override]
+        self,
+        key: str,
+        distinct_id,
+        groups: Mapping[str, Union[str, int]],
+        person_properties: dict[str, Any],
+        group_properties: dict[str, dict[str, Any]],
+        disable_geoip: Optional[bool],
+        device_id: Optional[str] = None,
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool, bool]:
+        resp_data = await self._get_flags_decision(
+            distinct_id,
+            groups,
+            person_properties,
+            group_properties,
+            disable_geoip,
+            flag_keys_to_evaluate=[key],
+            device_id=device_id,
+        )
+        request_id = resp_data.get("requestId")
+        evaluated_at = resp_data.get("evaluatedAt")
+        errors_while_computing = resp_data.get("errorsWhileComputingFlags", False)
+        minimal_flag_called_events = resp_data.get("minimalFlagCalledEvents") is True
+        flags = resp_data.get("flags")
+        flag_details = flags.get(key) if flags else None
+        return (
+            flag_details,
+            request_id,
+            evaluated_at,
+            errors_while_computing,
+            minimal_flag_called_events,
+        )
+
+    async def get_feature_flag_result(  # type: ignore[override]
+        self,
+        key: str,
+        distinct_id,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
+        device_id: Optional[str] = None,
+    ) -> Optional[FeatureFlagResult]:
+        return await self._get_feature_flag_result(
+            key,
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
+            device_id=device_id,
+        )
+
+    async def _get_feature_flag_result(  # type: ignore[override]
+        self,
+        key: str,
+        distinct_id,
+        *,
+        override_match_value: Optional[FlagValue] = None,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
+        device_id: Optional[str] = None,
+    ) -> Optional[FeatureFlagResult]:
+        if self.disabled:
+            return None
+
+        await self._ensure_feature_flags_loaded_for_local_evaluation()
+        person_properties, group_properties = (
+            self._add_local_person_and_group_properties(
+                groups or {},
+                person_properties or {},
+                group_properties or {},
+            )
+        )
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
+
+        from .contexts import get_context_device_id
+
+        if device_id is None:
+            device_id = get_context_device_id()
+
+        flag_result = None
+        flag_details = None
+        request_id = None
+        evaluated_at = None
+        feature_flag_error: Optional[str] = None
+        remote_minimal_flag_called_events = False
+
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
+        flag_value = self._locally_evaluate_flag(
+            key,
+            distinct_id,
+            groups,
+            local_person_properties,
+            group_properties,
+            device_id,
+        )
+        flag_was_locally_evaluated = flag_value is not None
+
+        if flag_was_locally_evaluated:
+            lookup_match_value = override_match_value or flag_value
+            payload = (
+                self._compute_payload_locally(key, lookup_match_value)
+                if lookup_match_value is not None
+                else None
+            )
+            flag_result = FeatureFlagResult.from_value_and_payload(
+                key, lookup_match_value, payload
+            )
+            if self.flag_cache and flag_result:
+                self.flag_cache.set_cached_flag(
+                    distinct_id, key, flag_result, self.flag_definition_version
+                )
+        elif only_evaluate_locally:
+            if self.feature_flags is None:
+                self.log.warning(
+                    "[FEATURE FLAGS] Local evaluation called but feature flag definitions are not loaded yet. "
+                    "Returning None. You can call load_feature_flags() to load flags explicitly."
+                )
+        else:
+            try:
+                (
+                    flag_details,
+                    request_id,
+                    evaluated_at,
+                    errors_while_computing,
+                    remote_minimal_flag_called_events,
+                ) = await self._get_feature_flag_details_from_server(
+                    key,
+                    distinct_id,
+                    groups,
+                    person_properties,
+                    group_properties,
+                    disable_geoip,
+                    device_id=device_id,
+                )
+                errors = []
+                if errors_while_computing:
+                    errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
+                if flag_details is None:
+                    errors.append(FeatureFlagError.FLAG_MISSING)
+                if errors:
+                    feature_flag_error = ",".join(errors)
+
+                flag_result = FeatureFlagResult.from_flag_details(
+                    flag_details, override_match_value
+                )
+                if self.flag_cache and flag_result:
+                    self.flag_cache.set_cached_flag(
+                        distinct_id, key, flag_result, self.flag_definition_version
+                    )
+            except _QuotaLimitError as e:
+                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+                feature_flag_error = FeatureFlagError.QUOTA_LIMITED
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
+            except _APIError as e:
+                self.log.warning(f"[FEATURE FLAGS] API error: {e}")
+                feature_flag_error = FeatureFlagError.api_error(e.status)
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
+            except Exception as e:
+                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+                feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
+                flag_result = self._get_stale_flag_fallback(distinct_id, key)
+
+        if send_feature_flag_events:
+            has_experiment: Optional[bool] = None
+            minimal_flag_called_events = self._minimal_flag_called_events
+            if flag_was_locally_evaluated:
+                local_def = (self.feature_flags_by_key or {}).get(key)
+                if isinstance(local_def, dict):
+                    has_experiment = _parse_has_experiment(
+                        local_def.get("has_experiment")
+                    )
+            elif isinstance(flag_details, FeatureFlag):
+                has_experiment = _metadata_has_experiment(flag_details.metadata)
+                minimal_flag_called_events = remote_minimal_flag_called_events
+
+            await self._capture_feature_flag_called_async(
+                distinct_id,
+                key,
+                flag_result.get_value() if flag_result else None,
+                flag_result.payload if flag_result else None,
+                flag_was_locally_evaluated,
+                groups,
+                disable_geoip,
+                request_id,
+                evaluated_at,
+                flag_details,
+                feature_flag_error,
+                has_experiment,
+                minimal_flag_called_events,
+            )
+
+        return flag_result
+
+    async def get_feature_flag(  # type: ignore[override]
+        self,
+        key: str,
+        distinct_id,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = True,
+        disable_geoip: Optional[bool] = None,
+        device_id: Optional[str] = None,
+    ) -> Optional[FlagValue]:
+        warnings.warn(
+            "`get_feature_flag` is deprecated and will be removed in a future major version. "
+            "Use `await posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        result = await self._get_feature_flag_result(
+            key,
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
+            device_id=device_id,
+        )
+        return result.get_value() if result else None
+
+    async def feature_enabled(  # type: ignore[override]
+        self, key: str, distinct_id, **kwargs
+    ) -> Optional[bool]:
+        warnings.warn(
+            "`feature_enabled` is deprecated and will be removed in a future major version. "
+            "Use `await posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        result = await self._get_feature_flag_result(key, distinct_id, **kwargs)
+        value = result.get_value() if result else None
+        return None if value is None else bool(value)
+
+    async def get_feature_flag_payload(
+        self,
+        key: str,
+        distinct_id,
+        *,
+        match_value: Optional[FlagValue] = None,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        send_feature_flag_events: bool = False,
+        disable_geoip: Optional[bool] = None,
+        device_id: Optional[str] = None,
+    ) -> Optional[object]:
+        warnings.warn(
+            "`get_feature_flag_payload` is deprecated and will be removed in a future major version. "
+            "Use `await posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag_payload(key)` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        result = await self._get_feature_flag_result(
+            key,
+            distinct_id,
+            override_match_value=match_value,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            send_feature_flag_events=send_feature_flag_events,
+            disable_geoip=disable_geoip,
+            device_id=device_id,
+        )
+        return result.payload if result else None
+
+    async def get_all_flags(  # type: ignore[override]
+        self,
+        distinct_id,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        disable_geoip: Optional[bool] = None,
+        flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> Optional[dict[str, FlagValue]]:
+        response = await self.get_all_flags_and_payloads(
+            distinct_id,
+            groups=groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            only_evaluate_locally=only_evaluate_locally,
+            disable_geoip=disable_geoip,
+            flag_keys_to_evaluate=flag_keys_to_evaluate,
+            device_id=device_id,
+        )
+        return response["featureFlags"]
+
+    async def get_all_flags_and_payloads(  # type: ignore[override]
+        self,
+        distinct_id,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        disable_geoip: Optional[bool] = None,
+        flag_keys_to_evaluate: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FlagsAndPayloads:
+        if self.disabled:
+            return {"featureFlags": None, "featureFlagPayloads": None}
+
+        await self._ensure_feature_flags_loaded_for_local_evaluation()
+        person_properties, group_properties = (
+            self._add_local_person_and_group_properties(
+                groups or {}, person_properties or {}, group_properties or {}
+            )
+        )
+
+        from .contexts import get_context_device_id
+
+        if device_id is None:
+            device_id = get_context_device_id()
+        groups = groups or {}
+
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
+        response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
+            distinct_id,
+            groups=groups,
+            person_properties=local_person_properties,
+            group_properties=group_properties,
+            flag_keys_to_evaluate=flag_keys_to_evaluate,
+            device_id=device_id,
+        )
+
+        if fallback_to_flags and not only_evaluate_locally:
+            try:
+                decide_response = await self._get_flags_decision(
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    disable_geoip=disable_geoip,
+                    flag_keys_to_evaluate=flag_keys_to_evaluate,
+                    device_id=device_id,
+                )
+                return to_flags_and_payloads(decide_response)
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}"
+                )
+        return response
+
+    async def evaluate_flags(  # type: ignore[override]
+        self,
+        distinct_id=None,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        only_evaluate_locally: bool = False,
+        disable_geoip: Optional[bool] = None,
+        flag_keys: Optional[List[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FeatureFlagEvaluations:
+        from .contexts import get_context_device_id, get_context_distinct_id
+
+        host = self._get_feature_flag_evaluations_host()
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+        if device_id is None:
+            device_id = get_context_device_id()
+        if not distinct_id or self.disabled:
+            return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
+
+        await self._ensure_feature_flags_loaded_for_local_evaluation()
+        person_properties, group_properties = (
+            self._add_local_person_and_group_properties(
+                groups or {},
+                person_properties or {},
+                group_properties or {},
+            )
+        )
+        groups = groups or {}
+
+        request_id: Optional[str] = None
+        evaluated_at: Optional[int] = None
+        errors_while_computing = False
+        quota_limited = False
+        minimal_flag_called_events = self._minimal_flag_called_events
+
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
+        local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
+            distinct_id,
+            groups=dict(groups),
+            person_properties=local_person_properties,
+            group_properties=group_properties,
+            flag_keys_to_evaluate=flag_keys,
+            device_id=device_id,
+        )
+        records, locally_evaluated_keys = _local_evaluation_records(
+            local_result, self.feature_flags_by_key or {}
+        )
+
+        if fallback_to_server and not only_evaluate_locally:
+            try:
+                response = await self._get_flags_decision(
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    disable_geoip=disable_geoip,
+                    flag_keys_to_evaluate=flag_keys,
+                    device_id=device_id,
+                )
+                minimal_flag_called_events = (
+                    response.get("minimalFlagCalledEvents") is True
+                )
+                (
+                    remote_records,
+                    request_id,
+                    evaluated_at,
+                    errors_while_computing,
+                ) = _remote_evaluation_records(response, locally_evaluated_keys)
+                records.update(remote_records)
+            except _QuotaLimitError as e:
+                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+                quota_limited = True
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Unable to evaluate flags remotely: {e}"
+                )
+
+        return FeatureFlagEvaluations(
+            host=host,
+            distinct_id=str(distinct_id),
+            flags=records,
+            groups=groups,
+            disable_geoip=disable_geoip,
+            request_id=request_id,
+            evaluated_at=evaluated_at,
+            errors_while_computing=errors_while_computing,
+            quota_limited=quota_limited,
+            minimal_flag_called_events=minimal_flag_called_events,
+        )
+
+    async def get_remote_config_payload(self, key: str):
+        if self.disabled:
+            return None
+        if self.personal_api_key is None:
+            self.log.warning(
+                "[FEATURE FLAGS] You have to specify a personal_api_key to fetch decrypted feature flag payloads."
+            )
+            return None
+        try:
+            return await _async_remote_config(
+                self.personal_api_key,
+                self.api_key,
+                self.host,
+                key,
+                timeout=self.feature_flags_request_timeout_seconds,
+                client=self._get_http_client(),
+            )
+        except Exception as e:
+            self.log.exception(
+                f"[FEATURE FLAGS] Unable to get decrypted feature flag payload: {e}"
+            )
+
+    def _get_feature_flag_evaluations_host(self) -> _FeatureFlagEvaluationsHost:
+        if self._feature_flag_evaluations_host_cache is None:
+            self._feature_flag_evaluations_host_cache = _FeatureFlagEvaluationsHost(
+                capture_flag_called_event_if_needed=self._schedule_feature_flag_called_event,
+                log_warning=lambda message: self.log.warning(message),
+            )
+        return self._feature_flag_evaluations_host_cache
+
+    def _schedule_feature_flag_called_event(self, **kwargs) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.log.warning(
+                "[FEATURE FLAGS] Unable to capture $feature_flag_called because no event loop is running. "
+                "Access FeatureFlagEvaluations results before the async client shuts down."
+            )
+            return
+
+        task = loop.create_task(
+            self._capture_feature_flag_called_if_needed_async(**kwargs)
+        )
+        self._pending_feature_flag_capture_tasks.add(task)
+        task.add_done_callback(self._pending_feature_flag_capture_tasks.discard)
+
+    async def _capture_feature_flag_called_async(
+        self,
+        distinct_id,
+        key: str,
+        response: Optional[FlagValue],
+        payload: Optional[str],
+        flag_was_locally_evaluated: bool,
+        groups: Mapping[str, Union[str, int]],
+        disable_geoip: Optional[bool],
+        request_id: Optional[str],
+        evaluated_at: Optional[int],
+        flag_details: Optional[FeatureFlag],
+        feature_flag_error: Optional[str] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
+    ) -> None:
+        flag_id, flag_version, flag_reason = _flag_details_metadata(flag_details)
+        properties = _feature_flag_called_properties(
+            key=key,
+            response=response,
+            locally_evaluated=flag_was_locally_evaluated,
+            payload=payload,
+            request_id=request_id,
+            evaluated_at=evaluated_at,
+            flag_id=flag_id,
+            flag_version=flag_version,
+            flag_reason=flag_reason,
+            feature_flag_error=feature_flag_error,
+        )
+
+        await self._capture_feature_flag_called_if_needed_async(
+            distinct_id=distinct_id,
+            key=key,
+            response=response,
+            properties=properties,
+            groups=groups,
+            disable_geoip=disable_geoip,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+        )
+
+    async def _capture_feature_flag_called_if_needed_async(
+        self,
+        *,
+        distinct_id,
+        key: str,
+        response: Optional[FlagValue],
+        properties: dict[str, Any],
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        disable_geoip: Optional[bool] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
+    ) -> None:
+        groups_key = (
+            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
+        )
+        feature_flag_reported_key = (key, response, groups_key)
+        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
+        if feature_flag_reported_key in reported_flags:
+            return
+
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+
+        extra_capture_kwargs: dict[str, Any] = {}
+        if minimal_flag_called_events and has_experiment is False:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
+
+        await self.capture(
+            "$feature_flag_called",
+            distinct_id=distinct_id,
+            properties=properties,
+            groups={str(k): str(v) for k, v in (groups or {}).items()},
+            disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
+        )
+        reported_flags.add(feature_flag_reported_key)
+
+    async def _drain_pending_feature_flag_captures(self) -> None:
+        while self._pending_feature_flag_capture_tasks:
+            tasks = list(self._pending_feature_flag_capture_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:  # type: ignore[override]
+        await self._drain_pending_feature_flag_captures()
         if timeout_seconds is None:
             await self._queue.join()
             return
@@ -543,15 +1424,19 @@ class AsyncClient(_Client):
         self._worker_tasks.clear()
         self._async_consumers.clear()
 
-        await self._close_http_client()
-        await asyncio.to_thread(self._join_blocking_resources)
+        if self._flag_poll_task is not None:
+            self._flag_poll_task.cancel()
+            await asyncio.gather(self._flag_poll_task, return_exceptions=True)
+            self._flag_poll_task = None
 
-    def _join_blocking_resources(self) -> None:
+        await self._close_http_client()
+        await asyncio.to_thread(self._stop_blocking_polling_resources)
+        await self._shutdown_flag_definition_cache_provider_async()
+        await asyncio.to_thread(self._unregister_duplicate_client)
+
+    def _stop_blocking_polling_resources(self) -> None:
         if self.poller:
             self.poller.stop()
-
-        self._shutdown_flag_definition_cache_provider()
-        self._unregister_duplicate_client()
 
     async def shutdown(self) -> None:  # type: ignore[override]
         if self._closed:
