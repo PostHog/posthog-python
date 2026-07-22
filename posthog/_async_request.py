@@ -26,10 +26,6 @@ except ImportError:  # pragma: no cover
 
 _RETRY_STATUS_FORCELIST = (408, 500, 502, 503, 504)
 
-_async_client: Optional["httpx.AsyncClient"] = None
-_async_flags_client: Optional["httpx.AsyncClient"] = None
-_pooling_enabled = True
-
 
 def _require_httpx():
     if httpx is None:  # pragma: no cover
@@ -42,39 +38,6 @@ def _require_httpx():
 def _build_client():
     httpx_module = _require_httpx()
     return httpx_module.AsyncClient()
-
-
-def _build_flags_client():
-    httpx_module = _require_httpx()
-    return httpx_module.AsyncClient()
-
-
-async def _get_client():
-    global _async_client
-    if not _pooling_enabled:
-        return _build_client()
-    if _async_client is None:
-        _async_client = _build_client()
-    return _async_client
-
-
-async def _get_flags_client():
-    global _async_flags_client
-    if not _pooling_enabled:
-        return _build_flags_client()
-    if _async_flags_client is None:
-        _async_flags_client = _build_flags_client()
-    return _async_flags_client
-
-
-async def close_async_clients() -> None:
-    global _async_client, _async_flags_client
-    clients = [_async_client, _async_flags_client]
-    _async_client = None
-    _async_flags_client = None
-    for client in clients:
-        if client is not None:
-            await client.aclose()
 
 
 async def async_post(
@@ -106,13 +69,18 @@ async def async_post(
         except (OSError, zlib.error) as exc:
             log.warning("failed to gzip request body, sending uncompressed: %s", exc)
 
-    http_client = client or await _get_client()
-    res = await http_client.post(url, data=data, headers=headers, timeout=timeout)
+    owns_client = client is None
+    http_client = client or _build_client()
+    try:
+        res = await http_client.post(url, data=data, headers=headers, timeout=timeout)
 
-    if res.status_code == 200:
-        log.debug("data uploaded successfully")
+        if res.status_code == 200:
+            log.debug("data uploaded successfully")
 
-    return res
+        return res
+    finally:
+        if owns_client:
+            await http_client.aclose()
 
 
 def _response_json(res: Any) -> Any:
@@ -178,6 +146,7 @@ async def async_flags(
     host: Optional[str] = None,
     gzip: bool = False,
     timeout: int = 15,
+    client: Optional[Any] = None,
     **kwargs,
 ) -> Any:
     """Post to the flags API endpoint with async retries for transient failures."""
@@ -191,7 +160,7 @@ async def async_flags(
                 "/flags/?v=2",
                 gzip,
                 timeout,
-                client=await _get_flags_client(),
+                client=client,
                 **kwargs,
             )
             if res.status_code in _RETRY_STATUS_FORCELIST and attempt < 2:
@@ -215,10 +184,11 @@ async def async_batch_post(
     gzip: bool = False,
     timeout: int = 15,
     path: str = EVENTS_ENDPOINT,
+    client: Optional[Any] = None,
     **kwargs,
 ) -> Any:
     """Post a batch of events using async HTTP."""
-    res = await async_post(api_key, host, path, gzip, timeout, **kwargs)
+    res = await async_post(api_key, host, path, gzip, timeout, client=client, **kwargs)
     return _process_async_response(
         res, success_message="data uploaded successfully", return_json=False
     )
@@ -240,17 +210,24 @@ async def async_get(
     if etag:
         headers["If-None-Match"] = etag
 
-    http_client = client or await _get_client()
-    res = await http_client.get(full_url, headers=headers, timeout=timeout)
+    owns_client = client is None
+    http_client = client or _build_client()
+    try:
+        res = await http_client.get(full_url, headers=headers, timeout=timeout)
 
-    if res.status_code == 304:
-        log.debug("GET returned 304 Not Modified")
+        if res.status_code == 304:
+            log.debug("GET returned 304 Not Modified")
+            response_etag = res.headers.get("ETag")
+            return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
+
+        data = _process_async_response(
+            res, success_message="GET completed successfully"
+        )
         response_etag = res.headers.get("ETag")
-        return GetResponse(data=None, etag=response_etag or etag, not_modified=True)
-
-    data = _process_async_response(res, success_message="GET completed successfully")
-    response_etag = res.headers.get("ETag")
-    return GetResponse(data=data, etag=response_etag, not_modified=False)
+        return GetResponse(data=data, etag=response_etag, not_modified=False)
+    finally:
+        if owns_client:
+            await http_client.aclose()
 
 
 async def async_remote_config(
@@ -259,11 +236,13 @@ async def async_remote_config(
     host: Optional[str] = None,
     key: str = "",
     timeout: int = 15,
+    client: Optional[Any] = None,
 ) -> Any:
     response = await async_get(
         personal_api_key,
         f"/api/projects/@current/feature_flags/{key}/remote_config?token={project_api_key}",
         host,
         timeout,
+        client=client,
     )
     return response.data

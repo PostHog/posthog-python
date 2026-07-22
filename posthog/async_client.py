@@ -11,7 +11,7 @@ from typing_extensions import Unpack
 
 from .args import ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from ._async_consumer import _AsyncConsumer
-from ._async_request import async_batch_post as _async_batch_post
+from ._async_request import _build_client, async_batch_post as _async_batch_post
 from .client import Client as _Client
 from .contexts import (
     get_capture_exception_code_variables_context as _get_capture_exception_code_variables_context,
@@ -153,6 +153,7 @@ class AsyncClient(_Client):
         self._flush_at = flush_at
         self._flush_interval = flush_interval
         self._max_retries = max_retries
+        self._http_client: Optional[Any] = None
         self._closed = False
 
     async def __aenter__(self):
@@ -162,6 +163,17 @@ class AsyncClient(_Client):
     async def __aexit__(self, exc_type, exc, tb):
         await self.shutdown()
         return False
+
+    def _get_http_client(self):
+        if self._http_client is None:
+            self._http_client = _build_client()
+        return self._http_client
+
+    async def _close_http_client(self) -> None:
+        http_client = self._http_client
+        self._http_client = None
+        if http_client is not None:
+            await http_client.aclose()
 
     def _ensure_workers_started(self) -> None:
         if self.disabled or not self.send or self.sync_mode or self._worker_tasks:
@@ -180,6 +192,7 @@ class AsyncClient(_Client):
                 timeout=self.timeout,
                 historical_migration=self.historical_migration,
                 dedicated_ai_endpoint=self._dedicated_ai_endpoint,
+                client=self._get_http_client(),
             )
             self._async_consumers.append(consumer)
             self._worker_tasks.append(asyncio.create_task(consumer.run()))
@@ -455,6 +468,9 @@ class AsyncClient(_Client):
             return None
 
     async def _enqueue(self, msg, disable_geoip) -> Optional[str]:  # type: ignore[override]
+        if self._closed:
+            return None
+
         msg, sent_uuid = self._prepare_enqueue_message(msg, disable_geoip)
         if msg is None or sent_uuid is None:
             return None
@@ -491,6 +507,7 @@ class AsyncClient(_Client):
                 batch=[msg],
                 historical_migration=self.historical_migration,
                 path=path,
+                client=self._get_http_client(),
             )
             return sent_uuid
 
@@ -526,6 +543,7 @@ class AsyncClient(_Client):
         self._worker_tasks.clear()
         self._async_consumers.clear()
 
+        await self._close_http_client()
         await asyncio.to_thread(self._join_blocking_resources)
 
     def _join_blocking_resources(self) -> None:

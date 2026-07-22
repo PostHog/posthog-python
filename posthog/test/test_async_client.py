@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest import mock
 
 import pytest
@@ -179,6 +180,75 @@ async def test_capture_send_feature_flags_runs_sync_fallback_in_thread():
 
     assert event_uuid is not None
     await client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_reuses_owned_http_client_and_closes_it_on_shutdown():
+    http_client = mock.Mock()
+    http_client.aclose = mock.AsyncMock()
+
+    with (
+        mock.patch(
+            "posthog.async_client._build_client", return_value=http_client
+        ) as build,
+        mock.patch(
+            "posthog.async_client._async_batch_post", new=mock.AsyncMock()
+        ) as batch_post,
+    ):
+        client = AsyncPostHog("test-key", sync_mode=True)
+        await client.capture("first", distinct_id="user-1")
+        await client.capture("second", distinct_id="user-1")
+        await client.shutdown()
+
+    build.assert_called_once_with()
+    assert [call.kwargs["client"] for call in batch_post.await_args_list] == [
+        http_client,
+        http_client,
+    ]
+    http_client.aclose.assert_awaited_once_with()
+
+
+def test_separate_event_loops_use_separate_http_clients():
+    http_clients = []
+
+    def build_http_client():
+        http_client = mock.Mock()
+        http_client.aclose = mock.AsyncMock()
+        http_clients.append(http_client)
+        return http_client
+
+    async def capture_and_shutdown():
+        client = AsyncPostHog("test-key", sync_mode=True)
+        await client.capture("event", distinct_id="user-1")
+        await client.shutdown()
+
+    with (
+        mock.patch("posthog.async_client._build_client", side_effect=build_http_client),
+        mock.patch("posthog.async_client._async_batch_post", new=mock.AsyncMock()),
+    ):
+        asyncio.run(capture_and_shutdown())
+        asyncio.run(capture_and_shutdown())
+
+    assert len(http_clients) == 2
+    assert http_clients[0] is not http_clients[1]
+    for http_client in http_clients:
+        http_client.aclose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [False, True])
+async def test_capture_after_shutdown_does_not_restart_transport(sync_mode):
+    with (
+        mock.patch("posthog.async_client._build_client") as build,
+        mock.patch("posthog.async_client._async_batch_post", new=mock.AsyncMock()),
+    ):
+        client = AsyncPostHog("test-key", sync_mode=sync_mode)
+        await client.shutdown()
+        result = await client.capture("event", distinct_id="user-1")
+
+    assert result is None
+    build.assert_not_called()
+    assert client._worker_tasks == []
 
 
 @pytest.mark.asyncio

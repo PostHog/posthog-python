@@ -33,6 +33,7 @@ class _AsyncConsumer:
         timeout: int = 15,
         historical_migration: bool = False,
         dedicated_ai_endpoint: bool = False,
+        client: Optional[Any] = None,
     ) -> None:
         self.flush_at = flush_at
         self.flush_interval = flush_interval
@@ -46,6 +47,7 @@ class _AsyncConsumer:
         self.retries = retries
         self.timeout = timeout
         self.historical_migration = historical_migration
+        self.http_client = client
 
     async def run(self) -> None:
         self.log.debug("async consumer is running...")
@@ -168,6 +170,7 @@ class _AsyncConsumer:
                     batch=batch,
                     historical_migration=self.historical_migration,
                     path=path,
+                    client=self.http_client,
                 )
                 return
             except Exception as e:
