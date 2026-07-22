@@ -15,6 +15,7 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
+    _capture_ai_event,
     extract_available_tool_calls,
     get_model_params,
     merge_usage_stats,
@@ -252,7 +253,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai_response(kwargs.get("input")),
+                sanitize_openai_response(kwargs.get("input"), self._client._ph_client),
             ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
@@ -291,9 +292,10 @@ class WrappedResponses(_OpenAIWrapperResource):
             event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
+            _capture_ai_event(
+                self._client._ph_client,
+                "$ai_generation",
                 distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
                 properties=event_properties,
                 groups=posthog_groups,
             )
@@ -547,7 +549,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai(kwargs.get("messages")),
+                sanitize_openai(kwargs.get("messages"), self._client._ph_client),
             ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
@@ -587,9 +589,10 @@ class WrappedCompletions(_OpenAIWrapperResource):
             event_properties["$process_person_profile"] = False
 
         if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
+            _capture_ai_event(
+                self._client._ph_client,
+                "$ai_generation",
                 distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_generation",
                 properties=event_properties,
                 groups=posthog_groups,
             )
@@ -647,7 +650,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai_response(kwargs.get("input")),
+                sanitize_openai_response(kwargs.get("input"), self._client._ph_client),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -662,9 +665,10 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
 
         # Send capture event for embeddings
         if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
+            _capture_ai_event(
+                self._client._ph_client,
+                "$ai_embedding",
                 distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_embedding",
                 properties=event_properties,
                 groups=posthog_groups,
             )

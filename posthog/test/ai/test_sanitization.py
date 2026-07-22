@@ -1,5 +1,6 @@
-import os
+import types
 import unittest
+from unittest import mock
 
 from posthog.ai.sanitization import (
     redact_base64_data_url,
@@ -351,117 +352,8 @@ class TestSanitization(unittest.TestCase):
         )
 
 
-class TestAIMultipartRequest(unittest.TestCase):
-    """Test that _INTERNAL_LLMA_MULTIMODAL environment variable controls sanitization."""
-
-    def tearDown(self):
-        # Clean up environment variable after each test
-        if "_INTERNAL_LLMA_MULTIMODAL" in os.environ:
-            del os.environ["_INTERNAL_LLMA_MULTIMODAL"]
-
-    def test_multimodal_disabled_redacts_images(self):
-        """When _INTERNAL_LLMA_MULTIMODAL is not set, images should be redacted."""
-        if "_INTERNAL_LLMA_MULTIMODAL" in os.environ:
-            del os.environ["_INTERNAL_LLMA_MULTIMODAL"]
-
-        base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-        result = redact_base64_data_url(base64_image)
-        self.assertEqual(result, REDACTED_IMAGE_PLACEHOLDER)
-
-    def test_multimodal_enabled_preserves_images(self):
-        """When _INTERNAL_LLMA_MULTIMODAL is true, images should be preserved."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
-
-        base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-        result = redact_base64_data_url(base64_image)
-        self.assertEqual(result, base64_image)
-
-    def test_multimodal_enabled_with_1(self):
-        """_INTERNAL_LLMA_MULTIMODAL=1 should enable multimodal."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "1"
-
-        base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-        result = redact_base64_data_url(base64_image)
-        self.assertEqual(result, base64_image)
-
-    def test_multimodal_enabled_with_yes(self):
-        """_INTERNAL_LLMA_MULTIMODAL=yes should enable multimodal."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "yes"
-
-        base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-        result = redact_base64_data_url(base64_image)
-        self.assertEqual(result, base64_image)
-
-    def test_multimodal_false_redacts_images(self):
-        """_INTERNAL_LLMA_MULTIMODAL=false should still redact."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "false"
-
-        base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-        result = redact_base64_data_url(base64_image)
-        self.assertEqual(result, REDACTED_IMAGE_PLACEHOLDER)
-
-    def test_anthropic_multimodal_enabled(self):
-        """Anthropic images should be preserved when _INTERNAL_LLMA_MULTIMODAL is enabled."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
-
-        input_data = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": "base64data",
-                        },
-                    }
-                ],
-            }
-        ]
-
-        result = sanitize_anthropic(input_data)
-        self.assertEqual(result[0]["content"][0]["source"]["data"], "base64data")
-
-    def test_gemini_multimodal_enabled(self):
-        """Gemini images should be preserved when _INTERNAL_LLMA_MULTIMODAL is enabled."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
-
-        input_data = [
-            {
-                "parts": [
-                    {"inline_data": {"mime_type": "image/jpeg", "data": "base64data"}}
-                ]
-            }
-        ]
-
-        result = sanitize_gemini(input_data)
-        self.assertEqual(result[0]["parts"][0]["inline_data"]["data"], "base64data")
-
-    def test_langchain_anthropic_style_multimodal_enabled(self):
-        """LangChain Anthropic-style images should be preserved when _INTERNAL_LLMA_MULTIMODAL is enabled."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
-
-        input_data = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"data": "base64data"},
-                    }
-                ],
-            }
-        ]
-
-        result = sanitize_langchain(input_data)
-        self.assertEqual(result[0]["content"][0]["source"]["data"], "base64data")
-
-    def test_openai_audio_redacted_by_default(self):
-        """OpenAI audio should be redacted when _INTERNAL_LLMA_MULTIMODAL is not set."""
-        if "_INTERNAL_LLMA_MULTIMODAL" in os.environ:
-            del os.environ["_INTERNAL_LLMA_MULTIMODAL"]
-
+class TestAudioRedaction(unittest.TestCase):
+    def test_openai_audio_redacted(self):
         input_data = [
             {
                 "role": "assistant",
@@ -475,27 +367,7 @@ class TestAIMultipartRequest(unittest.TestCase):
         self.assertEqual(result[0]["content"][0]["data"], REDACTED_IMAGE_PLACEHOLDER)
         self.assertEqual(result[0]["content"][0]["id"], "audio_123")
 
-    def test_openai_audio_preserved_with_flag(self):
-        """OpenAI audio should be preserved when _INTERNAL_LLMA_MULTIMODAL is enabled."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
-
-        input_data = [
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "audio", "data": "base64audiodata", "id": "audio_123"}
-                ],
-            }
-        ]
-
-        result = sanitize_openai(input_data)
-        self.assertEqual(result[0]["content"][0]["data"], "base64audiodata")
-
-    def test_gemini_audio_redacted_by_default(self):
-        """Gemini audio should be redacted when _INTERNAL_LLMA_MULTIMODAL is not set."""
-        if "_INTERNAL_LLMA_MULTIMODAL" in os.environ:
-            del os.environ["_INTERNAL_LLMA_MULTIMODAL"]
-
+    def test_gemini_audio_redacted(self):
         input_data = [
             {
                 "parts": [
@@ -514,26 +386,85 @@ class TestAIMultipartRequest(unittest.TestCase):
             result[0]["parts"][0]["inline_data"]["data"], REDACTED_IMAGE_PLACEHOLDER
         )
 
-    def test_gemini_audio_preserved_with_flag(self):
-        """Gemini audio should be preserved when _INTERNAL_LLMA_MULTIMODAL is enabled."""
-        os.environ["_INTERNAL_LLMA_MULTIMODAL"] = "true"
 
-        input_data = [
+class TestClientMultimodalPassthrough(unittest.TestCase):
+    def setUp(self):
+        self.image = "data:image/jpeg;base64," + "A" * 64
+        self.openai_input = [
             {
-                "parts": [
-                    {
-                        "inline_data": {
-                            "mime_type": "audio/L16;codec=pcm;rate=24000",
-                            "data": "base64audiodata",
-                        }
-                    }
-                ]
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self.image}}],
             }
         ]
 
-        result = sanitize_gemini(input_data)
+    def _client(self, enabled):
+        return types.SimpleNamespace(_enable_multimodal_capture=enabled)
+
+    def test_flag_preserves_media_across_entry_points(self):
+        client = self._client(True)
+        for fn, data in [
+            (sanitize_openai, self.openai_input),
+            (
+                sanitize_anthropic,
+                [
+                    {
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": "A" * 64,
+                                },
+                            }
+                        ]
+                    }
+                ],
+            ),
+            (
+                sanitize_gemini,
+                [
+                    {
+                        "parts": [
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/jpeg",
+                                    "data": "A" * 64,
+                                }
+                            }
+                        ]
+                    }
+                ],
+            ),
+            (
+                sanitize_langchain,
+                [
+                    {
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": self.image}}
+                        ]
+                    }
+                ],
+            ),
+        ]:
+            self.assertEqual(fn(data, ph_client=client), data)
+
+    def test_flag_off_still_redacts(self):
+        result = sanitize_openai(self.openai_input, ph_client=self._client(False))
         self.assertEqual(
-            result[0]["parts"][0]["inline_data"]["data"], "base64audiodata"
+            result[0]["content"][0]["image_url"]["url"], REDACTED_IMAGE_PLACEHOLDER
+        )
+
+    def test_no_client_redacts(self):
+        result = sanitize_openai(self.openai_input)
+        self.assertEqual(
+            result[0]["content"][0]["image_url"]["url"], REDACTED_IMAGE_PLACEHOLDER
+        )
+
+    def test_unspecced_mock_client_still_redacts(self):
+        result = sanitize_openai(self.openai_input, ph_client=mock.Mock())
+        self.assertEqual(
+            result[0]["content"][0]["image_url"]["url"], REDACTED_IMAGE_PLACEHOLDER
         )
 
 

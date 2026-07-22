@@ -393,6 +393,14 @@ flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvi
 # Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
 # then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
 capture_mode = None  # type: Optional[CaptureMode]
+# Internal, no stability guarantees. `_use_ai_lane` routes AI SDK wrapper events
+# through the dedicated AI capture lane; `_enable_multimodal_capture` additionally
+# skips media redaction (and implies the lane). Module attributes so the lazily
+# auto-instantiated default client can be configured without constructing it.
+# Like `debug`/`disabled`, these are authoritative for the default client:
+# `setup()` re-syncs them onto it on every call, overwriting direct assignments.
+_use_ai_lane = False  # type: bool
+_enable_multimodal_capture = False  # type: bool
 
 default_client = None  # type: Optional[Client]
 
@@ -1201,6 +1209,8 @@ def setup() -> Client:
     default_client.disabled = disabled or not default_client.api_key
     default_client.debug = debug
     default_client._set_before_send(before_send)
+    default_client._use_ai_lane = bool(_use_ai_lane)
+    default_client._enable_multimodal_capture = bool(_enable_multimodal_capture)
     # Metrics config is consumed lazily on first `.metrics` access, so late
     # module-attr assignment (e.g. a Django ready() hook running after something
     # already forced setup()) still applies until the metrics API is first used.

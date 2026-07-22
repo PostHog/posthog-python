@@ -1575,3 +1575,21 @@ def test_integration_stop_reason(mock_client):
     assert isinstance(props["$ai_stop_reason"], str)
     assert props["$ai_provider"] == "gemini"
     assert props["$ai_input_tokens"] > 0
+
+
+def test_ai_lane_client_routes_through_capture_ai(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
+    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
+
+    mock_client._use_ai_lane = True
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Tell me a fun fact about hedgehogs"],
+        posthog_distinct_id="test-id",
+    )
+
+    mock_client.capture.assert_not_called()
+    assert mock_client._capture_ai.call_count == 1
+    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"

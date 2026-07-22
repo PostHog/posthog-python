@@ -365,10 +365,6 @@ EVENTS_ENDPOINT = "/batch/"
 AI_EVENTS_ENDPOINT = "/i/v0/ai/batch/"
 
 
-def is_ai_event(event_name) -> bool:
-    return isinstance(event_name, str) and event_name.startswith("$ai_")
-
-
 def batch_post(
     api_key: str,
     host: Optional[str] = None,

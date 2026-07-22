@@ -2450,3 +2450,52 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
 
     assert source.closed is True
     assert mock_client.capture.call_count == 1
+
+
+def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_openai_response):
+    mock_client._use_ai_lane = True
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+    mock_client.capture.assert_not_called()
+    assert mock_client._capture_ai.call_count == 1
+    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+
+
+def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_response):
+    mock_client._enable_multimodal_capture = True
+    image = "data:image/jpeg;base64," + "A" * 64
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image}},
+                    ],
+                }
+            ],
+            posthog_distinct_id="test-id",
+        )
+
+        mock_client.capture.assert_not_called()
+        assert mock_client._capture_ai.call_count == 1
+
+        call_args = mock_client._capture_ai.call_args[1]
+        props = call_args["properties"]
+
+        assert props["$ai_input"][0]["content"][0]["image_url"]["url"] == image
