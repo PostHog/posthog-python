@@ -9,6 +9,7 @@ from freezegun import freeze_time
 from parameterized import parameterized
 
 from posthog.client import Client
+import posthog.feature_flags
 from posthog.feature_flags import (
     InconclusiveMatchError,
     match_property,
@@ -38,6 +39,9 @@ class TestLocalEvaluation(unittest.TestCase):
     def setUp(self):
         self.failed = False
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        # Reset the process-wide malformed-dependency warning dedup set so tests
+        # asserting on the warning stay order-independent.
+        posthog.feature_flags._warned_malformed_flag_dependencies.clear()
 
     @mock.patch("posthog.client.get")
     def test_flag_person_properties(self, patch_get):
@@ -75,6 +79,47 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertTrue(feature_flag_match)
         self.assertFalse(not_feature_flag_match)
+
+    @mock.patch("posthog.client.flags")
+    def test_distinct_id_property_is_available_for_local_evaluation_only(
+        self, patch_flags
+    ):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Distinct ID Feature",
+                "key": "distinct-id-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "distinct_id",
+                                    "operator": "exact",
+                                    "value": "some-distinct-id",
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        person_properties = {"region": "USA"}
+        feature_flag_match = self.client.get_feature_flag(
+            "distinct-id-flag",
+            "some-distinct-id",
+            person_properties=person_properties,
+            only_evaluate_locally=True,
+            send_feature_flag_events=False,
+        )
+
+        self.assertTrue(feature_flag_match)
+        self.assertEqual(person_properties, {"region": "USA"})
+        self.assertEqual(patch_flags.call_count, 0)
 
     def test_case_insensitive_matching(self):
         self.client.feature_flags = [
@@ -2040,6 +2085,498 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
+    def test_flag_dependencies_evaluates_to_false(self, patch_get, patch_flags):
+        """A `flag_evaluates_to: false` condition matches when the referenced flag is conclusively False, without falling back to /flags."""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                # 0% rollout: conclusively False for everyone
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 0}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": False,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        for distinct_id in ["user-1", "user-2", "another-user-xyz"]:
+            self.assertEqual(
+                client.get_feature_flag("dependent-flag", distinct_id), True
+            )
+
+        # Control: base flag returning a variant does not match `value: false`
+        client.feature_flags[0]["filters"] = {
+            "groups": [
+                {"properties": [], "rollout_percentage": 100, "variant": "test"}
+            ],
+            "multivariate": {"variants": [{"key": "test", "rollout_percentage": 100}]},
+        }
+        self.assertEqual(client.get_feature_flag("dependent-flag", "user-1"), False)
+
+        # Control: base flag at 100% (True) does not match `value: false`
+        client.feature_flags[0]["filters"] = {
+            "groups": [{"properties": [], "rollout_percentage": 100}]
+        }
+        self.assertEqual(client.get_feature_flag("dependent-flag", "user-1"), False)
+
+        # Everything above resolves locally - no /flags fallback
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_multi_level_evaluates_to_false(
+        self, patch_get, patch_flags
+    ):
+        """Multi-level chain with a legitimately-False ancestor: A(false) -> B(true) -> D(true)."""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Flag A",
+                "key": "flag-a",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 0}]},
+            },
+            {
+                "id": 2,
+                "name": "Flag B",
+                "key": "flag-b",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-a",
+                                    "operator": "flag_evaluates_to",
+                                    "value": False,
+                                    "type": "flag",
+                                    "dependency_chain": ["flag-a"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 3,
+                "name": "Flag D",
+                "key": "flag-d",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "flag-b",
+                                    "operator": "flag_evaluates_to",
+                                    "value": True,
+                                    "type": "flag",
+                                    # Ancestor A is False; only B's value decides D
+                                    "dependency_chain": ["flag-a", "flag-b"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        self.assertEqual(client.get_feature_flag("flag-a", "user-1"), False)
+        self.assertEqual(client.get_feature_flag("flag-b", "user-1"), True)
+        self.assertEqual(client.get_feature_flag("flag-d", "user-1"), True)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_inactive_base_evaluates_to_false(
+        self, patch_get, patch_flags
+    ):
+        """An inactive base flag caches False, so `flag_evaluates_to: false` matches."""
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": False,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": False,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        self.assertEqual(client.get_feature_flag("dependent-flag", "user-1"), True)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_inconclusive_base_falls_back(
+        self, patch_get, patch_flags
+    ):
+        """An inconclusive base (missing person properties) is distinct from False and falls back to /flags."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "email",
+                                    "operator": "icontains",
+                                    "value": "@example.com",
+                                    "type": "person",
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": False,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # No person properties => base is inconclusive (None), not False
+        result = client.get_feature_flag("dependent-flag", "user-1")
+        self.assertIsNone(result)
+        self.assertEqual(patch_flags.call_count, 1)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_null_value_no_match_locally(
+        self, patch_get, patch_flags
+    ):
+        """A malformed `value: null` condition is a definitive local no-match (False), never falling back to /flags."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # The malformed condition does not match, so the only group fails and the
+        # flag resolves to False locally - no billable /flags fallback.
+        result = client.get_feature_flag("dependent-flag", "user-1")
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_missing_key_no_match_locally(
+        self, patch_get, patch_flags
+    ):
+        """A dependency condition with an empty/missing `key` is a definitive local no-match (False)."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "",
+                                    "operator": "flag_evaluates_to",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        result = client.get_feature_flag("dependent-flag", "user-1")
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_wrong_operator_no_match_locally(
+        self, patch_get, patch_flags
+    ):
+        """A dependency condition with the wrong operator is a definitive local no-match (False)."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "exact",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        result = client.get_feature_flag("dependent-flag", "user-1")
+        self.assertFalse(result)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_malformed_condition_warns_once(
+        self, patch_get, patch_flags
+    ):
+        """A malformed dependency condition warns on first eval, then stays quiet (dedup)."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            {
+                "id": 2,
+                "name": "Dependent Flag",
+                "key": "dependent-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+        ]
+
+        # First evaluation emits exactly one warning naming the malformed flag.
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            self.assertFalse(client.get_feature_flag("dependent-flag", "user-1"))
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("base-flag", logs.output[0])
+        self.assertIn("malformed", logs.output[0])
+
+        # Second evaluation of the same malformed condition stays silent (dedup).
+        # assertLogs fails if nothing is logged, so log a sentinel to prove the
+        # malformed-dependency warning itself did not fire again.
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            self.assertFalse(client.get_feature_flag("dependent-flag", "user-2"))
+            posthog.feature_flags.log.warning("sentinel")
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("sentinel", logs.output[0])
+
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_flag_dependencies_malformed_condition_falls_through_to_other_group(
+        self, patch_get, patch_flags
+    ):
+        """A malformed dependency condition no-matches its group, but a second matching group still resolves the flag locally."""
+        patch_flags.return_value = {"featureFlags": {}}
+        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Base Flag",
+                "key": "base-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            },
+            # Only condition is the malformed dependency -> resolves to False locally.
+            {
+                "id": 2,
+                "name": "Malformed Only Flag",
+                "key": "malformed-only-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ],
+                },
+            },
+            # Malformed dependency group no-matches, but the second group matches.
+            {
+                "id": 3,
+                "name": "Malformed Plus Matching Flag",
+                "key": "malformed-plus-matching-flag",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "base-flag",
+                                    "operator": "flag_evaluates_to",
+                                    "value": None,
+                                    "type": "flag",
+                                    "dependency_chain": ["base-flag"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        },
+                        {"properties": [], "rollout_percentage": 100},
+                    ],
+                },
+            },
+        ]
+
+        self.assertFalse(client.get_feature_flag("malformed-only-flag", "user-1"))
+        self.assertTrue(
+            client.get_feature_flag("malformed-plus-matching-flag", "user-1")
+        )
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
     def test_multi_level_multivariate_dependency_chain(self, patch_get, patch_flags):
         """Test multi-level multivariate dependency chain: dependent-flag -> intermediate-flag -> leaf-flag"""
         client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
@@ -2726,7 +3263,7 @@ class TestLocalEvaluation(unittest.TestCase):
             client.load_feature_flags()
             self.assertIn("Unauthorized", logs.output[0])
             self.assertIn("project_api_key", logs.output[0])
-            self.assertIn("personal_api_key", logs.output[0])
+            self.assertIn("secret_key", logs.output[0])
         client.debug = True
         with self.assertRaisesRegex(APIError, "Unauthorized"):
             client.load_feature_flags()
@@ -5594,6 +6131,9 @@ class TestConsistency(unittest.TestCase):
     def setUp(self):
         self.failed = False
         self.client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        # Reset the process-wide malformed-dependency warning dedup set so tests
+        # asserting on the warning stay order-independent.
+        posthog.feature_flags._warned_malformed_flag_dependencies.clear()
 
     @mock.patch("posthog.client.get")
     def test_simple_flag_consistency(self, patch_get):
@@ -7796,9 +8336,7 @@ class TestConsistency(unittest.TestCase):
         mock_flags.assert_called_once()
         call_args = mock_flags.call_args[1]
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag2"])
-        self.assertEqual(
-            call_args["person_properties"], {"distinct_id": "user123", "region": "USA"}
-        )
+        self.assertEqual(call_args["person_properties"], {"region": "USA"})
 
         # Check the result
         self.assertEqual(result, {"flag1": "value1", "flag2": True})
@@ -7834,7 +8372,7 @@ class TestConsistency(unittest.TestCase):
         self.assertEqual(call_args["flag_keys_to_evaluate"], ["flag1", "flag3"])
         self.assertEqual(
             call_args["person_properties"],
-            {"distinct_id": "user123", "subscription": "pro"},
+            {"subscription": "pro"},
         )
 
         # Check the result

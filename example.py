@@ -32,7 +32,7 @@ load_env_file()
 
 # Get configuration
 project_key = os.getenv("POSTHOG_PROJECT_API_KEY", "")
-personal_api_key = os.getenv("POSTHOG_PERSONAL_API_KEY", "")
+secret_key = os.getenv("POSTHOG_SECRET_KEY", "")
 host = os.getenv("POSTHOG_HOST", "http://localhost:8010")
 
 # Check if project key is provided (required)
@@ -49,23 +49,23 @@ posthog.project_api_key = project_key
 posthog.host = host
 posthog.poll_interval = 10
 
-# Check if personal API key is available for local evaluation
-local_eval_available = bool(personal_api_key)
-if personal_api_key:
-    posthog.personal_api_key = personal_api_key
+# Check if a secret key is available for local evaluation
+local_eval_available = bool(secret_key)
+if secret_key:
+    posthog.secret_key = secret_key
 
 print("🔑 PostHog Configuration:")
 print(f"   Project API Key: {project_key[:9]}...")
 if local_eval_available:
-    print("   Personal API Key: [SET]")
+    print("   Secret Key: [SET]")
 else:
-    print("   Personal API Key: [NOT SET] - Local evaluation examples will be skipped")
+    print("   Secret Key: [NOT SET] - Local evaluation examples will be skipped")
 print(f"   Host: {host}\n")
 
 # Display menu and get user choice
 print("🚀 PostHog Python SDK Demo - Choose an example to run:\n")
 print("1. Identify and capture examples")
-local_eval_note = "" if local_eval_available else " [requires personal API key]"
+local_eval_note = "" if local_eval_available else " [requires secret key]"
 print(f"2. Feature flag local evaluation examples{local_eval_note}")
 print("3. Feature flag payload examples")
 print(f"4. Flag dependencies examples{local_eval_note}")
@@ -135,10 +135,8 @@ if choice == "1":
 
 elif choice == "2":
     if not local_eval_available:
-        print("\n❌ This example requires a personal API key for local evaluation.")
-        print(
-            "   Set POSTHOG_PERSONAL_API_KEY environment variable to run this example."
-        )
+        print("\n❌ This example requires a secret API key for local evaluation.")
+        print("   Set POSTHOG_SECRET_KEY environment variable to run this example.")
         posthog.shutdown()
         exit(1)
 
@@ -210,10 +208,8 @@ elif choice == "3":
 
 elif choice == "4":
     if not local_eval_available:
-        print("\n❌ This example requires a personal API key for local evaluation.")
-        print(
-            "   Set POSTHOG_PERSONAL_API_KEY environment variable to run this example."
-        )
+        print("\n❌ This example requires a secret API key for local evaluation.")
+        print("   Set POSTHOG_SECRET_KEY environment variable to run this example.")
         posthog.shutdown()
         exit(1)
 
@@ -432,7 +428,7 @@ elif choice == "5":
 elif choice == "6":
     print("\n🔄 Running all examples...")
     if not local_eval_available:
-        print("   (Skipping local evaluation examples - no personal API key set)\n")
+        print("   (Skipping local evaluation examples - no secret key set)\n")
 
     # Run example 1
     print(f"\n{'🔸' * 20} IDENTIFY AND CAPTURE {'🔸' * 20}")

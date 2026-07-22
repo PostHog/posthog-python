@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.21.2"
+version = "7.28.0"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -37,6 +37,11 @@ Repository = "https://github.com/posthog/posthog-python"
 [project.optional-dependencies]
 async = ["httpx>=0.27,<1.0"]
 langchain = ["langchain>=0.2.0"]
+# Opt-in zstd support for capture-v1 request compression. Kept out of the core
+# dependencies so existing installs are unaffected; Python gains stdlib zstd
+# only in 3.14 (compression.zstd), so the third-party package is needed until
+# then.
+zstd = ["zstandard>=0.23.0"]
 # Note: the MCP SDK (`mcp`) is intentionally NOT an extra. It's a peer dependency of
 # `instrument()` — anyone wrapping a FastMCP/Server already has it — so it's imported
 # lazily and version-checked at runtime, not installed by posthog. `PostHogMCP` (custom
@@ -71,7 +76,7 @@ test = [
     "pytest",
     "pytest-timeout",
     "pytest-asyncio",
-    "django>=5.2.8,<6.0",
+    "django>=5.2.15,<6.0",
     "openai>=2.0",
     "anthropic>=0.72",
     "langgraph>=1.0",
@@ -85,11 +90,12 @@ test = [
     "pydantic>=2.12.0",
     "parameterized>=0.8.1",
     "claude-agent-sdk",
-    "mcp>=1.26.0",
+    "mcp>=1.28.1",
     "fastmcp>=2.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
     "pytest-bdd>=8.1.0",
+    "zstandard>=0.23.0",
 ]
 
 [tool.setuptools]

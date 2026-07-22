@@ -682,6 +682,7 @@ class PostHogTracingProcessor(TracingProcessor):
 
         # Try to extract usage from response
         usage = getattr(response, "usage", None) if response else None
+        total_cost_usd = getattr(usage, "cost", None) if usage else None
         input_tokens = 0
         output_tokens = 0
         if usage:
@@ -702,6 +703,9 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": input_tokens + output_tokens,
         }
+
+        if total_cost_usd is not None:
+            properties["$ai_total_cost_usd"] = total_cost_usd
 
         # Extract output content from response
         if response:

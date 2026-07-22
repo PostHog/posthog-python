@@ -2,12 +2,15 @@ import logging
 import asyncio
 import time
 import unittest
+import warnings
 from datetime import datetime
+from unittest import mock
 from uuid import UUID, uuid4
 
-from unittest import mock
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, use_span
 from parameterized import parameterized
 
+from posthog.capture_compression import CaptureCompression
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError, GetResponse
@@ -77,6 +80,30 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.raw_host, "https://eu.posthog.com/")
         self.assertEqual(client.host, "https://eu.i.posthog.com")
         self.assertIsNone(client.personal_api_key)
+
+    @parameterized.expand(
+        [
+            ("secret_key_only", "phx_secret", None, "phx_secret", False),
+            ("personal_api_key_alias", None, "phx_legacy", "phx_legacy", True),
+            ("secret_key_wins", "phx_secret", "phx_legacy", "phx_secret", False),
+        ]
+    )
+    def test_secret_key_resolution(
+        self, _, secret_key, personal_api_key, expected, expect_deprecation
+    ):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            client = Client(
+                FAKE_TEST_API_KEY,
+                secret_key=secret_key,
+                personal_api_key=personal_api_key,
+                send=False,
+            )
+
+        self.assertEqual(client.secret_key, expected)
+        self.assertEqual(client.personal_api_key, expected)
+        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        self.assertEqual(bool(deprecations), expect_deprecation)
 
     def test_client_with_empty_api_key_is_noop(self):
         client = Client("", send=False)
@@ -461,6 +488,58 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
+    @parameterized.expand(
+        [
+            (
+                "active_context",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "explicit_properties",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("invalid_context", 0, 0, {}, None, None),
+        ]
+    )
+    def test_capture_exception_uses_current_otel_span_context(
+        self,
+        _,
+        context_trace_id,
+        context_span_id,
+        properties,
+        expected_trace_id,
+        expected_span_id,
+    ):
+        span_context = SpanContext(
+            trace_id=context_trace_id,
+            span_id=context_span_id,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            client.capture_exception(Exception("test exception"), properties=properties)
+
+        event = mock_post.call_args.kwargs["batch"][0]
+        if expected_trace_id is None:
+            self.assertNotIn("$trace_id", event["properties"])
+            self.assertNotIn("$span_id", event["properties"])
+        else:
+            self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
+            self.assertEqual(event["properties"]["$span_id"], expected_span_id)
+
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
@@ -810,7 +889,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.cohorts, {})
             self.assertIn("Unauthorized", logs.output[0])
             self.assertIn("project_api_key", logs.output[0])
-            self.assertIn("personal_api_key", logs.output[0])
+            self.assertIn("secret_key", logs.output[0])
 
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):
@@ -2088,9 +2167,11 @@ class TestClient(unittest.TestCase):
         for i in range(10):
             client.capture("test event", distinct_id="distinct_id")
 
-        msg_uuid = client.capture("test event", distinct_id="distinct_id")
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            msg_uuid = client.capture("test event", distinct_id="distinct_id")
         # Make sure we are informed that the queue is at capacity
         self.assertIsNone(msg_uuid)
+        self.assertIn("dropping event", logs.output[0])
 
     def test_unicode(self):
         Client("unicode_key")
@@ -2290,7 +2371,7 @@ class TestClient(unittest.TestCase):
             max_retries=1,
             distinct_id="some_id",
             groups={},
-            person_properties={"distinct_id": "some_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=True,
             device_id=None,
@@ -2307,7 +2388,7 @@ class TestClient(unittest.TestCase):
             max_retries=1,
             distinct_id="feature_enabled_distinct_id",
             groups={},
-            person_properties={"distinct_id": "feature_enabled_distinct_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=True,
             device_id=None,
@@ -2322,7 +2403,7 @@ class TestClient(unittest.TestCase):
             max_retries=1,
             distinct_id="all_flags_payloads_id",
             groups={},
-            person_properties={"distinct_id": "all_flags_payloads_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=False,
             device_id=None,
@@ -2369,7 +2450,7 @@ class TestClient(unittest.TestCase):
             max_retries=1,
             distinct_id="some_id",
             groups={"company": "id:5", "instance": "app.posthog.com"},
-            person_properties={"distinct_id": "some_id", "x1": "y1"},
+            person_properties={"x1": "y1"},
             group_properties={
                 "company": {"$group_key": "id:5", "x": "y"},
                 "instance": {"$group_key": "app.posthog.com"},
@@ -2420,7 +2501,7 @@ class TestClient(unittest.TestCase):
             max_retries=1,
             distinct_id="some_id",
             groups={},
-            person_properties={"distinct_id": "some_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=False,
             device_id=None,
@@ -2432,22 +2513,22 @@ class TestClient(unittest.TestCase):
             (
                 "get_feature_flag",
                 ["random_key", "some_id"],
-                {"distinct_id": "some_id"},
+                {},
                 ["random_key"],
             ),
             (
                 "feature_enabled",
                 ["random_key", "some_id"],
-                {"distinct_id": "some_id"},
+                {},
                 ["random_key"],
             ),
             (
                 "get_all_flags_and_payloads",
                 ["some_id"],
-                {"distinct_id": "some_id"},
+                {},
                 None,
             ),
-            ("get_all_flags", ["some_id"], {"distinct_id": "some_id"}, None),
+            ("get_all_flags", ["some_id"], {}, None),
             ("get_flags_decision", ["some_id"], {}, None),
         ]
     )
@@ -2511,7 +2592,7 @@ class TestClient(unittest.TestCase):
                 max_retries=1,
                 distinct_id="some_id",
                 groups={},
-                person_properties={"distinct_id": "some_id"},
+                person_properties={},
                 group_properties={},
                 geoip_disable=True,
                 device_id="context-device-id",
@@ -2532,7 +2613,7 @@ class TestClient(unittest.TestCase):
                 max_retries=1,
                 distinct_id="some_id",
                 groups={},
-                person_properties={"distinct_id": "some_id"},
+                person_properties={},
                 group_properties={},
                 geoip_disable=True,
                 device_id="explicit-device-id",
@@ -2562,7 +2643,7 @@ class TestClient(unittest.TestCase):
             max_retries=1,
             distinct_id="some_id",
             groups={},
-            person_properties={"distinct_id": "some_id"},
+            person_properties={},
             group_properties={},
             geoip_disable=True,
             device_id="client-context-device-id",
@@ -3260,3 +3341,98 @@ class TestClient(unittest.TestCase):
                 with self.assertRaises(Exception) as cm:
                     method(*args, **kwargs)
                 self.assertEqual(str(cm.exception), "Expected error")
+
+
+class TestClientSyncCaptureMode(unittest.TestCase):
+    """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`;
+    the dedicated AI endpoint always uses the legacy submitter."""
+
+    def _client(self, **kwargs):
+        return Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
+
+    @parameterized.expand(
+        [
+            ("v0", None, False),
+            ("v1", "v1", True),
+        ]
+    )
+    def test_capture_mode_selects_sync_submitter(self, _name, capture_mode, expects_v1):
+        kwargs = {"capture_mode": capture_mode} if capture_mode else {}
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client(**kwargs).capture("evt", distinct_id="d")
+        if expects_v1:
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()
+            sent_batch = mock_v1.call_args.args[2]
+            self.assertEqual(len(sent_batch), 1)
+            self.assertEqual(sent_batch[0]["event"], "evt")
+        else:
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
+
+    def test_v1_sync_forwards_config_to_submitter(self):
+        with (
+            mock.patch("posthog.client.batch_post"),
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client(
+                capture_mode="v1",
+                capture_compression=CaptureCompression.GZIP,
+                max_retries=4,
+                historical_migration=True,
+            ).capture("evt", distinct_id="d")
+            kwargs = mock_v1.call_args.kwargs
+            self.assertEqual(kwargs["compression"], CaptureCompression.GZIP)
+            self.assertEqual(kwargs["max_retries"], 4)
+            self.assertEqual(kwargs["historical_migration"], True)
+
+    def test_v1_sync_gzip_flag_falls_back_to_gzip_compression(self):
+        # Legacy `gzip=True` with no explicit capture_compression -> GZIP on v1.
+        with (
+            mock.patch("posthog.client.batch_post"),
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            self._client(capture_mode="v1", gzip=True).capture("evt", distinct_id="d")
+            self.assertEqual(
+                mock_v1.call_args.kwargs["compression"], CaptureCompression.GZIP
+            )
+
+    def test_v1_sync_dedicated_ai_event_stays_legacy(self):
+        # $ai_* on the dedicated AI endpoint has no v1 form.
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            client = self._client(capture_mode="v1", _dedicated_ai_endpoint=True)
+            client.capture("$ai_generation", distinct_id="d")
+            mock_v1.assert_not_called()
+            mock_post.assert_called_once()
+            self.assertEqual(mock_post.call_args.kwargs["path"], "/i/v0/ai/batch/")
+
+    def test_v1_sync_dedicated_ai_analytics_event_uses_v1(self):
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            client = self._client(capture_mode="v1", _dedicated_ai_endpoint=True)
+            client.capture("regular_event", distinct_id="d")
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()
+
+    def test_v1_sync_ai_event_uses_v1_without_dedicated_endpoint(self):
+        # Without the dedicated AI endpoint, $ai_* events follow `capture_mode`
+        # and ride the v1 submitter like any analytics event.
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+        ):
+            client = self._client(capture_mode="v1")
+            client.capture("$ai_generation", distinct_id="d")
+            mock_post.assert_not_called()
+            mock_v1.assert_called_once()
+            sent_batch = mock_v1.call_args.args[2]
+            self.assertEqual(len(sent_batch), 1)
+            self.assertEqual(sent_batch[0]["event"], "$ai_generation")

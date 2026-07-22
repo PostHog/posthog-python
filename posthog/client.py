@@ -15,6 +15,13 @@ from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.metrics_capture import PostHogMetrics
+from posthog.capture_compression import (
+    CaptureCompression,
+    _resolve_capture_compression,
+)
+from posthog.capture_mode import CaptureMode, _resolve_capture_mode
+from posthog.capture_v1 import _send_v1_batch
 from posthog.consumer import Consumer
 from posthog.contexts import (
     _get_current_context,
@@ -44,6 +51,7 @@ from posthog.exception_utils import (
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
+    _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
@@ -193,6 +201,58 @@ def no_throw(default_return=None):
     return decorator
 
 
+# Strict allowlist for minimal ``$feature_flag_called`` events, per the cross-SDK
+# contract: everything else — customer-passed properties, super properties, context
+# tags, and the richer parts of system context — is stripped from the
+# fully-enriched properties dict. The static platform/runtime identity keys below
+# are the exception: they're cheap and useful for debugging flag behavior by
+# platform, so they survive minimization.
+_MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
+    {
+        # Identity
+        "$feature_flag",
+        "$feature_flag_response",
+        "$feature_flag_has_experiment",
+        # Evaluation debug
+        "$feature_flag_id",
+        "$feature_flag_version",
+        "$feature_flag_reason",
+        "$feature_flag_request_id",
+        "$feature_flag_evaluated_at",
+        "$feature_flag_error",
+        "locally_evaluated",
+        # Correctness-required
+        "$groups",
+        "$process_person_profile",
+        # Linkage / SDK identity
+        "$session_id",
+        "$lib",
+        "$lib_version",
+        "$is_server",
+        # Processing-control sentinel this SDK sets to deliver the event correctly
+        "$geoip_disable",
+        # Static platform/runtime identity: cheap, low-cardinality dimensions kept
+        # for platform/runtime breakdowns on flag-call debugging.
+        "$os",
+        "$os_version",
+        "$os_distro",
+        "$python_runtime",
+        "$python_version",
+    }
+)
+
+
+def _parse_has_experiment(value: Any) -> Optional[bool]:
+    """Server-reported experiment linkage; anything but an explicit bool means unknown."""
+    return value if isinstance(value, bool) else None
+
+
+def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
+    """Server-reported experiment linkage from flag metadata; ``None`` when absent
+    (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
+    return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
+
+
 class Client(object):
     """
     This is the SDK reference for the PostHog Python SDK.
@@ -262,7 +322,11 @@ class Client(object):
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
+        capture_mode: Optional[Union[CaptureMode, str]] = None,
+        capture_compression: Optional[Union[CaptureCompression, str]] = None,
+        secret_key=None,
         _dedicated_ai_endpoint=False,
+        metrics: Optional[dict] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -288,8 +352,15 @@ class Client(object):
             timeout: HTTP request timeout in seconds for event uploads.
             thread: Number of background consumer threads.
             poll_interval: Seconds between local feature flag definition refreshes.
-            personal_api_key: Personal API key used for local feature flag
-                evaluation and remote config payloads.
+            secret_key: A Personal API Key or Project Secret API Key, used to
+                authenticate local feature flag evaluation, remote config
+                payloads, and decrypted flag payloads. Example::
+
+                    posthog.Client(project_api_key, secret_key="phx_...")
+
+            personal_api_key: Deprecated alias for ``secret_key``. Still honored
+                for backwards compatibility; prefer ``secret_key``, which also
+                accepts a Project Secret API Key.
             disabled: If True, disable captures and API requests. Useful in tests.
             disable_geoip: Whether to disable server-side GeoIP enrichment.
                 Defaults to True.
@@ -345,6 +416,16 @@ class Client(object):
                 interval for each exception type's bucket.
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
+            capture_mode: Capture wire protocol to use. Defaults to
+                ``CaptureMode.V0`` (legacy ``/batch/``). Set ``CaptureMode.V1``
+                (or pass the string ``"v1"``) to opt into
+                ``/i/v1/analytics/events``. When omitted, the
+                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V0``.
+            capture_compression: Request-body compression for capture-v1 uploads
+                (ignored in V0, which uses ``gzip``). ``CaptureCompression.GZIP``
+                or ``DEFLATE`` (or the strings ``"gzip"``/``"deflate"``). When
+                omitted, the ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted,
+                then the legacy ``gzip`` flag, then no compression.
 
         Examples:
             ```python
@@ -372,6 +453,7 @@ class Client(object):
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self.gzip = gzip
         self.timeout = timeout
+        self.max_retries = max_retries
         self._feature_flags: Optional[list[Any]] = (
             None  # private variable to store flags
         )
@@ -398,8 +480,20 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
         self.disabled = disabled or not self.api_key
         self.disable_geoip = disable_geoip
+        self._metrics_config = metrics
+        self._metrics: Optional[PostHogMetrics] = None
+        self._metrics_lock = threading.Lock()
         self.is_server = is_server
         self.historical_migration = historical_migration
+        # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
+        # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
+        # applied once; V0 is the default and keeps upgrades transparent.
+        self.capture_mode = _resolve_capture_mode(capture_mode)
+        # v1-only request compression; falls back to the legacy `gzip` flag when
+        # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
+        self.capture_compression = _resolve_capture_compression(
+            capture_compression, gzip_fallback=gzip
+        )
         # Internal, not ready for use: routes `$ai_*` events to a dedicated
         # capture-ai endpoint while the backend route + ingress roll out.
         self._dedicated_ai_endpoint = _dedicated_ai_endpoint
@@ -417,6 +511,10 @@ class Client(object):
         self.exception_capture = None
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
+        # Server-controlled gate for minimal $feature_flag_called events, read from
+        # the /flags v2 response and the local-evaluation payload. False until the
+        # server reports it, so full events are the fail-safe.
+        self._minimal_flag_called_events: bool = False
 
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -449,12 +547,25 @@ class Client(object):
 
         self.project_root = project_root
 
-        # personal_api_key: This should be a generated Personal API Key, private
-        self.personal_api_key = (
-            personal_api_key.strip()
-            if isinstance(personal_api_key, str)
-            else personal_api_key
+        if personal_api_key is not None and secret_key is None:
+            warnings.warn(
+                "`personal_api_key` is deprecated; use `secret_key` instead. "
+                "`secret_key` accepts a Personal API Key or a Project Secret API Key.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif secret_key is not None and personal_api_key is not None:
+            self.log.warning(
+                "[FEATURE FLAGS] Both `secret_key` and `personal_api_key` were "
+                "provided; using `secret_key` and ignoring `personal_api_key`."
+            )
+        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
+        self.secret_key = (
+            resolved_secret_key.strip()
+            if isinstance(resolved_secret_key, str)
+            else resolved_secret_key
         ) or None
+        self.personal_api_key = self.secret_key
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
             # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
@@ -505,6 +616,8 @@ class Client(object):
                     timeout=timeout,
                     historical_migration=historical_migration,
                     dedicated_ai_endpoint=self._dedicated_ai_endpoint,
+                    capture_mode=self.capture_mode,
+                    capture_compression=self.capture_compression,
                 )
                 self.consumers.append(consumer)
 
@@ -912,7 +1025,14 @@ class Client(object):
             **request_data,
         )
 
-        return normalize_flags_response(resp_data)
+        response = normalize_flags_response(resp_data)
+        # Server-controlled gate for minimal $feature_flag_called events. Only the
+        # v2 response shape carries it; absent (legacy shape, older server, team
+        # not gated) means False.
+        self._minimal_flag_called_events = (
+            response.get("minimalFlagCalledEvents") is True
+        )
+        return response
 
     def _build_capture_message(
         self,
@@ -1034,7 +1154,7 @@ class Client(object):
             msg["properties"]["$session_id"] = str(session_id)
         return msg
 
-    def _prepare_enqueue_message(self, msg, disable_geoip):
+    def _prepare_enqueue_message(self, msg, disable_geoip, property_allowlist=None):
         if self.disabled:
             return None, None
 
@@ -1078,6 +1198,14 @@ class Client(object):
         # can't be silently overridden by a user-provided super property.
         if self.is_server:
             msg["properties"]["$is_server"] = True
+
+        # Applied after every enrichment step (system context, context tags, super
+        # properties, $lib/$lib_version) so the final event shape is exactly the
+        # allowlist regardless of where a property came from.
+        if property_allowlist is not None:
+            msg["properties"] = {
+                k: v for k, v in msg["properties"].items() if k in property_allowlist
+            }
 
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
@@ -1149,6 +1277,9 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
+        # Internal, set for minimal $feature_flag_called events: a strict allowlist
+        # applied to the fully-enriched properties dict just before enqueueing.
+        property_allowlist = kwargs.get("_property_allowlist", None)
 
         msg, distinct_id = self._build_capture_message(
             event, distinct_id, properties, timestamp, uuid, groups
@@ -1234,7 +1365,7 @@ class Client(object):
 
         self._apply_capture_properties(msg, extra_properties)
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(msg, disable_geoip, property_allowlist=property_allowlist)
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
         """
@@ -1437,6 +1568,9 @@ class Client(object):
         """
         Capture an exception for error tracking.
 
+        When OpenTelemetry is installed and a valid span is active, its trace and
+        span IDs are added as ``$trace_id`` and ``$span_id`` event properties.
+
         Args:
             exception: The exception to capture.
             distinct_id: The distinct ID of the user.
@@ -1499,6 +1633,7 @@ class Client(object):
 
             properties = {
                 "$exception_list": all_exceptions_with_trace_and_in_app,
+                **_get_current_otel_span_properties(),
                 **properties,
             }
 
@@ -1613,6 +1748,8 @@ class Client(object):
                     timeout=old.timeout,
                     historical_migration=old.historical_migration,
                     dedicated_ai_endpoint=old.dedicated_ai_endpoint,
+                    capture_mode=old.capture_mode,
+                    capture_compression=old.capture_compression,
                 )
                 new_consumers.append(consumer)
 
@@ -1634,6 +1771,12 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
 
+        # Metrics locks may have been held by a parent thread at fork time; replace
+        # them (never acquire them) so the child can't deadlock on a vanished holder.
+        self._metrics_lock = threading.Lock()
+        if self._metrics is not None:
+            self._metrics._reinit_after_fork()
+
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
         if isinstance(self.flag_cache, RedisFlagCache):
@@ -1641,11 +1784,13 @@ class Client(object):
 
         reset_sessions()
 
-    def _enqueue(self, msg, disable_geoip):
+    def _enqueue(self, msg, disable_geoip, property_allowlist=None):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto the queue, return `(success, msg)`"""
 
-        msg, sent_uuid = self._prepare_enqueue_message(msg, disable_geoip)
+        msg, sent_uuid = self._prepare_enqueue_message(
+            msg, disable_geoip, property_allowlist=property_allowlist
+        )
         if msg is None or sent_uuid is None:
             return None
 
@@ -1668,11 +1813,24 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            path = (
-                AI_EVENTS_ENDPOINT
-                if self._dedicated_ai_endpoint and is_ai_event(msg.get("event"))
-                else EVENTS_ENDPOINT
+            is_dedicated_ai = self._dedicated_ai_endpoint and is_ai_event(
+                msg.get("event")
             )
+            # Analytics events follow `capture_mode`; the dedicated AI endpoint
+            # has no v1 form and always uses the legacy submitter.
+            if not is_dedicated_ai and self.capture_mode == CaptureMode.V1:
+                _send_v1_batch(
+                    self.api_key,
+                    self.host,
+                    [msg],
+                    compression=self.capture_compression,
+                    timeout=self.timeout,
+                    max_retries=self.max_retries,
+                    historical_migration=self.historical_migration,
+                )
+                return sent_uuid
+
+            path = AI_EVENTS_ENDPOINT if is_dedicated_ai else EVENTS_ENDPOINT
             batch_post(
                 self.api_key,
                 self.host,
@@ -1690,8 +1848,47 @@ class Client(object):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
         except Full:
-            self.log.warning("analytics-python queue is full")
+            self.log.warning(
+                "event queue is full (maxsize %d), dropping event %s",
+                self.queue.maxsize,
+                msg["event"],
+            )
             return None
+
+    @property
+    def metrics(self) -> PostHogMetrics:
+        """
+        The `posthog.metrics` API: a statsd-style pre-aggregating metrics client — alpha.
+
+        Samples fold into per-series aggregates in memory and flush as one OTLP
+        data point per series per window, so recording from hot paths is cheap.
+        Configure via the ``metrics`` client option; pending metrics flush on
+        ``shutdown()``.
+
+        Examples:
+            ```python
+            client = Posthog("<ph_project_api_key>", metrics={"service_name": "billing-worker"})
+            client.metrics.count("invoices.processed", 1, attributes={"plan": "pro"})
+            client.metrics.gauge("queue.depth", 42)
+            client.metrics.histogram("job.duration", 187, unit="ms")
+            ```
+        """
+        if self._metrics is None:
+            with self._metrics_lock:
+                if self._metrics is None:
+                    # Same no-throw semantics as the rest of the public client surface:
+                    # a bad metrics config degrades to defaults instead of raising from
+                    # the first chained metrics.count() call (raise only in debug mode).
+                    try:
+                        self._metrics = PostHogMetrics(self, self._metrics_config)
+                    except Exception as e:
+                        if self.debug:
+                            raise e
+                        self.log.exception(
+                            f"Error initializing metrics, using default configuration: {e}"
+                        )
+                        self._metrics = PostHogMetrics(self, None)
+        return self._metrics
 
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
@@ -1767,6 +1964,12 @@ class Client(object):
             ```
         """
         self.flush(timeout_seconds=None)
+        if self._metrics is not None:
+            try:
+                self._metrics.flush()
+            except Exception:
+                self.log.exception("Failed to flush metrics on shutdown")
+            self._metrics.reset()
         self.join()
         self.distinct_ids_feature_flags_reported.clear()
 
@@ -1807,6 +2010,11 @@ class Client(object):
         self.feature_flags = data["flags"]
         self.group_type_mapping = data["group_type_mapping"]
         self.cohorts = data["cohorts"]
+        # Server-controlled gate for minimal $feature_flag_called events; the
+        # local-evaluation payload carries it as a top-level key. Absent means False.
+        self._minimal_flag_called_events = (
+            data.get("minimal_flag_called_events") is True
+        )
 
         # Invalidate evaluation cache if flag definitions changed
         if (
@@ -1868,7 +2076,7 @@ class Client(object):
         personal_api_key = self.personal_api_key
         if personal_api_key is None:
             self.log.warning(
-                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+                "[FEATURE FLAGS] You have to specify a secret_key to use feature flags."
             )
             return
 
@@ -1912,6 +2120,7 @@ class Client(object):
                                 "flags": self.feature_flags or [],
                                 "group_type_mapping": self.group_type_mapping or {},
                                 "cohorts": self.cohorts or {},
+                                "minimal_flag_called_events": self._minimal_flag_called_events,
                             }
                         )
                     )
@@ -1923,7 +2132,7 @@ class Client(object):
             if e.status == 401:
                 detail = (
                     f"Error loading feature flags: {e.message}. "
-                    "Please verify both your project_api_key and personal_api_key. "
+                    "Please verify both your project_api_key and secret_key. "
                     "More information: https://posthog.com/docs/api/overview"
                 )
                 self.log.error("[FEATURE FLAGS] %s", detail)
@@ -1983,7 +2192,7 @@ class Client(object):
 
         if not self.personal_api_key:
             self.log.warning(
-                "[FEATURE FLAGS] You have to specify a personal_api_key to use feature flags."
+                "[FEATURE FLAGS] You have to specify a secret_key to use feature flags."
             )
             self.feature_flags = []
             return
@@ -2186,7 +2395,6 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -2202,13 +2410,22 @@ class Client(object):
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
+        remote_minimal_flag_called_events = False
 
         # Resolve device_id from context if not provided
         if device_id is None:
             device_id = get_context_device_id()
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         flag_value = self._locally_evaluate_flag(
-            key, distinct_id, groups, person_properties, group_properties, device_id
+            key,
+            distinct_id,
+            groups,
+            local_person_properties,
+            group_properties,
+            device_id,
         )
         flag_was_locally_evaluated = flag_value is not None
 
@@ -2236,16 +2453,20 @@ class Client(object):
                 )
         else:
             try:
-                flag_details, request_id, evaluated_at, errors_while_computing = (
-                    self._get_feature_flag_details_from_server(
-                        key,
-                        distinct_id,
-                        groups,
-                        person_properties,
-                        group_properties,
-                        disable_geoip,
-                        device_id=device_id,
-                    )
+                (
+                    flag_details,
+                    request_id,
+                    evaluated_at,
+                    errors_while_computing,
+                    remote_minimal_flag_called_events,
+                ) = self._get_feature_flag_details_from_server(
+                    key,
+                    distinct_id,
+                    groups,
+                    person_properties,
+                    group_properties,
+                    disable_geoip,
+                    device_id=device_id,
                 )
                 errors = []
                 if errors_while_computing:
@@ -2290,6 +2511,23 @@ class Client(object):
                 flag_result = self._get_stale_flag_fallback(distinct_id, key)
 
         if send_feature_flag_events:
+            # Locally-evaluated flags carry has_experiment in the stored definition;
+            # remotely-evaluated flags carry it in the response metadata. None when
+            # the server (older deployment) does not report it.
+            has_experiment: Optional[bool] = None
+            # Source the gate the same way as has_experiment above; see
+            # _capture_feature_flag_called_if_needed for why.
+            minimal_flag_called_events = self._minimal_flag_called_events
+            if flag_was_locally_evaluated:
+                local_def = (self.feature_flags_by_key or {}).get(key)
+                if isinstance(local_def, dict):
+                    has_experiment = _parse_has_experiment(
+                        local_def.get("has_experiment")
+                    )
+            elif isinstance(flag_details, FeatureFlag):
+                has_experiment = _metadata_has_experiment(flag_details.metadata)
+                minimal_flag_called_events = remote_minimal_flag_called_events
+
             self._capture_feature_flag_called(
                 distinct_id,
                 key,
@@ -2302,6 +2540,8 @@ class Client(object):
                 evaluated_at,
                 flag_details,
                 feature_flag_error,
+                has_experiment,
+                minimal_flag_called_events,
             )
 
         return flag_result
@@ -2547,10 +2787,12 @@ class Client(object):
         group_properties: dict[str, dict[str, Any]],
         disable_geoip: Optional[bool],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool, bool]:
         """
         Calls /flags and returns the flag details, request id, evaluated at timestamp,
-        and whether there were errors while computing flags.
+        whether there were errors while computing flags, and this response's own
+        minimal-flag-called-events gate (see _capture_feature_flag_called_if_needed
+        for why the caller should use this over the client-wide gate).
         """
         resp_data = self._get_flags_decision(
             distinct_id,
@@ -2564,9 +2806,16 @@ class Client(object):
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
         errors_while_computing = resp_data.get("errorsWhileComputingFlags", False)
+        minimal_flag_called_events = resp_data.get("minimalFlagCalledEvents") is True
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
-        return flag_details, request_id, evaluated_at, errors_while_computing
+        return (
+            flag_details,
+            request_id,
+            evaluated_at,
+            errors_while_computing,
+            minimal_flag_called_events,
+        )
 
     def _capture_feature_flag_called(
         self,
@@ -2581,6 +2830,8 @@ class Client(object):
         evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ):
         flag_id, flag_version, flag_reason = _flag_details_metadata(flag_details)
         properties = _feature_flag_called_properties(
@@ -2603,6 +2854,8 @@ class Client(object):
             properties=properties,
             groups=groups,
             disable_geoip=disable_geoip,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -2614,13 +2867,28 @@ class Client(object):
         properties: dict[str, Any],
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ) -> None:
         """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
         groups) tuple hasn't already been reported on this client. Group context is
-        included so that group-scoped flags fire a separate event for each group a
-        user is evaluated under. Shared by the single-flag evaluation path and
+        included so that group-scoped flags fire a separate event for each group a user
+        is evaluated under. Shared by the single-flag evaluation path and
         ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
         identically.
+
+        ``has_experiment`` is the server-reported signal for whether the flag is linked
+        to an experiment (``None`` when the server did not report it). When the
+        server-controlled gate is on and the flag is known non-experiment, the event is
+        trimmed to a strict allowlist; any missing signal sends the full legacy shape,
+        and experiment-linked flags keep the full set for exposure analysis.
+
+        ``minimal_flag_called_events`` is the gate as observed by the evaluation that
+        produced ``response``, not a fresh read of client-wide state: both callers
+        resolve it themselves (the snapshot pins it at construction; the single-flag
+        path reads it from the specific local/remote source that produced the value)
+        so a concurrent poller refresh or another ``/flags`` call can't reshape an
+        event after the fact.
         """
         groups_key = (
             tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
@@ -2635,12 +2903,30 @@ class Client(object):
         if feature_flag_reported_key in reported_flags:
             return
 
+        # Record the server's experiment signal when known, so minimization's impact
+        # can be measured by segmenting on it.
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+
+        # Minimize iff the server-controlled gate is on AND the flag is known to have
+        # no linked experiment. Any missing signal (gate absent, has_experiment
+        # missing) fails safe to the full legacy shape.
+        should_minimize = minimal_flag_called_events and has_experiment is False
+        # Only thread the internal allowlist through when minimizing, so the
+        # full-property path's capture() call signature stays unchanged.
+        extra_capture_kwargs: dict[str, Any] = {}
+        if should_minimize:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
+
         self.capture(
             "$feature_flag_called",
             distinct_id=distinct_id,
             properties=properties,
             groups=groups or {},
             disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
         )
         reported_flags.add(feature_flag_reported_key)
 
@@ -2658,7 +2944,7 @@ class Client(object):
             returned.
 
         Note:
-            Requires ``personal_api_key`` for authentication.
+            Requires ``secret_key`` for authentication.
 
         Category:
             Feature flags
@@ -2668,7 +2954,7 @@ class Client(object):
 
         if self.personal_api_key is None:
             self.log.warning(
-                "[FEATURE FLAGS] You have to specify a personal_api_key to fetch decrypted feature flag payloads."
+                "[FEATURE FLAGS] You have to specify a secret_key to fetch decrypted feature flag payloads."
             )
             return None
 
@@ -2793,7 +3079,7 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id, groups, person_properties, group_properties
+                groups, person_properties, group_properties
             )
         )
 
@@ -2803,10 +3089,13 @@ class Client(object):
 
         groups = groups or {}
 
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
@@ -2907,7 +3196,6 @@ class Client(object):
 
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
-                distinct_id,
                 groups or {},
                 person_properties or {},
                 group_properties or {},
@@ -2919,12 +3207,20 @@ class Client(object):
         evaluated_at: Optional[int] = None
         errors_while_computing = False
         quota_limited = False
+        # Source the gate the same way as has_experiment below; see
+        # _capture_feature_flag_called_if_needed for why. Defaults to the poller's
+        # current state; a successful remote fallback overwrites it with that
+        # response's own field below.
+        minimal_flag_called_events = self._minimal_flag_called_events
 
         # Try local evaluation first when the poller has loaded definitions.
+        local_person_properties = self._person_properties_for_local_evaluation(
+            distinct_id, person_properties
+        )
         local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=dict(groups),
-            person_properties=person_properties,
+            person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
         )
@@ -2946,6 +3242,9 @@ class Client(object):
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys,
                     device_id=device_id,
+                )
+                minimal_flag_called_events = (
+                    response.get("minimalFlagCalledEvents") is True
                 )
                 (
                     remote_records,
@@ -2972,6 +3271,7 @@ class Client(object):
             evaluated_at=evaluated_at,
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None
@@ -3149,13 +3449,15 @@ class Client(object):
         """
         return self.feature_flags
 
+    def _person_properties_for_local_evaluation(self, distinct_id, person_properties):
+        local_person_properties = dict(person_properties or {})
+        local_person_properties.setdefault("distinct_id", distinct_id)
+        return local_person_properties
+
     def _add_local_person_and_group_properties(
-        self, distinct_id, groups, person_properties, group_properties
+        self, groups, person_properties, group_properties
     ):
-        all_person_properties = {
-            "distinct_id": distinct_id,
-            **(person_properties or {}),
-        }
+        person_properties = person_properties or {}
 
         all_group_properties = {}
         if groups:
@@ -3165,7 +3467,7 @@ class Client(object):
                     **((group_properties or {}).get(group_name) or {}),
                 }
 
-        return all_person_properties, all_group_properties
+        return person_properties, all_group_properties
 
 
 def stringify_id(val):

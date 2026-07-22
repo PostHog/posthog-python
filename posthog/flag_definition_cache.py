@@ -13,7 +13,7 @@ Usage:
     cache = RedisFlagDefinitionCache(redis_client, "my-team")
     posthog = Posthog(
         "<project_api_key>",
-        personal_api_key="<personal_api_key>",
+        secret_key="<secret_key>",
         flag_definition_cache_provider=cache,
     )
 """
@@ -29,7 +29,7 @@ from typing import (
     runtime_checkable,
 )
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 
 class FlagDefinitionCacheData(TypedDict):
@@ -40,11 +40,14 @@ class FlagDefinitionCacheData(TypedDict):
         flags: List of feature flag definition dictionaries from the API.
         group_type_mapping: Mapping of group type indices to group names.
         cohorts: Dictionary of cohort definitions for local evaluation.
+        minimal_flag_called_events: Server-controlled gate for minimal
+            ``$feature_flag_called`` events. Treated as False when absent.
     """
 
     flags: Required[List[Dict[str, Any]]]
     group_type_mapping: Required[Dict[str, str]]
     cohorts: Required[Dict[str, Any]]
+    minimal_flag_called_events: NotRequired[bool]
 
 
 @runtime_checkable

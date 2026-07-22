@@ -1,5 +1,6 @@
 import os
 import gc
+import signal
 import unittest
 import warnings
 import weakref
@@ -231,6 +232,46 @@ class TestClientForkEndToEnd(unittest.TestCase):
             )
 
         status, result = self._run_fork_probe(child_probe)
+
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
+        self.assertEqual(result, "ok")
+
+    def test_register_at_fork_replaces_metrics_locks_in_child_process(self):
+        # Locks held at fork time are inherited locked, and their holders don't
+        # exist in the child — the metrics path must not deadlock on them.
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        client.metrics.count("parent.metric")
+
+        locks = [
+            client._metrics_lock,
+            client.metrics._lock,
+            client.metrics._flush_lock,
+        ]
+
+        def child_probe():
+            # A deadlocked child gets killed by SIGALRM (a signaled exit fails
+            # the assertion below) instead of hanging the test forever.
+            signal.alarm(5)
+            try:
+                if not client._metrics_lock.acquire(blocking=False):
+                    return "inherited _metrics_lock still held"
+                client._metrics_lock.release()
+                client.metrics.count("child.metric")
+                client.metrics.flush()
+            finally:
+                signal.alarm(0)
+            return "ok"
+
+        for lock in locks:
+            lock.acquire()
+        try:
+            status, result = self._run_fork_probe(child_probe)
+        finally:
+            for lock in locks:
+                lock.release()
+            client.metrics.reset()
 
         self.assertTrue(
             os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result

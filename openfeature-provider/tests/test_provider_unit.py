@@ -230,14 +230,14 @@ def test_send_feature_flag_events_forwarded(fake_client):
     )
 
 
-def test_initialize_skips_preload_without_personal_api_key(fake_client):
-    # fake_client.personal_api_key is None by default.
+def test_initialize_skips_preload_without_secret_key(fake_client):
+    # fake_client.secret_key is None by default.
     PostHogProvider(fake_client).initialize(EvaluationContext())
     fake_client.load_feature_flags.assert_not_called()
 
 
 def test_initialize_logs_warning_on_preload_failure(fake_client, caplog):
-    fake_client.personal_api_key = "phx_test"
+    fake_client.secret_key = "phx_test"
     fake_client.load_feature_flags.side_effect = RuntimeError("bad key")
     with caplog.at_level("WARNING"):
         PostHogProvider(fake_client).initialize(EvaluationContext())
