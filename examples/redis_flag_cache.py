@@ -13,7 +13,7 @@ Usage:
 
     posthog = Posthog(
         "<project_api_key>",
-        personal_api_key="<personal_api_key>",
+        secret_key="<secret_key>",
         flag_definition_cache_provider=cache,
     )
 

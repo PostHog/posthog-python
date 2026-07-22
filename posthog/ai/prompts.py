@@ -21,45 +21,66 @@ APP_ENDPOINT = "https://us.posthog.com"
 DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
-PromptCacheKey = tuple[str, Optional[int]]
+PromptCacheKey = tuple[str, Optional[int], Optional[str]]
 
 PromptSource = Literal["api", "cache", "stale_cache", "code_fallback"]
 
 
 @dataclass(frozen=True)
 class PromptResult:
-    """Result of a prompt fetch with metadata about its source."""
+    """Result of a prompt fetch with metadata about its source.
+
+    ``label`` is the label the prompt resolved through, populated from the API
+    response when fetching with the ``label`` option; ``None`` otherwise.
+    """
 
     source: PromptSource
     prompt: str
     name: Optional[str] = None
     version: Optional[int] = None
+    label: Optional[str] = None
 
 
 class CachedPrompt:
     """Cached prompt with metadata."""
 
-    def __init__(self, prompt: str, fetched_at: float, name: str, version: int):
+    def __init__(
+        self,
+        prompt: str,
+        fetched_at: float,
+        name: str,
+        version: int,
+        label: Optional[str] = None,
+    ):
         self.prompt = prompt
         self.fetched_at = fetched_at
         self.name = name
         self.version = version
+        self.label = label
 
 
-def _cache_key(name: str, version: Optional[int]) -> PromptCacheKey:
-    """Build a cache key for latest or versioned prompt fetches."""
-    return (name, version)
+def _cache_key(
+    name: str, version: Optional[int], label: Optional[str] = None
+) -> PromptCacheKey:
+    """Build a cache key for latest, versioned, or labeled prompt fetches."""
+    return (name, version, label)
 
 
 def _prompt_reference(
-    name: str, version: Optional[int], *, capitalize: bool = False
+    name: str,
+    version: Optional[int],
+    label: Optional[str] = None,
+    *,
+    capitalize: bool = False,
 ) -> str:
     """Format a prompt reference for logs and errors."""
     prefix = "Prompt" if capitalize else "prompt"
-    label = f'{prefix} "{name}"'
+    reference = f'{prefix} "{name}"'
     if version is not None:
-        return f"{label} version {version}"
-    return label
+        return f"{reference} version {version}"
+    if label is not None:
+        return f'{reference} label "{label}"'
+    return reference
 
 
 def _is_prompt_api_response(data: Any) -> bool:
@@ -84,7 +105,7 @@ class Prompts:
         from posthog.ai.prompts import Prompts
 
         # With PostHog client
-        posthog = Posthog('phc_xxx', host='https://us.posthog.com', personal_api_key='phx_xxx')
+        posthog = Posthog('phc_xxx', host='https://us.posthog.com', secret_key='phx_xxx')
         prompts = Prompts(posthog)
 
         # Or with direct options (no PostHog client needed)
@@ -102,6 +123,9 @@ class Prompts:
 
         # Fetch a specific published version
         prompt_v1 = prompts.get('support-system-prompt', version=1)
+
+        # Fetch the version a label currently points to
+        prod_prompt = prompts.get('support-system-prompt', label='production')
 
         # Compile with variables
         system_prompt = prompts.compile(template, {
@@ -161,6 +185,7 @@ class Prompts:
         cache_ttl_seconds: Optional[int] = ...,
         fallback: Optional[str] = ...,
         version: Optional[int] = ...,
+        label: Optional[str] = ...,
     ) -> PromptResult: ...
 
     @overload
@@ -172,6 +197,7 @@ class Prompts:
         cache_ttl_seconds: Optional[int] = ...,
         fallback: Optional[str] = ...,
         version: Optional[int] = ...,
+        label: Optional[str] = ...,
     ) -> str: ...
 
     @overload
@@ -182,6 +208,7 @@ class Prompts:
         cache_ttl_seconds: Optional[int] = ...,
         fallback: Optional[str] = ...,
         version: Optional[int] = ...,
+        label: Optional[str] = ...,
     ) -> str: ...
 
     def get(
@@ -192,6 +219,7 @@ class Prompts:
         cache_ttl_seconds: Optional[int] = None,
         fallback: Optional[str] = None,
         version: Optional[int] = None,
+        label: Optional[str] = None,
     ) -> Union[str, PromptResult]:
         """
         Fetch a prompt by name from the PostHog API.
@@ -207,15 +235,22 @@ class Prompts:
                 Omitting this parameter is deprecated.
             cache_ttl_seconds: Cache TTL in seconds (defaults to instance default)
             fallback: Fallback prompt to use if fetch fails and no cache available
-            version: Specific prompt version to fetch. If None, fetches the latest
-                version
+            version: Specific prompt version to fetch. Mutually exclusive with label.
+                If neither is given, fetches the latest version
+            label: Fetch the version this label currently points to, e.g.
+                'production'. Mutually exclusive with version
 
         Returns:
             str if with_metadata is False/omitted, PromptResult if True
 
         Raises:
+            ValueError: If both version and label are provided
             Exception: If the prompt cannot be fetched and no fallback is available
         """
+        if version is not None and label is not None:
+            raise ValueError(
+                "[PostHog Prompts] Pass either version or label, not both."
+            )
         if with_metadata is None and not self._has_warned_deprecation:
             self._has_warned_deprecation = True
             warnings.warn(
@@ -232,13 +267,13 @@ class Prompts:
 
         try:
             result = self._get_internal(
-                name, cache_ttl_seconds=cache_ttl_seconds, version=version
+                name, cache_ttl_seconds=cache_ttl_seconds, version=version, label=label
             )
             if with_metadata is True:
                 return result
             return result.prompt
         except Exception as error:
-            prompt_reference = _prompt_reference(name, version)
+            prompt_reference = _prompt_reference(name, version, label)
             if fallback is not None:
                 log.warning(
                     "[PostHog Prompts] Failed to fetch %s, using fallback: %s",
@@ -256,6 +291,7 @@ class Prompts:
         *,
         cache_ttl_seconds: Optional[int] = None,
         version: Optional[int] = None,
+        label: Optional[str] = None,
     ) -> PromptResult:
         """
         Internal method that handles cache + fetch logic, returning full metadata.
@@ -267,7 +303,7 @@ class Prompts:
             if cache_ttl_seconds is not None
             else self._default_cache_ttl_seconds
         )
-        cache_key = _cache_key(name, version)
+        cache_key = _cache_key(name, version, label)
 
         # Check cache first
         cached = self._cache.get(cache_key)
@@ -282,11 +318,24 @@ class Prompts:
                     prompt=cached.prompt,
                     name=cached.name,
                     version=cached.version,
+                    label=cached.label,
                 )
 
         # Try to fetch from API
         try:
-            data = self._fetch_prompt_from_api(name, version)
+            data = self._fetch_prompt_from_api(name, version, label)
+
+            # An older PostHog server ignores the label param and returns the latest
+            # version with no label field — surface that instead of failing silently.
+            if label is not None and data.get("label") != label:
+                log.warning(
+                    "[PostHog Prompts] Requested label %r for prompt %r but the server "
+                    "resolved %r. It may not support prompt labels yet and returned the "
+                    "latest version instead.",
+                    label,
+                    name,
+                    data.get("label"),
+                )
 
             # Update cache
             self._cache[cache_key] = CachedPrompt(
@@ -294,6 +343,7 @@ class Prompts:
                 fetched_at=time.time(),
                 name=data["name"],
                 version=data["version"],
+                label=data.get("label"),
             )
 
             return PromptResult(
@@ -301,12 +351,13 @@ class Prompts:
                 prompt=data["prompt"],
                 name=data["name"],
                 version=data["version"],
+                label=data.get("label"),
             )
 
         except Exception as error:
-            self._maybe_capture_error(error, name=name, version=version)
+            self._maybe_capture_error(error, name=name, version=version, label=label)
 
-            prompt_reference = _prompt_reference(name, version)
+            prompt_reference = _prompt_reference(name, version, label)
             # Return stale cache (with warning)
             if cached is not None:
                 log.warning(
@@ -319,6 +370,7 @@ class Prompts:
                     prompt=cached.prompt,
                     name=cached.name,
                     version=cached.version,
+                    label=cached.label,
                 )
 
             raise
@@ -374,7 +426,12 @@ class Prompts:
             self._cache.pop(key, None)
 
     def _maybe_capture_error(
-        self, error: Exception, *, name: str, version: Optional[int]
+        self,
+        error: Exception,
+        *,
+        name: str,
+        version: Optional[int],
+        label: Optional[str] = None,
     ) -> None:
         """Report a prompt fetch error to PostHog error tracking if enabled."""
         if not self._capture_errors or self._client is None:
@@ -388,6 +445,7 @@ class Prompts:
                     "$lib_feature": "ai.prompts",
                     "prompt_name": name,
                     "prompt_version": version,
+                    "prompt_label": label,
                     "posthog_host": self._host,
                 },
             )
@@ -395,22 +453,25 @@ class Prompts:
             log.debug("[PostHog Prompts] Failed to capture exception to error tracking")
 
     def _fetch_prompt_from_api(
-        self, name: str, version: Optional[int] = None
+        self, name: str, version: Optional[int] = None, label: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Fetch prompt from PostHog API.
 
         Endpoint:
             {host}/api/environments/@current/llm_prompts/name/{encoded_name}/
-            ?token={encoded_project_api_key}[&version={version}]
+            ?token={encoded_project_api_key}[&version={version}][&label={label}]
         Auth: Bearer {personal_api_key}
 
         Args:
             name: The name of the prompt to fetch
-            version: Specific prompt version to fetch. If None, fetches the latest
+            version: Specific prompt version to fetch
+            label: Fetch the version this label points to. If neither version nor
+                label is given, fetches the latest
 
         Returns:
-            The validated API response dict containing prompt, name, and version
+            The validated API response dict containing prompt, name, version,
+            and label (when fetched by label)
 
         Raises:
             Exception: If the prompt cannot be fetched
@@ -430,10 +491,12 @@ class Prompts:
         query_params: Dict[str, Union[str, int]] = {"token": self._project_api_key}
         if version is not None:
             query_params["version"] = version
+        if label is not None:
+            query_params["label"] = label
         encoded_query = urllib.parse.urlencode(query_params)
         url = f"{self._host}/api/environments/@current/llm_prompts/name/{encoded_name}/?{encoded_query}"
-        prompt_reference = _prompt_reference(name, version)
-        prompt_label = _prompt_reference(name, version, capitalize=True)
+        prompt_reference = _prompt_reference(name, version, label)
+        prompt_title = _prompt_reference(name, version, label, capitalize=True)
 
         headers = {
             "Authorization": f"Bearer {self._personal_api_key}",
@@ -444,7 +507,7 @@ class Prompts:
 
         if not response.ok:
             if response.status_code == 404:
-                raise Exception(f"[PostHog Prompts] {prompt_label} not found")
+                raise Exception(f"[PostHog Prompts] {prompt_title} not found")
 
             if response.status_code == 403:
                 raise Exception(
@@ -453,19 +516,19 @@ class Prompts:
                 )
 
             raise Exception(
-                f"[PostHog Prompts] Failed to fetch {prompt_label}: HTTP {response.status_code}"
+                f"[PostHog Prompts] Failed to fetch {prompt_title}: HTTP {response.status_code}"
             )
 
         try:
             data = response.json()
         except Exception:
             raise Exception(
-                f"[PostHog Prompts] Invalid response format for {prompt_label}"
+                f"[PostHog Prompts] Invalid response format for {prompt_title}"
             )
 
         if not _is_prompt_api_response(data):
             raise Exception(
-                f"[PostHog Prompts] Invalid response format for {prompt_label}"
+                f"[PostHog Prompts] Invalid response format for {prompt_title}"
             )
 
         return data

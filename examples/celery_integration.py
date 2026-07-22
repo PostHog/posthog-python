@@ -45,7 +45,7 @@ def configure_posthog() -> None:
     posthog.api_key = POSTHOG_PROJECT_API_KEY
     posthog.host = POSTHOG_HOST
     posthog.enable_local_evaluation = (
-        False  # to not require personal_api_key for this example
+        False  # to not require secret_key for this example
     )
     posthog.setup()
 

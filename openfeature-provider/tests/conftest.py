@@ -26,8 +26,8 @@ def make_result(
 def fake_client():
     """A stand-in Posthog client exposing only ``get_feature_flag_result``."""
     client = MagicMock()
-    # No personal API key -> provider.initialize() skips load_feature_flags().
-    client.personal_api_key = None
+    # No secret key -> provider.initialize() skips load_feature_flags().
+    client.secret_key = None
     return client
 
 
