@@ -401,6 +401,29 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
 
 
+class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):
+    """`shutdown()` is terminal: no lane may accept events or start consumers
+    afterwards, even a lazy AI lane that never started before shutdown."""
+
+    def test_late_ai_capture_after_shutdown_starts_nothing_and_sends_nothing(self):
+        client = Client(TEST_API_KEY, _use_ai_lane=True, flush_interval=0.05)
+        client.shutdown()
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            _capture_ai_event(client, "$ai_generation", distinct_id="d")
+            client._ai_lane.queue.join()
+        self.assertEqual(client._ai_lane.consumers, [])
+        mock_post.assert_not_called()
+
+    def test_late_analytics_capture_after_shutdown_drops_with_warning(self):
+        client = Client(TEST_API_KEY, flush_interval=0.05)
+        client.shutdown()
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            uuid = client.capture("button_clicked", distinct_id="d")
+        self.assertIsNone(uuid)
+        self.assertIn("after shutdown", logs.output[0])
+        self.assertTrue(client.queue.empty())
+
+
 class TestModuleLevelFlagConfig(unittest.TestCase):
     """The lazily auto-instantiated default client picks the private AI flags
     up from module attributes, so deployments configuring PostHog via

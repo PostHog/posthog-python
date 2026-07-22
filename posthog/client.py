@@ -304,6 +304,7 @@ class _Lane:
         self.queue: Queue = Queue(max_queue_size)
         self.consumers: List[Consumer] = []
         self._started = False
+        self._closed = False
         self._start_lock = threading.Lock()
         if eager_start:
             self.start()
@@ -315,7 +316,7 @@ class _Lane:
         one pool.
         """
         with self._start_lock:
-            if self._started:
+            if self._started or self._closed:
                 return
             for _ in range(self._thread_count):
                 consumer = Consumer(
@@ -342,6 +343,8 @@ class _Lane:
 
     def enqueue(self, msg) -> bool:
         """Queue `msg` for upload, starting the lane on its first event."""
+        if self._closed:
+            return False
         if not self._started:
             self.start()
         try:
@@ -349,6 +352,11 @@ class _Lane:
             return True
         except Full:
             return False
+
+    def close(self) -> None:
+        """Terminal: refuse all future enqueues and consumer starts."""
+        with self._start_lock:
+            self._closed = True
 
     def flush(self, timeout_seconds: Optional[float]) -> None:
         """Block until this lane's queue drains, or until `timeout_seconds` elapse."""
@@ -1982,12 +1990,19 @@ class Client(object):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
 
-        self.log.warning(
-            "%s lane queue is full (maxsize %d), dropping event %s",
-            lane.name,
-            lane.queue.maxsize,
-            msg["event"],
-        )
+        if lane._closed:
+            self.log.warning(
+                "%s lane received event %s after shutdown, dropping it",
+                lane.name,
+                msg["event"],
+            )
+        else:
+            self.log.warning(
+                "%s lane queue is full (maxsize %d), dropping event %s",
+                lane.name,
+                lane.queue.maxsize,
+                msg["event"],
+            )
         return None
 
     @property
@@ -2090,6 +2105,8 @@ class Client(object):
                 self.log.exception("Failed to flush metrics on shutdown")
             self._metrics.reset()
         self.join()
+        for lane in self._lanes:
+            lane.close()
         self.distinct_ids_feature_flags_reported.clear()
 
         if self.exception_capture:
