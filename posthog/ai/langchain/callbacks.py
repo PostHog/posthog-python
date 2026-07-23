@@ -44,7 +44,12 @@ from pydantic import BaseModel
 from posthog import setup
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import sanitize_langchain
-from posthog.ai.utils import _capture_ai_event, get_model_params, with_privacy_mode
+from posthog.ai.utils import (
+    _capture_ai_event,
+    _extract_cache_creation_ttl_breakdown,
+    get_model_params,
+    with_privacy_mode,
+)
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -662,6 +667,16 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_cache_creation_input_tokens"] = (
                 usage.cache_write_tokens
             )
+            if (
+                usage.cache_write_5m_tokens is not None
+                and usage.cache_write_1h_tokens is not None
+            ):
+                event_properties["$ai_cache_creation_5m_input_tokens"] = (
+                    usage.cache_write_5m_tokens
+                )
+                event_properties["$ai_cache_creation_1h_input_tokens"] = (
+                    usage.cache_write_1h_tokens
+                )
             event_properties["$ai_cache_read_input_tokens"] = usage.cache_read_tokens
             event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
 
@@ -777,6 +792,8 @@ class ModelUsage:
     cache_write_tokens: Optional[int]
     cache_read_tokens: Optional[int]
     reasoning_tokens: Optional[int]
+    cache_write_5m_tokens: Optional[int] = None
+    cache_write_1h_tokens: Optional[int] = None
 
 
 def _parse_usage_model(
@@ -829,8 +846,15 @@ def _parse_usage_model(
     if "input_token_details" in usage and isinstance(
         usage["input_token_details"], dict
     ):
-        parsed_usage["cache_write"] = usage["input_token_details"].get("cache_creation")
-        parsed_usage["cache_read"] = usage["input_token_details"].get("cache_read")
+        input_token_details = usage["input_token_details"]
+        parsed_usage["cache_write"] = input_token_details.get("cache_creation")
+        cache_write_ttl = _extract_cache_creation_ttl_breakdown(input_token_details)
+        if cache_write_ttl is not None:
+            cache_write_5m, cache_write_1h = cache_write_ttl
+            parsed_usage["cache_write_5m"] = cache_write_5m
+            parsed_usage["cache_write_1h"] = cache_write_1h
+            parsed_usage["cache_write"] = cache_write_5m + cache_write_1h
+        parsed_usage["cache_read"] = input_token_details.get("cache_read")
 
     # Reasoning (OpenAI & langchain 0.3.9+)
     if "output_token_details" in usage and isinstance(
@@ -850,6 +874,8 @@ def _parse_usage_model(
             dataclass_key: parsed_usage.get(mapped_key) or 0
             for mapped_key, dataclass_key in field_mapping.items()
         },
+        cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),
+        cache_write_1h_tokens=parsed_usage.get("cache_write_1h"),
     )
     # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
     # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.

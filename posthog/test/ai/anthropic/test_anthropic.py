@@ -7,9 +7,9 @@ import pytest
 from posthog import identify_context, new_context
 
 try:
-    from anthropic.types import Message, Usage
+    from anthropic.types import CacheCreation, Message, Usage
 
-    from posthog.ai.anthropic import Anthropic, AsyncAnthropic
+    from posthog.ai.anthropic import Anthropic, AnthropicBedrock, AsyncAnthropic
     from posthog.test.ai.utils import RecordingAsyncStream
 
     ANTHROPIC_AVAILABLE = True
@@ -76,6 +76,14 @@ class MockResponse:
 def create_mock_response(**kwargs):
     """Factory function to create mock responses with custom parameters."""
     return MockResponse(**kwargs)
+
+
+def assert_cache_creation_ttl_breakdown_preserved(props):
+    assert props["$ai_cache_creation_input_tokens"] == 800
+    assert props["$ai_usage"]["cache_creation"] == {
+        "ephemeral_5m_input_tokens": 300,
+        "ephemeral_1h_input_tokens": 500,
+    }
 
 
 # Streaming mock helpers
@@ -225,6 +233,46 @@ def mock_anthropic_response_with_cached_tokens():
         stop_reason="end_turn",
         stop_sequence=None,
     )
+
+
+@pytest.fixture
+def mock_anthropic_response_with_cache_ttl():
+    return Message(
+        id="msg_cache_ttl",
+        type="message",
+        role="assistant",
+        content=[{"type": "text", "text": "Test response"}],
+        model="claude-sonnet-4-20250514",
+        usage=Usage(
+            input_tokens=20,
+            output_tokens=10,
+            cache_creation_input_tokens=800,
+            cache_creation=CacheCreation(
+                ephemeral_5m_input_tokens=300,
+                ephemeral_1h_input_tokens=500,
+            ),
+        ),
+        stop_reason="end_turn",
+        stop_sequence=None,
+    )
+
+
+def anthropic_stream_with_cache_ttl():
+    message_start = MockStreamEvent("message_start")
+    message_start.message = MockStreamEvent(
+        usage=Usage(
+            input_tokens=20,
+            output_tokens=0,
+            cache_creation_input_tokens=800,
+            cache_creation=CacheCreation(
+                ephemeral_5m_input_tokens=300,
+                ephemeral_1h_input_tokens=500,
+            ),
+        )
+    )
+    message_delta = MockStreamEvent("message_delta")
+    message_delta.usage = MockUsage(output_tokens=10)
+    return [message_start, message_delta, MockStreamEvent("message_stop")]
 
 
 @pytest.fixture
@@ -593,9 +641,118 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_cache_read_input_tokens"] == 15
         assert props["$ai_cache_creation_input_tokens"] == 2
+        assert "$ai_cache_creation_5m_input_tokens" not in props
+        assert "$ai_cache_creation_1h_input_tokens" not in props
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+def test_preserves_cache_creation_ttl_breakdown_non_streaming(
+    mock_client, mock_anthropic_response_with_cache_ttl
+):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response_with_cache_ttl,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        client.messages.create(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert_cache_creation_ttl_breakdown_preserved(
+        mock_client.capture.call_args.kwargs["properties"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_preserves_cache_creation_ttl_breakdown_non_streaming_async(
+    mock_client, mock_anthropic_response_with_cache_ttl
+):
+    async def mock_async_create(**kwargs):
+        return mock_anthropic_response_with_cache_ttl
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+        await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert_cache_creation_ttl_breakdown_preserved(
+        mock_client.capture.call_args.kwargs["properties"]
+    )
+
+
+def test_preserves_cache_creation_ttl_breakdown_streaming(mock_client):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=iter(anthropic_stream_with_cache_ttl()),
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        list(response)
+
+    assert_cache_creation_ttl_breakdown_preserved(
+        mock_client.capture.call_args.kwargs["properties"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_preserves_cache_creation_ttl_breakdown_streaming_async(mock_client):
+    async def mock_async_stream():
+        for event in anthropic_stream_with_cache_ttl():
+            yield event
+
+    async def mock_async_create(**kwargs):
+        return mock_async_stream()
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        [event async for event in response]
+
+    assert_cache_creation_ttl_breakdown_preserved(
+        mock_client.capture.call_args.kwargs["properties"]
+    )
+
+
+def test_anthropic_bedrock_preserves_cache_creation_ttl_breakdown(
+    mock_client, mock_anthropic_response_with_cache_ttl
+):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_response_with_cache_ttl,
+    ):
+        client = AnthropicBedrock(
+            posthog_client=mock_client,
+            aws_access_key="test-key",
+            aws_secret_key="test-secret",
+            aws_region="us-east-1",
+        )
+        client.messages.create(
+            model="anthropic.claude-sonnet-4-20250514-v1:0",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert_cache_creation_ttl_breakdown_preserved(
+        mock_client.capture.call_args.kwargs["properties"]
+    )
 
 
 def test_tool_definition(mock_client, mock_anthropic_response):
