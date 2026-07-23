@@ -1,4 +1,3 @@
-import os
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -6,13 +5,11 @@ from urllib.parse import urlparse
 REDACTED_IMAGE_PLACEHOLDER = "[base64 image redacted]"
 
 
-def _is_multimodal_enabled() -> bool:
-    """Check if multimodal capture is enabled via environment variable."""
-    return os.environ.get("_INTERNAL_LLMA_MULTIMODAL", "").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
+def _multimodal_capture_enabled(ph_client: Any = None) -> bool:
+    """Media passthrough: on only when the client opted into multimodal capture."""
+    return (
+        getattr(ph_client, "_enable_multimodal_capture", False) is True
+    )  # is True: tolerate unspecced Mock clients whose auto-generated attrs are truthy
 
 
 def is_base64_data_url(text: str) -> bool:
@@ -37,9 +34,6 @@ def is_raw_base64(text: str) -> bool:
 
 
 def redact_base64_data_url(value: Any) -> Any:
-    if _is_multimodal_enabled():
-        return value
-
     if not isinstance(value, str):
         return value
 
@@ -103,8 +97,6 @@ def sanitize_openai_image(item: Any) -> Any:
         }
 
     if item.get("type") == "audio" and "data" in item:
-        if _is_multimodal_enabled():
-            return item
         return {**item, "data": REDACTED_IMAGE_PLACEHOLDER}
 
     return item
@@ -124,9 +116,6 @@ def sanitize_openai_response_image(item: Any) -> Any:
 
 
 def sanitize_anthropic_image(item: Any) -> Any:
-    if _is_multimodal_enabled():
-        return item
-
     if not isinstance(item, dict):
         return item
 
@@ -148,9 +137,6 @@ def sanitize_anthropic_image(item: Any) -> Any:
 
 
 def sanitize_gemini_part(part: Any) -> Any:
-    if _is_multimodal_enabled():
-        return part
-
     if not isinstance(part, dict):
         return part
 
@@ -211,9 +197,6 @@ def sanitize_langchain_image(item: Any) -> Any:
         and isinstance(item.get("source"), dict)
         and "data" in item["source"]
     ):
-        if _is_multimodal_enabled():
-            return item
-
         return {
             **item,
             "source": {
@@ -228,19 +211,28 @@ def sanitize_langchain_image(item: Any) -> Any:
     return item
 
 
-def sanitize_openai(data: Any) -> Any:
+def sanitize_openai(data: Any, ph_client: Any = None) -> Any:
+    if _multimodal_capture_enabled(ph_client):
+        return data
     return process_messages(data, sanitize_openai_image)
 
 
-def sanitize_openai_response(data: Any) -> Any:
+def sanitize_openai_response(data: Any, ph_client: Any = None) -> Any:
+    if _multimodal_capture_enabled(ph_client):
+        return data
     return process_messages(data, sanitize_openai_response_image)
 
 
-def sanitize_anthropic(data: Any) -> Any:
+def sanitize_anthropic(data: Any, ph_client: Any = None) -> Any:
+    if _multimodal_capture_enabled(ph_client):
+        return data
     return process_messages(data, sanitize_anthropic_image)
 
 
-def sanitize_gemini(data: Any) -> Any:
+def sanitize_gemini(data: Any, ph_client: Any = None) -> Any:
+    if _multimodal_capture_enabled(ph_client):
+        return data
+
     if not data:
         return data
 
@@ -250,5 +242,7 @@ def sanitize_gemini(data: Any) -> Any:
     return process_gemini_item(data)
 
 
-def sanitize_langchain(data: Any) -> Any:
+def sanitize_langchain(data: Any, ph_client: Any = None) -> Any:
+    if _multimodal_capture_enabled(ph_client):
+        return data
     return process_messages(data, sanitize_langchain_image)

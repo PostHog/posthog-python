@@ -2646,3 +2646,17 @@ def test_exception_autocapture_none_return_no_exception_id():
 
     span_props = span_calls[0][1]["properties"]
     assert "$exception_event_id" not in span_props
+
+
+def test_ai_lane_client_routes_through_capture_ai(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Who won the world series?")])
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="The Dodgers.")])
+    mock_client._use_ai_lane = True
+    callbacks = [CallbackHandler(mock_client)]
+
+    (prompt | model).invoke({}, config={"callbacks": callbacks})
+
+    mock_client.capture.assert_not_called()
+    events = [c[1]["event"] for c in mock_client._capture_ai.call_args_list]
+    assert "$ai_generation" in events
+    assert "$ai_trace" in events

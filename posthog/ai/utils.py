@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, cast
 from posthog import get_tags, identify_context, new_context, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import (
+    _multimodal_capture_enabled,
     sanitize_anthropic,
     sanitize_gemini,
     sanitize_langchain,
@@ -34,6 +35,27 @@ def _get_tokens_source(
     ):
         return "passthrough"
     return "sdk"
+
+
+def _ai_lane_enabled(ph_client) -> bool:
+    """The client's private, unstable AI-lane opt-in; multimodal implies it."""
+    # `is True` tolerates unspecced Mock clients whose auto-generated attrs are truthy.
+    opted_in = getattr(ph_client, "_use_ai_lane", False) is True
+    return opted_in or _multimodal_capture_enabled(ph_client)
+
+
+def _capture_ai_event(ph_client, event: str, **kwargs):
+    """Capture a wrapper-emitted AI event.
+
+    When the client opted into the AI lane, the event rides it via
+    `_capture_ai`. Otherwise — including duck-typed client-likes without the
+    lane — events keep the plain `capture()` path they have today.
+    """
+    if _ai_lane_enabled(ph_client):
+        capture_ai = getattr(ph_client, "_capture_ai", None)
+        if callable(capture_ai):
+            return capture_ai(event=event, **kwargs)
+    return ph_client.capture(event=event, **kwargs)
 
 
 def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
@@ -403,7 +425,7 @@ def call_llm_and_track_usage(
                 usage = get_usage(response, provider)
 
             messages = merge_system_prompt(kwargs, provider)
-            sanitized_messages = sanitize_messages(messages, provider)
+            sanitized_messages = sanitize_messages(messages, provider, ph_client)
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
@@ -479,9 +501,10 @@ def call_llm_and_track_usage(
                 merged_properties["$ai_tokens_source"] = _get_tokens_source(
                     sdk_tags, posthog_properties
                 )
-                ph_client.capture(
+                _capture_ai_event(
+                    ph_client,
+                    "$ai_generation",
                     distinct_id=contexts.get_context_distinct_id(),
-                    event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
                 )
@@ -553,7 +576,7 @@ async def call_llm_and_track_usage_async(
                 usage = get_usage(response, provider)
 
             messages = merge_system_prompt(kwargs, provider)
-            sanitized_messages = sanitize_messages(messages, provider)
+            sanitized_messages = sanitize_messages(messages, provider, ph_client)
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
@@ -629,9 +652,10 @@ async def call_llm_and_track_usage_async(
                 merged_properties["$ai_tokens_source"] = _get_tokens_source(
                     sdk_tags, posthog_properties
                 )
-                ph_client.capture(
+                _capture_ai_event(
+                    ph_client,
+                    "$ai_generation",
                     distinct_id=contexts.get_context_distinct_id(),
-                    event="$ai_generation",
                     properties=merged_properties,
                     groups=posthog_groups,
                 )
@@ -642,16 +666,16 @@ async def call_llm_and_track_usage_async(
     return response
 
 
-def sanitize_messages(data: Any, provider: str) -> Any:
+def sanitize_messages(data: Any, provider: str, ph_client: Any = None) -> Any:
     """Sanitize messages using provider-specific sanitization functions."""
     if provider == "anthropic":
-        return sanitize_anthropic(data)
+        return sanitize_anthropic(data, ph_client)
     elif provider == "openai":
-        return sanitize_openai(data)
+        return sanitize_openai(data, ph_client)
     elif provider == "gemini":
-        return sanitize_gemini(data)
+        return sanitize_gemini(data, ph_client)
     elif provider == "langchain":
-        return sanitize_langchain(data)
+        return sanitize_langchain(data, ph_client)
     return data
 
 
@@ -786,9 +810,10 @@ def capture_streaming_event(
 
     # Send event to PostHog
     if hasattr(ph_client, "capture"):
-        ph_client.capture(
+        _capture_ai_event(
+            ph_client,
+            "$ai_generation",
             distinct_id=event_data.get("distinct_id") or trace_id,
-            event="$ai_generation",
             properties=event_properties,
             groups=event_data.get("groups"),
         )

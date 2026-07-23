@@ -9,12 +9,10 @@ from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
 from posthog.capture_v1 import _send_v1_batch
 from posthog.request import (
-    AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
     APIError,
     DatetimeSerializer,
     batch_post,
-    is_ai_event,
 )
 
 from queue import Empty
@@ -22,10 +20,12 @@ from queue import Empty
 
 MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
 
-# `$ai_*` events carry LLM inputs/outputs and, when routed to the dedicated AI
-# endpoint, hit a pipeline that accepts larger messages than analytics ingestion,
-# so they get a higher per-event ceiling when that routing is enabled.
-AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per `$ai_*` event
+# AI events carry LLM inputs/outputs and post to a dedicated endpoint whose
+# pipeline accepts larger messages than analytics ingestion, so the AI lane
+# grants a higher per-event ceiling. `next()` appends an item before checking
+# BATCH_SIZE_LIMIT, so worst-case request body is BATCH_SIZE_LIMIT +
+# AI_MAX_MSG_SIZE (~13MiB) — keep that sum under the 20MiB server body cap.
+AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per event
 
 # The maximum request body size is currently 20MiB, let's be conservative
 # in case we want to lower it in the future.
@@ -52,7 +52,8 @@ class Consumer(Thread):
         retries=10,
         timeout=15,
         historical_migration=False,
-        dedicated_ai_endpoint=False,
+        endpoint=EVENTS_ENDPOINT,
+        max_msg_size=MAX_MSG_SIZE,
         capture_mode=CaptureMode.V0,
         capture_compression=CaptureCompression.NONE,
     ):
@@ -67,7 +68,8 @@ class Consumer(Thread):
         self.on_error = on_error
         self.queue = queue
         self.gzip = gzip
-        self.dedicated_ai_endpoint = dedicated_ai_endpoint
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
         # It's important to set running in the constructor: if we are asked to
@@ -131,12 +133,15 @@ class Consumer(Thread):
             try:
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
-                max_msg_size = self._max_msg_size(item)
-                if item_size > max_msg_size:
+                if item_size > self.max_msg_size:
+                    # Log only name and size: AI events may carry unredacted
+                    # multimodal payloads that must not leak into logs.
                     self.log.error(
-                        "Item exceeds %dKiB limit, dropping. (%s)",
-                        max_msg_size // 1024,
-                        str(item),
+                        "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
+                        item.get("event") if isinstance(item, dict) else type(item),
+                        item_size,
+                        self.max_msg_size // 1024,
+                        self.endpoint,
                     )
                     queue.task_done()
                     continue
@@ -151,48 +156,11 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Upload the batch, routing `$ai_*` events to their own endpoint when enabled.
+        """Upload the batch via the wire protocol selected by `capture_mode`.
 
-        Each destination is attempted independently so a failure on one does not
-        skip the other. The first failure is raised (so `upload()` logs it and
-        invokes `on_error`); a second is logged here so it isn't silently lost.
-        The batch was already dequeued in `upload()`, so unsent events are dropped
-        after retries, same as the single-endpoint path.
-
-        The analytics destination follows `capture_mode` (v1 -> partial-retry
-        submitter); the dedicated AI endpoint has no v1 form and always uses the
-        legacy submitter.
+        V1 uses the partial-retry submitter (which posts to its own path); V0
+        posts the batch to this consumer's `endpoint`.
         """
-        if not self.dedicated_ai_endpoint:
-            self._send_analytics(batch)
-            return
-
-        ai_events: list[Any] = []
-        analytics_events: list[Any] = []
-        for item in batch:
-            target = ai_events if is_ai_event(item.get("event")) else analytics_events
-            target.append(item)
-
-        first_exc = None
-        for events, label, sender in (
-            (analytics_events, "analytics", self._send_analytics),
-            (ai_events, "ai", self._send_ai),
-        ):
-            if not events:
-                continue
-            try:
-                sender(events)
-            except Exception as e:
-                if first_exc is None:
-                    first_exc = e
-                else:
-                    self.log.error("error uploading to %s: %s", label, e)
-
-        if first_exc is not None:
-            raise first_exc
-
-    def _send_analytics(self, batch):
-        """Submit analytics events via the wire protocol selected by `capture_mode`."""
         if self.capture_mode == CaptureMode.V1:
             _send_v1_batch(
                 self.api_key,
@@ -204,11 +172,7 @@ class Consumer(Thread):
                 historical_migration=self.historical_migration,
             )
             return
-        self._send(batch, EVENTS_ENDPOINT)
-
-    def _send_ai(self, batch):
-        """Submit `$ai_*` events to the dedicated legacy AI endpoint (no v1 form)."""
-        self._send(batch, AI_EVENTS_ENDPOINT)
+        self._send(batch, self.endpoint)
 
     def _send(self, batch, path):
         """Attempt to upload a single batch to `path`, retrying before raising an error"""
@@ -254,8 +218,3 @@ class Consumer(Thread):
 
         if last_exc:
             raise last_exc
-
-    def _max_msg_size(self, item):
-        if self.dedicated_ai_endpoint and is_ai_event(item.get("event")):
-            return AI_MAX_MSG_SIZE
-        return MAX_MSG_SIZE

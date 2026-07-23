@@ -250,7 +250,7 @@ class WrappedMessages(Messages):
 
         # Prepare standardized event data
         formatted_input = format_anthropic_streaming_input(kwargs)
-        sanitized_input = sanitize_anthropic(formatted_input)
+        sanitized_input = sanitize_anthropic(formatted_input, self._client._ph_client)
 
         event_data = StreamingEventData(
             provider="anthropic",

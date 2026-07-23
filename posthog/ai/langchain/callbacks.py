@@ -44,7 +44,7 @@ from pydantic import BaseModel
 from posthog import setup
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import sanitize_langchain
-from posthog.ai.utils import get_model_params, with_privacy_mode
+from posthog.ai.utils import _capture_ai_event, get_model_params, with_privacy_mode
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -536,7 +536,9 @@ class CallbackHandler(BaseCallbackHandler):
         event_properties = {
             "$ai_trace_id": trace_id,
             "$ai_input_state": with_privacy_mode(
-                self._ph_client, self._privacy_mode, sanitize_langchain(run.input)
+                self._ph_client,
+                self._privacy_mode,
+                sanitize_langchain(run.input, self._ph_client),
             ),
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
@@ -567,9 +569,10 @@ class CallbackHandler(BaseCallbackHandler):
         if self._distinct_id is None:
             event_properties["$process_person_profile"] = False
 
-        self._ph_client.capture(
+        _capture_ai_event(
+            self._ph_client,
+            event_name,
             distinct_id=self._distinct_id or run_id,
-            event=event_name,
             properties=event_properties,
             groups=self._groups,
         )
@@ -615,7 +618,9 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_model": run.model,
             "$ai_model_parameters": run.model_params,
             "$ai_input": with_privacy_mode(
-                self._ph_client, self._privacy_mode, sanitize_langchain(run.input)
+                self._ph_client,
+                self._privacy_mode,
+                sanitize_langchain(run.input, self._ph_client),
             ),
             "$ai_http_status": 200,
             "$ai_latency": run.latency,
@@ -685,9 +690,10 @@ class CallbackHandler(BaseCallbackHandler):
                     if finish_reason is not None:
                         event_properties["$ai_stop_reason"] = finish_reason
 
-        self._ph_client.capture(
+        _capture_ai_event(
+            self._ph_client,
+            "$ai_generation",
             distinct_id=self._distinct_id or trace_id,
-            event="$ai_generation",
             properties=event_properties,
             groups=self._groups,
         )
