@@ -1,5 +1,13 @@
 # posthog
 
+## 7.29.0 — 2026-07-23
+
+### Minor changes
+
+- [f9a163c](https://github.com/posthog/posthog-python/commit/f9a163c2c8793798eb696ffa38231e0c7a5a892d) Refactored capture internals to support multiple delivery lanes per client. Added an internal test lane for heavy AI events.
+  
+  Events captured after `shutdown()` are now dropped with a warning instead of being silently queued with no consumer to deliver them. — Thanks @carlos-marchal-ph!
+
 ## 7.28.0 — 2026-07-21
 
 ### Minor changes
