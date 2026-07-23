@@ -7,7 +7,12 @@ import pytest
 
 import posthog
 from posthog.client import Client
-from posthog.metrics_capture import DEFAULT_HISTOGRAM_BOUNDS
+from posthog.metrics_capture import (
+    _DEFAULT_FLUSH_INTERVAL_SECONDS,
+    _DEFAULT_MAX_SERIES_PER_FLUSH,
+    _MAX_CONSECUTIVE_SEND_FAILURES,
+    DEFAULT_HISTOGRAM_BOUNDS,
+)
 from posthog.version import VERSION
 
 FAKE_API_KEY = "phc_test_key"
@@ -313,6 +318,78 @@ class TestMetricsDelivery:
                 posthog.sync_mode,
             ) = saved
 
+    def test_module_metrics_config_flows_to_default_client(self):
+        # Module-level `posthog.metrics = {...}` must reach the client built by
+        # posthog.setup(), or apps configured via module settings get
+        # 'unknown_service' as service.name on every series.
+        saved = (
+            posthog.default_client,
+            posthog.api_key,
+            posthog.host,
+            posthog.sync_mode,
+            getattr(posthog, "metrics", None),
+        )
+        posthog.default_client = None
+        posthog.api_key = FAKE_API_KEY
+        posthog.host = "https://us.example.com"
+        posthog.sync_mode = True
+        posthog.metrics = {"service_name": "module-configured"}
+        try:
+            client = posthog.setup()
+            client.metrics.count("m", 1)
+            payload, _, _ = flush_and_capture(client)
+            resource_attrs = {
+                kv["key"]: kv["value"]
+                for kv in payload["resourceMetrics"][0]["resource"]["attributes"]
+            }
+            assert resource_attrs["service.name"] == {
+                "stringValue": "module-configured"
+            }
+        finally:
+            (
+                posthog.default_client,
+                posthog.api_key,
+                posthog.host,
+                posthog.sync_mode,
+                posthog.metrics,
+            ) = saved
+
+    def test_module_metrics_config_set_after_setup_applies_until_first_use(self):
+        # Django-style apps set module attrs in a ready() hook that can run after
+        # something else has already forced setup(). As long as `.metrics` hasn't
+        # been touched yet, a repeat setup() call must pick up the new config.
+        saved = (
+            posthog.default_client,
+            posthog.api_key,
+            posthog.host,
+            posthog.sync_mode,
+            getattr(posthog, "metrics", None),
+        )
+        posthog.default_client = None
+        posthog.api_key = FAKE_API_KEY
+        posthog.host = "https://us.example.com"
+        posthog.sync_mode = True
+        posthog.metrics = None
+        try:
+            posthog.setup()
+            posthog.metrics = {"service_name": "late-configured"}
+            client = posthog.setup()
+            client.metrics.count("m", 1)
+            payload, _, _ = flush_and_capture(client)
+            resource_attrs = {
+                kv["key"]: kv["value"]
+                for kv in payload["resourceMetrics"][0]["resource"]["attributes"]
+            }
+            assert resource_attrs["service.name"] == {"stringValue": "late-configured"}
+        finally:
+            (
+                posthog.default_client,
+                posthog.api_key,
+                posthog.host,
+                posthog.sync_mode,
+                posthog.metrics,
+            ) = saved
+
 
 class TestMetricsCrashSafety:
     # A telemetry SDK must never raise into the host application — these inputs all
@@ -342,6 +419,86 @@ class TestMetricsCrashSafety:
         keys = {attr["key"] for attr in dp["attributes"]}
         assert keys == {"a", "2"}
         assert all(isinstance(attr["key"], str) for attr in dp["attributes"])
+
+    def test_uncopyable_attribute_does_not_unshare_other_values(self, client):
+        # One un-deepcopyable value must not degrade the whole snapshot to a
+        # shallow copy: the other, perfectly copyable values would then stay
+        # shared with the caller and mutate after the series key was computed.
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("nope")
+
+        tags = ["a"]
+        client.metrics.count("m", 1, attributes={"bad": Uncopyable(), "tags": tags})
+        tags.append("b")
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        attrs = {a["key"]: a["value"] for a in dp["attributes"]}
+        wire_tags = [v["stringValue"] for v in attrs["tags"]["arrayValue"]["values"]]
+        assert wire_tags == ["a"]
+
+    def test_nested_attribute_values_snapshot_at_capture(self, client):
+        # The series key is computed at capture time; a caller mutating a nested
+        # value afterwards must not rewrite the stored series' attributes, or the
+        # wire payload diverges from the identity the series was keyed under.
+        tags = ["a"]
+        client.metrics.count("m", 1, attributes={"tags": tags})
+        tags.append("b")
+        client.metrics.count("m", 1, attributes={"tags": tags})
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        points = metric["sum"]["dataPoints"]
+        assert len(points) == 2
+        wire_tags = sorted(
+            [
+                v["stringValue"]
+                for v in dp["attributes"][0]["value"]["arrayValue"]["values"]
+            ]
+            for dp in points
+        )
+        assert wire_tags == [["a"], ["a", "b"]]
+
+    @pytest.mark.parametrize(
+        "bad_config",
+        [
+            "not-a-dict",
+            {"resource_attributes": "bad"},
+            {"flush_interval": "10"},
+            {"max_series_per_flush": "many"},
+            {"before_send": "not-callable"},
+        ],
+        ids=[
+            "config-not-dict",
+            "resource-attributes-not-dict",
+            "flush-interval-not-number",
+            "series-cap-not-int",
+            "before-send-not-callable",
+        ],
+    )
+    def test_hostile_metrics_config_does_not_raise_and_still_records(self, bad_config):
+        # client.metrics is reached before the guarded capture path, so bad nested
+        # config must fall back to defaults instead of raising into the host app.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics=bad_config,
+        )
+        c.metrics.count("m", 1)  # the complete public call must not raise
+
+        assert c.metrics._flush_interval == _DEFAULT_FLUSH_INTERVAL_SECONDS
+        assert c.metrics._max_series_per_flush == _DEFAULT_MAX_SERIES_PER_FLUSH
+
+        payload, _, _ = flush_and_capture(c)
+        c.metrics.reset()
+
+        (metric,) = metrics_from(payload)
+        assert metric["name"] == "m"
 
     def test_list_attribute_records_as_array_value(self, client):
         client.metrics.count("arr", 1, attributes={"tags": ["a", "b"]})
@@ -475,7 +632,7 @@ class TestMetricsFailureHandling:
         with mock.patch(
             "posthog.metrics_capture._get_session", return_value=mock_session(503)
         ):
-            for _ in range(4):
+            for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES):
                 client.metrics.flush()
 
         payload, _, _ = flush_and_capture(client)
@@ -483,3 +640,100 @@ class TestMetricsFailureHandling:
         assert (
             payload is None
         )  # budget exhausted → window dropped, nothing left to send
+
+    def test_window_survives_failures_until_the_drop_limit(self, client):
+        # One failure short of the budget the window must still deliver in full —
+        # dropping earlier than documented silently loses data during outages.
+        client.metrics.count("m", 3)
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES - 1):
+                client.metrics.flush()
+
+        payload, _, _ = flush_and_capture(client)
+
+        (metric,) = metrics_from(payload)
+        (dp,) = metric["sum"]["dataPoints"]
+        assert dp["asDouble"] == 3.0
+
+    def test_explicit_flush_failure_reschedules_armed_timer_with_backoff(self):
+        # A capture arms the base-interval timer; if an explicit flush() then
+        # fails, the retry must happen at the backoff delay — the already-armed
+        # timer has to be rescheduled, not left to fire at the base cadence.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"flush_interval": 1.0},
+        )
+        c.metrics.count("m", 1)
+        assert c.metrics._flush_timer.interval == 1.0
+
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            c.metrics.flush()
+            c.metrics.flush()
+
+        assert c.metrics._flush_timer is not None
+        assert c.metrics._flush_timer.interval == 2.0
+        c.metrics.reset()
+
+    def test_stale_timer_callback_does_not_clobber_newer_timer(self):
+        # A timer whose thread already started can't be cancelled; when its body
+        # runs late it must not clear (and duplicate-flush over) a newer backoff
+        # timer armed in the meantime by a failed explicit flush.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"flush_interval": 1.0},
+        )
+        c.metrics.count("m", 1)
+        stale = c.metrics._flush_timer
+
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ) as session:
+            c.metrics.flush()  # cancels `stale`, arms the backoff timer
+            newer = c.metrics._flush_timer
+            assert newer is not stale
+            sends_before = session.post.call_count
+
+            c.metrics._timer_flush(stale)  # the already-started stale thread body
+
+            assert c.metrics._flush_timer is newer
+            assert session.post.call_count == sends_before
+        c.metrics.reset()
+
+    def test_failed_flushes_back_off_exponentially_capped(self):
+        # Retrying a down endpoint at the fixed cadence hammers it for the whole
+        # outage; retry delays must grow exponentially and cap at 64x the base
+        # interval (matching the shared JS logs policy), then reset on success.
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"flush_interval": 1.0},
+        )
+        c.metrics.count("m", 1)
+
+        intervals = []
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            for _ in range(_MAX_CONSECUTIVE_SEND_FAILURES - 1):
+                c.metrics._timer_flush()  # what the flush timer thread invokes
+                intervals.append(c.metrics._flush_timer.interval)
+        # First retry at the base interval, then doubling to the 64x cap — the
+        # shared JS logs ramp (exponent is failures - 1), giving the documented
+        # ~21 minute outage budget at the default 10s interval.
+        assert intervals == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]
+
+        # A successful flush resets the backoff: the next capture arms the base interval.
+        flush_and_capture(c)
+        c.metrics.reset()
+        c.metrics.count("m", 1)
+        assert c.metrics._flush_timer.interval == 1.0
+        c.metrics.reset()

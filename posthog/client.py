@@ -23,7 +23,7 @@ from posthog.capture_compression import (
 )
 from posthog.capture_mode import CaptureMode, _resolve_capture_mode
 from posthog.capture_v1 import _send_v1_batch
-from posthog.consumer import Consumer
+from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer
 from posthog.contexts import (
     _get_current_context,
     get_capture_exception_code_variables_context,
@@ -84,7 +84,6 @@ from posthog.request import (
     determine_server_host,
     flags,
     get,
-    is_ai_event,
     normalize_host,
     remote_config,
     reset_sessions,
@@ -199,6 +198,217 @@ def no_throw(default_return=None):
     return decorator
 
 
+# Strict allowlist for minimal ``$feature_flag_called`` events, per the cross-SDK
+# contract: everything else — customer-passed properties, super properties, context
+# tags, and the richer parts of system context — is stripped from the
+# fully-enriched properties dict. The static platform/runtime identity keys below
+# are the exception: they're cheap and useful for debugging flag behavior by
+# platform, so they survive minimization.
+_MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
+    {
+        # Identity
+        "$feature_flag",
+        "$feature_flag_response",
+        "$feature_flag_has_experiment",
+        # Evaluation debug
+        "$feature_flag_id",
+        "$feature_flag_version",
+        "$feature_flag_reason",
+        "$feature_flag_request_id",
+        "$feature_flag_evaluated_at",
+        "$feature_flag_error",
+        "locally_evaluated",
+        # Correctness-required
+        "$groups",
+        "$process_person_profile",
+        # Linkage / SDK identity
+        "$session_id",
+        "$lib",
+        "$lib_version",
+        "$is_server",
+        # Processing-control sentinel this SDK sets to deliver the event correctly
+        "$geoip_disable",
+        # Static platform/runtime identity: cheap, low-cardinality dimensions kept
+        # for platform/runtime breakdowns on flag-call debugging.
+        "$os",
+        "$os_version",
+        "$os_distro",
+        "$python_runtime",
+        "$python_version",
+    }
+)
+
+
+def _parse_has_experiment(value: Any) -> Optional[bool]:
+    """Server-reported experiment linkage; anything but an explicit bool means unknown."""
+    return value if isinstance(value, bool) else None
+
+
+def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
+    """Server-reported experiment linkage from flag metadata; ``None`` when absent
+    (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
+    return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
+
+
+class _Lane:
+    """A capture lane: a queue drained by its own consumer pool, posting to one endpoint.
+
+    Internal and unexported. The client owns one lane per traffic class
+    (analytics, AI) so each gets its own backpressure, flush cadence,
+    per-event size cap, and wire protocol without lane-conditional branches
+    in shared consumer code.
+    """
+
+    log = logging.getLogger("posthog")
+
+    def __init__(
+        self,
+        *,
+        name,
+        api_key,
+        host,
+        on_error,
+        max_queue_size,
+        thread_count,
+        send,
+        flush_at,
+        flush_interval,
+        gzip,
+        max_retries,
+        timeout,
+        historical_migration,
+        endpoint,
+        max_msg_size,
+        capture_mode,
+        capture_compression,
+        eager_start,
+    ):
+        self.name = name
+        self.api_key = api_key
+        self.host = host
+        self.on_error = on_error
+        self.send = send
+        self.flush_at = flush_at
+        self.flush_interval = flush_interval
+        self.gzip = gzip
+        self.max_retries = max_retries
+        self.timeout = timeout
+        self.historical_migration = historical_migration
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
+        self.capture_mode = capture_mode
+        self.capture_compression = capture_compression
+        self._max_queue_size = max_queue_size
+        self._thread_count = thread_count
+        self._eager_start = eager_start
+        self.queue: Queue = Queue(max_queue_size)
+        self.consumers: List[Consumer] = []
+        self._started = False
+        self._closed = False
+        self._start_lock = threading.Lock()
+        if eager_start:
+            self.start()
+
+    def start(self):
+        """Construct this lane's consumer pool, starting its threads when sending is enabled.
+
+        Idempotent and thread-safe, so concurrent first captures start exactly
+        one pool.
+        """
+        with self._start_lock:
+            if self._started or self._closed:
+                return
+            for _ in range(self._thread_count):
+                consumer = Consumer(
+                    self.queue,
+                    self.api_key,
+                    host=self.host,
+                    on_error=self.on_error,
+                    flush_at=self.flush_at,
+                    flush_interval=self.flush_interval,
+                    gzip=self.gzip,
+                    retries=self.max_retries,
+                    timeout=self.timeout,
+                    historical_migration=self.historical_migration,
+                    endpoint=self.endpoint,
+                    max_msg_size=self.max_msg_size,
+                    capture_mode=self.capture_mode,
+                    capture_compression=self.capture_compression,
+                )
+                self.consumers.append(consumer)
+
+                if self.send:
+                    consumer.start()
+            self._started = True
+
+    def enqueue(self, msg) -> bool:
+        """Queue `msg` for upload, starting the lane on its first event."""
+        if self._closed:
+            return False
+        if not self._started:
+            self.start()
+        try:
+            self.queue.put(msg, block=False)
+            return True
+        except Full:
+            return False
+
+    def close(self) -> None:
+        """Terminal: refuse all future enqueues and consumer starts."""
+        with self._start_lock:
+            self._closed = True
+
+    def flush(self, timeout_seconds: Optional[float]) -> None:
+        """Block until this lane's queue drains, or until `timeout_seconds` elapse."""
+        queue = self.queue
+        size = queue.qsize()
+        if timeout_seconds is None:
+            queue.join()
+        else:
+            deadline = time.monotonic() + timeout_seconds
+            with queue.all_tasks_done:
+                while queue.unfinished_tasks:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.log.warning(
+                            "%s lane flush ran out of budget (%.1fs granted) with %s items pending.",
+                            self.name,
+                            timeout_seconds,
+                            queue.unfinished_tasks,
+                        )
+                        return
+                    queue.all_tasks_done.wait(remaining)
+
+        # Note that this message may not be precise, because of threading.
+        self.log.debug("successfully flushed about %s items.", size)
+
+    def join(self) -> None:
+        """Pause this lane's consumers and wait for them to exit; a never-started lane is a no-op."""
+        for consumer in self.consumers:
+            consumer.pause()
+            try:
+                consumer.join()
+            except RuntimeError:
+                # consumer thread has not started
+                pass
+
+    def rebuild_after_fork(self) -> None:
+        """Replace fork-unsafe lane state in a forked child.
+
+        Threads do not survive fork() and queue.Queue internal locks may be in
+        an inconsistent state, so the queue, lock, and consumer pool are
+        replaced. Inherited queue items are not retained as they'll be handled
+        by the parent process's consumers. An eager lane restarts immediately;
+        a lazy lane returns to not-started and restarts on next use.
+        """
+        self.queue = Queue(self._max_queue_size)
+        self._start_lock = threading.Lock()
+        self.consumers = []
+        self._started = False
+        if self._eager_start:
+            self.start()
+
+
 class Client(object):
     """
     This is the SDK reference for the PostHog Python SDK.
@@ -271,8 +481,9 @@ class Client(object):
         capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
-        _dedicated_ai_endpoint=False,
         metrics: Optional[dict] = None,
+        _use_ai_lane=False,
+        _enable_multimodal_capture=False,
     ):
         """
         Initialize a new PostHog client instance.
@@ -383,9 +594,6 @@ class Client(object):
         Category:
             Initialization
         """
-        self._max_queue_size = max_queue_size
-        self.queue: Queue = Queue(max_queue_size)
-
         # api_key: This should be the Team API Key (token), public
         self.api_key = (project_api_key or "").strip()
 
@@ -429,6 +637,12 @@ class Client(object):
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
         self._metrics_lock = threading.Lock()
+        # Internal, no stability guarantees. `_use_ai_lane` routes all AI SDK
+        # wrapper events through the dedicated AI lane; `_enable_multimodal_capture`
+        # additionally skips media redaction (and implies the lane). Both are
+        # read per event by wrapper-layer code, never by `capture()` itself.
+        self._use_ai_lane = bool(_use_ai_lane)
+        self._enable_multimodal_capture = bool(_enable_multimodal_capture)
         self.is_server = is_server
         self.historical_migration = historical_migration
         # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
@@ -440,9 +654,6 @@ class Client(object):
         self.capture_compression = _resolve_capture_compression(
             capture_compression, gzip_fallback=gzip
         )
-        # Internal, not ready for use: routes `$ai_*` events to a dedicated
-        # capture-ai endpoint while the backend route + ingress roll out.
-        self._dedicated_ai_endpoint = _dedicated_ai_endpoint
         self.super_properties = super_properties
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
@@ -457,6 +668,10 @@ class Client(object):
         self.exception_capture = None
         self.privacy_mode = privacy_mode
         self.enable_local_evaluation = enable_local_evaluation
+        # Server-controlled gate for minimal $feature_flag_called events, read from
+        # the /flags v2 response and the local-evaluation payload. False until the
+        # server reports it, so full events are the fail-safe.
+        self._minimal_flag_called_events: bool = False
 
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -532,40 +747,54 @@ class Client(object):
                 refill_interval_seconds=self.exception_autocapture_refill_interval_seconds,
             )
 
-        if sync_mode:
-            self.consumers = None
-        else:
-            # On program exit, allow the consumer thread to exit cleanly.
+        if not sync_mode and send:
+            # On program exit, allow the consumer threads to exit cleanly.
             # This prevents exceptions and a messy shutdown when the
-            # interpreter is destroyed before the daemon thread finishes
+            # interpreter is destroyed before the daemon threads finish
             # execution. However, it is *not* the same as flushing the queue!
             # To guarantee all messages have been delivered, you'll still need
             # to call flush().
-            if send:
-                atexit.register(self.join)
+            atexit.register(self.join)
 
-            self.consumers = []
-            for _ in range(thread):
-                consumer = Consumer(
-                    self.queue,
-                    self.api_key,
-                    host=self.host,
-                    on_error=on_error,
-                    flush_at=flush_at,
-                    flush_interval=flush_interval,
-                    gzip=gzip,
-                    retries=max_retries,
-                    timeout=timeout,
-                    historical_migration=historical_migration,
-                    dedicated_ai_endpoint=self._dedicated_ai_endpoint,
-                    capture_mode=self.capture_mode,
-                    capture_compression=self.capture_compression,
-                )
-                self.consumers.append(consumer)
-
-                # if we've disabled sending, just don't start the consumer
-                if send:
-                    consumer.start()
+        lane_defaults = dict(
+            api_key=self.api_key,
+            host=self.host,
+            on_error=on_error,
+            max_queue_size=max_queue_size,
+            thread_count=thread,
+            send=send,
+            flush_at=flush_at,
+            flush_interval=flush_interval,
+            gzip=gzip,
+            max_retries=max_retries,
+            timeout=timeout,
+            historical_migration=historical_migration,
+        )
+        self._analytics_lane = _Lane(
+            name="analytics",
+            **lane_defaults,
+            endpoint=EVENTS_ENDPOINT,
+            max_msg_size=MAX_MSG_SIZE,
+            capture_mode=self.capture_mode,
+            capture_compression=self.capture_compression,
+            eager_start=not sync_mode,
+        )
+        # The AI lane is pinned to the v0 submitter: the AI endpoint has no v1
+        # form, and this keeps multi-MB AI events away from capture v1's
+        # smaller caps. The `capture_compression` pin is inert on v0 — its wire
+        # compression is the `gzip` flag, inherited from client config. Lazy
+        # start, so the many clients that never emit AI events pay for no
+        # extra threads.
+        self._ai_lane = _Lane(
+            name="ai",
+            **lane_defaults,
+            endpoint=AI_EVENTS_ENDPOINT,
+            max_msg_size=AI_MAX_MSG_SIZE,
+            capture_mode=CaptureMode.V0,
+            capture_compression=CaptureCompression.NONE,
+            eager_start=False,
+        )
+        self._lanes = [self._analytics_lane, self._ai_lane]
 
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
@@ -574,6 +803,18 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+
+    @property
+    def queue(self) -> Queue:
+        """The analytics lane's queue (kept for backwards compatibility)."""
+        return self._analytics_lane.queue
+
+    @property
+    def consumers(self) -> Optional[List[Consumer]]:
+        """Flat list of the lanes' consumers, analytics first (kept for backwards compatibility)."""
+        if self.sync_mode:
+            return None
+        return [consumer for lane in self._lanes for consumer in lane.consumers]
 
     def _warn_if_duplicate_async_client(self):
         if self.disabled or not self.send or self.sync_mode or not self.api_key:
@@ -967,7 +1208,14 @@ class Client(object):
             **request_data,
         )
 
-        return normalize_flags_response(resp_data)
+        response = normalize_flags_response(resp_data)
+        # Server-controlled gate for minimal $feature_flag_called events. Only the
+        # v2 response shape carries it; absent (legacy shape, older server, team
+        # not gated) means False.
+        self._minimal_flag_called_events = (
+            response.get("minimalFlagCalledEvents") is True
+        )
+        return response
 
     @no_throw()
     def capture(
@@ -1026,6 +1274,33 @@ class Client(object):
         Category:
             Capture
         """
+        return self._capture(event, self._analytics_lane, **kwargs)
+
+    @no_throw()
+    def _capture_ai(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Capture an AI event on the dedicated AI lane.
+
+        Internal and experimental, with no stability guarantees: the signature
+        and lane behavior may change while the AI capture lane is validated on
+        PostHog's own traffic.
+
+        Takes the same arguments and returns the same value as `capture()`,
+        but the event is queued on the AI lane, which posts to the dedicated
+        AI endpoint with its own consumer pool and per-event size cap.
+        """
+        if not event.startswith("$ai_"):
+            self.log.debug(
+                "_capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
+                event,
+            )
+        return self._capture(event, self._ai_lane, **kwargs)
+
+    def _capture(
+        self, event: str, lane: _Lane, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Shared message-building body of `capture()` and `_capture_ai()`; `lane` picks the wire destination."""
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
@@ -1034,6 +1309,9 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
+        # Internal, set for minimal $feature_flag_called events: a strict allowlist
+        # applied to the fully-enriched properties dict just before enqueueing.
+        property_allowlist = kwargs.get("_property_allowlist", None)
 
         properties = {**(properties or {}), **system_context()}
 
@@ -1147,7 +1425,9 @@ class Client(object):
             properties = {**extra_properties, **properties}
             msg["properties"] = properties
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg, disable_geoip, lane, property_allowlist=property_allowlist
+        )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
         """
@@ -1564,37 +1844,12 @@ class Client(object):
         exactly once in each child, before any user code, covering all code
         paths (capture, flush, join, etc.).
 
-        Python threads do not survive fork() and queue.Queue internal locks
-        may be in an inconsistent state, so the event queue, consumer threads
-        and other state are replaced. Inherited queue items are not retained
-        as they'll be handled by the parent process's consumers.
+        Python threads do not survive fork(), so each lane's queue and
+        consumer pool are rebuilt (see `_Lane.rebuild_after_fork`).
         """
-        if self.consumers:
-            self.queue = Queue(self._max_queue_size)
-
-            new_consumers = []
-            for old in self.consumers:
-                consumer = Consumer(
-                    self.queue,
-                    old.api_key,
-                    flush_at=old.flush_at,
-                    host=old.host,
-                    on_error=old.on_error,
-                    flush_interval=old.flush_interval,
-                    gzip=old.gzip,
-                    retries=old.retries,
-                    timeout=old.timeout,
-                    historical_migration=old.historical_migration,
-                    dedicated_ai_endpoint=old.dedicated_ai_endpoint,
-                    capture_mode=old.capture_mode,
-                    capture_compression=old.capture_compression,
-                )
-                new_consumers.append(consumer)
-
-                if self.send:
-                    consumer.start()
-
-            self.consumers = new_consumers
+        if not self.sync_mode:
+            for lane in self._lanes:
+                lane.rebuild_after_fork()
 
         if self.enable_local_evaluation:
             self.poller = Poller(
@@ -1622,9 +1877,12 @@ class Client(object):
 
         reset_sessions()
 
-    def _enqueue(self, msg, disable_geoip):
+    def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
         # type: (...) -> Optional[str]
-        """Push a new `msg` onto the queue, return `(success, msg)`"""
+        """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
+
+        if lane is None:
+            lane = self._analytics_lane
 
         if self.disabled:
             return None
@@ -1670,6 +1928,14 @@ class Client(object):
         if self.is_server:
             msg["properties"]["$is_server"] = True
 
+        # Applied after every enrichment step (system context, context tags, super
+        # properties, $lib/$lib_version) so the final event shape is exactly the
+        # allowlist regardless of where a property came from.
+        if property_allowlist is not None:
+            msg["properties"] = {
+                k: v for k, v in msg["properties"].items() if k in property_allowlist
+            }
+
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
         msg = clean(msg)
@@ -1693,12 +1959,10 @@ class Client(object):
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            is_dedicated_ai = self._dedicated_ai_endpoint and is_ai_event(
-                msg.get("event")
-            )
-            # Analytics events follow `capture_mode`; the dedicated AI endpoint
-            # has no v1 form and always uses the legacy submitter.
-            if not is_dedicated_ai and self.capture_mode == CaptureMode.V1:
+            # Sync mode bypasses the lane's queue but keeps its wire config:
+            # the AI lane is pinned to v0, so its events post to the AI
+            # endpoint regardless of `capture_mode`.
+            if lane.capture_mode == CaptureMode.V1:
                 _send_v1_batch(
                     self.api_key,
                     self.host,
@@ -1710,7 +1974,6 @@ class Client(object):
                 )
                 return sent_uuid
 
-            path = AI_EVENTS_ENDPOINT if is_dedicated_ai else EVENTS_ENDPOINT
             batch_post(
                 self.api_key,
                 self.host,
@@ -1718,18 +1981,29 @@ class Client(object):
                 timeout=self.timeout,
                 batch=[msg],
                 historical_migration=self.historical_migration,
-                path=path,
+                path=lane.endpoint,
             )
 
             return sent_uuid
 
-        try:
-            self.queue.put(msg, block=False)
+        if lane.enqueue(msg):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
-        except Full:
-            self.log.warning("analytics-python queue is full")
-            return None
+
+        if lane._closed:
+            self.log.warning(
+                "%s lane received event %s after shutdown, dropping it",
+                lane.name,
+                msg["event"],
+            )
+        else:
+            self.log.warning(
+                "%s lane queue is full (maxsize %d), dropping event %s",
+                lane.name,
+                lane.queue.maxsize,
+                msg["event"],
+            )
+        return None
 
     @property
     def metrics(self) -> PostHogMetrics:
@@ -1752,7 +2026,18 @@ class Client(object):
         if self._metrics is None:
             with self._metrics_lock:
                 if self._metrics is None:
-                    self._metrics = PostHogMetrics(self, self._metrics_config)
+                    # Same no-throw semantics as the rest of the public client surface:
+                    # a bad metrics config degrades to defaults instead of raising from
+                    # the first chained metrics.count() call (raise only in debug mode).
+                    try:
+                        self._metrics = PostHogMetrics(self, self._metrics_config)
+                    except Exception as e:
+                        if self.debug:
+                            raise e
+                        self.log.exception(
+                            f"Error initializing metrics, using default configuration: {e}"
+                        )
+                        self._metrics = PostHogMetrics(self, None)
         return self._metrics
 
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
@@ -1769,30 +2054,20 @@ class Client(object):
             posthog.flush()  # Ensures the event is sent immediately
             ```
         """
-        queue = self.queue
-        size = queue.qsize()
         try:
             if timeout_seconds is None:
-                queue.join()
-            else:
-                deadline = time.monotonic() + timeout_seconds
-                with queue.all_tasks_done:
-                    while queue.unfinished_tasks:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            self.log.warning(
-                                "flush timed out after %s seconds with %s items pending.",
-                                timeout_seconds,
-                                queue.unfinished_tasks,
-                            )
-                            return
-                        queue.all_tasks_done.wait(remaining)
+                for lane in self._lanes:
+                    lane.flush(None)
+                return
+
+            # The timeout is a total budget shared by the lanes, so flush()
+            # returns within roughly `timeout_seconds` overall.
+            deadline = time.monotonic() + timeout_seconds
+            for lane in self._lanes:
+                lane.flush(max(0.0, deadline - time.monotonic()))
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
-
-        # Note that this message may not be precise, because of threading.
-        self.log.debug("successfully flushed about %s items.", size)
 
     def join(self) -> None:
         """
@@ -1803,14 +2078,8 @@ class Client(object):
             posthog.join()
             ```
         """
-        if self.consumers:
-            for consumer in self.consumers:
-                consumer.pause()
-                try:
-                    consumer.join()
-                except RuntimeError:
-                    # consumer thread has not started
-                    pass
+        for lane in self._lanes:
+            lane.join()
 
         if self.poller:
             self.poller.stop()
@@ -1836,6 +2105,8 @@ class Client(object):
                 self.log.exception("Failed to flush metrics on shutdown")
             self._metrics.reset()
         self.join()
+        for lane in self._lanes:
+            lane.close()
         self.distinct_ids_feature_flags_reported.clear()
 
         if self.exception_capture:
@@ -1875,6 +2146,11 @@ class Client(object):
         self.feature_flags = data["flags"]
         self.group_type_mapping = data["group_type_mapping"]
         self.cohorts = data["cohorts"]
+        # Server-controlled gate for minimal $feature_flag_called events; the
+        # local-evaluation payload carries it as a top-level key. Absent means False.
+        self._minimal_flag_called_events = (
+            data.get("minimal_flag_called_events") is True
+        )
 
         # Invalidate evaluation cache if flag definitions changed
         if (
@@ -1980,6 +2256,7 @@ class Client(object):
                                 "flags": self.feature_flags or [],
                                 "group_type_mapping": self.group_type_mapping or {},
                                 "cohorts": self.cohorts or {},
+                                "minimal_flag_called_events": self._minimal_flag_called_events,
                             }
                         )
                     )
@@ -2269,6 +2546,7 @@ class Client(object):
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
+        remote_minimal_flag_called_events = False
 
         # Resolve device_id from context if not provided
         if device_id is None:
@@ -2311,16 +2589,20 @@ class Client(object):
                 )
         else:
             try:
-                flag_details, request_id, evaluated_at, errors_while_computing = (
-                    self._get_feature_flag_details_from_server(
-                        key,
-                        distinct_id,
-                        groups,
-                        person_properties,
-                        group_properties,
-                        disable_geoip,
-                        device_id=device_id,
-                    )
+                (
+                    flag_details,
+                    request_id,
+                    evaluated_at,
+                    errors_while_computing,
+                    remote_minimal_flag_called_events,
+                ) = self._get_feature_flag_details_from_server(
+                    key,
+                    distinct_id,
+                    groups,
+                    person_properties,
+                    group_properties,
+                    disable_geoip,
+                    device_id=device_id,
                 )
                 errors = []
                 if errors_while_computing:
@@ -2369,14 +2651,18 @@ class Client(object):
             # remotely-evaluated flags carry it in the response metadata. None when
             # the server (older deployment) does not report it.
             has_experiment: Optional[bool] = None
+            # Source the gate the same way as has_experiment above; see
+            # _capture_feature_flag_called_if_needed for why.
+            minimal_flag_called_events = self._minimal_flag_called_events
             if flag_was_locally_evaluated:
                 local_def = (self.feature_flags_by_key or {}).get(key)
                 if isinstance(local_def, dict):
-                    has_experiment = local_def.get("has_experiment")
-            elif isinstance(flag_details, FeatureFlag) and isinstance(
-                flag_details.metadata, FlagMetadata
-            ):
-                has_experiment = flag_details.metadata.has_experiment
+                    has_experiment = _parse_has_experiment(
+                        local_def.get("has_experiment")
+                    )
+            elif isinstance(flag_details, FeatureFlag):
+                has_experiment = _metadata_has_experiment(flag_details.metadata)
+                minimal_flag_called_events = remote_minimal_flag_called_events
 
             self._capture_feature_flag_called(
                 distinct_id,
@@ -2391,6 +2677,7 @@ class Client(object):
                 flag_details,
                 feature_flag_error,
                 has_experiment,
+                minimal_flag_called_events,
             )
 
         return flag_result
@@ -2636,10 +2923,12 @@ class Client(object):
         group_properties: dict[str, dict[str, Any]],
         disable_geoip: Optional[bool],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool]:
+    ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool, bool]:
         """
         Calls /flags and returns the flag details, request id, evaluated at timestamp,
-        and whether there were errors while computing flags.
+        whether there were errors while computing flags, and this response's own
+        minimal-flag-called-events gate (see _capture_feature_flag_called_if_needed
+        for why the caller should use this over the client-wide gate).
         """
         resp_data = self._get_flags_decision(
             distinct_id,
@@ -2653,9 +2942,16 @@ class Client(object):
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
         errors_while_computing = resp_data.get("errorsWhileComputingFlags", False)
+        minimal_flag_called_events = resp_data.get("minimalFlagCalledEvents") is True
         flags = resp_data.get("flags")
         flag_details = flags.get(key) if flags else None
-        return flag_details, request_id, evaluated_at, errors_while_computing
+        return (
+            flag_details,
+            request_id,
+            evaluated_at,
+            errors_while_computing,
+            minimal_flag_called_events,
+        )
 
     def _capture_feature_flag_called(
         self,
@@ -2671,6 +2967,7 @@ class Client(object):
         flag_details: Optional[FeatureFlag],
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -2706,6 +3003,7 @@ class Client(object):
             groups=groups,
             disable_geoip=disable_geoip,
             has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -2718,17 +3016,27 @@ class Client(object):
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
     ) -> None:
         """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
         groups) tuple hasn't already been reported on this client. Group context is
-        included so that group-scoped flags fire a separate event for each group a
-        user is evaluated under. Shared by the single-flag evaluation path and
+        included so that group-scoped flags fire a separate event for each group a user
+        is evaluated under. Shared by the single-flag evaluation path and
         ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
         identically.
 
         ``has_experiment`` is the server-reported signal for whether the flag is linked
-        to an experiment; when the server reported it, it is recorded on the event as
-        ``$feature_flag_has_experiment``. ``None`` (unknown) omits the property.
+        to an experiment (``None`` when the server did not report it). When the
+        server-controlled gate is on and the flag is known non-experiment, the event is
+        trimmed to a strict allowlist; any missing signal sends the full legacy shape,
+        and experiment-linked flags keep the full set for exposure analysis.
+
+        ``minimal_flag_called_events`` is the gate as observed by the evaluation that
+        produced ``response``, not a fresh read of client-wide state: both callers
+        resolve it themselves (the snapshot pins it at construction; the single-flag
+        path reads it from the specific local/remote source that produced the value)
+        so a concurrent poller refresh or another ``/flags`` call can't reshape an
+        event after the fact.
         """
         groups_key = (
             tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
@@ -2743,10 +3051,22 @@ class Client(object):
         if feature_flag_reported_key in reported_flags:
             return
 
-        # Record the server's experiment signal so the server can optimize ingestion.
-        # Omitted when unknown (older servers that don't report has_experiment).
+        # Record the server's experiment signal when known, so minimization's impact
+        # can be measured by segmenting on it.
         if has_experiment is not None:
             properties["$feature_flag_has_experiment"] = has_experiment
+
+        # Minimize iff the server-controlled gate is on AND the flag is known to have
+        # no linked experiment. Any missing signal (gate absent, has_experiment
+        # missing) fails safe to the full legacy shape.
+        should_minimize = minimal_flag_called_events and has_experiment is False
+        # Only thread the internal allowlist through when minimizing, so the
+        # full-property path's capture() call signature stays unchanged.
+        extra_capture_kwargs: dict[str, Any] = {}
+        if should_minimize:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
 
         self.capture(
             "$feature_flag_called",
@@ -2754,6 +3074,7 @@ class Client(object):
             properties=properties,
             groups=groups or {},
             disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
         )
         reported_flags.add(feature_flag_reported_key)
 
@@ -3036,6 +3357,11 @@ class Client(object):
         errors_while_computing = False
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
+        # Source the gate the same way as has_experiment below; see
+        # _capture_feature_flag_called_if_needed for why. Defaults to the poller's
+        # current state; a successful remote fallback overwrites it with that
+        # response's own field below.
+        minimal_flag_called_events = self._minimal_flag_called_events
 
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
@@ -3065,7 +3391,7 @@ class Client(object):
                 version=None,
                 reason="Evaluated locally",
                 locally_evaluated=True,
-                has_experiment=flag_def.get("has_experiment"),
+                has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
             )
             locally_evaluated_keys.add(key)
 
@@ -3090,6 +3416,9 @@ class Client(object):
                 )
                 errors_while_computing = bool(
                     response.get("errorsWhileComputingFlags", False)
+                )
+                minimal_flag_called_events = (
+                    response.get("minimalFlagCalledEvents") is True
                 )
                 for key, detail in response.get("flags", {}).items():
                     if key in locally_evaluated_keys:
@@ -3128,11 +3457,7 @@ class Client(object):
                             else None
                         ),
                         locally_evaluated=False,
-                        has_experiment=(
-                            detail.metadata.has_experiment
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
+                        has_experiment=_metadata_has_experiment(detail.metadata),
                     )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
@@ -3152,6 +3477,7 @@ class Client(object):
             evaluated_at=evaluated_at,
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
+            minimal_flag_called_events=minimal_flag_called_events,
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None

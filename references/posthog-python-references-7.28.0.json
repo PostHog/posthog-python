@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.29.0",
+    "version": "7.28.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -626,22 +626,16 @@
               "type": "any"
             },
             {
+              "name": "_dedicated_ai_endpoint",
+              "description": "",
+              "isOptional": false,
+              "type": "bool"
+            },
+            {
               "name": "metrics",
               "description": "",
               "isOptional": true,
               "type": "dict"
-            },
-            {
-              "name": "_use_ai_lane",
-              "description": "",
-              "isOptional": false,
-              "type": "bool"
-            },
-            {
-              "name": "_enable_multimodal_capture",
-              "description": "",
-              "isOptional": false,
-              "type": "bool"
             }
           ],
           "showDocs": true,

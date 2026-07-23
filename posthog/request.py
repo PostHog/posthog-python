@@ -229,7 +229,12 @@ def post(
     url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
     data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
-    log.debug("making request: %s to url: %s", data, url)
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug(
+            "making request: %s to url: %s",
+            json.dumps({**body, "api_key": "[redacted]"}, cls=DatetimeSerializer),
+            url,
+        )
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if gzip:
         try:
@@ -363,10 +368,6 @@ def remote_config(
 
 EVENTS_ENDPOINT = "/batch/"
 AI_EVENTS_ENDPOINT = "/i/v0/ai/batch/"
-
-
-def is_ai_event(event_name) -> bool:
-    return isinstance(event_name, str) and event_name.startswith("$ai_")
 
 
 def batch_post(

@@ -270,7 +270,7 @@ class TestClient(unittest.TestCase):
 
         self.assertLess(time.monotonic() - start, 1)
         self.assertFalse(client.queue.empty())
-        self.assertIn("flush timed out", logs.output[0])
+        self.assertIn("flush ran out of budget", logs.output[0])
 
         client.queue.get_nowait()
         client.queue.task_done()
@@ -2167,9 +2167,11 @@ class TestClient(unittest.TestCase):
         for i in range(10):
             client.capture("test event", distinct_id="distinct_id")
 
-        msg_uuid = client.capture("test event", distinct_id="distinct_id")
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            msg_uuid = client.capture("test event", distinct_id="distinct_id")
         # Make sure we are informed that the queue is at capacity
         self.assertIsNone(msg_uuid)
+        self.assertIn("dropping event", logs.output[0])
 
     def test_unicode(self):
         Client("unicode_key")
@@ -3342,8 +3344,7 @@ class TestClient(unittest.TestCase):
 
 
 class TestClientSyncCaptureMode(unittest.TestCase):
-    """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`;
-    the dedicated AI endpoint always uses the legacy submitter."""
+    """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`."""
 
     def _client(self, **kwargs):
         return Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
@@ -3398,31 +3399,10 @@ class TestClientSyncCaptureMode(unittest.TestCase):
                 mock_v1.call_args.kwargs["compression"], CaptureCompression.GZIP
             )
 
-    def test_v1_sync_dedicated_ai_event_stays_legacy(self):
-        # $ai_* on the dedicated AI endpoint has no v1 form.
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            client = self._client(capture_mode="v1", _dedicated_ai_endpoint=True)
-            client.capture("$ai_generation", distinct_id="d")
-            mock_v1.assert_not_called()
-            mock_post.assert_called_once()
-            self.assertEqual(mock_post.call_args.kwargs["path"], "/i/v0/ai/batch/")
-
-    def test_v1_sync_dedicated_ai_analytics_event_uses_v1(self):
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            client = self._client(capture_mode="v1", _dedicated_ai_endpoint=True)
-            client.capture("regular_event", distinct_id="d")
-            mock_post.assert_not_called()
-            mock_v1.assert_called_once()
-
-    def test_v1_sync_ai_event_uses_v1_without_dedicated_endpoint(self):
-        # Without the dedicated AI endpoint, $ai_* events follow `capture_mode`
-        # and ride the v1 submitter like any analytics event.
+    def test_v1_sync_ai_named_event_through_capture_uses_v1(self):
+        # `capture()` never special-cases AI events: an `$ai_*`-named event
+        # follows `capture_mode` and rides the v1 submitter like any analytics
+        # event. Only `_capture_ai()` reaches the AI lane.
         with (
             mock.patch("posthog.client.batch_post") as mock_post,
             mock.patch("posthog.client._send_v1_batch") as mock_v1,

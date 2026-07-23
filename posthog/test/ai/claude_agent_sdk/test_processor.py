@@ -695,3 +695,13 @@ class TestQueryGracefulFallback:
                     prompt="Hello", options=ClaudeAgentOptions()
                 ):
                     pass
+
+
+def test_ai_lane_client_routes_through_capture_ai(mock_client):
+    mock_client._use_ai_lane = True
+    processor = PostHogClaudeAgentProcessor(client=mock_client, distinct_id="test-user")
+    processor._capture_event(event="$ai_trace", properties={}, distinct_id="d")
+
+    mock_client.capture.assert_not_called()
+    mock_client._capture_ai.assert_called_once()
+    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_trace"

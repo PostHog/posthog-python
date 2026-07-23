@@ -17,6 +17,7 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
+    _capture_ai_event,
     capture_streaming_event,
     merge_usage_stats,
 )
@@ -374,7 +375,7 @@ class AsyncModels:
     ):
         # Prepare standardized event data
         formatted_input = self._format_input(contents, **kwargs)
-        sanitized_input = sanitize_gemini(formatted_input)
+        sanitized_input = sanitize_gemini(formatted_input, self._ph_client)
 
         event_data = StreamingEventData(
             provider="gemini",
@@ -526,9 +527,10 @@ class AsyncModels:
             if distinct_id is None:
                 event_properties["$process_person_profile"] = False
 
-            self._ph_client.capture(
+            _capture_ai_event(
+                self._ph_client,
+                "$ai_embedding",
                 distinct_id=distinct_id or trace_id,
-                event="$ai_embedding",
                 properties=event_properties,
                 groups=groups,
             )

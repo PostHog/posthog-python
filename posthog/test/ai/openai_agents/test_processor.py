@@ -832,3 +832,14 @@ class TestInstrumentHelper:
 
             assert processor._groups == {"company": "acme"}
             assert processor._properties == {"env": "test"}
+
+
+def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_trace):
+    mock_client._use_ai_lane = True
+    processor = PostHogTracingProcessor(client=mock_client, distinct_id="test-user")
+    processor.on_trace_start(mock_trace)
+    processor.on_trace_end(mock_trace)
+
+    mock_client.capture.assert_not_called()
+    mock_client._capture_ai.assert_called_once()
+    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_trace"

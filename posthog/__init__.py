@@ -329,6 +329,10 @@ Attributes:
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
     super_properties: Properties merged into every captured event.
+    metrics: Config dict for the ``client.metrics`` API (``service_name``,
+        ``service_version``, ``environment``, ``flush_interval``, ...). Applied
+        when ``setup()`` builds the global client, or on a later ``setup()``
+        call if the metrics API hasn't been used yet.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
     before_send: Optional callback that can modify or drop events before upload.
@@ -374,6 +378,7 @@ is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
+metrics = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
 log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
@@ -388,6 +393,14 @@ flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvi
 # Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
 # then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
 capture_mode = None  # type: Optional[CaptureMode]
+# Internal, no stability guarantees. `_use_ai_lane` routes AI SDK wrapper events
+# through the dedicated AI capture lane; `_enable_multimodal_capture` additionally
+# skips media redaction (and implies the lane). Module attributes so the lazily
+# auto-instantiated default client can be configured without constructing it.
+# Like `debug`/`disabled`, these are authoritative for the default client:
+# `setup()` re-syncs them onto it on every call, overwriting direct assignments.
+_use_ai_lane = False  # type: bool
+_enable_multimodal_capture = False  # type: bool
 
 default_client = None  # type: Optional[Client]
 
@@ -1169,6 +1182,7 @@ def setup() -> Client:
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
+            metrics=metrics,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
@@ -1195,6 +1209,13 @@ def setup() -> Client:
     default_client.disabled = disabled or not default_client.api_key
     default_client.debug = debug
     default_client._set_before_send(before_send)
+    default_client._use_ai_lane = bool(_use_ai_lane)
+    default_client._enable_multimodal_capture = bool(_enable_multimodal_capture)
+    # Metrics config is consumed lazily on first `.metrics` access, so late
+    # module-attr assignment (e.g. a Django ready() hook running after something
+    # already forced setup()) still applies until the metrics API is first used.
+    if default_client._metrics is None:
+        default_client._metrics_config = metrics
 
     return default_client
 

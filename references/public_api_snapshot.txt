@@ -217,6 +217,7 @@ alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
 alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
+alias posthog.client.AI_MAX_MSG_SIZE -> posthog.consumer.AI_MAX_MSG_SIZE
 alias posthog.client.APIError -> posthog.request.APIError
 alias posthog.client.CaptureCompression -> posthog.capture_compression.CaptureCompression
 alias posthog.client.CaptureMode -> posthog.capture_mode.CaptureMode
@@ -241,6 +242,7 @@ alias posthog.client.FlagsAndPayloads -> posthog.types.FlagsAndPayloads
 alias posthog.client.FlagsResponse -> posthog.types.FlagsResponse
 alias posthog.client.ID_TYPES -> posthog.args.ID_TYPES
 alias posthog.client.InconclusiveMatchError -> posthog.feature_flags.InconclusiveMatchError
+alias posthog.client.MAX_MSG_SIZE -> posthog.consumer.MAX_MSG_SIZE
 alias posthog.client.OptionalCaptureArgs -> posthog.args.OptionalCaptureArgs
 alias posthog.client.OptionalSetArgs -> posthog.args.OptionalSetArgs
 alias posthog.client.Poller -> posthog.poller.Poller
@@ -271,7 +273,6 @@ alias posthog.client.get_context_distinct_id -> posthog.contexts.get_context_dis
 alias posthog.client.get_context_session_id -> posthog.contexts.get_context_session_id
 alias posthog.client.guess_timezone -> posthog.utils.guess_timezone
 alias posthog.client.handle_in_app -> posthog.exception_utils.handle_in_app
-alias posthog.client.is_ai_event -> posthog.request.is_ai_event
 alias posthog.client.mark_exception_as_captured -> posthog.exception_utils.mark_exception_as_captured
 alias posthog.client.match_feature_flag_properties -> posthog.feature_flags.match_feature_flag_properties
 alias posthog.client.new_context -> posthog.contexts.new_context
@@ -285,14 +286,12 @@ alias posthog.client.to_flags_and_payloads -> posthog.types.to_flags_and_payload
 alias posthog.client.to_payloads -> posthog.types.to_payloads
 alias posthog.client.to_values -> posthog.types.to_values
 alias posthog.client.try_attach_code_variables_to_frames -> posthog.exception_utils.try_attach_code_variables_to_frames
-alias posthog.consumer.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.consumer.APIError -> posthog.request.APIError
 alias posthog.consumer.CaptureCompression -> posthog.capture_compression.CaptureCompression
 alias posthog.consumer.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.consumer.DatetimeSerializer -> posthog.request.DatetimeSerializer
 alias posthog.consumer.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
 alias posthog.consumer.batch_post -> posthog.request.batch_post
-alias posthog.consumer.is_ai_event -> posthog.request.is_ai_event
 alias posthog.contexts.Client -> posthog.client.Client
 alias posthog.disable_connection_reuse -> posthog.request.disable_connection_reuse
 alias posthog.enable_keep_alive -> posthog.request.enable_keep_alive
@@ -406,11 +405,13 @@ attribute posthog.ai.otel.spans.AI_SPAN_PREFIXES = ('gen_ai.', 'llm.', 'ai.', 't
 attribute posthog.ai.otel.spans.DEFAULT_HOST = 'https://us.i.posthog.com'
 attribute posthog.ai.prompts.APP_ENDPOINT = 'https://us.posthog.com'
 attribute posthog.ai.prompts.CachedPrompt.fetched_at = fetched_at
+attribute posthog.ai.prompts.CachedPrompt.label = label
 attribute posthog.ai.prompts.CachedPrompt.name = name
 attribute posthog.ai.prompts.CachedPrompt.prompt = prompt
 attribute posthog.ai.prompts.CachedPrompt.version = version
 attribute posthog.ai.prompts.DEFAULT_CACHE_TTL_SECONDS = 300
-attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int]]
+attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int], Optional[str]]
+attribute posthog.ai.prompts.PromptResult.label: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.name: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.prompt: str
 attribute posthog.ai.prompts.PromptResult.source: PromptSource
@@ -503,7 +504,7 @@ attribute posthog.client.Client.code_variables_ignore_patterns = code_variables_
 attribute posthog.client.Client.code_variables_mask_patterns = code_variables_mask_patterns if code_variables_mask_patterns is not None else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 attribute posthog.client.Client.code_variables_mask_url_credentials = code_variables_mask_url_credentials if code_variables_mask_url_credentials is not None else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 attribute posthog.client.Client.cohorts: Optional[dict[str, Any]] = None
-attribute posthog.client.Client.consumers = None
+attribute posthog.client.Client.consumers: Optional[List[Consumer]]
 attribute posthog.client.Client.debug = debug
 attribute posthog.client.Client.disable_geoip = disable_geoip
 attribute posthog.client.Client.disabled = disabled or not self.api_key
@@ -538,7 +539,7 @@ attribute posthog.client.Client.poll_interval = poll_interval
 attribute posthog.client.Client.poller: Optional[Poller] = None
 attribute posthog.client.Client.privacy_mode = privacy_mode
 attribute posthog.client.Client.project_root = project_root
-attribute posthog.client.Client.queue: Queue = Queue(max_queue_size)
+attribute posthog.client.Client.queue: Queue
 attribute posthog.client.Client.raw_host = normalize_host(host)
 attribute posthog.client.Client.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
 attribute posthog.client.Client.send = send
@@ -556,13 +557,14 @@ attribute posthog.consumer.Consumer.api_key = api_key
 attribute posthog.consumer.Consumer.capture_compression = capture_compression
 attribute posthog.consumer.Consumer.capture_mode = capture_mode
 attribute posthog.consumer.Consumer.daemon = True
-attribute posthog.consumer.Consumer.dedicated_ai_endpoint = dedicated_ai_endpoint
+attribute posthog.consumer.Consumer.endpoint = endpoint
 attribute posthog.consumer.Consumer.flush_at = flush_at
 attribute posthog.consumer.Consumer.flush_interval = flush_interval
 attribute posthog.consumer.Consumer.gzip = gzip
 attribute posthog.consumer.Consumer.historical_migration = historical_migration
 attribute posthog.consumer.Consumer.host = host
 attribute posthog.consumer.Consumer.log = logging.getLogger('posthog')
+attribute posthog.consumer.Consumer.max_msg_size = max_msg_size
 attribute posthog.consumer.Consumer.on_error = on_error
 attribute posthog.consumer.Consumer.queue = queue
 attribute posthog.consumer.Consumer.retries = retries
@@ -638,6 +640,7 @@ attribute posthog.feature_flags_request_timeout_seconds = 3
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.cohorts: Required[Dict[str, Any]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.flags: Required[List[Dict[str, Any]]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.group_type_mapping: Required[Dict[str, str]]
+attribute posthog.flag_definition_cache.FlagDefinitionCacheData.minimal_flag_called_events: NotRequired[bool]
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
@@ -707,6 +710,7 @@ attribute posthog.mcp.types.UserIdentity.distinct_id: str
 attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
 attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
 attribute posthog.mcp.version.__version__ = '0.1.0'
+attribute posthog.metrics = None
 attribute posthog.metrics_capture.DEFAULT_HISTOGRAM_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
 attribute posthog.metrics_capture.MetricAttributeValue = Union[str, int, float, bool]
 attribute posthog.metrics_capture.log = logging.getLogger('posthog')
@@ -777,6 +781,7 @@ attribute posthog.types.FlagsAndPayloads.featureFlags: Optional[dict[str, FlagVa
 attribute posthog.types.FlagsResponse.errorsWhileComputingFlags: bool
 attribute posthog.types.FlagsResponse.evaluatedAt: Optional[int]
 attribute posthog.types.FlagsResponse.flags: dict[str, FeatureFlag]
+attribute posthog.types.FlagsResponse.minimalFlagCalledEvents: bool
 attribute posthog.types.FlagsResponse.quotaLimit: Optional[List[str]]
 attribute posthog.types.FlagsResponse.requestId: str
 attribute posthog.types.LegacyFlagMetadata.payload: Any
@@ -846,8 +851,8 @@ class posthog.ai.openai.openai_providers.AzureOpenAI(posthog_client: Optional[Po
 class posthog.ai.openai_agents.processor.PostHogTracingProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
 class posthog.ai.otel.exporter.PostHogTraceExporter(api_key: str, host: str = DEFAULT_HOST)
 class posthog.ai.otel.processor.PostHogSpanProcessor(api_key: str, host: str = DEFAULT_HOST)
-class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int)
-class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None)
+class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int, label: Optional[str] = None)
+class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None)
 class posthog.ai.prompts.Prompts(posthog: Optional[Any] = None, *, personal_api_key: Optional[str] = None, project_api_key: Optional[str] = None, host: Optional[str] = None, default_cache_ttl_seconds: Optional[int] = None, capture_errors: bool = False)
 class posthog.ai.stream.AsyncStreamWrapper(generator: AsyncGenerator[T, None], stream: Optional[Any] = None)
 class posthog.ai.types.FormattedFunctionCall 
@@ -865,13 +870,13 @@ class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, ref
 class posthog.capture_compression.CaptureCompression 
 class posthog.capture_mode.CaptureMode 
 class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, _dedicated_ai_endpoint=False, metrics: Optional[dict] = None)
-class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, dedicated_ai_endpoint=False, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, _use_ai_lane=False, _enable_multimodal_capture=False)
+class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
-class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, accessed: Optional[Set[str]] = None)
+class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None)
 class posthog.feature_flags.ConditionMatch 
 class posthog.feature_flags.InconclusiveMatchError 
 class posthog.feature_flags.RequiresServerEvaluation 
@@ -963,15 +968,15 @@ function posthog.ai.sanitization.is_valid_url(text: str) -> bool
 function posthog.ai.sanitization.process_gemini_item(item: Any) -> Any
 function posthog.ai.sanitization.process_messages(messages: Any, transform_content_func) -> Any
 function posthog.ai.sanitization.redact_base64_data_url(value: Any) -> Any
-function posthog.ai.sanitization.sanitize_anthropic(data: Any) -> Any
+function posthog.ai.sanitization.sanitize_anthropic(data: Any, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_anthropic_image(item: Any) -> Any
-function posthog.ai.sanitization.sanitize_gemini(data: Any) -> Any
+function posthog.ai.sanitization.sanitize_gemini(data: Any, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_gemini_part(part: Any) -> Any
-function posthog.ai.sanitization.sanitize_langchain(data: Any) -> Any
+function posthog.ai.sanitization.sanitize_langchain(data: Any, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_langchain_image(item: Any) -> Any
-function posthog.ai.sanitization.sanitize_openai(data: Any) -> Any
+function posthog.ai.sanitization.sanitize_openai(data: Any, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_openai_image(item: Any) -> Any
-function posthog.ai.sanitization.sanitize_openai_response(data: Any) -> Any
+function posthog.ai.sanitization.sanitize_openai_response(data: Any, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_openai_response_image(item: Any) -> Any
 function posthog.ai.utils.call_llm_and_track_usage(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_method: Callable[..., Any], **kwargs: Any) -> Any
 function posthog.ai.utils.call_llm_and_track_usage_async(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_async_method: Callable[..., Any], **kwargs: Any) -> Any
@@ -983,7 +988,7 @@ function posthog.ai.utils.get_model_params(kwargs: Dict[str, Any]) -> Dict[str, 
 function posthog.ai.utils.get_usage(response, provider: str) -> TokenUsage
 function posthog.ai.utils.merge_system_prompt(kwargs: Dict[str, Any], provider: str) -> List[FormattedMessage]
 function posthog.ai.utils.merge_usage_stats(target: TokenUsage, source: TokenUsage, mode: str = 'incremental') -> None
-function posthog.ai.utils.sanitize_messages(data: Any, provider: str) -> Any
+function posthog.ai.utils.sanitize_messages(data: Any, provider: str, ph_client: Any = None) -> Any
 function posthog.ai.utils.serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]
 function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any)
 function posthog.alias(previous_id: str, distinct_id: str, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
@@ -1085,7 +1090,6 @@ function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
 function posthog.request.flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, max_retries: int = 1, **kwargs) -> Any
 function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
-function posthog.request.is_ai_event(event_name) -> bool
 function posthog.request.normalize_host(host: Optional[str]) -> str
 function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
 function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
@@ -1180,7 +1184,7 @@ method posthog.ai.otel.processor.PostHogSpanProcessor.on_start(span: Span, paren
 method posthog.ai.otel.processor.PostHogSpanProcessor.shutdown() -> None
 method posthog.ai.prompts.Prompts.clear_cache(name: Optional[str] = None, *, version: Optional[int] = None) -> None
 method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariables) -> str
-method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None) -> Union[str, PromptResult]
+method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
 method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]

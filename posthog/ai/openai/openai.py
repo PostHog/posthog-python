@@ -13,6 +13,7 @@ except ImportError:
 
 from posthog.ai.utils import (
     call_llm_and_track_usage,
+    _capture_ai_event,
     extract_available_tool_calls,
     merge_usage_stats,
     with_privacy_mode,
@@ -244,7 +245,9 @@ class WrappedResponses(_OpenAIWrapperResource):
 
         # Prepare standardized event data
         formatted_input = format_openai_streaming_input(kwargs, "responses")
-        sanitized_input = sanitize_openai_response(formatted_input)
+        sanitized_input = sanitize_openai_response(
+            formatted_input, self._client._ph_client
+        )
 
         # Use model from kwargs, fallback to model from response
         model = kwargs.get("model") or model_from_response or "unknown"
@@ -513,7 +516,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
 
         # Prepare standardized event data
         formatted_input = format_openai_streaming_input(kwargs, "chat")
-        sanitized_input = sanitize_openai(formatted_input)
+        sanitized_input = sanitize_openai(formatted_input, self._client._ph_client)
 
         # Use model from kwargs, fallback to model from response
         model = kwargs.get("model") or model_from_response or "unknown"
@@ -590,7 +593,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai_response(kwargs.get("input")),
+                sanitize_openai_response(kwargs.get("input"), self._client._ph_client),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
@@ -605,9 +608,10 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
 
         # Send capture event for embeddings
         if hasattr(self._client._ph_client, "capture"):
-            self._client._ph_client.capture(
+            _capture_ai_event(
+                self._client._ph_client,
+                "$ai_embedding",
                 distinct_id=posthog_distinct_id or posthog_trace_id,
-                event="$ai_embedding",
                 properties=event_properties,
                 groups=posthog_groups,
             )
