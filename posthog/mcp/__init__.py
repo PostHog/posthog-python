@@ -44,6 +44,18 @@ from ._internal import (
 from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
 from .session import derive_session_id_from_mcp_session, new_session_id
+from .session_token import (
+    MCP_SESSION_HEADER,
+    SessionTokenPayload,
+    decode_session_id,
+    encode_session_id,
+    read_mcp_session_header,
+)
+from .asgi import (
+    PostHogMcpStatelessSessionMiddleware,
+    autowire_stateless_mint,
+    get_mcp_session,
+)
 from ._sink import McpEventSink
 from .tools import get_more_tools_result
 from .types import (
@@ -66,6 +78,16 @@ __all__ = [
     "PreparedToolCall",
     "get_more_tools_result",
     "derive_session_id_from_mcp_session",
+    # Self-encoded session tokens for stateless / multi-pod servers. Minted onto
+    # the `Mcp-Session-Id` response header by PostHogMcpStatelessSessionMiddleware
+    # and decoded on every request; codec is exported for custom HTTP layers.
+    "PostHogMcpStatelessSessionMiddleware",
+    "get_mcp_session",
+    "encode_session_id",
+    "decode_session_id",
+    "read_mcp_session_header",
+    "SessionTokenPayload",
+    "MCP_SESSION_HEADER",
     "set_logger",
     "POSTHOG_MCP_ANALYTICS_SOURCE",
     "PostHogMCPAnalyticsEvent",
@@ -226,6 +248,11 @@ def instrument(
                 f"Unsupported server type: {type(server)!r}. Pass a FastMCP (official or jlowin's "
                 "fastmcp 2.0) or a low-level mcp.server.Server."
             )
+
+        # Zero-config stateless minting: wrap the server's ASGI-app factories so a
+        # stateless/multi-pod deployment keeps one $session_id + the client harness
+        # across pods with no extra setup. No-op for stdio / low-level servers.
+        autowire_stateless_mint(server)
 
         return McpAnalytics(key)
     except Exception as error:  # noqa: BLE001

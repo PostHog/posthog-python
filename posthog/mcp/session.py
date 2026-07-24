@@ -14,6 +14,7 @@ from typing import Optional
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._ids import deterministic_prefixed_id, new_prefixed_id
 from ._internal import MCPAnalyticsData
+from .session_token import SessionTokenPayload
 
 __all__ = ["derive_session_id_from_mcp_session"]
 
@@ -29,12 +30,36 @@ def derive_session_id_from_mcp_session(mcp_session_id: str) -> str:
 
 
 async def resolve_session_id(
-    data: MCPAnalyticsData, mcp_session_id: Optional[str]
+    data: MCPAnalyticsData,
+    mcp_session_id: Optional[str],
+    *,
+    token: Optional[SessionTokenPayload] = None,
 ) -> str:
     """Resolve the session id for a request. Mutates per-server state under a lock
-    so concurrent async requests can't race on session rotation."""
+    so concurrent async requests can't race on session rotation.
+
+    ``token`` is our self-encoded session token (see :mod:`.session_token`),
+    decoded from the replayed ``Mcp-Session-Id`` header. It is the only source
+    that survives a stateless / multi-pod deployment, so it takes precedence.
+
+    The token session is resolved *per request*, never sticky: ``data`` is shared
+    by every client hitting this server instance, so reusing a stored token session
+    for a request that didn't replay the token would merge unrelated clients under
+    one ``$session_id``. A compliant client replays the header on every request, so
+    a genuine token session never needs the fallback.
+    """
     async with data.session_lock:
         now = datetime.now(timezone.utc)
+
+        if token is not None:
+            # A token we minted at `initialize`. Its session id is already a
+            # `ses_...` id, so use it verbatim -- do NOT re-hash. (Client
+            # name/version are recovered per request in the adapters, not stored
+            # on the shared `data`, for the same cross-client reason.)
+            data.session_id = token.session_id
+            data.session_source = "token"
+            data.last_activity = now
+            return data.session_id
 
         if mcp_session_id:
             data.session_id = derive_session_id_from_mcp_session(mcp_session_id)
@@ -49,8 +74,13 @@ async def resolve_session_id(
             data.last_activity = now
             return data.session_id
 
+        # Memory fallback (single-owner transports like stdio). A leftover token
+        # session must NOT leak to a credential-less request, so anything that
+        # isn't already a generated session starts fresh; generated sessions
+        # persist and roll over on inactivity.
         timeout_seconds = INACTIVITY_TIMEOUT_IN_MINUTES * 60
-        if (now - data.last_activity).total_seconds() > timeout_seconds:
+        is_stale = (now - data.last_activity).total_seconds() > timeout_seconds
+        if data.session_source != "generated" or is_stale:
             data.session_id = new_session_id()
             data.session_source = "generated"
         data.last_activity = now
