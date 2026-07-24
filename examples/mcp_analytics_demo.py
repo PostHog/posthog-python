@@ -11,6 +11,8 @@ Usage::
 This drives the instrumented server's seams directly (tools/list + tool calls)
 rather than spinning up a transport + client, so it's a self-contained way to
 generate events.
+
+Stateless / multi-pod servers: see ``examples/mcp_stateless.py``.
 """
 
 import asyncio
