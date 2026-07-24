@@ -1217,6 +1217,184 @@ class Client(object):
         )
         return response
 
+    def _build_capture_message(
+        self,
+        event: str,
+        distinct_id,
+        properties,
+        timestamp,
+        uuid,
+        groups,
+    ):
+        properties = {**(properties or {}), **system_context()}
+        properties = add_context_tags(properties)
+        assert properties is not None  # Type hint for mypy
+
+        distinct_id, personless = get_identity_state(distinct_id)
+        if personless and "$process_person_profile" not in properties:
+            properties["$process_person_profile"] = False
+
+        msg = {
+            "properties": properties,
+            "timestamp": timestamp,
+            "distinct_id": distinct_id,
+            "event": event,
+            "uuid": uuid,
+        }
+
+        if groups:
+            properties["$groups"] = groups
+
+        return msg, distinct_id
+
+    def _feature_flag_capture_properties(self, feature_variants):
+        extra_properties: dict[str, Any] = {}
+        for feature, variant in (feature_variants or {}).items():
+            extra_properties[f"$feature/{feature}"] = variant
+
+        active_feature_flags = [
+            key
+            for (key, value) in (feature_variants or {}).items()
+            if value is not False
+        ]
+        if active_feature_flags:
+            extra_properties["$active_feature_flags"] = active_feature_flags
+        return extra_properties
+
+    def _apply_capture_properties(self, msg, extra_properties) -> None:
+        if extra_properties:
+            msg["properties"] = {**extra_properties, **msg["properties"]}
+
+    def _build_person_properties_message(
+        self,
+        event: str,
+        property_key: str,
+        distinct_id,
+        properties,
+        timestamp,
+        uuid,
+    ):
+        properties = add_context_tags(properties or {})
+        distinct_id, personless = get_identity_state(distinct_id)
+        if personless or not properties:
+            return None
+
+        return {
+            "timestamp": timestamp,
+            "distinct_id": distinct_id,
+            property_key: properties,
+            "event": event,
+            "uuid": uuid,
+        }
+
+    def _build_group_identify_message(
+        self,
+        group_type: str,
+        group_key: str,
+        properties,
+        timestamp,
+        uuid,
+        distinct_id,
+    ):
+        # group_identify is purposefully always personful
+        distinct_id = get_identity_state(distinct_id)[0]
+        msg: Dict[str, Any] = {
+            "event": "$groupidentify",
+            "properties": {
+                "$group_type": group_type,
+                "$group_key": group_key,
+                "$group_set": properties or {},
+            },
+            "distinct_id": distinct_id,
+            "timestamp": timestamp,
+            "uuid": uuid,
+        }
+
+        # NOTE - group_identify doesn't generally use context properties - should it?
+        session_id = get_context_session_id()
+        if session_id:
+            msg["properties"]["$session_id"] = str(session_id)
+        return msg
+
+    def _build_alias_message(self, previous_id, distinct_id, timestamp, uuid):
+        distinct_id, personless = get_identity_state(distinct_id)
+        if personless:
+            return None
+
+        msg: Dict[str, Any] = {
+            "properties": {
+                "distinct_id": previous_id,
+                "alias": distinct_id,
+            },
+            "timestamp": timestamp,
+            "event": "$create_alias",
+            "distinct_id": previous_id,
+            "uuid": uuid,
+        }
+
+        session_id = get_context_session_id()
+        if session_id:
+            msg["properties"]["$session_id"] = str(session_id)
+        return msg
+
+    def _prepare_enqueue_message(self, msg, disable_geoip, property_allowlist=None):
+        if self.disabled:
+            return None, None
+
+        timestamp = msg["timestamp"]
+        if timestamp is None:
+            timestamp = datetime.now(tz=timezone.utc)
+
+        # add common
+        timestamp = guess_timezone(timestamp)
+        msg["timestamp"] = timestamp.isoformat()
+
+        if "uuid" in msg:
+            uuid = msg.pop("uuid")
+            if uuid is not None:
+                try:
+                    msg["uuid"] = _stringify_event_uuid(uuid)
+                except ValueError as e:
+                    self.log.error("%s Falling back to a generated UUID.", e)
+
+        if "uuid" not in msg:
+            # Always send a uuid, so we can always return one
+            msg["uuid"] = stringify_id(uuid4())
+
+        sent_uuid = msg["uuid"]
+
+        if not msg.get("properties"):
+            msg["properties"] = {}
+        msg["properties"]["$lib"] = "posthog-python"
+        msg["properties"]["$lib_version"] = VERSION
+
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
+
+        if disable_geoip:
+            msg["properties"]["$geoip_disable"] = True
+
+        if self.super_properties:
+            msg["properties"] = {**msg["properties"], **self.super_properties}
+
+        # Set after the super_properties merge so this SDK's server classification
+        # can't be silently overridden by a user-provided super property.
+        if self.is_server:
+            msg["properties"]["$is_server"] = True
+
+        # Applied after every enrichment step (system context, context tags, super
+        # properties, $lib/$lib_version) so the final event shape is exactly the
+        # allowlist regardless of where a property came from.
+        if property_allowlist is not None:
+            msg["properties"] = {
+                k: v for k, v in msg["properties"].items() if k in property_allowlist
+            }
+
+        msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
+
+        msg = clean(msg)
+        return msg, sent_uuid
+
     @no_throw()
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
@@ -1313,26 +1491,9 @@ class Client(object):
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
 
-        properties = {**(properties or {}), **system_context()}
-
-        properties = add_context_tags(properties)
-        assert properties is not None  # Type hint for mypy
-
-        (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless and "$process_person_profile" not in properties:
-            properties["$process_person_profile"] = False
-
-        msg = {
-            "properties": properties,
-            "timestamp": timestamp,
-            "distinct_id": distinct_id,
-            "event": event,
-            "uuid": uuid,
-        }
-
-        if groups:
-            properties["$groups"] = groups
+        msg, distinct_id = self._build_capture_message(
+            event, distinct_id, properties, timestamp, uuid, groups
+        )
 
         extra_properties: dict[str, Any] = {}
 
@@ -1410,20 +1571,9 @@ class Client(object):
                         f"[FEATURE FLAGS] Unable to get feature variants: {e}"
                     )
 
-            for feature, variant in (feature_variants or {}).items():
-                extra_properties[f"$feature/{feature}"] = variant
+            extra_properties = self._feature_flag_capture_properties(feature_variants)
 
-            active_feature_flags = [
-                key
-                for (key, value) in (feature_variants or {}).items()
-                if value is not False
-            ]
-            if active_feature_flags:
-                extra_properties["$active_feature_flags"] = active_feature_flags
-
-        if extra_properties:
-            properties = {**extra_properties, **properties}
-            msg["properties"] = properties
+        self._apply_capture_properties(msg, extra_properties)
 
         return self._enqueue(
             msg, disable_geoip, lane, property_allowlist=property_allowlist
@@ -1492,30 +1642,18 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
-        distinct_id = kwargs.get("distinct_id", None)
-        properties = kwargs.get("properties", None)
-        timestamp = kwargs.get("timestamp", None)
-        uuid = kwargs.get("uuid", None)
-        disable_geoip = kwargs.get("disable_geoip", None)
-
-        properties = properties or {}
-
-        properties = add_context_tags(properties)
-
-        (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless or not properties:
+        msg = self._build_person_properties_message(
+            "$set",
+            "$set",
+            kwargs.get("distinct_id", None),
+            kwargs.get("properties", None),
+            kwargs.get("timestamp", None),
+            kwargs.get("uuid", None),
+        )
+        if msg is None:
             return None  # Personless set() does nothing
 
-        msg = {
-            "timestamp": timestamp,
-            "distinct_id": distinct_id,
-            "$set": properties,
-            "event": "$set",
-            "uuid": uuid,
-        }
-
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(msg, kwargs.get("disable_geoip", None))
 
     @no_throw()
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
@@ -1541,29 +1679,18 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
-        distinct_id = kwargs.get("distinct_id", None)
-        properties = kwargs.get("properties", None)
-        timestamp = kwargs.get("timestamp", None)
-        uuid = kwargs.get("uuid", None)
-        disable_geoip = kwargs.get("disable_geoip", None)
-        properties = properties or {}
-
-        properties = add_context_tags(properties)
-
-        (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless or not properties:
+        msg = self._build_person_properties_message(
+            "$set_once",
+            "$set_once",
+            kwargs.get("distinct_id", None),
+            kwargs.get("properties", None),
+            kwargs.get("timestamp", None),
+            kwargs.get("uuid", None),
+        )
+        if msg is None:
             return None  # Personless set_once() does nothing
 
-        msg = {
-            "timestamp": timestamp,
-            "distinct_id": distinct_id,
-            "$set_once": properties,
-            "event": "$set_once",
-            "uuid": uuid,
-        }
-
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(msg, kwargs.get("disable_geoip", None))
 
     @no_throw()
     def group_identify(
@@ -1603,27 +1730,9 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
-        properties = properties or {}
-
-        # group_identify is purposefully always personful
-        distinct_id = get_identity_state(distinct_id)[0]
-
-        msg: Dict[str, Any] = {
-            "event": "$groupidentify",
-            "properties": {
-                "$group_type": group_type,
-                "$group_key": group_key,
-                "$group_set": properties,
-            },
-            "distinct_id": distinct_id,
-            "timestamp": timestamp,
-            "uuid": uuid,
-        }
-
-        # NOTE - group_identify doesn't generally use context properties - should it?
-        if get_context_session_id():
-            msg["properties"]["$session_id"] = str(get_context_session_id())
-
+        msg = self._build_group_identify_message(
+            group_type, group_key, properties, timestamp, uuid, distinct_id
+        )
         return self._enqueue(msg, disable_geoip)
 
     @no_throw()
@@ -1657,24 +1766,9 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
-        (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless:
+        msg = self._build_alias_message(previous_id, distinct_id, timestamp, uuid)
+        if msg is None:
             return None  # Personless alias() does nothing - should this throw?
-
-        msg: Dict[str, Any] = {
-            "properties": {
-                "distinct_id": previous_id,
-                "alias": distinct_id,
-            },
-            "timestamp": timestamp,
-            "event": "$create_alias",
-            "distinct_id": previous_id,
-            "uuid": uuid,
-        }
-
-        if get_context_session_id():
-            msg["properties"]["$session_id"] = str(get_context_session_id())
 
         return self._enqueue(msg, disable_geoip)
 
@@ -1884,61 +1978,11 @@ class Client(object):
         if lane is None:
             lane = self._analytics_lane
 
-        if self.disabled:
+        msg, sent_uuid = self._prepare_enqueue_message(
+            msg, disable_geoip, property_allowlist=property_allowlist
+        )
+        if msg is None or sent_uuid is None:
             return None
-
-        timestamp = msg["timestamp"]
-        if timestamp is None:
-            timestamp = datetime.now(tz=timezone.utc)
-
-        # add common
-        timestamp = guess_timezone(timestamp)
-        msg["timestamp"] = timestamp.isoformat()
-
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
-
-        if "uuid" not in msg:
-            # Always send a uuid, so we can always return one
-            msg["uuid"] = stringify_id(uuid4())
-
-        sent_uuid = msg["uuid"]
-
-        if not msg.get("properties"):
-            msg["properties"] = {}
-        msg["properties"]["$lib"] = "posthog-python"
-        msg["properties"]["$lib_version"] = VERSION
-
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-
-        if disable_geoip:
-            msg["properties"]["$geoip_disable"] = True
-
-        if self.super_properties:
-            msg["properties"] = {**msg["properties"], **self.super_properties}
-
-        # Set after the super_properties merge so this SDK's server classification
-        # can't be silently overridden by a user-provided super property.
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
-
-        # Applied after every enrichment step (system context, context tags, super
-        # properties, $lib/$lib_version) so the final event shape is exactly the
-        # allowlist regardless of where a property came from.
-        if property_allowlist is not None:
-            msg["properties"] = {
-                k: v for k, v in msg["properties"].items() if k in property_allowlist
-            }
-
-        msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
-
-        msg = clean(msg)
 
         if self.before_send:
             try:

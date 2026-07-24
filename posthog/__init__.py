@@ -12,6 +12,7 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
+from posthog.async_client import AsyncClient
 from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
     identify_context as inner_identify_context,
@@ -1235,6 +1236,18 @@ class Posthog(Client):
     ``Posthog`` is the customer-facing alias for ``Client`` and accepts the same
     constructor arguments. Use it to create an explicit SDK instance instead of
     relying on module-level global configuration.
+    """
+
+    pass
+
+
+class AsyncPostHog(AsyncClient):
+    """
+    Public asyncio-native PostHog SDK client.
+
+    ``AsyncPostHog`` is the customer-facing alias for ``AsyncClient`` and accepts
+    the same constructor arguments as ``Posthog``. Use it with ``async with`` or
+    call ``await shutdown()`` during application shutdown.
     """
 
     pass
