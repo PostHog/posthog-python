@@ -106,23 +106,29 @@ def test_rate_limits_per_exception_type():
         capture.close()
 
 
-def test_rate_limit_keys_on_root_cause_of_chained_exceptions():
+def test_rate_limit_keys_on_outermost_of_chained_exceptions():
     from posthog.exception_capture import ExceptionCapture
 
-    # PostHog groups by the root cause ($exception_list[0].type), so chained
-    # exceptions sharing a wrapper type but differing in their cause must land
-    # in separate buckets rather than collapsing under the wrapper.
+    # Canonical order puts the caught/outermost exception at
+    # $exception_list[0], and server-side issue naming keys on it — so chained
+    # exceptions sharing a wrapper type collapse into one bucket regardless of
+    # their cause, and a different wrapper type gets its own bucket.
     client = MagicMock()
-    capture = ExceptionCapture(client, rate_limiting_enabled=True, bucket_size=2)
+    capture = ExceptionCapture(client, rate_limiting_enabled=True, bucket_size=10)
     try:
-        capture.capture_exception(
-            _chained_exc_info(ZeroDivisionError(), RuntimeError("wrapped"))
-        )
-        capture.capture_exception(
-            _chained_exc_info(KeyError(), RuntimeError("wrapped"))
-        )
+        for i in range(15):
+            cause = ZeroDivisionError() if i % 2 == 0 else KeyError()
+            capture.capture_exception(_chained_exc_info(cause, RuntimeError("wrapped")))
 
-        assert client.capture_exception.call_count == 2
+        # one shared RuntimeError bucket: same arithmetic as the plain
+        # per-type test above (bucket size 10 -> 9 captured)
+        assert client.capture_exception.call_count == 9
+
+        # a different wrapper type has its own bucket
+        capture.capture_exception(
+            _chained_exc_info(ZeroDivisionError(), ValueError("other wrapper"))
+        )
+        assert client.capture_exception.call_count == 10
     finally:
         capture.close()
 

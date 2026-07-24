@@ -133,7 +133,11 @@ async def test_tool_call_error_is_captured_and_reraised():
     assert calls and calls[0]["properties"]["$mcp_is_error"] is True
     exceptions = _events(client, "$exception")
     assert exceptions
-    assert exceptions[0]["properties"]["$exception_list"][0]["value"] == "explode"
+    # Canonical order: the caught/outermost exception (fastmcp's ToolError
+    # wrapper) is first, the root cause last.
+    exception_list = exceptions[0]["properties"]["$exception_list"]
+    assert exception_list[0]["value"] == "Error executing tool boom: explode"
+    assert exception_list[-1]["value"] == "explode"
 
 
 async def test_identify_sets_distinct_id_and_groups():
