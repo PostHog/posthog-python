@@ -43,8 +43,12 @@ from pydantic import BaseModel
 
 from posthog import setup
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
-from posthog.ai.sanitization import sanitize_langchain
-from posthog.ai.utils import _capture_ai_event, get_model_params, with_privacy_mode
+from posthog.ai.utils import (
+    _capture_ai_event,
+    finalize_ai_content,
+    get_model_params,
+    with_privacy_mode,
+)
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -538,7 +542,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_input_state": with_privacy_mode(
                 self._ph_client,
                 self._privacy_mode,
-                sanitize_langchain(run.input, self._ph_client),
+                finalize_ai_content(run.input, self._ph_client),
             ),
             "$ai_latency": run.latency,
             "$ai_span_name": run.name,
@@ -563,7 +567,9 @@ class CallbackHandler(BaseCallbackHandler):
 
         elif outputs is not None:
             event_properties["$ai_output_state"] = with_privacy_mode(
-                self._ph_client, self._privacy_mode, outputs
+                self._ph_client,
+                self._privacy_mode,
+                finalize_ai_content(outputs, self._ph_client),
             )
 
         if self._distinct_id is None:
@@ -620,7 +626,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_input": with_privacy_mode(
                 self._ph_client,
                 self._privacy_mode,
-                sanitize_langchain(run.input, self._ph_client),
+                finalize_ai_content(run.input, self._ph_client),
             ),
             "$ai_http_status": 200,
             "$ai_latency": run.latency,
@@ -678,7 +684,9 @@ class CallbackHandler(BaseCallbackHandler):
                     for generation in generation_result
                 ]
             event_properties["$ai_output_choices"] = with_privacy_mode(
-                self._ph_client, self._privacy_mode, completions
+                self._ph_client,
+                self._privacy_mode,
+                finalize_ai_content(completions, self._ph_client),
             )
 
             # Extract stop reason from generation info

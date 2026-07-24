@@ -1,4 +1,3 @@
-import json
 import logging
 import time
 from datetime import datetime
@@ -21,26 +20,12 @@ from agents.tracing.span_data import (
 )
 
 from posthog import setup
-from posthog.ai.utils import _capture_ai_event
+from posthog.ai.media import ensure_serializable as _ensure_serializable
+from posthog.ai.sanitization import _multimodal_capture_enabled, _placeholder
+from posthog.ai.utils import _capture_ai_event, finalize_ai_content
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
-
-
-def _ensure_serializable(obj: Any) -> Any:
-    """Ensure an object is JSON-serializable, converting to str as fallback.
-
-    Returns the original object if it's already serializable (dict, list, str,
-    int, etc.), or str(obj) for non-serializable types so that downstream
-    json.dumps() calls won't fail.
-    """
-    if obj is None:
-        return None
-    try:
-        json.dumps(obj)
-        return obj
-    except (TypeError, ValueError):
-        return str(obj)
 
 
 def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
@@ -532,9 +517,13 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_model": span_data.model,
             "$ai_model_parameters": model_params if model_params else None,
-            "$ai_input": self._with_privacy_mode(_ensure_serializable(span_data.input)),
+            "$ai_input": self._with_privacy_mode(
+                finalize_ai_content(_ensure_serializable(span_data.input), self._client)
+            ),
             "$ai_output_choices": self._with_privacy_mode(
-                _ensure_serializable(span_data.output)
+                finalize_ai_content(
+                    _ensure_serializable(span_data.output), self._client
+                )
             ),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
@@ -579,10 +568,12 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_span_name": span_data.name,
             "$ai_span_type": "tool",
             "$ai_input_state": self._with_privacy_mode(
-                _ensure_serializable(span_data.input)
+                finalize_ai_content(_ensure_serializable(span_data.input), self._client)
             ),
             "$ai_output_state": self._with_privacy_mode(
-                _ensure_serializable(span_data.output)
+                finalize_ai_content(
+                    _ensure_serializable(span_data.output), self._client
+                )
             ),
         }
 
@@ -700,7 +691,9 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
             "$ai_model": model,
             "$ai_response_id": response_id,
-            "$ai_input": self._with_privacy_mode(_ensure_serializable(span_data.input)),
+            "$ai_input": self._with_privacy_mode(
+                finalize_ai_content(_ensure_serializable(span_data.input), self._client)
+            ),
             "$ai_input_tokens": input_tokens,
             "$ai_output_tokens": output_tokens,
             "$ai_total_tokens": input_tokens + output_tokens,
@@ -714,7 +707,9 @@ class PostHogTracingProcessor(TracingProcessor):
             output_items = getattr(response, "output", None)
             if output_items:
                 properties["$ai_output_choices"] = self._with_privacy_mode(
-                    _ensure_serializable(output_items)
+                    finalize_ai_content(
+                        _ensure_serializable(output_items), self._client
+                    )
                 )
 
             # Extract stop reason (status) from response
@@ -789,18 +784,38 @@ class PostHogTracingProcessor(TracingProcessor):
         if hasattr(span_data, "output_format"):
             properties["audio_output_format"] = span_data.output_format
 
-        # Add text input for TTS
+        # Capture the input. For speech (TTS) spans the input is the text to
+        # synthesize. For transcription spans the input is the base64-encoded
+        # audio — a bare string with no key/parent context the structural
+        # redactor can't recognize, so redact it here (or pass it through in
+        # multimodal mode) rather than leaking raw base64 into $ai_input.
         if (
             hasattr(span_data, "input")
             and span_data.input
             and isinstance(span_data.input, str)
         ):
-            properties["$ai_input"] = self._with_privacy_mode(span_data.input)
+            if span_type == "transcription":
+                audio_input: Any = (
+                    span_data.input
+                    if _multimodal_capture_enabled(self._client)
+                    else _placeholder(
+                        getattr(span_data, "input_format", None) or "audio"
+                    )
+                )
+                properties["$ai_input"] = self._with_privacy_mode(audio_input)
+            else:
+                properties["$ai_input"] = self._with_privacy_mode(
+                    finalize_ai_content(
+                        _ensure_serializable(span_data.input), self._client
+                    )
+                )
 
-        # Don't include audio data (base64) - just metadata
         if hasattr(span_data, "output") and isinstance(span_data.output, str):
-            # For transcription, output is the text
-            properties["$ai_output_state"] = self._with_privacy_mode(span_data.output)
+            properties["$ai_output_state"] = self._with_privacy_mode(
+                finalize_ai_content(
+                    _ensure_serializable(span_data.output), self._client
+                )
+            )
 
         self._capture_event("$ai_span", properties, distinct_id)
 

@@ -4,13 +4,8 @@ from typing import Any, Callable, Dict, List, Optional, cast
 
 from posthog import get_tags, identify_context, new_context, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
-from posthog.ai.sanitization import (
-    _multimodal_capture_enabled,
-    sanitize_anthropic,
-    sanitize_gemini,
-    sanitize_langchain,
-    sanitize_openai,
-)
+from posthog.ai.sanitization import _multimodal_capture_enabled, redact_media
+from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-exported for back-compat
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
 
@@ -425,7 +420,7 @@ def call_llm_and_track_usage(
                 usage = get_usage(response, provider)
 
             messages = merge_system_prompt(kwargs, provider)
-            sanitized_messages = sanitize_messages(messages, provider, ph_client)
+            sanitized_messages = finalize_ai_content(messages, ph_client)
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
@@ -437,7 +432,9 @@ def call_llm_and_track_usage(
             tag(
                 "$ai_output_choices",
                 with_privacy_mode(
-                    ph_client, posthog_privacy_mode, format_response(response, provider)
+                    ph_client,
+                    posthog_privacy_mode,
+                    finalize_ai_content(format_response(response, provider), ph_client),
                 ),
             )
             tag("$ai_http_status", http_status)
@@ -576,7 +573,7 @@ async def call_llm_and_track_usage_async(
                 usage = get_usage(response, provider)
 
             messages = merge_system_prompt(kwargs, provider)
-            sanitized_messages = sanitize_messages(messages, provider, ph_client)
+            sanitized_messages = finalize_ai_content(messages, ph_client)
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
@@ -588,7 +585,9 @@ async def call_llm_and_track_usage_async(
             tag(
                 "$ai_output_choices",
                 with_privacy_mode(
-                    ph_client, posthog_privacy_mode, format_response(response, provider)
+                    ph_client,
+                    posthog_privacy_mode,
+                    finalize_ai_content(format_response(response, provider), ph_client),
                 ),
             )
             tag("$ai_http_status", http_status)
@@ -666,17 +665,14 @@ async def call_llm_and_track_usage_async(
     return response
 
 
-def sanitize_messages(data: Any, provider: str, ph_client: Any = None) -> Any:
-    """Sanitize messages using provider-specific sanitization functions."""
-    if provider == "anthropic":
-        return sanitize_anthropic(data, ph_client)
-    elif provider == "openai":
-        return sanitize_openai(data, ph_client)
-    elif provider == "gemini":
-        return sanitize_gemini(data, ph_client)
-    elif provider == "langchain":
-        return sanitize_langchain(data, ph_client)
-    return data
+def finalize_ai_content(value: Any, ph_client: Any = None) -> Any:
+    """Single choke point for AI content properties: structural media redaction
+    (or bytes->base64 passthrough when the client opted into multimodal capture).
+
+    This is the ONLY function allowed to touch $ai_input / $ai_output_choices /
+    $ai_input_state / $ai_output_state values before capture.
+    """
+    return redact_media(value, ph_client=ph_client)
 
 
 def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
@@ -717,12 +713,12 @@ def capture_streaming_event(
         "$ai_input": with_privacy_mode(
             ph_client,
             event_data["privacy_mode"],
-            event_data["formatted_input"],
+            finalize_ai_content(event_data["formatted_input"], ph_client),
         ),
         "$ai_output_choices": with_privacy_mode(
             ph_client,
             event_data["privacy_mode"],
-            event_data["formatted_output"],
+            finalize_ai_content(event_data["formatted_output"], ph_client),
         ),
         "$ai_http_status": 200,
         "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),

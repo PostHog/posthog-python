@@ -76,7 +76,7 @@ test = [
     "pytest-timeout",
     "pytest-asyncio",
     "django>=5.2.15,<6.0",
-    "openai>=2.0",
+    "openai-agents>=0.18",
     "anthropic>=0.72",
     "langgraph>=1.0",
     "langgraph-checkpoint>=4.1.1",

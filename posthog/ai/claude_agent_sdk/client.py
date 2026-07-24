@@ -23,6 +23,10 @@ except ImportError:
         "Please install the Claude Agent SDK to use this feature: 'pip install claude-agent-sdk'"
     )
 
+from posthog.ai.claude_agent_sdk.formatting import (
+    format_assistant_blocks,
+    format_tool_result_content,
+)
 from posthog.ai.claude_agent_sdk.processor import (
     PostHogClaudeAgentProcessor,
     _GenerationTracker,
@@ -159,7 +163,6 @@ class PostHogClaudeSDKClient:
                         self._tracker.current_span_id
                         or self._current_generation_span_id
                     )
-                    output_content: List[Dict[str, Any]] = []
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
                             self._processor._emit_tool_span(
@@ -171,17 +174,7 @@ class PostHogClaudeSDKClient:
                                 self._privacy,
                                 self._groups,
                             )
-                            output_content.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": block.name,
-                                        "arguments": block.input,
-                                    },
-                                }
-                            )
-                        elif hasattr(block, "text"):
-                            output_content.append({"type": "text", "text": block.text})
+                    output_content = format_assistant_blocks(message.content)
                     if output_content:
                         self._pending_output = [
                             {"role": "assistant", "content": output_content}
@@ -199,9 +192,9 @@ class PostHogClaudeSDKClient:
                                     {
                                         "type": "tool_result",
                                         "tool_use_id": block.tool_use_id,
-                                        "content": str(block.content)[:500]
-                                        if block.content
-                                        else None,
+                                        "content": format_tool_result_content(
+                                            block, self._processor._client
+                                        ),
                                     }
                                 )
                             elif hasattr(block, "text"):
