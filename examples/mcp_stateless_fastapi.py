@@ -83,15 +83,16 @@ async def mcp_endpoint(request: Request):
     return {"jsonrpc": "2.0", "id": body.get("id"), "result": {}}
 
 
-# Mounted-FastMCP variant: the exact same middleware works in front of a FastMCP
-# streamable-HTTP app, and instrument() reads the replayed token automatically --
-# no per-request code needed there:
+# Mounted-FastMCP variant: nothing to add at all. instrument() auto-wires the
+# stateless mint into the server's app factory (and mcp.run() uses the same
+# factory), so a stateless FastMCP keeps one $session_id + the harness across pods
+# with zero extra setup:
 #
 #     from mcp.server.fastmcp import FastMCP
 #     from posthog import Posthog
-#     from posthog.mcp import instrument, PostHogMcpStatelessSessionMiddleware
+#     from posthog.mcp import instrument
 #
 #     server = FastMCP("my-server", stateless_http=True, json_response=True)
 #     instrument(server, Posthog("phc_xxx"))
-#     app = server.streamable_http_app()
-#     app.add_middleware(PostHogMcpStatelessSessionMiddleware)
+#     app = server.streamable_http_app()   # already mints/decodes the session token
+#     # (server.run(transport="streamable-http") works the same way)

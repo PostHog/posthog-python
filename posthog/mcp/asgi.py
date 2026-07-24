@@ -12,7 +12,12 @@ initialize handler -- there is no in-SDK seam to mint from. We mint at the HTTP
 layer instead, with a pure-ASGI middleware that works for both a mounted FastMCP
 app and a custom ``PostHogMCP`` dispatcher, across every SDK routing path.
 
-Add it once::
+On the ``instrument()`` path this is **wired up automatically**:
+``instrument(server, ...)`` wraps the FastMCP server's app factories
+(``streamable_http_app()`` / ``sse_app()``, which ``mcp.run()`` also calls), so the
+app it builds already carries the middleware -- nothing extra to add.
+
+For a custom ``PostHogMCP`` dispatcher (you own the ASGI app), add it once::
 
     app.add_middleware(PostHogMcpStatelessSessionMiddleware)
 
@@ -31,6 +36,7 @@ This module has no hard dependency on Starlette/FastAPI -- it speaks raw ASGI.
 
 from __future__ import annotations
 
+import functools
 import json
 from typing import Any, Optional
 
@@ -201,3 +207,42 @@ def _sending_session_header(send: Any, token: str) -> Any:
 
 def _str_or_none(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
+
+
+# Marker so we never double-wrap a factory (idempotent across repeat instrument()).
+_AUTOWIRED = "__posthog_mcp_autowired__"
+
+
+def autowire_stateless_mint(server: Any) -> None:
+    """Make stateless minting zero-config on the ``instrument()`` path.
+
+    Wraps a FastMCP server's ASGI-app factories so the app they build already has
+    :class:`PostHogMcpStatelessSessionMiddleware` applied. Covers both
+    ``server.streamable_http_app()`` / ``sse_app()`` and ``mcp.run(transport=...)``
+    (which calls those factories internally), so the user adds nothing.
+
+    No-op for servers without app factories (stdio / low-level ``Server``), and safe
+    if the middleware is also added manually (it only mints when none is present)."""
+    for attr in ("streamable_http_app", "sse_app", "http_app"):
+        original = getattr(server, attr, None)
+        if not callable(original) or getattr(original, _AUTOWIRED, False):
+            continue
+        try:
+            setattr(server, attr, _wrap_app_factory(original))
+        except Exception as error:  # noqa: BLE001 - never let wiring break instrument()
+            log(f"PostHog MCP: could not auto-wire stateless mint on {attr} - {error}")
+
+
+def _wrap_app_factory(original: Any) -> Any:
+    @functools.wraps(original)
+    def factory(*args: Any, **kwargs: Any) -> Any:
+        app = original(*args, **kwargs)
+        add_middleware = getattr(app, "add_middleware", None)
+        if callable(add_middleware):
+            add_middleware(PostHogMcpStatelessSessionMiddleware)
+            return app
+        # Not a Starlette app -- wrap as raw ASGI so minting still happens.
+        return PostHogMcpStatelessSessionMiddleware(app)
+
+    setattr(factory, _AUTOWIRED, True)
+    return factory

@@ -51,7 +51,11 @@ from .session_token import (
     encode_session_id,
     read_mcp_session_header,
 )
-from .asgi import PostHogMcpStatelessSessionMiddleware, get_mcp_session
+from .asgi import (
+    PostHogMcpStatelessSessionMiddleware,
+    autowire_stateless_mint,
+    get_mcp_session,
+)
 from ._sink import McpEventSink
 from .tools import get_more_tools_result
 from .types import (
@@ -244,6 +248,11 @@ def instrument(
                 f"Unsupported server type: {type(server)!r}. Pass a FastMCP (official or jlowin's "
                 "fastmcp 2.0) or a low-level mcp.server.Server."
             )
+
+        # Zero-config stateless minting: wrap the server's ASGI-app factories so a
+        # stateless/multi-pod deployment keeps one $session_id + the client harness
+        # across pods with no extra setup. No-op for stdio / low-level servers.
+        autowire_stateless_mint(server)
 
         return McpAnalytics(key)
     except Exception as error:  # noqa: BLE001

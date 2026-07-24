@@ -389,3 +389,62 @@ def test_middleware_end_to_end_with_stateless_fastmcp():
         )
         resp2 = client.post("/mcp", headers=h2, content=b2)
         assert resp2.status_code == 200, resp2.text
+
+
+def test_instrument_autowires_stateless_mint_no_manual_middleware():
+    """instrument() alone (no app.add_middleware) makes the FastMCP streamable-HTTP
+    app mint the session token -- the zero-config path. mcp.run() uses the same
+    factory internally, so it's covered too."""
+    pytest.importorskip("starlette.testclient")
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
+    from starlette.testclient import TestClient
+
+    from posthog.mcp import instrument
+
+    class _Sink:
+        def capture(self, *_: object, **__: object) -> None:
+            pass
+
+    srv = FastMCP(
+        "posthog-autowire-test",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+    )
+
+    @srv.tool()
+    def ping() -> str:
+        return "pong"
+
+    # No app.add_middleware() anywhere -- instrument() wires the mint itself.
+    instrument(srv, _Sink())
+    app = srv.streamable_http_app()
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/mcp",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+            content=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "Cursor", "version": "0.42"},
+                    },
+                }
+            ),
+        )
+        assert resp.status_code == 200, resp.text
+        payload = decode_session_id(resp.headers.get(MCP_SESSION_HEADER))
+        assert payload is not None, "instrument() did not auto-wire the mint"
+        assert payload.client_name == "Cursor"
+        assert payload.client_version == "0.42"
