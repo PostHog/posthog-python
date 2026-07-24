@@ -322,15 +322,29 @@ alias posthog.integrations.django.contexts -> posthog.contexts
 alias posthog.mcp.CaptureEventData -> posthog.mcp.types.CaptureEventData
 alias posthog.mcp.MCPAnalyticsContextOptions -> posthog.mcp.types.MCPAnalyticsContextOptions
 alias posthog.mcp.MCPAnalyticsOptions -> posthog.mcp.types.MCPAnalyticsOptions
+alias posthog.mcp.MCP_SESSION_HEADER -> posthog.mcp.session_token.MCP_SESSION_HEADER
 alias posthog.mcp.POSTHOG_MCP_ANALYTICS_SOURCE -> posthog.mcp.constants.POSTHOG_MCP_ANALYTICS_SOURCE
 alias posthog.mcp.PostHogMCP -> posthog.mcp.posthog_mcp.PostHogMCP
 alias posthog.mcp.PostHogMCPAnalyticsEvent -> posthog.mcp.constants.PostHogMCPAnalyticsEvent
 alias posthog.mcp.PostHogMCPAnalyticsProperty -> posthog.mcp.constants.PostHogMCPAnalyticsProperty
+alias posthog.mcp.PostHogMcpStatelessSessionMiddleware -> posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware
 alias posthog.mcp.PreparedToolCall -> posthog.mcp.types.PreparedToolCall
+alias posthog.mcp.SessionTokenPayload -> posthog.mcp.session_token.SessionTokenPayload
 alias posthog.mcp.UserIdentity -> posthog.mcp.types.UserIdentity
 alias posthog.mcp.__version__ -> posthog.mcp.version.__version__
+alias posthog.mcp.asgi.MCP_SESSION_HEADER -> posthog.mcp.session_token.MCP_SESSION_HEADER
+alias posthog.mcp.asgi.SessionTokenPayload -> posthog.mcp.session_token.SessionTokenPayload
+alias posthog.mcp.asgi.decode_session_id -> posthog.mcp.session_token.decode_session_id
+alias posthog.mcp.asgi.encode_session_id -> posthog.mcp.session_token.encode_session_id
+alias posthog.mcp.asgi.log -> posthog.mcp.logger.log
+alias posthog.mcp.asgi.new_session_id -> posthog.mcp.session.new_session_id
+alias posthog.mcp.asgi.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
+alias posthog.mcp.decode_session_id -> posthog.mcp.session_token.decode_session_id
 alias posthog.mcp.derive_session_id_from_mcp_session -> posthog.mcp.session.derive_session_id_from_mcp_session
+alias posthog.mcp.encode_session_id -> posthog.mcp.session_token.encode_session_id
+alias posthog.mcp.get_mcp_session -> posthog.mcp.asgi.get_mcp_session
 alias posthog.mcp.get_more_tools_result -> posthog.mcp.tools.get_more_tools_result
+alias posthog.mcp.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
 alias posthog.mcp.set_logger -> posthog.mcp.logger.set_logger
 alias posthog.metrics_capture.VERSION -> posthog.version.VERSION
 alias posthog.metrics_capture.remove_trailing_slash -> posthog.utils.remove_trailing_slash
@@ -657,6 +671,7 @@ attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = Tr
 attribute posthog.integrations.django.PosthogContextMiddleware.tag_map = cast('Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]', settings.POSTHOG_MW_TAG_MAP)
 attribute posthog.is_server = True
 attribute posthog.log_captured_exceptions = False
+attribute posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware.app = app
 attribute posthog.mcp.constants.POSTHOG_MCP_ANALYTICS_SOURCE = 'posthog_mcp_analytics'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.CUSTOM = '$mcp_custom'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.EXCEPTION = '$exception'
@@ -687,6 +702,11 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SOURCE = '$mcp_sourc
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_CATEGORY = '$mcp_tool_category'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_DESCRIPTION = '$mcp_tool_description'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_NAME = '$mcp_tool_name'
+attribute posthog.mcp.session_token.MCP_SESSION_HEADER = 'mcp-session-id'
+attribute posthog.mcp.session_token.SessionTokenPayload.client_name: Optional[str] = None
+attribute posthog.mcp.session_token.SessionTokenPayload.client_version: Optional[str] = None
+attribute posthog.mcp.session_token.SessionTokenPayload.protocol_version: Optional[str] = None
+attribute posthog.mcp.session_token.SessionTokenPayload.session_id: str
 attribute posthog.mcp.types.CaptureEventData.event: str
 attribute posthog.mcp.types.CaptureEventData.properties: Optional[JsonRecord] = None
 attribute posthog.mcp.types.MCPAnalyticsContextOptions.description: Optional[str] = None
@@ -707,7 +727,7 @@ attribute posthog.mcp.types.PreparedToolCall.is_missing_capability: bool = False
 attribute posthog.mcp.types.UserIdentity.distinct_id: str
 attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
 attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
-attribute posthog.mcp.version.__version__ = '0.1.0'
+attribute posthog.mcp.version.__version__ = '0.2.0'
 attribute posthog.metrics = None
 attribute posthog.metrics_capture.DEFAULT_HISTOGRAM_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
 attribute posthog.metrics_capture.MetricAttributeValue = Union[str, int, float, bool]
@@ -883,9 +903,11 @@ class posthog.flag_definition_cache.FlagDefinitionCacheProvider
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
 class posthog.mcp.McpAnalytics(key: Any)
+class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
 class posthog.mcp.constants.PostHogMCPAnalyticsProperty 
 class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, mcp_exception_autocapture: bool = True, **kwargs: Any)
+class posthog.mcp.session_token.SessionTokenPayload(session_id: str, client_name: Optional[str] = None, client_version: Optional[str] = None, protocol_version: Optional[str] = None)
 class posthog.mcp.types.CaptureEventData(event: str, properties: Optional[JsonRecord] = None)
 class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
 class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = False, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None)
@@ -1077,9 +1099,14 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.join() -> None
 function posthog.load_feature_flags()
+function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
+function posthog.mcp.asgi.get_mcp_session(request_or_scope: Any) -> Optional[SessionTokenPayload]
 function posthog.mcp.instrument(server: Any, posthog_client: Optional[Client] = None, options: Optional[MCPAnalyticsOptions] = None) -> McpAnalytics
 function posthog.mcp.logger.set_logger(logger: Optional[LoggerFn]) -> None
 function posthog.mcp.session.derive_session_id_from_mcp_session(mcp_session_id: str) -> str
+function posthog.mcp.session_token.decode_session_id(value: Any) -> Optional[SessionTokenPayload]
+function posthog.mcp.session_token.encode_session_id(payload: SessionTokenPayload) -> str
+function posthog.mcp.session_token.read_mcp_session_header(headers: Any) -> Optional[str]
 function posthog.mcp.tools.get_more_tools_result() -> Dict[str, Any]
 function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
@@ -1358,10 +1385,12 @@ module posthog.integrations
 module posthog.integrations.celery
 module posthog.integrations.django
 module posthog.mcp
+module posthog.mcp.asgi
 module posthog.mcp.constants
 module posthog.mcp.logger
 module posthog.mcp.posthog_mcp
 module posthog.mcp.session
+module posthog.mcp.session_token
 module posthog.mcp.tools
 module posthog.mcp.types
 module posthog.mcp.version
