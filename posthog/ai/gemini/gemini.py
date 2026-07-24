@@ -18,6 +18,7 @@ from posthog.ai.utils import (
     call_llm_and_track_usage,
     _capture_ai_event,
     capture_streaming_event,
+    finalize_ai_content,
     merge_usage_stats,
 )
 from posthog.ai.gemini.gemini_converter import (
@@ -28,7 +29,6 @@ from posthog.ai.gemini.gemini_converter import (
     format_gemini_streaming_output,
 )
 from posthog.ai.utils import with_privacy_mode
-from posthog.ai.sanitization import sanitize_gemini
 from posthog.client import Client as PostHogClient
 
 
@@ -321,10 +321,10 @@ class Models:
                         merge_usage_stats(usage_stats, chunk_usage, mode="cumulative")
 
                     # Extract content from chunk (now returns content blocks)
-                    content_block = extract_gemini_content_from_chunk(chunk)
+                    content_blocks = extract_gemini_content_from_chunk(chunk)
 
-                    if content_block is not None:
-                        accumulated_content.append(content_block)
+                    if content_blocks is not None:
+                        accumulated_content.extend(content_blocks)
 
                     # Extract stop reason from chunk
                     chunk_stop_reason = extract_gemini_stop_reason_from_chunk(chunk)
@@ -369,16 +369,14 @@ class Models:
         output: Any,
         stop_reason: Optional[str] = None,
     ):
-        # Prepare standardized event data
         formatted_input = self._format_input(contents, **kwargs)
-        sanitized_input = sanitize_gemini(formatted_input, self._ph_client)
 
         event_data = StreamingEventData(
             provider="gemini",
             model=model,
             base_url=self._base_url,
             kwargs=kwargs,
-            formatted_input=sanitized_input,
+            formatted_input=formatted_input,
             formatted_output=format_gemini_streaming_output(output),
             usage_stats=usage_stats,
             latency=latency,
@@ -507,7 +505,11 @@ class Models:
             event_properties = {
                 "$ai_provider": "gemini",
                 "$ai_model": model,
-                "$ai_input": with_privacy_mode(self._ph_client, privacy_mode, contents),
+                "$ai_input": with_privacy_mode(
+                    self._ph_client,
+                    privacy_mode,
+                    finalize_ai_content(contents, self._ph_client),
+                ),
                 "$ai_http_status": http_status,
                 "$ai_input_tokens": input_tokens,
                 "$ai_latency": latency,

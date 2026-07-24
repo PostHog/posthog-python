@@ -25,7 +25,12 @@ except ImportError:
     )
 
 from posthog import setup
-from posthog.ai.utils import _capture_ai_event
+from posthog.ai.claude_agent_sdk.formatting import (
+    format_assistant_blocks,
+    format_tool_result_content,
+)
+from posthog.ai.media import ensure_serializable as _ensure_serializable
+from posthog.ai.utils import _capture_ai_event, finalize_ai_content
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -322,8 +327,6 @@ class PostHogClaudeAgentProcessor:
                     # would be stale (from the previous turn). tracker.current_span_id gives us
                     # the correct in-progress generation.
                     parent_id = tracker.current_span_id or current_generation_span_id
-                    # Build output content from assistant blocks
-                    output_content: List[Dict[str, Any]] = []
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
                             self._emit_tool_span(
@@ -335,17 +338,7 @@ class PostHogClaudeAgentProcessor:
                                 privacy,
                                 groups,
                             )
-                            output_content.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": block.name,
-                                        "arguments": block.input,
-                                    },
-                                }
-                            )
-                        elif hasattr(block, "text"):
-                            output_content.append({"type": "text", "text": block.text})
+                    output_content = format_assistant_blocks(message.content)
                     if output_content:
                         pending_output = [
                             {"role": "assistant", "content": output_content}
@@ -365,9 +358,9 @@ class PostHogClaudeAgentProcessor:
                                     {
                                         "type": "tool_result",
                                         "tool_use_id": block.tool_use_id,
-                                        "content": str(block.content)[:500]
-                                        if block.content
-                                        else None,
+                                        "content": format_tool_result_content(
+                                            block, self._client
+                                        ),
                                     }
                                 )
                             elif hasattr(block, "text"):
@@ -439,11 +432,19 @@ class PostHogClaudeAgentProcessor:
 
         if input_messages is not None:
             properties["$ai_input"] = (
-                None if privacy else self._with_privacy_mode(input_messages)
+                None
+                if privacy
+                else self._with_privacy_mode(
+                    finalize_ai_content(input_messages, self._client)
+                )
             )
         if output_choices is not None:
             properties["$ai_output_choices"] = (
-                None if privacy else self._with_privacy_mode(output_choices)
+                None
+                if privacy
+                else self._with_privacy_mode(
+                    finalize_ai_content(output_choices, self._client)
+                )
             )
 
         if gen.cache_read_input_tokens:
@@ -498,11 +499,19 @@ class PostHogClaudeAgentProcessor:
 
         if input_messages is not None:
             properties["$ai_input"] = (
-                None if privacy else self._with_privacy_mode(input_messages)
+                None
+                if privacy
+                else self._with_privacy_mode(
+                    finalize_ai_content(input_messages, self._client)
+                )
             )
         if output_choices is not None:
             properties["$ai_output_choices"] = (
-                None if privacy else self._with_privacy_mode(output_choices)
+                None
+                if privacy
+                else self._with_privacy_mode(
+                    finalize_ai_content(output_choices, self._client)
+                )
             )
 
         cache_read = usage.get("cache_read_input_tokens", 0)
@@ -548,7 +557,9 @@ class PostHogClaudeAgentProcessor:
         if not privacy and not (
             hasattr(self._client, "privacy_mode") and self._client.privacy_mode
         ):
-            properties["$ai_input_state"] = _ensure_serializable(block.input)
+            properties["$ai_input_state"] = finalize_ai_content(
+                _ensure_serializable(block.input), self._client
+            )
 
         if resolved_id is None:
             properties["$process_person_profile"] = False
@@ -613,16 +624,3 @@ class PostHogClaudeAgentProcessor:
             return str(override)
         # Fall back to instance default
         return self._get_distinct_id(result)
-
-
-def _ensure_serializable(obj: Any) -> Any:
-    """Ensure an object is JSON-serializable."""
-    if obj is None:
-        return None
-    try:
-        import json
-
-        json.dumps(obj)
-        return obj
-    except (TypeError, ValueError):
-        return str(obj)

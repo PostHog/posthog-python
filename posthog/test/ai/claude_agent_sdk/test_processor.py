@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -413,6 +414,64 @@ class TestPrivacyMode:
             "properties"
         )
         assert "$ai_input_state" not in props
+
+
+class TestMediaRedactionEndToEnd:
+    @pytest.mark.asyncio
+    async def test_data_url_prompt_and_tool_use_base64_are_redacted(
+        self, processor, mock_client
+    ):
+        """A data-URL image in the prompt ($ai_input) and base64 in a
+        tool_use block's input (relayed into $ai_output_choices via
+        format_assistant_blocks) must both be redacted end-to-end."""
+        png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 400).decode()
+        data_url = f"data:image/png;base64,{png_b64}"
+
+        messages = [
+            _make_message_start(),
+            _make_message_stop(),
+            _make_assistant_message(
+                tool_uses=[
+                    {"id": "tu_1", "name": "Read", "input": {"image": data_url}},
+                ]
+            ),
+            _make_message_start(),
+            _make_message_stop(),
+            _make_result_message(),
+        ]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in processor.query(
+                prompt=data_url, options=ClaudeAgentOptions()
+            ):
+                pass
+
+        gen_calls = [
+            c
+            for c in mock_client.capture.call_args_list
+            if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
+        ]
+        assert len(gen_calls) == 2
+
+        gen1_props = gen_calls[0].kwargs.get("properties") or gen_calls[0][1].get(
+            "properties"
+        )
+        assert gen1_props["$ai_input"][0]["content"] == "[base64 image redacted]"
+
+        gen2_props = gen_calls[1].kwargs.get("properties") or gen_calls[1][1].get(
+            "properties"
+        )
+        output_content = gen2_props["$ai_output_choices"][0]["content"]
+        function_block = next(
+            item for item in output_content if item.get("type") == "function"
+        )
+        assert (
+            function_block["function"]["arguments"]["image"]
+            == "[base64 image redacted]"
+        )
 
 
 class TestPersonlessMode:

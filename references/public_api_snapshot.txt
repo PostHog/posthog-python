@@ -47,7 +47,6 @@ alias posthog.ai.anthropic.anthropic.handle_anthropic_content_block_start -> pos
 alias posthog.ai.anthropic.anthropic.handle_anthropic_text_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta
 alias posthog.ai.anthropic.anthropic.handle_anthropic_tool_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta
 alias posthog.ai.anthropic.anthropic.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.anthropic.anthropic.sanitize_anthropic -> posthog.ai.sanitization.sanitize_anthropic
 alias posthog.ai.anthropic.anthropic.setup -> posthog.setup
 alias posthog.ai.anthropic.anthropic_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
 alias posthog.ai.anthropic.anthropic_async.PostHogClient -> posthog.client.Client
@@ -61,7 +60,6 @@ alias posthog.ai.anthropic.anthropic_async.handle_anthropic_content_block_start 
 alias posthog.ai.anthropic.anthropic_async.handle_anthropic_text_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta
 alias posthog.ai.anthropic.anthropic_async.handle_anthropic_tool_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta
 alias posthog.ai.anthropic.anthropic_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.anthropic.anthropic_async.sanitize_anthropic -> posthog.ai.sanitization.sanitize_anthropic
 alias posthog.ai.anthropic.anthropic_async.setup -> posthog.setup
 alias posthog.ai.anthropic.anthropic_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
 alias posthog.ai.anthropic.anthropic_converter.FormattedFunctionCall -> posthog.ai.types.FormattedFunctionCall
@@ -71,6 +69,7 @@ alias posthog.ai.anthropic.anthropic_converter.StreamingContentBlock -> posthog.
 alias posthog.ai.anthropic.anthropic_converter.TokenUsage -> posthog.ai.types.TokenUsage
 alias posthog.ai.anthropic.anthropic_converter.ToolInProgress -> posthog.ai.types.ToolInProgress
 alias posthog.ai.anthropic.anthropic_converter.serialize_raw_usage -> posthog.ai.utils.serialize_raw_usage
+alias posthog.ai.anthropic.anthropic_converter.to_plain -> posthog.ai.media.to_plain
 alias posthog.ai.anthropic.anthropic_providers.AsyncWrappedMessages -> posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages
 alias posthog.ai.anthropic.anthropic_providers.PostHogClient -> posthog.client.Client
 alias posthog.ai.anthropic.anthropic_providers.WrappedMessages -> posthog.ai.anthropic.anthropic.WrappedMessages
@@ -83,7 +82,14 @@ alias posthog.ai.claude_agent_sdk.PostHogClaudeAgentProcessor -> posthog.ai.clau
 alias posthog.ai.claude_agent_sdk.PostHogClaudeSDKClient -> posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient
 alias posthog.ai.claude_agent_sdk.client.Client -> posthog.client.Client
 alias posthog.ai.claude_agent_sdk.client.PostHogClaudeAgentProcessor -> posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor
+alias posthog.ai.claude_agent_sdk.client.format_assistant_blocks -> posthog.ai.claude_agent_sdk.formatting.format_assistant_blocks
+alias posthog.ai.claude_agent_sdk.client.format_tool_result_content -> posthog.ai.claude_agent_sdk.formatting.format_tool_result_content
+alias posthog.ai.claude_agent_sdk.formatting.redact_media -> posthog.ai.sanitization.redact_media
+alias posthog.ai.claude_agent_sdk.formatting.to_plain -> posthog.ai.media.to_plain
 alias posthog.ai.claude_agent_sdk.processor.Client -> posthog.client.Client
+alias posthog.ai.claude_agent_sdk.processor.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
+alias posthog.ai.claude_agent_sdk.processor.format_assistant_blocks -> posthog.ai.claude_agent_sdk.formatting.format_assistant_blocks
+alias posthog.ai.claude_agent_sdk.processor.format_tool_result_content -> posthog.ai.claude_agent_sdk.formatting.format_tool_result_content
 alias posthog.ai.claude_agent_sdk.processor.setup -> posthog.setup
 alias posthog.ai.gemini.AsyncClient -> posthog.ai.gemini.gemini_async.AsyncClient
 alias posthog.ai.gemini.Client -> posthog.ai.gemini.gemini.Client
@@ -99,10 +105,10 @@ alias posthog.ai.gemini.gemini.extract_gemini_content_from_chunk -> posthog.ai.g
 alias posthog.ai.gemini.gemini.extract_gemini_embedding_token_count -> posthog.ai.gemini.gemini_converter.extract_gemini_embedding_token_count
 alias posthog.ai.gemini.gemini.extract_gemini_stop_reason_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk
 alias posthog.ai.gemini.gemini.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
+alias posthog.ai.gemini.gemini.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
 alias posthog.ai.gemini.gemini.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.gemini.gemini.sanitize_gemini -> posthog.ai.sanitization.sanitize_gemini
 alias posthog.ai.gemini.gemini.setup -> posthog.setup
 alias posthog.ai.gemini.gemini.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.gemini.gemini_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
@@ -115,20 +121,23 @@ alias posthog.ai.gemini.gemini_async.extract_gemini_content_from_chunk -> postho
 alias posthog.ai.gemini.gemini_async.extract_gemini_embedding_token_count -> posthog.ai.gemini.gemini_converter.extract_gemini_embedding_token_count
 alias posthog.ai.gemini.gemini_async.extract_gemini_stop_reason_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk
 alias posthog.ai.gemini.gemini_async.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
+alias posthog.ai.gemini.gemini_async.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini_async.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
 alias posthog.ai.gemini.gemini_async.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.gemini.gemini_async.sanitize_gemini -> posthog.ai.sanitization.sanitize_gemini
 alias posthog.ai.gemini.gemini_async.setup -> posthog.setup
 alias posthog.ai.gemini.gemini_async.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.gemini.gemini_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
 alias posthog.ai.gemini.gemini_converter.FormattedMessage -> posthog.ai.types.FormattedMessage
 alias posthog.ai.gemini.gemini_converter.TokenUsage -> posthog.ai.types.TokenUsage
+alias posthog.ai.gemini.gemini_converter.bytes_to_base64 -> posthog.ai.media.bytes_to_base64
+alias posthog.ai.gemini.gemini_converter.normalize_part_keys -> posthog.ai.media.normalize_part_keys
 alias posthog.ai.gemini.gemini_converter.serialize_raw_usage -> posthog.ai.utils.serialize_raw_usage
+alias posthog.ai.gemini.gemini_converter.to_plain -> posthog.ai.media.to_plain
 alias posthog.ai.langchain.CallbackHandler -> posthog.ai.langchain.callbacks.CallbackHandler
 alias posthog.ai.langchain.callbacks.Client -> posthog.client.Client
+alias posthog.ai.langchain.callbacks.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.langchain.callbacks.get_model_params -> posthog.ai.utils.get_model_params
-alias posthog.ai.langchain.callbacks.sanitize_langchain -> posthog.ai.sanitization.sanitize_langchain
 alias posthog.ai.langchain.callbacks.setup -> posthog.setup
 alias posthog.ai.langchain.callbacks.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.ai.langchain.callbacks.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
@@ -148,9 +157,8 @@ alias posthog.ai.openai.openai.extract_available_tool_calls -> posthog.ai.utils.
 alias posthog.ai.openai.openai.extract_openai_content_from_chunk -> posthog.ai.openai.openai_converter.extract_openai_content_from_chunk
 alias posthog.ai.openai.openai.extract_openai_tool_calls_from_chunk -> posthog.ai.openai.openai_converter.extract_openai_tool_calls_from_chunk
 alias posthog.ai.openai.openai.extract_openai_usage_from_chunk -> posthog.ai.openai.openai_converter.extract_openai_usage_from_chunk
+alias posthog.ai.openai.openai.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.openai.openai.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.openai.openai.sanitize_openai -> posthog.ai.sanitization.sanitize_openai
-alias posthog.ai.openai.openai.sanitize_openai_response -> posthog.ai.sanitization.sanitize_openai_response
 alias posthog.ai.openai.openai.setup -> posthog.setup
 alias posthog.ai.openai.openai.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.openai_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
@@ -162,11 +170,11 @@ alias posthog.ai.openai.openai_async.extract_available_tool_calls -> posthog.ai.
 alias posthog.ai.openai.openai_async.extract_openai_content_from_chunk -> posthog.ai.openai.openai_converter.extract_openai_content_from_chunk
 alias posthog.ai.openai.openai_async.extract_openai_tool_calls_from_chunk -> posthog.ai.openai.openai_converter.extract_openai_tool_calls_from_chunk
 alias posthog.ai.openai.openai_async.extract_openai_usage_from_chunk -> posthog.ai.openai.openai_converter.extract_openai_usage_from_chunk
+alias posthog.ai.openai.openai_async.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
+alias posthog.ai.openai.openai_async.format_openai_streaming_input -> posthog.ai.openai.openai_converter.format_openai_streaming_input
 alias posthog.ai.openai.openai_async.format_openai_streaming_output -> posthog.ai.openai.openai_converter.format_openai_streaming_output
 alias posthog.ai.openai.openai_async.get_model_params -> posthog.ai.utils.get_model_params
 alias posthog.ai.openai.openai_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.openai.openai_async.sanitize_openai -> posthog.ai.sanitization.sanitize_openai
-alias posthog.ai.openai.openai_async.sanitize_openai_response -> posthog.ai.sanitization.sanitize_openai_response
 alias posthog.ai.openai.openai_async.setup -> posthog.setup
 alias posthog.ai.openai.openai_async.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.openai_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
@@ -176,6 +184,7 @@ alias posthog.ai.openai.openai_converter.FormattedMessage -> posthog.ai.types.Fo
 alias posthog.ai.openai.openai_converter.FormattedTextContent -> posthog.ai.types.FormattedTextContent
 alias posthog.ai.openai.openai_converter.TokenUsage -> posthog.ai.types.TokenUsage
 alias posthog.ai.openai.openai_converter.serialize_raw_usage -> posthog.ai.utils.serialize_raw_usage
+alias posthog.ai.openai.openai_converter.to_plain -> posthog.ai.media.to_plain
 alias posthog.ai.openai.openai_providers.AsyncWrappedBeta -> posthog.ai.openai.openai_async.WrappedBeta
 alias posthog.ai.openai.openai_providers.AsyncWrappedChat -> posthog.ai.openai.openai_async.WrappedChat
 alias posthog.ai.openai.openai_providers.AsyncWrappedEmbeddings -> posthog.ai.openai.openai_async.WrappedEmbeddings
@@ -188,6 +197,7 @@ alias posthog.ai.openai.openai_providers.WrappedResponses -> posthog.ai.openai.o
 alias posthog.ai.openai.openai_providers.setup -> posthog.setup
 alias posthog.ai.openai_agents.PostHogTracingProcessor -> posthog.ai.openai_agents.processor.PostHogTracingProcessor
 alias posthog.ai.openai_agents.processor.Client -> posthog.client.Client
+alias posthog.ai.openai_agents.processor.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.openai_agents.processor.setup -> posthog.setup
 alias posthog.ai.otel.PostHogSpanProcessor -> posthog.ai.otel.processor.PostHogSpanProcessor
 alias posthog.ai.otel.PostHogTraceExporter -> posthog.ai.otel.exporter.PostHogTraceExporter
@@ -200,6 +210,7 @@ alias posthog.ai.otel.processor.is_ai_span -> posthog.ai.otel.spans.is_ai_span
 alias posthog.ai.otel.processor.warn_if_posthog_ai_gateway_otel_attributes -> posthog.ai.gateway.warn_if_posthog_ai_gateway_otel_attributes
 alias posthog.ai.prompts.USER_AGENT -> posthog.request.USER_AGENT
 alias posthog.ai.prompts.remove_trailing_slash -> posthog.utils.remove_trailing_slash
+alias posthog.ai.sanitization.bytes_to_base64 -> posthog.ai.media.bytes_to_base64
 alias posthog.ai.utils.FormattedMessage -> posthog.ai.types.FormattedMessage
 alias posthog.ai.utils.PostHogClient -> posthog.client.Client
 alias posthog.ai.utils.StreamingEventData -> posthog.ai.types.StreamingEventData
@@ -208,10 +219,8 @@ alias posthog.ai.utils.contexts -> posthog.contexts
 alias posthog.ai.utils.get_tags -> posthog.get_tags
 alias posthog.ai.utils.identify_context -> posthog.identify_context
 alias posthog.ai.utils.new_context -> posthog.new_context
-alias posthog.ai.utils.sanitize_anthropic -> posthog.ai.sanitization.sanitize_anthropic
-alias posthog.ai.utils.sanitize_gemini -> posthog.ai.sanitization.sanitize_gemini
-alias posthog.ai.utils.sanitize_langchain -> posthog.ai.sanitization.sanitize_langchain
-alias posthog.ai.utils.sanitize_openai -> posthog.ai.sanitization.sanitize_openai
+alias posthog.ai.utils.redact_media -> posthog.ai.sanitization.redact_media
+alias posthog.ai.utils.sanitize_messages -> posthog.ai.sanitization.sanitize_messages
 alias posthog.ai.utils.tag -> posthog.tag
 alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
@@ -425,16 +434,24 @@ attribute posthog.ai.types.FormattedFunctionCall.id: Optional[str]
 attribute posthog.ai.types.FormattedFunctionCall.type: str
 attribute posthog.ai.types.FormattedImageContent.image: str
 attribute posthog.ai.types.FormattedImageContent.type: str
+attribute posthog.ai.types.FormattedMessage.audio: NotRequired[Dict[str, Any]]
 attribute posthog.ai.types.FormattedMessage.content: Union[str, List[FormattedContentItem], Any]
+attribute posthog.ai.types.FormattedMessage.name: NotRequired[str]
+attribute posthog.ai.types.FormattedMessage.refusal: NotRequired[str]
 attribute posthog.ai.types.FormattedMessage.role: str
+attribute posthog.ai.types.FormattedMessage.tool_call_id: NotRequired[str]
+attribute posthog.ai.types.FormattedMessage.tool_calls: NotRequired[List[Dict[str, Any]]]
 attribute posthog.ai.types.FormattedTextContent.text: str
 attribute posthog.ai.types.FormattedTextContent.type: str
 attribute posthog.ai.types.ProviderResponse.error: Optional[str]
 attribute posthog.ai.types.ProviderResponse.messages: List[FormattedMessage]
 attribute posthog.ai.types.ProviderResponse.usage: TokenUsage
+attribute posthog.ai.types.StreamingContentBlock.data: Optional[str]
 attribute posthog.ai.types.StreamingContentBlock.function: Optional[Dict[str, Any]]
 attribute posthog.ai.types.StreamingContentBlock.id: Optional[str]
+attribute posthog.ai.types.StreamingContentBlock.signature: Optional[str]
 attribute posthog.ai.types.StreamingContentBlock.text: Optional[str]
+attribute posthog.ai.types.StreamingContentBlock.thinking: Optional[str]
 attribute posthog.ai.types.StreamingContentBlock.type: str
 attribute posthog.ai.types.StreamingEventData.base_url: str
 attribute posthog.ai.types.StreamingEventData.distinct_id: Optional[str]
@@ -925,12 +942,14 @@ function posthog.ai.anthropic.anthropic_converter.format_anthropic_streaming_out
 function posthog.ai.anthropic.anthropic_converter.handle_anthropic_content_block_start(event: Any) -> Tuple[Optional[StreamingContentBlock], Optional[ToolInProgress]]
 function posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta(event: Any, current_block: Optional[StreamingContentBlock]) -> Optional[str]
 function posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta(event: Any, content_blocks: List[StreamingContentBlock], tools_in_progress: Dict[str, ToolInProgress]) -> None
+function posthog.ai.claude_agent_sdk.formatting.format_assistant_blocks(blocks: Any) -> List[Dict[str, Any]]
+function posthog.ai.claude_agent_sdk.formatting.format_tool_result_content(block: Any, ph_client: Any = None) -> Any
 function posthog.ai.claude_agent_sdk.instrument(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None) -> PostHogClaudeAgentProcessor
 function posthog.ai.claude_agent_sdk.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None)
 function posthog.ai.gateway.is_posthog_ai_gateway_url(base_url: Any) -> bool
 function posthog.ai.gateway.warn_if_posthog_ai_gateway(base_url: Any) -> None
 function posthog.ai.gateway.warn_if_posthog_ai_gateway_otel_attributes(attributes: Optional[Mapping[str, Any]]) -> None
-function posthog.ai.gemini.gemini_converter.extract_gemini_content_from_chunk(chunk: Any) -> Optional[Dict[str, Any]]
+function posthog.ai.gemini.gemini_converter.extract_gemini_content_from_chunk(chunk: Any) -> Optional[List[FormattedContentItem]]
 function posthog.ai.gemini.gemini_converter.extract_gemini_embedding_token_count(response) -> int
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason(response: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]
@@ -943,8 +962,12 @@ function posthog.ai.gemini.gemini_converter.format_gemini_input(contents: Any) -
 function posthog.ai.gemini.gemini_converter.format_gemini_input_with_system(contents: Any, config: Any = None) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_response(response: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_streaming_output(accumulated_content: Union[str, List[Any]]) -> List[FormattedMessage]
+function posthog.ai.media.bytes_to_base64(data: bytes) -> str
+function posthog.ai.media.ensure_serializable(obj: Any) -> Any
+function posthog.ai.media.normalize_part_keys(d: dict) -> dict
+function posthog.ai.media.to_plain(obj: Any) -> Any
 function posthog.ai.openai.openai_converter.accumulate_openai_tool_calls(accumulated_tool_calls: Dict[int, Dict[str, Any]], chunk_tool_calls: List[Dict[str, Any]]) -> None
-function posthog.ai.openai.openai_converter.extract_openai_content_from_chunk(chunk: Any, provider_type: str = 'chat') -> Optional[str]
+function posthog.ai.openai.openai_converter.extract_openai_content_from_chunk(chunk: Any, provider_type: str = 'chat') -> Optional[Any]
 function posthog.ai.openai.openai_converter.extract_openai_stop_reason(response: Any) -> Optional[str]
 function posthog.ai.openai.openai_converter.extract_openai_tool_calls_from_chunk(chunk: Any) -> Optional[List[Dict[str, Any]]]
 function posthog.ai.openai.openai_converter.extract_openai_tools(kwargs: Dict[str, Any]) -> Optional[Any]
@@ -960,33 +983,25 @@ function posthog.ai.openai.wrapper_utils.reset_fallback_warnings() -> None
 function posthog.ai.openai.wrapper_utils.warn_on_fallback(wrapper_name: str, name: str) -> None
 function posthog.ai.openai_agents.instrument(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None) -> PostHogTracingProcessor
 function posthog.ai.otel.spans.is_ai_span(span: ReadableSpan) -> bool
-function posthog.ai.sanitization.is_base64_data_url(text: str) -> bool
-function posthog.ai.sanitization.is_raw_base64(text: str) -> bool
-function posthog.ai.sanitization.is_valid_url(text: str) -> bool
-function posthog.ai.sanitization.process_gemini_item(item: Any) -> Any
-function posthog.ai.sanitization.process_messages(messages: Any, transform_content_func) -> Any
 function posthog.ai.sanitization.redact_base64_data_url(value: Any) -> Any
+function posthog.ai.sanitization.redact_media(value: Any, max_string_len: Optional[int] = None, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_anthropic(data: Any, ph_client: Any = None) -> Any
-function posthog.ai.sanitization.sanitize_anthropic_image(item: Any) -> Any
 function posthog.ai.sanitization.sanitize_gemini(data: Any, ph_client: Any = None) -> Any
-function posthog.ai.sanitization.sanitize_gemini_part(part: Any) -> Any
 function posthog.ai.sanitization.sanitize_langchain(data: Any, ph_client: Any = None) -> Any
-function posthog.ai.sanitization.sanitize_langchain_image(item: Any) -> Any
+function posthog.ai.sanitization.sanitize_messages(data: Any, provider: Optional[str] = None, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_openai(data: Any, ph_client: Any = None) -> Any
-function posthog.ai.sanitization.sanitize_openai_image(item: Any) -> Any
 function posthog.ai.sanitization.sanitize_openai_response(data: Any, ph_client: Any = None) -> Any
-function posthog.ai.sanitization.sanitize_openai_response_image(item: Any) -> Any
 function posthog.ai.utils.call_llm_and_track_usage(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_method: Callable[..., Any], **kwargs: Any) -> Any
 function posthog.ai.utils.call_llm_and_track_usage_async(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_async_method: Callable[..., Any], **kwargs: Any) -> Any
 function posthog.ai.utils.capture_streaming_event(ph_client: PostHogClient, event_data: StreamingEventData)
 function posthog.ai.utils.extract_available_tool_calls(provider: str, kwargs: Dict[str, Any])
 function posthog.ai.utils.extract_stop_reason(response: Any, provider: str) -> Optional[str]
+function posthog.ai.utils.finalize_ai_content(value: Any, ph_client: Any = None) -> Any
 function posthog.ai.utils.format_response(response, provider: str)
 function posthog.ai.utils.get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]
 function posthog.ai.utils.get_usage(response, provider: str) -> TokenUsage
 function posthog.ai.utils.merge_system_prompt(kwargs: Dict[str, Any], provider: str) -> List[FormattedMessage]
 function posthog.ai.utils.merge_usage_stats(target: TokenUsage, source: TokenUsage, mode: str = 'incremental') -> None
-function posthog.ai.utils.sanitize_messages(data: Any, provider: str, ph_client: Any = None) -> Any
 function posthog.ai.utils.serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]
 function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any)
 function posthog.alias(previous_id: str, distinct_id: str, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
@@ -1316,6 +1331,7 @@ module posthog.ai.anthropic.anthropic_converter
 module posthog.ai.anthropic.anthropic_providers
 module posthog.ai.claude_agent_sdk
 module posthog.ai.claude_agent_sdk.client
+module posthog.ai.claude_agent_sdk.formatting
 module posthog.ai.claude_agent_sdk.processor
 module posthog.ai.gateway
 module posthog.ai.gemini
@@ -1324,6 +1340,7 @@ module posthog.ai.gemini.gemini_async
 module posthog.ai.gemini.gemini_converter
 module posthog.ai.langchain
 module posthog.ai.langchain.callbacks
+module posthog.ai.media
 module posthog.ai.openai
 module posthog.ai.openai.openai
 module posthog.ai.openai.openai_async
