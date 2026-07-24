@@ -44,6 +44,14 @@ from ._internal import (
 from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
 from .session import derive_session_id_from_mcp_session, new_session_id
+from .session_token import (
+    MCP_SESSION_HEADER,
+    SessionTokenPayload,
+    decode_session_id,
+    encode_session_id,
+    read_mcp_session_header,
+)
+from .asgi import PostHogMcpStatelessSessionMiddleware, get_mcp_session
 from ._sink import McpEventSink
 from .tools import get_more_tools_result
 from .types import (
@@ -66,6 +74,16 @@ __all__ = [
     "PreparedToolCall",
     "get_more_tools_result",
     "derive_session_id_from_mcp_session",
+    # Self-encoded session tokens for stateless / multi-pod servers. Minted onto
+    # the `Mcp-Session-Id` response header by PostHogMcpStatelessSessionMiddleware
+    # and decoded on every request; codec is exported for custom HTTP layers.
+    "PostHogMcpStatelessSessionMiddleware",
+    "get_mcp_session",
+    "encode_session_id",
+    "decode_session_id",
+    "read_mcp_session_header",
+    "SessionTokenPayload",
+    "MCP_SESSION_HEADER",
     "set_logger",
     "POSTHOG_MCP_ANALYTICS_SOURCE",
     "PostHogMCPAnalyticsEvent",
