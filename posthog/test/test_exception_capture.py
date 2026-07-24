@@ -106,23 +106,29 @@ def test_rate_limits_per_exception_type():
         capture.close()
 
 
-def test_rate_limit_keys_on_root_cause_of_chained_exceptions():
+def test_rate_limit_keys_on_outermost_of_chained_exceptions():
     from posthog.exception_capture import ExceptionCapture
 
-    # PostHog groups by the root cause ($exception_list[0].type), so chained
-    # exceptions sharing a wrapper type but differing in their cause must land
-    # in separate buckets rather than collapsing under the wrapper.
+    # Canonical order puts the caught/outermost exception at
+    # $exception_list[0], and server-side issue naming keys on it — so chained
+    # exceptions sharing a wrapper type collapse into one bucket regardless of
+    # their cause, and a different wrapper type gets its own bucket.
     client = MagicMock()
-    capture = ExceptionCapture(client, rate_limiting_enabled=True, bucket_size=2)
+    capture = ExceptionCapture(client, rate_limiting_enabled=True, bucket_size=10)
     try:
-        capture.capture_exception(
-            _chained_exc_info(ZeroDivisionError(), RuntimeError("wrapped"))
-        )
-        capture.capture_exception(
-            _chained_exc_info(KeyError(), RuntimeError("wrapped"))
-        )
+        for i in range(15):
+            cause = ZeroDivisionError() if i % 2 == 0 else KeyError()
+            capture.capture_exception(_chained_exc_info(cause, RuntimeError("wrapped")))
 
-        assert client.capture_exception.call_count == 2
+        # one shared RuntimeError bucket: same arithmetic as the plain
+        # per-type test above (bucket size 10 -> 9 captured)
+        assert client.capture_exception.call_count == 9
+
+        # a different wrapper type has its own bucket
+        capture.capture_exception(
+            _chained_exc_info(ZeroDivisionError(), ValueError("other wrapper"))
+        )
+        assert client.capture_exception.call_count == 10
     finally:
         capture.close()
 
@@ -154,3 +160,85 @@ def test_excepthook(tmpdir):
         b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
         in output
     )
+
+
+class _RootError(Exception):
+    pass
+
+
+class _WrapperError(Exception):
+    pass
+
+
+class _LeafOne(Exception):
+    pass
+
+
+class _LeafTwo(Exception):
+    pass
+
+
+def test_exception_list_canonical_order_explicit_cause():
+    # Canonical ordering: $exception_list[0] is the caught/outermost exception
+    # and the root cause is last. For `raise B from A`, B is caught and A is the
+    # root cause.
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        try:
+            raise _RootError("root")
+        except _RootError as root:
+            raise _WrapperError("wrapper") from root
+    except _WrapperError:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    types = [e["type"] for e in exceptions]
+    assert types == ["_WrapperError", "_RootError"]
+    assert exceptions[0]["value"] == "wrapper"
+    assert exceptions[-1]["value"] == "root"
+
+
+def test_exception_list_canonical_order_implicit_context():
+    # Implicit chaining (an exception raised while handling another) uses
+    # `__context__`. The caught exception is still first, root cause last.
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        try:
+            raise _RootError("root")
+        except _RootError:
+            raise _WrapperError("wrapper")
+    except _WrapperError:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    types = [e["type"] for e in exceptions]
+    assert types == ["_WrapperError", "_RootError"]
+    assert exceptions[0]["value"] == "wrapper"
+    assert exceptions[-1]["value"] == "root"
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_exception_list_canonical_order_exception_group():
+    # For an ExceptionGroup the group is the caught/outermost exception and
+    # comes first, with its member exceptions following.
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        raise ExceptionGroup(  # noqa: F821 -- builtin on 3.11+
+            "group", [_LeafOne("one"), _LeafTwo("two")]
+        )
+    except BaseException:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    types = [e["type"] for e in exceptions]
+    assert types[0] == "ExceptionGroup"
+    assert types[1:] == ["_LeafOne", "_LeafTwo"]
