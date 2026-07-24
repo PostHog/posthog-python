@@ -297,7 +297,6 @@ alias posthog.disable_connection_reuse -> posthog.request.disable_connection_reu
 alias posthog.enable_keep_alive -> posthog.request.enable_keep_alive
 alias posthog.exception_capture.BucketedRateLimiter -> posthog.bucketed_rate_limiter.BucketedRateLimiter
 alias posthog.exception_capture.Client -> posthog.client.Client
-alias posthog.exception_capture.walk_exception_chain -> posthog.exception_utils.walk_exception_chain
 alias posthog.exception_utils.ExcInfo -> posthog.args.ExcInfo
 alias posthog.exception_utils.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.feature_flag_evaluations.FlagValue -> posthog.types.FlagValue
