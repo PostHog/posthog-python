@@ -125,10 +125,9 @@ async def test_resolve_session_id_uses_token_verbatim():
     # Used verbatim -- NOT re-hashed through derive_session_id_from_mcp_session.
     assert sid == "ses_tok"
     assert data.session_source == "token"
-    assert data.token_client_name == "Cursor"
 
 
-async def test_token_session_does_not_fragment_or_roll_over():
+async def test_token_session_used_every_time_and_never_rolls_over():
     from datetime import datetime, timedelta, timezone
 
     data = _data()
@@ -136,16 +135,32 @@ async def test_token_session_does_not_fragment_or_roll_over():
         encode_session_id(SessionTokenPayload(session_id="ses_tok"))
     )
     first = await resolve_session_id(data, None, token=token)
-    # A later request without the header keeps the id...
-    assert await resolve_session_id(data, None) == first
-    # ...and it never rolls over on inactivity (only generated sessions do).
+    # Replayed on every request (what a compliant client does) -> same id, and it
+    # never rolls over on inactivity (unlike a generated session).
     data.last_activity = datetime.now(timezone.utc) - timedelta(minutes=31)
-    assert await resolve_session_id(data, None) == first
+    assert await resolve_session_id(data, None, token=token) == first
+
+
+async def test_token_session_not_reused_for_tokenless_request():
+    """`data` is shared across clients on one server, so a request that doesn't
+    replay the token must NOT inherit the previous client's token session."""
+    data = _data()
+    token = decode_session_id(
+        encode_session_id(SessionTokenPayload(session_id="ses_a"))
+    )
+    a = await resolve_session_id(data, None, token=token)
+    assert a == "ses_a"
+    # A different, tokenless client hits the same server -> fresh session, not ses_a.
+    b = await resolve_session_id(data, None)
+    assert b != "ses_a" and data.session_source == "generated"
 
 
 async def test_multi_pod_two_instances_resolve_same_session_and_harness():
     """The regression this fixes: independent pods (independent per-server state)
-    resolve the same replayed token to the same session id + harness."""
+    resolve the same replayed token to the same session id, and the harness is
+    recovered from the token by the adapter helper."""
+    from posthog.mcp._instrumentation import resolve_session_and_client
+
     token_str = encode_session_id(
         SessionTokenPayload(session_id="ses_shared", client_name="Claude Code")
     )
@@ -154,7 +169,9 @@ async def test_multi_pod_two_instances_resolve_same_session_and_harness():
         data = _data()
         token = decode_session_id(token_str)
         sid = await resolve_session_id(data, token_str, token=token)
-        results.append((sid, data.session_source, data.token_client_name))
+        # Harness comes back per request in the adapters (not from shared state).
+        _tok, name, _ver = resolve_session_and_client(token_str, None, None)
+        results.append((sid, data.session_source, name))
     assert results[0] == results[1] == ("ses_shared", "token", "Claude Code")
 
 

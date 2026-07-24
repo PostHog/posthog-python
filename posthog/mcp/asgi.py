@@ -124,36 +124,46 @@ def _headers_dict(scope: Any) -> dict[str, str]:
 
 
 async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
-    """Read the full request body, then return it plus a ``receive`` that replays
-    it downstream (so the app still sees an unconsumed stream)."""
+    """Read up to ``_MAX_SNIFF_BODY`` of the request body for sniffing, then return
+    that prefix plus a ``receive`` that replays it and streams the rest.
+
+    Memory is bounded to the cap: an `initialize` handshake is tiny, so once we
+    exceed the cap the request cannot be one and we stop buffering — the prefix is
+    replayed with ``more_body: True`` and any remaining chunks are forwarded
+    straight from the original ``receive`` (never accumulated). This keeps an
+    unauthenticated large / streamed POST from exhausting memory."""
     chunks: list[bytes] = []
-    more = True
-    while more:
+    total = 0
+    complete = False
+    overflow = False
+    while True:
         message = await receive()
         if message.get("type") != "http.request":
-            # A non-body message (e.g. http.disconnect); stop and replay what we have.
+            # A non-body message (e.g. http.disconnect); stop with what we have.
             break
         chunks.append(message.get("body", b"") or b"")
-        more = message.get("more_body", False)
+        total += len(chunks[-1])
+        if not message.get("more_body", False):
+            complete = True
+            break
+        if total > _MAX_SNIFF_BODY:
+            overflow = True  # too big to be initialize — stop buffering
+            break
 
-    # Always buffer the whole body so replay is byte-faithful (Starlette's own
-    # Request.body() buffers fully too). This holds the request in memory, which
-    # is fine for tiny JSON-RPC POSTs on an MCP endpoint.
     buffered = b"".join(chunks)
     replayed = False
 
     async def replay() -> dict[str, Any]:
-        # Hand the whole buffered body back in one message, then defer to the
-        # original transport for anything after it (disconnect, etc.).
+        # Replay the buffered prefix once; if we stopped early, flag more_body so
+        # the app keeps pulling the rest straight from the original transport.
         nonlocal replayed
         if not replayed:
             replayed = True
-            return {"type": "http.request", "body": buffered, "more_body": False}
+            return {"type": "http.request", "body": buffered, "more_body": overflow}
         return await receive()
 
-    # Only *sniff* (parse to detect initialize) small bodies -- a giant POST is
-    # never our tiny initialize handshake, so skip minting but still replay it whole.
-    sniff = buffered if len(buffered) <= _MAX_SNIFF_BODY else b""
+    # Only sniff (parse for `initialize`) when we captured the whole small body.
+    sniff = buffered if (complete and not overflow) else b""
     return sniff, replay
 
 

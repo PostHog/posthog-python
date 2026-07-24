@@ -41,28 +41,23 @@ async def resolve_session_id(
     ``token`` is our self-encoded session token (see :mod:`.session_token`),
     decoded from the replayed ``Mcp-Session-Id`` header. It is the only source
     that survives a stateless / multi-pod deployment, so it takes precedence.
+
+    The token session is resolved *per request*, never sticky: ``data`` is shared
+    by every client hitting this server instance, so reusing a stored token session
+    for a request that didn't replay the token would merge unrelated clients under
+    one ``$session_id``. A compliant client replays the header on every request, so
+    a genuine token session never needs the fallback.
     """
     async with data.session_lock:
         now = datetime.now(timezone.utc)
 
         if token is not None:
             # A token we minted at `initialize`. Its session id is already a
-            # `ses_...` id, so use it verbatim -- do NOT re-hash. The client
-            # name/version/protocol version ride along for pods that never saw
-            # `initialize`; stash them so adapters can fall back to them when the
-            # live `client_params` is absent (the stateless-pod case).
+            # `ses_...` id, so use it verbatim -- do NOT re-hash. (Client
+            # name/version are recovered per request in the adapters, not stored
+            # on the shared `data`, for the same cross-client reason.)
             data.session_id = token.session_id
             data.session_source = "token"
-            data.token_client_name = token.client_name
-            data.token_client_version = token.client_version
-            data.token_protocol_version = token.protocol_version
-            data.last_activity = now
-            return data.session_id
-
-        # A token session, like an MCP-derived one, lives as long as the client
-        # replays it -- keep the id even on a request that arrives without it, so
-        # the session doesn't fragment.
-        if data.session_source == "token":
             data.last_activity = now
             return data.session_id
 
@@ -79,10 +74,13 @@ async def resolve_session_id(
             data.last_activity = now
             return data.session_id
 
-        # Only generated sessions roll over on inactivity -- token/MCP ids live
-        # as long as the client replays them, and regenerating would split them.
+        # Memory fallback (single-owner transports like stdio). A leftover token
+        # session must NOT leak to a credential-less request, so anything that
+        # isn't already a generated session starts fresh; generated sessions
+        # persist and roll over on inactivity.
         timeout_seconds = INACTIVITY_TIMEOUT_IN_MINUTES * 60
-        if (now - data.last_activity).total_seconds() > timeout_seconds:
+        is_stale = (now - data.last_activity).total_seconds() > timeout_seconds
+        if data.session_source != "generated" or is_stale:
             data.session_id = new_session_id()
             data.session_source = "generated"
         data.last_activity = now

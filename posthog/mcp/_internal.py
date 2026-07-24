@@ -62,12 +62,6 @@ class MCPAnalyticsData:
     session_id: str = ""
     session_source: str = "generated"  # "generated" | "mcp" | "token"
     last_mcp_session_id: Optional[str] = None
-    # Client identity recovered from a self-encoded session token (see
-    # session_token.py). On a stateless pod that never processed `initialize`,
-    # the live `client_params` is empty, so these are the only harness source.
-    token_client_name: Optional[str] = None
-    token_client_version: Optional[str] = None
-    token_protocol_version: Optional[str] = None
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
