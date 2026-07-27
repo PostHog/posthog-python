@@ -102,8 +102,17 @@ class PostHogMcpStatelessSessionMiddleware:
             await self.app(scope, receive, send)
             return
 
-        body, receive = await _buffer_body(receive)
-        token = _mint_token_if_initialize(body)
+        # Sniff + mint under one guard so the fail-safe contract holds for *any*
+        # failure -- a raising receive(), or adversarial JSON (e.g. deeply-nested
+        # input making json.loads raise RecursionError, which is not a
+        # ValueError/TypeError). On any error the request passes through untouched.
+        token = None
+        try:
+            body, receive = await _buffer_body(receive)
+            token = _mint_token_if_initialize(body)
+        except Exception as error:  # noqa: BLE001
+            log(f"PostHog MCP session middleware: mint failed - {error}")
+
         if token is None:
             await self.app(scope, receive, send)
             return
@@ -174,8 +183,10 @@ def _mint_token_if_initialize(body: bytes) -> Optional[str]:
     if not body:
         return None
     try:
+        # RecursionError (deeply-nested JSON) is a RuntimeError, not a
+        # ValueError/TypeError -- catch broadly so a hostile body can't escape.
         message = json.loads(body)
-    except (ValueError, TypeError):
+    except Exception:  # noqa: BLE001
         return None
     if not isinstance(message, dict) or message.get("method") != "initialize":
         return None
@@ -232,7 +243,10 @@ def autowire_stateless_mint(server: Any) -> None:
     (which calls those factories internally), so the user adds nothing.
 
     No-op for servers without app factories (stdio / low-level ``Server``), and safe
-    if the middleware is also added manually (it only mints when none is present)."""
+    if the middleware is also added manually (it only mints when none is present).
+    On fastmcp 2.x, ``streamable_http_app`` / ``sse_app`` can be thin wrappers over
+    ``http_app``; wrapping all three could add the middleware twice to one app, so
+    the factory guards against a double-add (see ``_app_already_wrapped``)."""
     for attr in ("streamable_http_app", "sse_app", "http_app"):
         original = getattr(server, attr, None)
         if not callable(original) or getattr(original, _AUTOWIRED, False):
@@ -243,10 +257,23 @@ def autowire_stateless_mint(server: Any) -> None:
             log(f"PostHog MCP: could not auto-wire stateless mint on {attr} - {error}")
 
 
+def _app_already_wrapped(app: Any) -> bool:
+    """True if ``app`` already carries our middleware -- so wrapping a factory that
+    delegates to another wrapped factory (fastmcp 2.x aliases) doesn't add it twice."""
+    if isinstance(app, PostHogMcpStatelessSessionMiddleware):
+        return True
+    for middleware in getattr(app, "user_middleware", None) or []:
+        if getattr(middleware, "cls", None) is PostHogMcpStatelessSessionMiddleware:
+            return True
+    return False
+
+
 def _wrap_app_factory(original: Any) -> Any:
     @functools.wraps(original)
     def factory(*args: Any, **kwargs: Any) -> Any:
         app = original(*args, **kwargs)
+        if _app_already_wrapped(app):
+            return app
         add_middleware = getattr(app, "add_middleware", None)
         if callable(add_middleware):
             add_middleware(PostHogMcpStatelessSessionMiddleware)

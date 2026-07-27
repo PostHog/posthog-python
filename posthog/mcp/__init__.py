@@ -49,7 +49,6 @@ from .session_token import (
     SessionTokenPayload,
     decode_session_id,
     encode_session_id,
-    read_mcp_session_header,
 )
 from .asgi import (
     PostHogMcpStatelessSessionMiddleware,
@@ -85,7 +84,6 @@ __all__ = [
     "get_mcp_session",
     "encode_session_id",
     "decode_session_id",
-    "read_mcp_session_header",
     "SessionTokenPayload",
     "MCP_SESSION_HEADER",
     "set_logger",

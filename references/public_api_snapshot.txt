@@ -344,7 +344,6 @@ alias posthog.mcp.derive_session_id_from_mcp_session -> posthog.mcp.session.deri
 alias posthog.mcp.encode_session_id -> posthog.mcp.session_token.encode_session_id
 alias posthog.mcp.get_mcp_session -> posthog.mcp.asgi.get_mcp_session
 alias posthog.mcp.get_more_tools_result -> posthog.mcp.tools.get_more_tools_result
-alias posthog.mcp.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
 alias posthog.mcp.set_logger -> posthog.mcp.logger.set_logger
 alias posthog.metrics_capture.VERSION -> posthog.version.VERSION
 alias posthog.metrics_capture.remove_trailing_slash -> posthog.utils.remove_trailing_slash

@@ -43,6 +43,35 @@ def test_encode_decode_round_trip():
     assert payload.protocol_version == "2025-06-18"
 
 
+def test_cross_sdk_wire_format_is_frozen():
+    """The token must decode in both this SDK and the TypeScript one (same
+    base64url of compact JSON with keys sid/cn/cv/pv, in that order). This pins
+    the exact wire string for a known payload, so a key rename or encoding change
+    on either side fails CI instead of silently breaking cross-SDK reads.
+
+    The TS SDK produces this same string for the same input (`JSON.stringify` is
+    compact and preserves insertion order, matching Python's compact `json.dumps`).
+    """
+    payload = SessionTokenPayload(
+        session_id="ses_fixture",
+        client_name="Claude Code",
+        client_version="1.2.3",
+        protocol_version="2025-06-18",
+    )
+    frozen = "eyJzaWQiOiJzZXNfZml4dHVyZSIsImNuIjoiQ2xhdWRlIENvZGUiLCJjdiI6IjEuMi4zIiwicHYiOiIyMDI1LTA2LTE4In0"
+
+    # Encode side: our output is byte-identical to the shared wire format.
+    assert encode_session_id(payload) == frozen
+
+    # Decode side: a token minted elsewhere (e.g. the TS SDK) reads back exactly.
+    decoded = decode_session_id(frozen)
+    assert decoded is not None
+    assert decoded.session_id == "ses_fixture"
+    assert decoded.client_name == "Claude Code"
+    assert decoded.client_version == "1.2.3"
+    assert decoded.protocol_version == "2025-06-18"
+
+
 def test_encode_decode_survives_non_ascii_client_name():
     token = encode_session_id(
         SessionTokenPayload(session_id="ses_1", client_name="クロード🤖")
@@ -289,6 +318,45 @@ async def test_middleware_passes_through_non_initialize_post():
     body = json.dumps({"jsonrpc": "2.0", "method": "tools/list", "id": 2}).encode()
     sent = await _run(mw, _scope(), body)
     assert MCP_SESSION_HEADER not in sent["headers"]
+
+
+async def test_middleware_survives_adversarial_nested_json():
+    """A deeply-nested JSON body makes json.loads raise RecursionError (a
+    RuntimeError, not ValueError/TypeError). The fail-safe must swallow it and pass
+    the request through untouched -- never surface a 500 from the analytics layer."""
+    reached = {"app": False}
+
+    async def app(scope, receive, send):
+        reached["app"] = True
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    mw = PostHogMcpStatelessSessionMiddleware(app)
+    body = b"[" * 20000 + b"0" + b"]" * 20000  # ~40KB, well under the sniff cap
+    sent = await _run(mw, _scope(), body)  # must not raise
+    assert reached["app"] is True
+    assert MCP_SESSION_HEADER not in sent["headers"]
+
+
+def test_autowire_does_not_double_add_middleware():
+    """fastmcp 2.x aliases (streamable_http_app -> http_app) could add the
+    middleware twice to one app; the factory guards against that."""
+    from starlette.applications import Starlette
+
+    from posthog.mcp.asgi import _wrap_app_factory
+
+    app = Starlette()
+    # Simulate a factory that already applied the middleware (the aliased case).
+    app.add_middleware(PostHogMcpStatelessSessionMiddleware)
+
+    wrapped = _wrap_app_factory(lambda: app)()
+
+    count = sum(
+        1
+        for m in wrapped.user_middleware
+        if getattr(m, "cls", None) is PostHogMcpStatelessSessionMiddleware
+    )
+    assert count == 1
 
 
 async def test_middleware_replays_body_split_across_chunks_and_over_sniff_cap():
