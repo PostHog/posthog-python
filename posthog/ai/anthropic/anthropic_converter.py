@@ -8,6 +8,7 @@ into standardized formats for PostHog tracking.
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+from posthog.ai.media import to_plain
 from posthog.ai.types import (
     FormattedContentItem,
     FormattedFunctionCall,
@@ -69,6 +70,30 @@ def format_anthropic_response(response: Any) -> List[FormattedMessage]:
                 }
                 content.append(function_call)
 
+            elif getattr(choice, "type", None) == "thinking":
+                content.append(
+                    {
+                        "type": "thinking",
+                        "thinking": getattr(choice, "thinking", None),
+                        "signature": getattr(choice, "signature", None),
+                    }
+                )
+
+            elif getattr(choice, "type", None) == "redacted_thinking":
+                content.append(
+                    {
+                        "type": "redacted_thinking",
+                        "data": getattr(choice, "data", None),
+                    }
+                )
+
+            else:
+                # Catches blocks the branches above skip on falsy values (e.g. TextBlock(text=""))
+                # so empty-but-valid content survives instead of being silently dropped.
+                plain = to_plain(choice)
+                if isinstance(plain, dict) and plain.get("type"):
+                    content.append(plain)
+
     if content:
         message: FormattedMessage = {
             "role": "assistant",
@@ -102,10 +127,15 @@ def format_anthropic_input(
     # Add user messages
     if messages:
         for msg in messages:
-            # Messages are already in the correct format, just ensure type safety
+            raw_content = msg.get("content", "")
+            content: Any = (
+                [to_plain(item) for item in raw_content]
+                if isinstance(raw_content, list)
+                else raw_content
+            )
             formatted_msg: FormattedMessage = {
                 "role": msg.get("role", "user"),
-                "content": msg.get("content", ""),
+                "content": content,
             }
             formatted_messages.append(formatted_msg)
 
@@ -158,6 +188,23 @@ def format_anthropic_streaming_content(
                     "type": "function",
                     "id": block.get("id"),
                     "function": block.get("function") or {},
+                }
+            )
+
+        elif block.get("type") == "thinking":
+            formatted.append(
+                {
+                    "type": "thinking",
+                    "thinking": block.get("thinking") or "",
+                    "signature": block.get("signature"),
+                }
+            )
+
+        elif block.get("type") == "redacted_thinking":
+            formatted.append(
+                {
+                    "type": "redacted_thinking",
+                    "data": block.get("data"),
                 }
             )
 
@@ -325,6 +372,23 @@ def handle_anthropic_content_block_start(
         tool_in_progress: ToolInProgress = {"block": tool_block, "input_string": ""}
         return tool_block, tool_in_progress
 
+    elif block.type == "thinking":
+        thinking_block: StreamingContentBlock = {
+            "type": "thinking",
+            "thinking": getattr(block, "thinking", "") or "",
+        }
+        signature = getattr(block, "signature", None)
+        if signature:
+            thinking_block["signature"] = signature
+        return thinking_block, None
+
+    elif block.type == "redacted_thinking":
+        redacted_block: StreamingContentBlock = {
+            "type": "redacted_thinking",
+            "data": getattr(block, "data", None),
+        }
+        return redacted_block, None
+
     return None, None
 
 
@@ -332,11 +396,15 @@ def handle_anthropic_text_delta(
     event: Any, current_block: Optional[StreamingContentBlock]
 ) -> Optional[str]:
     """
-    Handle text delta event from Anthropic streaming.
+    Handle text, thinking, and signature delta events from Anthropic streaming.
+
+    Thinking and signature deltas are accumulated into current_block in place but,
+    unlike text deltas, are not returned — the caller's accumulated_content is a
+    plain-text fallback and thinking output must not leak into it.
 
     Args:
         event: Delta event
-        current_block: Current text block being accumulated
+        current_block: Current block being accumulated
 
     Returns:
         Text delta if present
@@ -353,6 +421,24 @@ def handle_anthropic_text_delta(
                 current_block["text"] = delta_text
 
         return delta_text
+
+    if hasattr(event, "delta") and hasattr(event.delta, "thinking"):
+        delta_thinking = event.delta.thinking or ""
+
+        if current_block is not None and current_block.get("type") == "thinking":
+            thinking_val = current_block.get("thinking")
+            current_block["thinking"] = (thinking_val or "") + delta_thinking
+
+        return None
+
+    if hasattr(event, "delta") and hasattr(event.delta, "signature"):
+        delta_signature = event.delta.signature or ""
+
+        if current_block is not None and current_block.get("type") == "thinking":
+            signature_val = current_block.get("signature")
+            current_block["signature"] = (signature_val or "") + delta_signature
+
+        return None
 
     return None
 

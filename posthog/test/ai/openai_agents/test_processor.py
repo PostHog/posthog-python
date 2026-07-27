@@ -1,3 +1,4 @@
+import base64
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,7 @@ try:
     )
 
     from posthog.ai.openai_agents import PostHogTracingProcessor, instrument
+    from posthog.ai.openai_agents.processor import _ensure_serializable
 
     OPENAI_AGENTS_AVAILABLE = True
 except ImportError:
@@ -401,6 +403,91 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["properties"]["$ai_input_tokens"] == 10
         assert call_kwargs["properties"]["$ai_output_tokens"] == 20
 
+    def test_generation_span_image_input_is_redacted(
+        self, processor, mock_client, mock_span
+    ):
+        """Test that base64 image data URLs in generation span input are redacted."""
+        png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 400).decode()
+        span_data = GenerationSpanData(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/png;base64,{png_b64}",
+                        }
+                    ],
+                }
+            ],
+            output=[{"role": "assistant", "content": "ok"}],
+            model="gpt-4o",
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        captured_input = call_kwargs["properties"]["$ai_input"]
+        assert captured_input[0]["content"][0]["image_url"] == "[base64 image redacted]"
+
+    def test_generation_span_bytes_input_becomes_base64_in_passthrough_mode(
+        self, processor, mock_client, mock_span
+    ):
+        """Test that raw bytes content becomes a base64 string under multimodal passthrough."""
+        mock_client._enable_multimodal_capture = True
+        raw = b"\x00\x01\x02\x03"
+        span_data = GenerationSpanData(
+            input=[{"role": "user", "content": raw}],
+            output=[],
+            model="gpt-4o",
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client._capture_ai.call_args[1]
+        captured_input = call_kwargs["properties"]["$ai_input"]
+        assert captured_input[0]["content"] == base64.b64encode(raw).decode()
+
+    def test_response_span_image_output_is_redacted(
+        self, processor, mock_client, mock_span
+    ):
+        """Test that base64 image data URLs in response span output are redacted."""
+        png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 400).decode()
+        mock_response = MagicMock()
+        mock_response.id = "resp_123"
+        mock_response.model = "gpt-4o"
+        mock_response.output = [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_image",
+                        "image_url": f"data:image/png;base64,{png_b64}",
+                    }
+                ],
+            }
+        ]
+        mock_response.usage = MagicMock()
+        mock_response.usage.input_tokens = 1
+        mock_response.usage.output_tokens = 1
+        mock_response.usage.cost = None
+
+        span_data = ResponseSpanData(response=mock_response, input="draw a cat")
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        captured_output = call_kwargs["properties"]["$ai_output_choices"]
+        assert (
+            captured_output[0]["content"][0]["image_url"] == "[base64 image redacted]"
+        )
+
     def test_error_handling_in_span(self, processor, mock_client, mock_span):
         """Test that span errors are captured correctly."""
         span_data = GenerationSpanData(model="gpt-4o")
@@ -643,6 +730,46 @@ class TestPostHogTracingProcessor:
             == "This is the transcribed text."
         )
 
+    def test_transcription_span_audio_input_redacted(
+        self, processor, mock_client, mock_span
+    ):
+        """Transcription input is base64 audio, not text — a bare string the
+        structural redactor can't recognize, so it must be redacted here."""
+        b64 = base64.b64encode(b"\x00" * 1000).decode()
+        span_data = TranscriptionSpanData(
+            input=b64,
+            input_format="pcm",
+            output="This is the transcribed text.",
+            model="whisper-1",
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["properties"]["$ai_input"] == "[base64 audio redacted]"
+
+    def test_transcription_span_audio_input_passthrough(
+        self, processor, mock_client, mock_span
+    ):
+        """Under multimodal passthrough the raw audio is kept intact."""
+        mock_client._enable_multimodal_capture = True
+        b64 = base64.b64encode(b"\x00" * 1000).decode()
+        span_data = TranscriptionSpanData(
+            input=b64,
+            input_format="pcm",
+            output="This is the transcribed text.",
+            model="whisper-1",
+        )
+        mock_span.span_data = span_data
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client._capture_ai.call_args[1]
+        assert call_kwargs["properties"]["$ai_input"] == b64
+
     def test_latency_calculation(self, processor, mock_client, mock_span):
         """Test that latency is calculated correctly."""
         span_data = GenerationSpanData(model="gpt-4o")
@@ -795,6 +922,26 @@ class TestPostHogTracingProcessor:
         # Should have evicted half
         assert len(processor._span_start_times) <= 10
         assert len(processor._trace_metadata) <= 10
+
+
+class TestEnsureSerializableCycleGuard:
+    def test_self_referencing_dict_returns_circular_marker(self):
+        node = {"a": 1}
+        node["self"] = node
+
+        result = _ensure_serializable(node)
+
+        assert result["a"] == 1
+        assert result["self"] == "<circular>"
+
+    def test_self_referencing_list_returns_circular_marker(self):
+        node = [1, 2]
+        node.append(node)
+
+        result = _ensure_serializable(node)
+
+        assert result[:2] == [1, 2]
+        assert result[2] == "<circular>"
 
 
 class TestInstrumentHelper:

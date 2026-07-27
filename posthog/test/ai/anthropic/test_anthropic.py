@@ -206,6 +206,77 @@ def mock_anthropic_stream_with_tools():
 
 
 @pytest.fixture
+def mock_anthropic_stream_with_thinking():
+    """Mock stream events for a thinking block followed by a text block."""
+
+    class MockMessage:
+        def __init__(self):
+            self.usage = MockUsage(
+                input_tokens=40,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            )
+
+    def stream_generator():
+        # Message start with usage
+        event = MockStreamEvent("message_start")
+        event.message = MockMessage()
+        yield event
+
+        # Thinking block start
+        event = MockStreamEvent("content_block_start")
+        event.content_block = MockContentBlock("thinking", thinking="", signature="")
+        event.index = 0
+        yield event
+
+        # Thinking delta
+        event = MockStreamEvent("content_block_delta")
+        event.delta = MockDelta(thinking="Let me work through this.")
+        event.index = 0
+        yield event
+
+        # Signature delta
+        event = MockStreamEvent("content_block_delta")
+        event.delta = MockDelta(signature="sig-xyz")
+        event.index = 0
+        yield event
+
+        # Thinking block stop
+        event = MockStreamEvent("content_block_stop")
+        event.index = 0
+        yield event
+
+        # Text block start
+        event = MockStreamEvent("content_block_start")
+        event.content_block = MockContentBlock("text")
+        event.index = 1
+        yield event
+
+        # Text delta
+        event = MockStreamEvent("content_block_delta")
+        event.delta = MockDelta(text="The answer is 4.")
+        event.index = 1
+        yield event
+
+        # Text block stop
+        event = MockStreamEvent("content_block_stop")
+        event.index = 1
+        yield event
+
+        # Message delta with final usage
+        event = MockStreamEvent("message_delta")
+        event.usage = MockUsage(output_tokens=12)
+        event.delta = MockDelta(stop_reason="end_turn")
+        yield event
+
+        # Message stop
+        event = MockStreamEvent("message_stop")
+        yield event
+
+    return stream_generator()
+
+
+@pytest.fixture
 def mock_anthropic_response_with_cached_tokens():
     # Create a mock Usage object with cached_tokens in input_tokens_details
     usage = Usage(
@@ -1077,6 +1148,96 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
         assert props["$ai_output_tokens"] == 25
         assert props["$ai_cache_read_input_tokens"] == 5
         assert props["$ai_cache_creation_input_tokens"] == 0
+
+
+def test_streaming_with_thinking(mock_client, mock_anthropic_stream_with_thinking):
+    """Test that thinking blocks are accumulated and captured alongside text in streaming mode."""
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=mock_anthropic_stream_with_thinking,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "What's 2 + 2?"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        # Consume the stream - this triggers the finally block synchronously
+        list(response)
+
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        output_choices = props["$ai_output_choices"]
+        assert len(output_choices) == 1
+
+        content = output_choices[0]["content"]
+        assert content == [
+            {
+                "type": "thinking",
+                "thinking": "Let me work through this.",
+                "signature": "sig-xyz",
+            },
+            {"type": "text", "text": "The answer is 4."},
+        ]
+
+        assert props["$ai_stop_reason"] == "end_turn"
+
+
+def test_async_streaming_with_thinking(
+    mock_client, mock_anthropic_stream_with_thinking
+):
+    """Test that thinking blocks are accumulated and captured alongside text in async streaming mode."""
+    import asyncio
+
+    async def mock_async_generator():
+        for event in mock_anthropic_stream_with_thinking:
+            yield event
+
+    async def mock_async_create(**kwargs):
+        return mock_async_generator()
+
+    with patch(
+        "anthropic.resources.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+
+        async def run_test():
+            response = await async_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                messages=[{"role": "user", "content": "What's 2 + 2?"}],
+                stream=True,
+                posthog_distinct_id="test-id",
+            )
+
+            [event async for event in response]
+
+        asyncio.run(run_test())
+
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        output_choices = props["$ai_output_choices"]
+        assert len(output_choices) == 1
+
+        content = output_choices[0]["content"]
+        assert content == [
+            {
+                "type": "thinking",
+                "thinking": "Let me work through this.",
+                "signature": "sig-xyz",
+            },
+            {"type": "text", "text": "The answer is 4."},
+        ]
+
+        assert props["$ai_stop_reason"] == "end_turn"
 
 
 def test_web_search_count(mock_client):

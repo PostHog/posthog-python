@@ -27,7 +27,6 @@ try:
         Response,
         ResponseOutputMessage,
         ResponseOutputText,
-        ResponseUsage,
         ResponseFunctionToolCall,
         ParsedResponse,
     )
@@ -39,7 +38,7 @@ try:
     from posthog.ai.openai import OpenAI
     from posthog.ai.openai.openai_async import AsyncOpenAI
     from posthog.ai.openai.wrapper_utils import reset_fallback_warnings
-    from posthog.test.ai.utils import RecordingAsyncStream
+    from posthog.test.ai.utils import RecordingAsyncStream, make_response_usage
 
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -114,12 +113,11 @@ def mock_openai_response_with_responses_api():
         ],
         parallel_tool_calls=True,
         previous_response_id=None,
-        usage=ResponseUsage(
+        usage=make_response_usage(
             input_tokens=10,
             output_tokens=10,
-            input_tokens_details={"prompt_tokens": 10, "cached_tokens": 0},
-            output_tokens_details={"reasoning_tokens": 15},
             total_tokens=20,
+            reasoning_tokens=15,
         ),
         user=None,
         metadata={},
@@ -167,12 +165,11 @@ def mock_parsed_response():
         },
         parallel_tool_calls=True,
         previous_response_id=None,
-        usage=ResponseUsage(
+        usage=make_response_usage(
             input_tokens=15,
             output_tokens=20,
-            input_tokens_details={"prompt_tokens": 15, "cached_tokens": 0},
-            output_tokens_details={"reasoning_tokens": 5},
             total_tokens=35,
+            reasoning_tokens=5,
         ),
         user=None,
         metadata={},
@@ -480,11 +477,9 @@ def mock_responses_api_with_tool_calls():
                 status="completed",
             ),
         ],
-        usage=ResponseUsage(
+        usage=make_response_usage(
             input_tokens=30,
             output_tokens=20,
-            input_tokens_details={"prompt_tokens": 30, "cached_tokens": 0},
-            output_tokens_details={"reasoning_tokens": 0},
             total_tokens=50,
         ),
         previous_response_id=None,
@@ -1240,7 +1235,6 @@ def test_fallback_logs_warning(
 
 def test_responses_api_streaming_with_tokens(mock_client):
     """Test that Responses API streaming properly captures token usage from response.usage."""
-    from openai.types.responses import ResponseUsage
     from unittest.mock import MagicMock
 
     # Create mock response chunks with usage data in the correct location
@@ -1262,12 +1256,10 @@ def test_responses_api_streaming_with_tokens(mock_client):
     chunk3 = MagicMock()
     chunk3.type = "response.completed"
     chunk3.response = MagicMock()
-    chunk3.response.usage = ResponseUsage(
+    chunk3.response.usage = make_response_usage(
         input_tokens=25,
         output_tokens=30,
         total_tokens=55,
-        input_tokens_details={"prompt_tokens": 25, "cached_tokens": 0},
-        output_tokens_details={"reasoning_tokens": 0},
     )
     chunk3.response.output = ["Test response"]
     chunks.append(chunk3)
@@ -1381,7 +1373,6 @@ async def test_async_chat_streaming_with_tool_calls(
 
 @pytest.mark.asyncio
 async def test_async_responses_streaming_with_tokens(mock_client):
-    from openai.types.responses import ResponseUsage
     from unittest.mock import MagicMock
 
     chunks = []
@@ -1399,12 +1390,10 @@ async def test_async_responses_streaming_with_tokens(mock_client):
     chunk3 = MagicMock()
     chunk3.type = "response.completed"
     chunk3.response = MagicMock()
-    chunk3.response.usage = ResponseUsage(
+    chunk3.response.usage = make_response_usage(
         input_tokens=25,
         output_tokens=30,
         total_tokens=55,
-        input_tokens_details={"prompt_tokens": 25, "cached_tokens": 0},
-        output_tokens_details={"reasoning_tokens": 0},
     )
     chunk3.response.output = ["Test response"]
     chunks.append(chunk3)
@@ -1991,7 +1980,6 @@ def test_streaming_chat_prefers_kwargs_model_over_chunk_model(mock_client):
 def test_streaming_responses_api_extracts_model_from_response_object(mock_client):
     """Test that Responses API streaming extracts model from chunk.response.model (stored prompts)."""
     from unittest.mock import MagicMock
-    from openai.types.responses import ResponseUsage
 
     chunks = []
 
@@ -2008,12 +1996,10 @@ def test_streaming_responses_api_extracts_model_from_response_object(mock_client
     chunk2.type = "response.completed"
     chunk2.response = MagicMock()
     chunk2.response.model = "gpt-4o-mini-stored"  # Model from stored prompt
-    chunk2.response.usage = ResponseUsage(
+    chunk2.response.usage = make_response_usage(
         input_tokens=20,
         output_tokens=10,
         total_tokens=30,
-        input_tokens_details={"prompt_tokens": 20, "cached_tokens": 0},
-        output_tokens_details={"reasoning_tokens": 0},
     )
     chunk2.response.output = ["Test response"]
     chunks.append(chunk2)
@@ -2115,11 +2101,9 @@ def test_non_streaming_responses_api_extracts_model_from_response(mock_client):
         ],
         parallel_tool_calls=True,
         previous_response_id=None,
-        usage=ResponseUsage(
+        usage=make_response_usage(
             input_tokens=10,
             output_tokens=10,
-            input_tokens_details={"prompt_tokens": 10, "cached_tokens": 0},
-            output_tokens_details={"reasoning_tokens": 0},
             total_tokens=20,
         ),
         user=None,
@@ -2287,7 +2271,6 @@ async def test_async_streaming_chat_extracts_model_from_chunk(mock_client):
 async def test_async_streaming_responses_extracts_model_from_response(mock_client):
     """Test async Responses API streaming extracts model from chunk.response.model."""
     from unittest.mock import MagicMock
-    from openai.types.responses import ResponseUsage
 
     chunks = []
 
@@ -2301,12 +2284,10 @@ async def test_async_streaming_responses_extracts_model_from_response(mock_clien
     chunk2.type = "response.completed"
     chunk2.response = MagicMock()
     chunk2.response.model = "gpt-4o-mini-async-stored"
-    chunk2.response.usage = ResponseUsage(
+    chunk2.response.usage = make_response_usage(
         input_tokens=20,
         output_tokens=10,
         total_tokens=30,
-        input_tokens_details={"prompt_tokens": 20, "cached_tokens": 0},
-        output_tokens_details={"reasoning_tokens": 0},
     )
     chunk2.response.output = ["Test"]
     chunks.append(chunk2)

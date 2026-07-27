@@ -17,6 +17,7 @@ from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     _capture_ai_event,
     extract_available_tool_calls,
+    finalize_ai_content,
     get_model_params,
     merge_usage_stats,
     with_privacy_mode,
@@ -26,9 +27,9 @@ from posthog.ai.openai.openai_converter import (
     extract_openai_content_from_chunk,
     extract_openai_tool_calls_from_chunk,
     accumulate_openai_tool_calls,
+    format_openai_streaming_input,
     format_openai_streaming_output,
 )
-from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
 from posthog.ai.openai.wrapper_utils import _OpenAIWrapperResource
 
@@ -158,7 +159,7 @@ class WrappedResponses(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
-        final_content = []
+        final_content: List[Any] = []
         model_from_response: Optional[str] = None
         stop_reason: Optional[str] = None
         response = await self._original.create(**kwargs)
@@ -184,11 +185,10 @@ class WrappedResponses(_OpenAIWrapperResource):
                     if chunk_usage:
                         merge_usage_stats(usage_stats, chunk_usage)
 
-                    # Extract content from chunk
                     content = extract_openai_content_from_chunk(chunk, "responses")
 
                     if content is not None:
-                        final_content.append(content)
+                        final_content.extend(content)
 
                     # Capture stop reason from response.completed event
                     if (
@@ -253,12 +253,18 @@ class WrappedResponses(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai_response(kwargs.get("input"), self._client._ph_client),
+                finalize_ai_content(
+                    format_openai_streaming_input(kwargs, "responses"),
+                    self._client._ph_client,
+                ),
             ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                format_openai_streaming_output(output, "responses"),
+                finalize_ai_content(
+                    format_openai_streaming_output(output, "responses"),
+                    self._client._ph_client,
+                ),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -441,7 +447,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
-        accumulated_content = []
+        accumulated_content: List[Any] = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
         model_from_response: Optional[str] = None
         stop_reason: Optional[str] = None
@@ -549,12 +555,18 @@ class WrappedCompletions(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai(kwargs.get("messages"), self._client._ph_client),
+                finalize_ai_content(
+                    format_openai_streaming_input(kwargs, "chat"),
+                    self._client._ph_client,
+                ),
             ),
             "$ai_output_choices": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                format_openai_streaming_output(output, "chat", tool_calls),
+                finalize_ai_content(
+                    format_openai_streaming_output(output, "chat", tool_calls),
+                    self._client._ph_client,
+                ),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),
@@ -650,7 +662,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai_response(kwargs.get("input"), self._client._ph_client),
+                finalize_ai_content(kwargs.get("input"), self._client._ph_client),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("input_tokens", 0),

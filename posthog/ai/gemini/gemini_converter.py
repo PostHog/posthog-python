@@ -5,14 +5,71 @@ This module handles the conversion of Gemini API responses and inputs
 into standardized formats for PostHog tracking.
 """
 
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
 
+from posthog.ai.media import bytes_to_base64, normalize_part_keys, to_plain
 from posthog.ai.types import (
     FormattedContentItem,
     FormattedMessage,
     TokenUsage,
 )
 from posthog.ai.utils import serialize_raw_usage
+
+_MEDIA_KINDS = {"image": "image", "video": "video", "audio": "audio"}
+_BARE_PART_KEYS = {
+    "text",
+    "inline_data",
+    "file_data",
+    "function_call",
+    "function_response",
+}
+
+
+def _kind_from_mime(mime: Optional[str]) -> str:
+    if isinstance(mime, str):
+        prefix = mime.split("/", 1)[0]
+        if prefix in _MEDIA_KINDS:
+            return _MEDIA_KINDS[prefix]
+    return "file"
+
+
+def _format_media_payload(payload: Any) -> Dict[str, Any]:
+    payload = to_plain(payload)
+    if isinstance(payload, dict) and isinstance(payload.get("data"), bytes):
+        payload = {**payload, "data": bytes_to_base64(payload["data"])}
+    return payload
+
+
+def _format_part(part: Any) -> Optional[FormattedContentItem]:
+    if isinstance(part, str):
+        return {"type": "text", "text": part}
+    plain = to_plain(part)
+    if not isinstance(plain, dict):
+        return {"type": "unknown", "part": str(plain)}
+    plain = normalize_part_keys(plain)
+    if "text" in plain:
+        return {"type": "text", "text": plain["text"]}
+    if "inline_data" in plain:
+        media = _format_media_payload(plain["inline_data"])
+        return {"type": _kind_from_mime(media.get("mime_type")), "inline_data": media}
+    if "file_data" in plain:
+        media = _format_media_payload(plain["file_data"])
+        return {"type": _kind_from_mime(media.get("mime_type")), "file_data": media}
+    if "function_call" in plain:
+        return {
+            "type": "function_call",
+            "function_call": to_plain(plain["function_call"]),
+        }
+    if "function_response" in plain:
+        return {
+            "type": "function_response",
+            "function_response": to_plain(plain["function_response"]),
+        }
+    if not plain:
+        return None
+    key = next(iter(plain))
+    fallback: Dict[str, Any] = {"type": key, key: to_plain(plain[key])}
+    return cast(FormattedContentItem, fallback)
 
 
 class GeminiPart(TypedDict, total=False):
@@ -43,63 +100,12 @@ def _format_parts_as_content_blocks(parts: List[Any]) -> List[FormattedContentIt
     Returns:
         List of formatted content blocks
     """
-    content_blocks: List[FormattedContentItem] = []
-
+    blocks: List[FormattedContentItem] = []
     for part in parts:
-        # Handle dict with text field
-        if isinstance(part, dict) and "text" in part:
-            content_blocks.append({"type": "text", "text": part["text"]})
-
-        # Handle string parts
-        elif isinstance(part, str):
-            content_blocks.append({"type": "text", "text": part})
-
-        # Handle dict with inline_data (images, documents, etc.)
-        elif isinstance(part, dict) and "inline_data" in part:
-            inline_data = part["inline_data"]
-            mime_type = inline_data.get("mime_type", "")
-            content_type = "image" if mime_type.startswith("image/") else "document"
-
-            content_blocks.append(
-                {
-                    "type": content_type,
-                    "inline_data": inline_data,
-                }
-            )
-
-        # Handle object with text attribute
-        elif hasattr(part, "text"):
-            text_value = getattr(part, "text", "")
-            if text_value:
-                content_blocks.append({"type": "text", "text": text_value})
-
-        # Handle object with inline_data attribute
-        elif hasattr(part, "inline_data"):
-            inline_data = part.inline_data
-            # Convert to dict if needed
-            if hasattr(inline_data, "mime_type") and hasattr(inline_data, "data"):
-                # Determine type based on mime_type
-                mime_type = inline_data.mime_type
-                content_type = "image" if mime_type.startswith("image/") else "document"
-
-                content_blocks.append(
-                    {
-                        "type": content_type,
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": inline_data.data,
-                        },
-                    }
-                )
-            else:
-                content_blocks.append(
-                    {
-                        "type": "image",
-                        "inline_data": inline_data,
-                    }
-                )
-
-    return content_blocks
+        block = _format_part(part)
+        if block is not None:
+            blocks.append(block)
+    return blocks
 
 
 def _format_dict_message(item: Dict[str, Any]) -> FormattedMessage:
@@ -132,6 +138,13 @@ def _format_dict_message(item: Dict[str, Any]) -> FormattedMessage:
 
         return {"role": item.get("role", "user"), "content": content}
 
+    if "role" not in item:
+        plain = to_plain(item)
+        if isinstance(plain, dict) and _BARE_PART_KEYS.intersection(
+            normalize_part_keys(plain)
+        ):
+            return {"role": "user", "content": _format_parts_as_content_blocks([item])}
+
     # Handle dict with text field
     if "text" in item:
         return {"role": item.get("role", "user"), "content": item["text"]}
@@ -161,6 +174,15 @@ def _format_object_message(item: Any) -> FormattedMessage:
             role = "user"
 
         return {"role": role, "content": content_blocks}
+
+    # Handle a bare typed Part object (no parts/content/role attributes) — must
+    # be caught before the "text" branch below, which would otherwise treat an
+    # unset `.text` as empty content and drop any other part kind it carries
+    plain = to_plain(item)
+    if isinstance(plain, dict) and _BARE_PART_KEYS.intersection(
+        normalize_part_keys(plain)
+    ):
+        return {"role": "user", "content": _format_parts_as_content_blocks([item])}
 
     # Handle object with text attribute
     if hasattr(item, "text"):
@@ -217,15 +239,16 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
 
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
-                        if hasattr(part, "text") and part.text:
-                            content.append(
-                                {
-                                    "type": "text",
-                                    "text": part.text,
-                                }
-                            )
+                        # Checked ahead of _format_part so loosely-specced MagicMock
+                        # fixtures (which report a truthy .text but aren't real Part
+                        # objects) still resolve to a text block — must stay ahead of
+                        # the _format_part delegation below.
+                        text = getattr(part, "text", None)
+                        if isinstance(text, str) and text:
+                            content.append({"type": "text", "text": text})
+                            continue
 
-                        elif hasattr(part, "function_call") and part.function_call:
+                        if hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
                             content.append(
                                 {
@@ -236,29 +259,11 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                                     },
                                 }
                             )
+                            continue
 
-                        elif hasattr(part, "inline_data") and part.inline_data:
-                            # Handle audio/media inline data
-                            import base64
-
-                            inline_data = part.inline_data
-                            mime_type = getattr(inline_data, "mime_type", "audio/pcm")
-                            raw_data = getattr(inline_data, "data", b"")
-
-                            # Encode binary data as base64 string for JSON serialization
-                            if isinstance(raw_data, bytes):
-                                data = base64.b64encode(raw_data).decode("utf-8")
-                            else:
-                                # Already a string (base64)
-                                data = raw_data
-
-                            content.append(
-                                {
-                                    "type": "audio",
-                                    "mime_type": mime_type,
-                                    "data": data,
-                                }
-                            )
+                        block = _format_part(part)
+                        if block is not None:
+                            content.append(block)
 
                 if content:
                     output.append(
@@ -568,42 +573,49 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
     return usage
 
 
-def extract_gemini_content_from_chunk(chunk: Any) -> Optional[Dict[str, Any]]:
+def extract_gemini_content_from_chunk(
+    chunk: Any,
+) -> Optional[List[FormattedContentItem]]:
     """
-    Extract content (text or function call) from a Gemini streaming chunk.
+    Extract all content blocks (text, media, function calls) from a Gemini
+    streaming chunk's parts, in order.
 
     Args:
         chunk: Streaming chunk from Gemini API
 
     Returns:
-        Content block dictionary if present, None otherwise
+        List of content block dictionaries if the chunk yields any blocks,
+        None otherwise
     """
 
-    # Check for text content
-    if hasattr(chunk, "text") and chunk.text:
-        return {"type": "text", "text": chunk.text}
+    blocks: List[FormattedContentItem] = []
 
-    # Check for function calls in candidates
     if hasattr(chunk, "candidates") and chunk.candidates:
         for candidate in chunk.candidates:
             if hasattr(candidate, "content") and candidate.content:
                 if hasattr(candidate.content, "parts") and candidate.content.parts:
                     for part in candidate.content.parts:
-                        # Check for function_call part
                         if hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
-                            return {
-                                "type": "function",
-                                "function": {
-                                    "name": function_call.name,
-                                    "arguments": function_call.args,
-                                },
-                            }
-                        # Also check for text in parts
-                        elif hasattr(part, "text") and part.text:
-                            return {"type": "text", "text": part.text}
+                            blocks.append(
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_call.name,
+                                        "arguments": function_call.args,
+                                    },
+                                }
+                            )
+                            continue
 
-    return None
+                        block = _format_part(part)
+                        if block is not None:
+                            blocks.append(block)
+
+    if not blocks and hasattr(chunk, "text") and chunk.text:
+        blocks.append({"type": "text", "text": chunk.text})
+
+    return blocks or None
 
 
 def format_gemini_streaming_output(
@@ -659,6 +671,17 @@ def format_gemini_streaming_output(
                             "function": item.get("function", {}),
                         }
                     )
+                else:
+                    if text_parts:
+                        content.append(
+                            {
+                                "type": "text",
+                                "text": "".join(text_parts),
+                            }
+                        )
+                        text_parts = []
+
+                    content.append(item)
 
         # Add any remaining text
         if text_parts:

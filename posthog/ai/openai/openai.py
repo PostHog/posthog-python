@@ -15,6 +15,7 @@ from posthog.ai.utils import (
     call_llm_and_track_usage,
     _capture_ai_event,
     extract_available_tool_calls,
+    finalize_ai_content,
     merge_usage_stats,
     with_privacy_mode,
 )
@@ -24,7 +25,6 @@ from posthog.ai.openai.openai_converter import (
     extract_openai_tool_calls_from_chunk,
     accumulate_openai_tool_calls,
 )
-from posthog.ai.sanitization import sanitize_openai, sanitize_openai_response
 from posthog.client import Client as PostHogClient
 from posthog import setup
 from posthog.ai.openai.wrapper_utils import _OpenAIWrapperResource
@@ -155,7 +155,7 @@ class WrappedResponses(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
-        final_content = []
+        final_content: List[Any] = []
         model_from_response: Optional[str] = None
         stop_reason: Optional[str] = None
         response = self._original.create(**kwargs)
@@ -181,11 +181,10 @@ class WrappedResponses(_OpenAIWrapperResource):
                     if chunk_usage:
                         merge_usage_stats(usage_stats, chunk_usage)
 
-                    # Extract content from chunk
                     content = extract_openai_content_from_chunk(chunk, "responses")
 
                     if content is not None:
-                        final_content.append(content)
+                        final_content.extend(content)
 
                     # Capture stop reason from response.completed event
                     if (
@@ -243,11 +242,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         )
         from posthog.ai.utils import capture_streaming_event
 
-        # Prepare standardized event data
         formatted_input = format_openai_streaming_input(kwargs, "responses")
-        sanitized_input = sanitize_openai_response(
-            formatted_input, self._client._ph_client
-        )
 
         # Use model from kwargs, fallback to model from response
         model = kwargs.get("model") or model_from_response or "unknown"
@@ -257,7 +252,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             model=model,
             base_url=str(self._client.base_url),
             kwargs=kwargs,
-            formatted_input=sanitized_input,
+            formatted_input=formatted_input,
             formatted_output=format_openai_streaming_output(output, "responses"),
             usage_stats=usage_stats,
             latency=latency,
@@ -411,7 +406,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
-        accumulated_content = []
+        accumulated_content: List[Any] = []
         accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
         model_from_response: Optional[str] = None
         stop_reason: Optional[str] = None
@@ -514,9 +509,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         )
         from posthog.ai.utils import capture_streaming_event
 
-        # Prepare standardized event data
         formatted_input = format_openai_streaming_input(kwargs, "chat")
-        sanitized_input = sanitize_openai(formatted_input, self._client._ph_client)
 
         # Use model from kwargs, fallback to model from response
         model = kwargs.get("model") or model_from_response or "unknown"
@@ -526,7 +519,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             model=model,
             base_url=str(self._client.base_url),
             kwargs=kwargs,
-            formatted_input=sanitized_input,
+            formatted_input=formatted_input,
             formatted_output=format_openai_streaming_output(output, "chat", tool_calls),
             usage_stats=usage_stats,
             latency=latency,
@@ -593,7 +586,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
             "$ai_input": with_privacy_mode(
                 self._client._ph_client,
                 posthog_privacy_mode,
-                sanitize_openai_response(kwargs.get("input"), self._client._ph_client),
+                finalize_ai_content(kwargs.get("input"), self._client._ph_client),
             ),
             "$ai_http_status": 200,
             "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),

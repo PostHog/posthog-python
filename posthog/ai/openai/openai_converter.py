@@ -6,8 +6,9 @@ into standardized formats for PostHog tracking. It supports both
 Chat Completions API and Responses API formats.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
+from posthog.ai.media import to_plain
 from posthog.ai.types import (
     FormattedContentItem,
     FormattedFunctionCall,
@@ -17,6 +18,101 @@ from posthog.ai.types import (
     TokenUsage,
 )
 from posthog.ai.utils import serialize_raw_usage
+
+
+def _item_attr(item: Any, name: str, default: Any = None) -> Any:
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _format_responses_output_items(items: Any) -> List[FormattedContentItem]:
+    content: List[FormattedContentItem] = []
+
+    for item in items:
+        item_type = _item_attr(item, "type")
+
+        if item_type == "message":
+            message_content = _item_attr(item, "content")
+            if isinstance(message_content, list):
+                for content_item in message_content:
+                    content_item_type = _item_attr(content_item, "type")
+                    content_item_text = _item_attr(content_item, "text")
+                    content_item_refusal = _item_attr(content_item, "refusal")
+
+                    if content_item_type == "output_text" and (
+                        content_item_text is not None
+                    ):
+                        content.append({"type": "text", "text": content_item_text})
+
+                    elif content_item_type == "refusal" and (
+                        content_item_refusal is not None
+                    ):
+                        content.append(
+                            {"type": "refusal", "refusal": content_item_refusal}
+                        )
+
+                    elif content_item_text is not None:
+                        content.append({"type": "text", "text": content_item_text})
+
+                    elif content_item_type == "input_image" and (
+                        _item_attr(content_item, "image_url") is not None
+                    ):
+                        image_content: FormattedImageContent = {
+                            "type": "image",
+                            "image": _item_attr(content_item, "image_url"),
+                        }
+                        content.append(image_content)
+
+            elif message_content is not None:
+                content.append({"type": "text", "text": str(message_content)})
+
+        elif item_type == "function_call":
+            call_id = _item_attr(item, "call_id")
+            if call_id is None:
+                call_id = _item_attr(item, "id", "")
+            content.append(
+                {
+                    "type": "function",
+                    "id": call_id,
+                    "function": {
+                        "name": _item_attr(item, "name"),
+                        "arguments": _item_attr(item, "arguments", {}),
+                    },
+                }
+            )
+
+        elif item_type == "reasoning":
+            content.append(to_plain(item))
+
+        elif item_type == "image_generation_call":
+            content.append(
+                {
+                    "type": "image_generation_call",
+                    "result": _item_attr(item, "result"),
+                    "status": _item_attr(item, "status"),
+                }
+            )
+
+        elif item_type is not None:
+            plain_item = to_plain(item)
+            content.append(
+                plain_item if isinstance(plain_item, dict) else {"type": item_type}
+            )
+
+    return content
+
+
+def _responses_output_role(items: Any) -> str:
+    role = "assistant"
+
+    for item in items:
+        if _item_attr(item, "type") == "message":
+            item_role = _item_attr(item, "role")
+            if item_role is not None:
+                role = item_role
+
+    return role
 
 
 def format_openai_response(response: Any) -> List[FormattedMessage]:
@@ -84,56 +180,8 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
 
     # Handle Responses API format
     if hasattr(response, "output"):
-        content = []
-        role = "assistant"
-
-        for item in response.output:
-            if item.type == "message":
-                role = item.role
-
-                if hasattr(item, "content") and isinstance(item.content, list):
-                    for content_item in item.content:
-                        if (
-                            hasattr(content_item, "type")
-                            and content_item.type == "output_text"
-                            and hasattr(content_item, "text")
-                        ):
-                            content.append(
-                                {
-                                    "type": "text",
-                                    "text": content_item.text,
-                                }
-                            )
-
-                        elif hasattr(content_item, "text"):
-                            content.append({"type": "text", "text": content_item.text})
-
-                        elif (
-                            hasattr(content_item, "type")
-                            and content_item.type == "input_image"
-                            and hasattr(content_item, "image_url")
-                        ):
-                            image_content: FormattedImageContent = {
-                                "type": "image",
-                                "image": content_item.image_url,
-                            }
-                            content.append(image_content)
-
-                elif hasattr(item, "content"):
-                    text_content = {"type": "text", "text": str(item.content)}
-                    content.append(text_content)
-
-            elif hasattr(item, "type") and item.type == "function_call":
-                content.append(
-                    {
-                        "type": "function",
-                        "id": getattr(item, "call_id", getattr(item, "id", "")),
-                        "function": {
-                            "name": item.name,
-                            "arguments": getattr(item, "arguments", {}),
-                        },
-                    }
-                )
+        content = _format_responses_output_items(response.output)
+        role = _responses_output_role(response.output)
 
         if content:
             output.append(
@@ -164,20 +212,41 @@ def format_openai_input(
 
     formatted_messages: List[FormattedMessage] = []
 
-    # Handle Chat Completions API format
     if messages is not None:
         for msg in messages:
-            formatted_messages.append(
-                {
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", ""),
-                }
-            )
+            plain = to_plain(msg)
+            if not isinstance(plain, dict):
+                plain = {"role": "user", "content": str(plain)}
+
+            formatted: Dict[str, Any] = {
+                "role": plain.get("role", "user"),
+                "content": plain.get("content"),
+            }
+
+            for key in ("tool_calls", "tool_call_id", "name", "audio", "refusal"):
+                if plain.get(key) is not None:
+                    formatted[key] = (
+                        to_plain(plain[key]) if key == "audio" else plain[key]
+                    )
+
+            formatted_messages.append(cast(FormattedMessage, formatted))
 
     # Handle Responses API format
     if input_data is not None:
         if isinstance(input_data, list):
             for item in input_data:
+                if not isinstance(item, (dict, str)):
+                    item = to_plain(item)
+
+                if (
+                    isinstance(item, dict)
+                    and "type" in item
+                    and "role" not in item
+                    and "content" not in item
+                ):
+                    formatted_messages.append(cast(FormattedMessage, to_plain(item)))
+                    continue
+
                 role = "user"
                 content = ""
 
@@ -551,7 +620,7 @@ def extract_openai_usage_from_chunk(
 
 def extract_openai_content_from_chunk(
     chunk: Any, provider_type: str = "chat"
-) -> Optional[str]:
+) -> Optional[Any]:
     """
     Extract content from an OpenAI streaming chunk.
 
@@ -562,7 +631,9 @@ def extract_openai_content_from_chunk(
         provider_type: Either "chat" or "responses" to handle different API formats
 
     Returns:
-        Text content if present, None otherwise
+        For "chat": text content (str), or an audio/refusal delta block (dict),
+        if present. For "responses": the full `response.output` list on the
+        `response.completed` event. None otherwise.
     """
 
     if provider_type == "chat":
@@ -572,18 +643,30 @@ def extract_openai_content_from_chunk(
             and chunk.choices
             and len(chunk.choices) > 0
             and chunk.choices[0].delta
-            and chunk.choices[0].delta.content
         ):
-            return chunk.choices[0].delta.content
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                return delta.content
+
+            audio_delta = getattr(delta, "audio", None)
+            if audio_delta is not None:
+                plain_audio = to_plain(audio_delta)
+                if isinstance(plain_audio, dict):
+                    return {"type": "audio", **plain_audio}
+                return {"type": "audio"}
+
+            refusal_delta = getattr(delta, "refusal", None)
+            if refusal_delta:
+                return {"type": "refusal", "refusal": refusal_delta}
 
     elif provider_type == "responses":
         # Responses API format
         if hasattr(chunk, "type") and chunk.type == "response.completed":
             if hasattr(chunk, "response") and chunk.response:
                 res = chunk.response
-                if res.output and len(res.output) > 0:
-                    # Return the full output for responses
-                    return res.output[0]
+                if res.output:
+                    return res.output
 
     return None
 
@@ -708,10 +791,44 @@ def format_openai_streaming_output(
         if isinstance(accumulated_content, str) and accumulated_content:
             content_items.append({"type": "text", "text": accumulated_content})
         elif isinstance(accumulated_content, list):
-            # If it's a list of strings, join them
-            text = "".join(str(item) for item in accumulated_content if item)
-            if text:
-                content_items.append({"type": "text", "text": text})
+            text_parts: List[str] = []
+            audio_id: Optional[str] = None
+            audio_data_parts: List[str] = []
+            audio_transcript_parts: List[str] = []
+            refusal_parts: List[str] = []
+
+            for item in accumulated_content:
+                if isinstance(item, str):
+                    if item:
+                        text_parts.append(item)
+                elif isinstance(item, dict) and item.get("type") == "audio":
+                    if audio_id is None and item.get("id"):
+                        audio_id = item["id"]
+                    if item.get("data"):
+                        audio_data_parts.append(item["data"])
+                    if item.get("transcript"):
+                        audio_transcript_parts.append(item["transcript"])
+                elif isinstance(item, dict) and item.get("type") == "refusal":
+                    if item.get("refusal"):
+                        refusal_parts.append(item["refusal"])
+
+            if text_parts:
+                content_items.append({"type": "text", "text": "".join(text_parts)})
+
+            if audio_data_parts or audio_transcript_parts:
+                audio_block: Dict[str, Any] = {"type": "audio"}
+                if audio_id is not None:
+                    audio_block["id"] = audio_id
+                if audio_data_parts:
+                    audio_block["data"] = "".join(audio_data_parts)
+                if audio_transcript_parts:
+                    audio_block["transcript"] = "".join(audio_transcript_parts)
+                content_items.append(audio_block)
+
+            if refusal_parts:
+                content_items.append(
+                    {"type": "refusal", "refusal": "".join(refusal_parts)}
+                )
 
         # Add tool calls if present
         if tool_calls:
@@ -732,10 +849,22 @@ def format_openai_streaming_output(
             return [{"role": "assistant", "content": []}]
 
     elif provider_type == "responses":
-        # Responses API: accumulated_content is a list of output items
+        if isinstance(accumulated_content, list) and not accumulated_content:
+            return []
         if isinstance(accumulated_content, list) and accumulated_content:
-            # The output is already formatted, just return it
-            return accumulated_content
+            items: List[Any] = []
+            for entry in accumulated_content:
+                if isinstance(entry, list):
+                    items.extend(entry)
+                else:
+                    items.append(entry)
+
+            content_items = _format_responses_output_items(items)
+            role = _responses_output_role(items)
+
+            if content_items:
+                return [{"role": role, "content": content_items}]
+            return []
         elif isinstance(accumulated_content, str):
             return [
                 {

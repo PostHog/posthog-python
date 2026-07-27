@@ -7,6 +7,8 @@ These types are used for formatting messages and responses across different AI p
 
 from typing import Any, Dict, List, Optional, TypedDict, Union
 
+from typing_extensions import NotRequired  # For Python < 3.11 compatibility
+
 
 class FormattedTextContent(TypedDict):
     """Formatted text content item."""
@@ -44,11 +46,18 @@ class FormattedMessage(TypedDict):
     Standardized message format for PostHog tracking.
 
     Used across all providers to ensure consistent message structure
-    when sending events to PostHog.
+    when sending events to PostHog. ``role`` and ``content`` are always
+    present; the remaining keys are provider-specific and only set when
+    the source message carried them (e.g. OpenAI tool-call messages).
     """
 
     role: str
     content: Union[str, List[FormattedContentItem], Any]
+    tool_calls: NotRequired[List[Dict[str, Any]]]
+    tool_call_id: NotRequired[str]
+    name: NotRequired[str]
+    audio: NotRequired[Dict[str, Any]]
+    refusal: NotRequired[str]
 
 
 class TokenUsage(TypedDict, total=False):
@@ -83,13 +92,16 @@ class StreamingContentBlock(TypedDict, total=False):
     """
     Content block used during streaming to accumulate content.
 
-    Used for tracking text and function calls as they stream in.
+    Used for tracking text, function calls, and thinking blocks as they stream in.
     """
 
-    type: str  # "text" or "function"
+    type: str
     text: Optional[str]
     id: Optional[str]
     function: Optional[Dict[str, Any]]
+    thinking: Optional[str]
+    signature: Optional[str]
+    data: Optional[str]
 
 
 class ToolInProgress(TypedDict):
