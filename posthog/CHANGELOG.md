@@ -1,5 +1,11 @@
 # posthog
 
+## 7.30.0 — 2026-07-27
+
+### Minor changes
+
+- [37aafd3](https://github.com/posthog/posthog-python/commit/37aafd3154e94450ffb3afa589f3d96472d3b5bc) feat(mcp): stateless and multi-pod server support — carry `$session_id` and the client identity (harness) across pods via a self-encoded `Mcp-Session-Id` token minted at `initialize` and replayed on every request. Auto-wired on the `instrument()` FastMCP path (`stateless_http=True`); custom `PostHogMCP` dispatchers add `PostHogMcpStatelessSessionMiddleware` and read `get_mcp_session()`. — Thanks @gesh!
+
 ## 7.29.0 — 2026-07-23
 
 ### Minor changes
