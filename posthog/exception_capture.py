@@ -10,7 +10,6 @@ import threading
 from typing import TYPE_CHECKING
 
 from posthog.bucketed_rate_limiter import BucketedRateLimiter
-from posthog.exception_utils import walk_exception_chain
 
 if TYPE_CHECKING:
     from posthog.client import Client
@@ -93,14 +92,11 @@ class ExceptionCapture:
                 getattr(exception, "__traceback__", None),
             )
 
-        # PostHog groups exceptions by the root cause of the chain:
-        # exceptions_from_error_tuple reverses the walked chain, so
-        # $exception_list[0].type is the deepest cause, not the wrapping
-        # exception. Key on that same type so rate-limit buckets line up with
-        # server-side grouping (e.g. `raise RuntimeError from ZeroDivisionError`
-        # is keyed on ZeroDivisionError, not RuntimeError).
+        # Canonical `$exception_list` order puts the caught/outermost
+        # exception first, and server-side issue naming keys on that first
+        # entry. Key rate-limit buckets on the same type so they line up
+        # (e.g. `raise RuntimeError from ZeroDivisionError` is keyed on
+        # RuntimeError, matching the issue it groups into).
         exc_type = exc_info[0]
-        for chained_type, _, _ in walk_exception_chain(exc_info):
-            exc_type = chained_type
 
         return getattr(exc_type, "__name__", None) or "Exception"
