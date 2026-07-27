@@ -46,15 +46,25 @@ class TestModuleLevelSetup(unittest.TestCase):
     def setUp(self):
         self._original_default_client = posthog.default_client
         self._original_api_key = posthog.api_key
+        self._original_project_api_key = posthog.project_api_key
+        self._original_project_root = posthog.project_root
+        self._original_privacy_mode = posthog.privacy_mode
         self._original_disabled = posthog.disabled
         self._original_send = posthog.send
         posthog.default_client = None
+        posthog.api_key = None
+        posthog.project_api_key = None
+        posthog.project_root = None
+        posthog.privacy_mode = False
         posthog.disabled = False
         posthog.send = False
 
     def tearDown(self):
         posthog.default_client = self._original_default_client
         posthog.api_key = self._original_api_key
+        posthog.project_api_key = self._original_project_api_key
+        posthog.project_root = self._original_project_root
+        posthog.privacy_mode = self._original_privacy_mode
         posthog.disabled = self._original_disabled
         posthog.send = self._original_send
 
@@ -76,6 +86,43 @@ class TestModuleLevelSetup(unittest.TestCase):
         self.assertEqual(client.api_key, "")
         self.assertTrue(client.disabled)
         self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
+
+    def test_setup_uses_project_api_key_when_api_key_is_unset(self):
+        posthog.project_api_key = " phc_project_key "
+
+        client = posthog.setup()
+
+        self.assertEqual(client.api_key, "phc_project_key")
+        self.assertFalse(client.disabled)
+
+    def test_setup_prefers_project_api_key_over_api_key(self):
+        posthog.api_key = "phc_api_key"
+        posthog.project_api_key = "phc_project_key"
+
+        client = posthog.setup()
+
+        self.assertEqual(client.api_key, "phc_project_key")
+
+    def test_setup_propagates_project_root(self):
+        posthog.api_key = "phc_test"
+        posthog.project_root = "/path/to/project"
+
+        client = posthog.setup()
+
+        self.assertEqual(client.project_root, "/path/to/project")
+
+    def test_setup_propagates_and_updates_privacy_mode(self):
+        posthog.api_key = "phc_test"
+        posthog.privacy_mode = True
+
+        client = posthog.setup()
+
+        self.assertTrue(client.privacy_mode)
+
+        posthog.privacy_mode = False
+
+        self.assertIs(posthog.setup(), client)
+        self.assertFalse(client.privacy_mode)
 
 
 class TestModuleLevelWrappers(unittest.TestCase):
