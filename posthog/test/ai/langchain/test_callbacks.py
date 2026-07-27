@@ -307,6 +307,51 @@ async def test_async_basic_chat_chain(mock_client, stream):
     assert "$ai_parent_id" not in trace_props
 
 
+def _capture_anthropic_usage(
+    mock_client,
+    input_token_details,
+    *,
+    provider="anthropic",
+    model="claude-sonnet",
+    input_tokens=1000,
+    cache_read_tokens=100,
+):
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": provider, "ls_model_name": model},
+    )
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(content="Response"),
+                    generation_info={
+                        "usage_metadata": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": 50,
+                            "input_token_details": {
+                                **input_token_details,
+                                "cache_read": cache_read_tokens,
+                            },
+                        }
+                    },
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+    return mock_client.capture.call_args.kwargs["properties"]
+
+
 @pytest.mark.parametrize(
     "Model,stream",
     [
@@ -1681,6 +1726,135 @@ def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
     generation_args = mock_client.capture.call_args_list[0][1]
     assert generation_args["properties"]["$ai_input_tokens"] == 200  # 1000 - 800
     assert generation_args["properties"]["$ai_cache_creation_input_tokens"] == 800
+
+
+@pytest.mark.parametrize(
+    "cache_creation_details,provider,model,expected_5m_tokens,expected_1h_tokens",
+    [
+        (
+            {
+                "cache_creation": 0,
+                "ephemeral_5m_input_tokens": 300,
+            },
+            "bedrock_converse",
+            "us.anthropic.claude-sonnet-4-20250514-v1:0",
+            300,
+            0,
+        ),
+        (
+            {
+                "cache_creation": 0,
+                "ephemeral_1h_input_tokens": 500,
+            },
+            "anthropic",
+            "claude-sonnet",
+            0,
+            500,
+        ),
+        (
+            {
+                "cache_creation": 0,
+                "ephemeral_5m_input_tokens": 300,
+                "ephemeral_1h_input_tokens": 500,
+            },
+            "anthropic",
+            "claude-sonnet",
+            300,
+            500,
+        ),
+    ],
+    ids=["5m-only", "1h-only", "mixed"],
+)
+def test_anthropic_cache_creation_ttl_breakdown(
+    mock_client,
+    cache_creation_details,
+    provider,
+    model,
+    expected_5m_tokens,
+    expected_1h_tokens,
+):
+    """TTL counts are emitted separately without double counting cache writes."""
+    cache_read_tokens = 200
+    input_tokens = 2000
+    expected_cache_write_tokens = expected_5m_tokens + expected_1h_tokens
+    generation_props = _capture_anthropic_usage(
+        mock_client,
+        cache_creation_details,
+        provider=provider,
+        model=model,
+        input_tokens=input_tokens,
+        cache_read_tokens=cache_read_tokens,
+    )
+    assert (
+        generation_props["$ai_cache_creation_input_tokens"]
+        == expected_cache_write_tokens
+    )
+    assert generation_props["$ai_cache_creation_5m_input_tokens"] == expected_5m_tokens
+    assert generation_props["$ai_cache_creation_1h_input_tokens"] == expected_1h_tokens
+    assert generation_props["$ai_input_tokens"] == (
+        input_tokens - cache_read_tokens - expected_cache_write_tokens
+    )
+
+
+def test_anthropic_aggregate_cache_creation_remains_supported(mock_client):
+    """Legacy aggregate-only usage keeps its existing capture semantics."""
+    generation_props = _capture_anthropic_usage(
+        mock_client,
+        {"cache_creation": 500},
+    )
+    assert generation_props["$ai_cache_creation_input_tokens"] == 500
+    assert generation_props["$ai_cache_read_input_tokens"] == 100
+    assert generation_props["$ai_input_tokens"] == 400
+    assert "$ai_cache_creation_5m_input_tokens" not in generation_props
+    assert "$ai_cache_creation_1h_input_tokens" not in generation_props
+
+
+@pytest.mark.parametrize(
+    "ttl_details",
+    [
+        {
+            "ephemeral_5m_input_tokens": None,
+            "ephemeral_1h_input_tokens": {"unexpected": 1},
+        },
+        {
+            "ephemeral_5m_input_tokens": True,
+            "ephemeral_1h_input_tokens": 0,
+        },
+        {
+            "ephemeral_5m_input_tokens": -1,
+            "ephemeral_1h_input_tokens": 0,
+        },
+    ],
+    ids=["none-and-malformed", "boolean", "negative"],
+)
+def test_anthropic_malformed_cache_creation_ttl_breakdown_uses_aggregate(
+    mock_client, ttl_details
+):
+    """Unusable TTL details do not replace valid legacy aggregate usage."""
+    generation_props = _capture_anthropic_usage(
+        mock_client,
+        {"cache_creation": 500, **ttl_details},
+    )
+    assert generation_props["$ai_cache_creation_input_tokens"] == 500
+    assert generation_props["$ai_input_tokens"] == 400
+    assert "$ai_cache_creation_5m_input_tokens" not in generation_props
+    assert "$ai_cache_creation_1h_input_tokens" not in generation_props
+
+
+def test_anthropic_zero_cache_creation_ttl_breakdown_uses_aggregate(mock_client):
+    """An empty TTL pair does not replace a usable legacy aggregate count."""
+    generation_props = _capture_anthropic_usage(
+        mock_client,
+        {
+            "cache_creation": 500,
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0,
+        },
+    )
+    assert generation_props["$ai_cache_creation_input_tokens"] == 500
+    assert generation_props["$ai_input_tokens"] == 400
+    assert "$ai_cache_creation_5m_input_tokens" not in generation_props
+    assert "$ai_cache_creation_1h_input_tokens" not in generation_props
 
 
 def test_anthropic_provider_subtracts_both_cache_read_and_write_tokens(mock_client):
