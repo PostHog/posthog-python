@@ -536,7 +536,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.15.3"
+version = "7.30.1"
 source = { directory = "../../" }
 dependencies = [
     { name = "backoff" },
@@ -558,21 +558,24 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'test'" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "distro", specifier = ">=1.5.0" },
-    { name = "django", marker = "extra == 'test'", specifier = ">=5.2.8,<6.0" },
+    { name = "django", marker = "extra == 'test'", specifier = ">=5.2.15,<6.0" },
     { name = "django-stubs", marker = "extra == 'dev'" },
+    { name = "fastmcp", marker = "extra == 'test'", specifier = ">=2.0" },
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
     { name = "google-genai", marker = "extra == 'test'" },
+    { name = "griffe", marker = "extra == 'dev'" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=0.2.0" },
     { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
     { name = "langchain-core", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=1.0" },
     { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
-    { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=3.0.1" },
+    { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=4.1.1" },
     { name = "lxml", marker = "extra == 'dev'" },
+    { name = "mcp", marker = "extra == 'test'", specifier = ">=1.28.1" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
-    { name = "openai", marker = "extra == 'test'", specifier = ">=2.0" },
+    { name = "openai-agents", marker = "extra == 'test'", specifier = ">=0.18" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'test'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
@@ -584,6 +587,7 @@ requires-dist = [
     { name = "pydantic", marker = "extra == 'test'", specifier = ">=2.12.0" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "pytest-bdd", marker = "extra == 'test'", specifier = ">=8.1.0" },
     { name = "pytest-timeout", marker = "extra == 'test'" },
     { name = "python-dateutil", marker = "extra == 'test'", specifier = ">=2.9.0.post0" },
     { name = "requests", specifier = ">=2.7,<3.0" },
@@ -598,8 +602,10 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.2.0" },
     { name = "tzdata", marker = "extra == 'test'" },
     { name = "wheel", marker = "extra == 'dev'" },
+    { name = "zstandard", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "zstandard", marker = "extra == 'zstd'", specifier = ">=0.23.0" },
 ]
-provides-extras = ["langchain", "otel", "dev", "test"]
+provides-extras = ["langchain", "zstd", "otel", "dev", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "claude-agent-sdk", specifier = ">=0.1.50" }]
@@ -811,11 +817,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.6.3"
+version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
 
 [[package]]
