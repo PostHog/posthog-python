@@ -35,7 +35,7 @@ Homepage = "https://github.com/posthog/posthog-python"
 Repository = "https://github.com/posthog/posthog-python"
 
 [project.optional-dependencies]
-langchain = ["langchain>=0.2.0"]
+langchain = ["langchain>=1.3.9"]
 # Opt-in zstd support for capture-v1 request compression. Kept out of the core
 # dependencies so existing installs are unaffected; Python gains stdlib zstd
 # only in 3.14 (compression.zstd), so the third-party package is needed until
