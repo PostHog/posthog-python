@@ -1,5 +1,11 @@
 # posthog
 
+## 7.30.1 — 2026-07-27
+
+### Patch changes
+
+- [4c8a85a](https://github.com/posthog/posthog-python/commit/4c8a85a75e1f5473133dc93a99e0ec6dac80d3f6) AI capture now records multimodal and structured content (thinking blocks, tool calls, media, and Responses API output items) faithfully across all providers and streaming paths, and redacts base64 media structurally without leaking raw bytes or over-redacting legitimate values. — Thanks @carlos-marchal-ph!
+
 ## 7.30.0 — 2026-07-27
 
 ### Minor changes
