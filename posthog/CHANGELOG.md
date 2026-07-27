@@ -1,5 +1,11 @@
 # posthog
 
+## 7.31.0 — 2026-07-27
+
+### Minor changes
+
+- [5535ecd](https://github.com/posthog/posthog-python/commit/5535ecd4fa9cb739347baae869490fc18b6505c4) fix(errors): emit `$exception_list` in canonical order — index `0` is the caught/outermost exception, causes follow in unwrap order, and the root cause is last (previously the list was reversed with the root cause first). This aligns posthog-python with the cross-SDK exception ordering spec. Frame order within each stacktrace is unchanged. — Thanks @cat-ph!
+
 ## 7.30.1 — 2026-07-27
 
 ### Patch changes
