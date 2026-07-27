@@ -102,10 +102,8 @@ class PostHogMcpStatelessSessionMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Sniff + mint under one guard so the fail-safe contract holds for *any*
-        # failure -- a raising receive(), or adversarial JSON (e.g. deeply-nested
-        # input making json.loads raise RecursionError, which is not a
-        # ValueError/TypeError). On any error the request passes through untouched.
+        # Guard the whole sniff+mint path: on any failure (a raising receive() or
+        # adversarial body) the request passes through untouched, per the contract.
         token = None
         try:
             body, receive = await _buffer_body(receive)

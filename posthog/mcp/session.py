@@ -52,10 +52,9 @@ async def resolve_session_id(
         now = datetime.now(timezone.utc)
 
         if token is not None:
-            # A token we minted at `initialize`. Its session id is already a
-            # `ses_...` id, so use it verbatim -- do NOT re-hash. (Client
-            # name/version are recovered per request in the adapters, not stored
-            # on the shared `data`, for the same cross-client reason.)
+            # Its session id is already a `ses_...` id, so use it verbatim -- do
+            # NOT re-hash. (Client name/version are recovered per request in the
+            # adapters, not stored on shared `data`.)
             data.session_id = token.session_id
             data.session_source = "token"
             data.last_activity = now
