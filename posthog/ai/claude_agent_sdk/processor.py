@@ -526,7 +526,7 @@ class PostHogClaudeAgentProcessor:
         if cache_creation:
             properties["$ai_cache_creation_input_tokens"] = cache_creation
         if usage:
-            properties["$ai_usage"] = usage
+            properties["$ai_usage"] = dict(usage)
 
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd

@@ -25,15 +25,15 @@ _TOKEN_PROPERTY_KEYS = frozenset(
 
 
 def _extract_cache_creation_ttl_breakdown(
-    cache_creation: Any,
+    token_details: Any,
 ) -> Optional[Tuple[int, int]]:
-    """Return a complete 5-minute/1-hour cache-write pair when usable."""
-    if not isinstance(cache_creation, dict):
+    """Return a usable cache-write TTL pair from LangChain input token details."""
+    if not isinstance(token_details, dict):
         return None
 
     values = (
-        cache_creation.get("ephemeral_5m_input_tokens"),
-        cache_creation.get("ephemeral_1h_input_tokens"),
+        token_details.get("ephemeral_5m_input_tokens"),
+        token_details.get("ephemeral_1h_input_tokens"),
     )
     if not any(value is not None for value in values) or not all(
         isinstance(value, int) and not isinstance(value, bool) and value >= 0

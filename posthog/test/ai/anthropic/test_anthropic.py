@@ -80,6 +80,8 @@ def create_mock_response(**kwargs):
 
 def assert_cache_creation_ttl_breakdown_preserved(props):
     assert props["$ai_cache_creation_input_tokens"] == 800
+    assert "$ai_cache_creation_5m_input_tokens" not in props
+    assert "$ai_cache_creation_1h_input_tokens" not in props
     assert props["$ai_usage"]["cache_creation"] == {
         "ephemeral_5m_input_tokens": 300,
         "ephemeral_1h_input_tokens": 500,

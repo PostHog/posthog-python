@@ -330,6 +330,34 @@ class TestGenerationEmission:
             "ephemeral_1h_input_tokens": 500,
         }
 
+    @pytest.mark.asyncio
+    async def test_fallback_copies_result_usage_before_capture(
+        self, processor, mock_client
+    ):
+        result = _make_result_message(input_tokens=200)
+        messages = [_make_assistant_message(), result]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
+                pass
+
+        generation_call = next(
+            call
+            for call in mock_client.capture.call_args_list
+            if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
+        )
+        props = generation_call.kwargs.get("properties") or generation_call[1].get(
+            "properties"
+        )
+
+        assert result.usage is not None
+        result.usage["input_tokens"] = 999
+
+        assert props["$ai_usage"]["input_tokens"] == 200
+
 
 class TestToolSpanEmission:
     @pytest.mark.asyncio
