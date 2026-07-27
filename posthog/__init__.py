@@ -303,10 +303,10 @@ For new code, prefer creating an explicit ``Posthog``/``Client`` instance with
 the corresponding constructor arguments.
 
 Attributes:
-    api_key: Project API key/token used by the global client. Missing or blank
-        values create a disabled no-op global client.
-    project_api_key: Preferred project API key setting when both it and
-        ``api_key`` are configured.
+    api_key: Deprecated legacy alias for ``project_api_key``.
+    project_api_key: Preferred project API key setting. It takes precedence when
+        both it and ``api_key`` are configured; missing or blank values create a
+        disabled no-op global client.
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
     on_error: Optional callback invoked by background consumers when event upload
@@ -366,6 +366,7 @@ Attributes:
     exception_autocapture_refill_interval_seconds: Seconds between token refills
         for autocaptured exception rate limiting.
 """
+# Deprecated legacy alias for project_api_key. Kept for backwards compatibility.
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
 on_error = None  # type: Optional[Callable]
@@ -375,6 +376,7 @@ sync_mode = False  # type: bool
 disabled = False  # type: bool
 secret_key = None  # type: Optional[str]
 personal_api_key = None  # type: Optional[str]  # Deprecated: use secret_key
+# Preferred project token setting; takes precedence over the legacy api_key alias.
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
