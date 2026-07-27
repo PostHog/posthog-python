@@ -41,6 +41,7 @@ from ._instrumentation import (
     record_tool_call,
     record_tools_list,
     request_to_dict,
+    resolve_session_and_client,
 )
 from ._internal import MCPAnalyticsData
 from .logger import log
@@ -94,6 +95,9 @@ def _wrap_call_tool(
         arguments = dict(req.params.arguments or {})
         client_name, client_version = _client_info(server)
         mcp_session_id = _mcp_session_id(server)
+        token, client_name, client_version = resolve_session_and_client(
+            mcp_session_id, client_name, client_version
+        )
         request = build_tool_call_request(name, arguments)
         extra = {"session_id": mcp_session_id}
 
@@ -104,6 +108,7 @@ def _wrap_call_tool(
             client_version=client_version,
             request=request,
             extra=extra,
+            token=token,
         )
 
         missing_name = resolve_missing_capability_tool_name(data.options)
@@ -223,6 +228,9 @@ def _wrap_list_tools(
 
         client_name, client_version = _client_info(server)
         mcp_session_id = _mcp_session_id(server)
+        token, client_name, client_version = resolve_session_and_client(
+            mcp_session_id, client_name, client_version
+        )
         request = request_to_dict(req)
         extra = {"session_id": mcp_session_id}
         # Resolve session, emit $mcp_initialize (once per session) and identify here
@@ -234,6 +242,7 @@ def _wrap_list_tools(
             client_version=client_version,
             request=request,
             extra=extra,
+            token=token,
         )
 
         start = time.monotonic()

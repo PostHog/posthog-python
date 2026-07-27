@@ -60,7 +60,7 @@ class MCPAnalyticsData:
     options: MCPAnalyticsOptions
     sink: Optional[McpEventSink] = None
     session_id: str = ""
-    session_source: str = "generated"  # "generated" | "mcp"
+    session_source: str = "generated"  # "generated" | "mcp" | "token"
     last_mcp_session_id: Optional[str] = None
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)

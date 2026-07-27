@@ -23,6 +23,7 @@ from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properti
 from .logger import log
 from ._sanitization import build_captured_mcp_parameters
 from .session import resolve_session_id
+from .session_token import SessionTokenPayload, decode_session_id
 
 # Keep strong refs to in-flight capture tasks/futures so they aren't GC'd mid-flight,
 # and so the asyncio ones can be awaited via drain_pending() before shutdown. Holds
@@ -183,6 +184,24 @@ async def _apply_event_properties(
         event["properties"] = props
 
 
+def resolve_session_and_client(
+    raw_session_id: Optional[str],
+    client_name: Optional[str],
+    client_version: Optional[str],
+) -> tuple[Optional[SessionTokenPayload], Optional[str], Optional[str]]:
+    """Decode a replayed ``Mcp-Session-Id`` value as a self-encoded session token,
+    and backfill the client name/version from it when the live transport supplied
+    none (the stateless-pod case, where ``initialize`` was never seen here).
+
+    Returns ``(token, client_name, client_version)``; ``token`` is ``None`` when the
+    header isn't one of our tokens (a plain transport UUID, JWT, or nothing)."""
+    token = decode_session_id(raw_session_id)
+    if token is not None:
+        client_name = client_name or token.client_name
+        client_version = client_version or token.client_version
+    return token, client_name, client_version
+
+
 async def prepare_request(
     data: MCPAnalyticsData,
     *,
@@ -191,16 +210,21 @@ async def prepare_request(
     client_version: Optional[str],
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]],
+    token: Optional[SessionTokenPayload] = None,
 ) -> str:
     """Resolve the session id, run identify, then lazily emit initialize. Returns
     the session id to stamp on the event for this request.
+
+    ``token`` is the decoded self-encoded session token (see ``session_token.py``);
+    when present it takes precedence over ``mcp_session_id`` and carries the client
+    identity across stateless pods.
 
     Identify runs *before* initialize so the resolved identity is already in the cache
     when ``capture_event`` builds the initialize event — otherwise the first
     ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
     (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
     the Python SDK handles initialize in the session layer, not ``request_handlers``.)"""
-    session_id = await resolve_session_id(data, mcp_session_id)
+    session_id = await resolve_session_id(data, mcp_session_id, token=token)
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event))

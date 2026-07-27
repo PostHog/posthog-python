@@ -4,4 +4,4 @@
 
 # Version of the PostHog MCP analytics SDK surface. Stamped as ``sdk_version``
 # on every captured event. The package itself ships inside posthog.
-__version__ = "0.1.0"
+__version__ = "0.2.0"
