@@ -1,5 +1,11 @@
 # posthog
 
+## 7.31.1 — 2026-07-28
+
+### Patch changes
+
+- [13de879](https://github.com/posthog/posthog-python/commit/13de87992eb5c42b1b400e285e29f9e294349745) Fix module-level settings propagation to the default client — Thanks @marandaneto!
+
 ## 7.31.0 — 2026-07-27
 
 ### Minor changes
