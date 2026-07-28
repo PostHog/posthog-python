@@ -164,6 +164,7 @@ def test_build_tool_call_event_properties():
         "tool_description": "Search events",
         "tool_category": "Logs",
         "duration": 12.5,
+        "protocol_version": "2025-06-18",
         "user_intent": "find churn cohort",
         "user_intent_source": "context_parameter",
         "is_error": False,
@@ -176,11 +177,32 @@ def test_build_tool_call_event_properties():
     assert props[PostHogMCPAnalyticsProperty.SOURCE] == POSTHOG_MCP_ANALYTICS_SOURCE
     assert props[PostHogMCPAnalyticsProperty.TOOL_NAME] == "search_events"
     assert props[PostHogMCPAnalyticsProperty.TOOL_CATEGORY] == "Logs"
+    assert props[PostHogMCPAnalyticsProperty.PROTOCOL_VERSION] == "2025-06-18"
     assert props[PostHogMCPAnalyticsProperty.INTENT] == "find churn cohort"
     assert props[PostHogMCPAnalyticsProperty.INTENT_SOURCE] == "context_parameter"
     assert props[PostHogMCPAnalyticsProperty.SESSION_ID] == "ses_abc"
     # anonymous (no identity) => person processing disabled
     assert props["$process_person_profile"] is False
+
+
+def test_protocol_version_on_primary_and_exception_events():
+    event = {
+        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+        "session_id": "ses_abc",
+        "resource_name": "search_events",
+        "protocol_version": "2025-06-18",
+        "is_error": True,
+        "error": {"$exception_list": [{"type": "ValueError", "value": "boom"}]},
+        "timestamp": datetime.now(timezone.utc),
+    }
+    captures = build_posthog_capture_events(event)
+    # Both the primary $mcp_tool_call and the $exception sibling carry it.
+    assert len(captures) == 2
+    for capture in captures:
+        assert (
+            capture["properties"][PostHogMCPAnalyticsProperty.PROTOCOL_VERSION]
+            == "2025-06-18"
+        )
 
 
 def test_identity_enables_person_processing_and_set():

@@ -49,6 +49,7 @@ def capture_event(
         "server_version": data.server_version,
         "client_name": event_input.get("client_name"),
         "client_version": event_input.get("client_version"),
+        "protocol_version": event_input.get("protocol_version"),
         "identify_actor_given_id": actor.distinct_id if actor else None,
         "identify_actor_data": (actor.properties or {}) if actor else {},
         "groups": actor.groups if actor else None,

@@ -151,6 +151,7 @@ async def _maybe_emit_initialize(
     client_name: Optional[str],
     client_version: Optional[str],
     extra: Optional[Dict[str, Any]],
+    protocol_version: Optional[str] = None,
 ) -> None:
     """Lazily emit ``$mcp_initialize`` once per session. The Python MCP SDK handles
     ``InitializeRequest`` inside the session layer (not ``request_handlers``), so we
@@ -163,6 +164,7 @@ async def _maybe_emit_initialize(
         "session_id": session_id,
         "client_name": client_name,
         "client_version": client_version,
+        "protocol_version": protocol_version,
         "timestamp": datetime.now(timezone.utc),
     }
     await _apply_event_properties(
@@ -188,18 +190,21 @@ def resolve_session_and_client(
     raw_session_id: Optional[str],
     client_name: Optional[str],
     client_version: Optional[str],
-) -> tuple[Optional[SessionTokenPayload], Optional[str], Optional[str]]:
+    protocol_version: Optional[str] = None,
+) -> tuple[Optional[SessionTokenPayload], Optional[str], Optional[str], Optional[str]]:
     """Decode a replayed ``Mcp-Session-Id`` value as a self-encoded session token,
-    and backfill the client name/version from it when the live transport supplied
-    none (the stateless-pod case, where ``initialize`` was never seen here).
+    and backfill the client name/version/protocol version from it when the live
+    transport supplied none (the stateless-pod case, where ``initialize`` was never
+    seen here).
 
-    Returns ``(token, client_name, client_version)``; ``token`` is ``None`` when the
-    header isn't one of our tokens (a plain transport UUID, JWT, or nothing)."""
+    Returns ``(token, client_name, client_version, protocol_version)``; ``token`` is
+    ``None`` when the header isn't one of our tokens (a plain UUID, JWT, or nothing)."""
     token = decode_session_id(raw_session_id)
     if token is not None:
         client_name = client_name or token.client_name
         client_version = client_version or token.client_version
-    return token, client_name, client_version
+        protocol_version = protocol_version or token.protocol_version
+    return token, client_name, client_version, protocol_version
 
 
 async def prepare_request(
@@ -211,6 +216,7 @@ async def prepare_request(
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]],
     token: Optional[SessionTokenPayload] = None,
+    protocol_version: Optional[str] = None,
 ) -> str:
     """Resolve the session id, run identify, then lazily emit initialize. Returns
     the session id to stamp on the event for this request.
@@ -228,7 +234,9 @@ async def prepare_request(
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event))
-    await _maybe_emit_initialize(data, session_id, client_name, client_version, extra)
+    await _maybe_emit_initialize(
+        data, session_id, client_name, client_version, extra, protocol_version
+    )
     return session_id
 
 
@@ -243,6 +251,7 @@ async def record_tool_call(
     duration_ms: Optional[float] = None,
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
+    protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -260,6 +269,7 @@ async def record_tool_call(
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,
+            "protocol_version": protocol_version,
             "conversation_id": conversation_id,
             "is_error": False,
         }
@@ -341,6 +351,7 @@ async def record_missing_capability(
     arguments: Optional[Dict[str, Any]],
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
+    protocol_version: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record a ``get_more_tools`` call as ``$mcp_missing_capability``, with the
@@ -354,6 +365,7 @@ async def record_missing_capability(
             "parameters": build_captured_mcp_parameters(request),
             "client_name": client_name,
             "client_version": client_version,
+            "protocol_version": protocol_version,
         }
         if isinstance(context, str) and context.strip():
             event["user_intent"] = context.strip()
@@ -376,6 +388,7 @@ async def record_tools_list(
     error: Any = None,
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
+    protocol_version: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
@@ -388,6 +401,7 @@ async def record_tools_list(
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,
+            "protocol_version": protocol_version,
             "is_error": is_error,
             "timestamp": datetime.now(timezone.utc),
         }

@@ -91,9 +91,12 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         convert_result: bool = False,
     ) -> Any:
         client_name, client_version = _client_info(context)
+        protocol_version = _protocol_version(context)
         mcp_session_id = _mcp_session_id(context)
-        token, client_name, client_version = resolve_session_and_client(
-            mcp_session_id, client_name, client_version
+        token, client_name, client_version, protocol_version = (
+            resolve_session_and_client(
+                mcp_session_id, client_name, client_version, protocol_version
+            )
         )
         request = build_tool_call_request(name, arguments)
         extra: Dict[str, Any] = {"session_id": mcp_session_id}
@@ -103,6 +106,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             mcp_session_id=mcp_session_id,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             request=request,
             extra=extra,
             token=token,
@@ -118,6 +122,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 arguments=arguments,
                 client_name=client_name,
                 client_version=client_version,
+                protocol_version=protocol_version,
                 extra=extra,
             )
             return [
@@ -162,6 +167,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 duration_ms=(time.monotonic() - start) * 1000,
                 client_name=client_name,
                 client_version=client_version,
+                protocol_version=protocol_version,
                 conversation_id=None if minted else conversation_id,
                 extra=extra,
             )
@@ -187,6 +193,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             duration_ms=(time.monotonic() - start) * 1000,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             conversation_id=delivered_conversation_id,
             extra=extra,
         )
@@ -215,9 +222,12 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             return await original(req)
 
         client_name, client_version = _low_level_client_info(server)
+        protocol_version = _low_level_protocol_version(server)
         mcp_session_id = _low_level_session_id(server)
-        token, client_name, client_version = resolve_session_and_client(
-            mcp_session_id, client_name, client_version
+        token, client_name, client_version, protocol_version = (
+            resolve_session_and_client(
+                mcp_session_id, client_name, client_version, protocol_version
+            )
         )
         request = request_to_dict(req)
         extra: Dict[str, Any] = {"session_id": mcp_session_id}
@@ -228,6 +238,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             mcp_session_id=mcp_session_id,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             request=request,
             extra=extra,
             token=token,
@@ -247,6 +258,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
                 error=error,
                 client_name=client_name,
                 client_version=client_version,
+                protocol_version=protocol_version,
                 extra=extra,
             )
             raise
@@ -299,6 +311,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             error="tools/list returned no tools" if empty else None,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             extra=extra,
         )
 
@@ -389,6 +402,17 @@ def _low_level_session_id(server: Any) -> Optional[str]:
     return None
 
 
+def _low_level_protocol_version(server: Any) -> Optional[str]:
+    ctx = _low_level_request_context(server)
+    try:
+        client_params = ctx.session.client_params
+        if client_params:
+            return client_params.protocolVersion
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
     try:
         client_params = context.request_context.session.client_params
@@ -397,6 +421,16 @@ def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
     except Exception:  # noqa: BLE001
         pass
     return None, None
+
+
+def _protocol_version(context: Any) -> Optional[str]:
+    try:
+        client_params = context.request_context.session.client_params
+        if client_params:
+            return client_params.protocolVersion
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _mcp_session_id(context: Any) -> Optional[str]:

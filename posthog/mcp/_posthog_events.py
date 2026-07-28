@@ -131,6 +131,8 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.CLIENT_NAME] = event["client_name"]
     if event.get("client_version"):
         properties[_P.CLIENT_VERSION] = event["client_version"]
+    if event.get("protocol_version"):
+        properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
     if event.get("user_intent"):
         properties[_P.INTENT] = event["user_intent"]
     if event.get("user_intent_source"):
@@ -183,6 +185,8 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         properties[_P.CLIENT_NAME] = event["client_name"]
     if event.get("client_version"):
         properties[_P.CLIENT_VERSION] = event["client_version"]
+    if event.get("protocol_version"):
+        properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
 
     _add_custom_properties(event, properties)
 
