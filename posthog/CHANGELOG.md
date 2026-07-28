@@ -1,5 +1,11 @@
 # posthog
 
+## 7.32.0 — 2026-07-28
+
+### Minor changes
+
+- [cdc0825](https://github.com/posthog/posthog-python/commit/cdc08251ccf36f7630a91494b16241d0b4803332) Preserve Anthropic cache-write TTL breakdowns across Python SDK AI integrations. — Thanks @gouveags!
+
 ## 7.31.1 — 2026-07-28
 
 ### Patch changes
