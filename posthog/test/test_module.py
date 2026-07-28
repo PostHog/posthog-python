@@ -103,6 +103,15 @@ class TestModuleLevelSetup(unittest.TestCase):
 
         self.assertEqual(client.api_key, "phc_project_key")
 
+    def test_setup_uses_api_key_when_project_api_key_is_blank(self):
+        posthog.api_key = " phc_api_key "
+        posthog.project_api_key = " \n\t "
+
+        client = posthog.setup()
+
+        self.assertEqual(client.api_key, "phc_api_key")
+        self.assertFalse(client.disabled)
+
     def test_setup_propagates_project_root(self):
         posthog.api_key = "phc_test"
         posthog.project_root = "/path/to/project"

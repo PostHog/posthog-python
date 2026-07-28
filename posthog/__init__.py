@@ -1172,7 +1172,7 @@ def setup() -> Client:
     """
     global default_client
     if not default_client:
-        configured_api_key = (project_api_key or api_key or "").strip()
+        configured_api_key = (project_api_key or "").strip() or (api_key or "").strip()
         default_client = Client(
             configured_api_key,
             host=host,
