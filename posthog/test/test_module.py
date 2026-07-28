@@ -41,6 +41,25 @@ class TestModule(unittest.TestCase):
 
         proxy.assert_called_once_with("flush", timeout_seconds=1.5)
 
+    def test_module_get_feature_flag_payload_does_not_send_events_by_default(self):
+        """Payload-only reads must not emit $feature_flag_called.
+
+        The module-level wrapper forwards `send_feature_flag_events` explicitly, so its
+        default has to match `Client.get_feature_flag_payload`, which is `False`.
+        """
+        with mock.patch.object(posthog, "_proxy") as proxy:
+            posthog.get_feature_flag_payload("flag-key", "distinct_id")
+
+        self.assertIs(proxy.call_args.kwargs["send_feature_flag_events"], False)
+
+    def test_module_get_feature_flag_payload_can_opt_into_events(self):
+        with mock.patch.object(posthog, "_proxy") as proxy:
+            posthog.get_feature_flag_payload(
+                "flag-key", "distinct_id", send_feature_flag_events=True
+            )
+
+        self.assertIs(proxy.call_args.kwargs["send_feature_flag_events"], True)
+
 
 class TestModuleLevelSetup(unittest.TestCase):
     def setUp(self):

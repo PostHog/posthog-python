@@ -893,7 +893,7 @@ def get_feature_flag_payload(
     person_properties: Optional[Dict[str, Any]] = None,
     group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
     only_evaluate_locally: bool = False,
-    send_feature_flag_events: bool = True,
+    send_feature_flag_events: bool = False,
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
 ) -> Optional[object]:
@@ -911,7 +911,8 @@ def get_feature_flag_payload(
         person_properties: Person properties to use for evaluation.
         group_properties: Group properties keyed by group type.
         only_evaluate_locally: Whether to evaluate only locally.
-        send_feature_flag_events: Whether to send a $feature_flag_called event.
+        send_feature_flag_events: Deprecated. Payload-only reads do not send a
+            $feature_flag_called event; use get_feature_flag() if you need events.
         disable_geoip: Whether to disable GeoIP lookup.
         device_id: Optional device ID override for experience-continuity flags.
 
