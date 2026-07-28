@@ -303,8 +303,10 @@ For new code, prefer creating an explicit ``Posthog``/``Client`` instance with
 the corresponding constructor arguments.
 
 Attributes:
-    api_key: Project API key/token used by the global client. Missing or blank
-        values create a disabled no-op global client.
+    api_key: Deprecated legacy alias for ``project_api_key``.
+    project_api_key: Preferred project API key setting. It takes precedence when
+        both it and ``api_key`` are configured; missing or blank values create a
+        disabled no-op global client.
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
     on_error: Optional callback invoked by background consumers when event upload
@@ -335,6 +337,8 @@ Attributes:
         call if the metrics API hasn't been used yet.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
+    project_root: Root path used to determine in-app exception stack frames.
+    privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
     before_send: Optional callback that can modify or drop events before upload.
         Return ``None`` to drop an event.
     enable_local_evaluation: Whether to poll feature flag definitions for local
@@ -362,6 +366,7 @@ Attributes:
     exception_autocapture_refill_interval_seconds: Seconds between token refills
         for autocaptured exception rate limiting.
 """
+# Deprecated legacy alias for project_api_key. Kept for backwards compatibility.
 api_key = None  # type: Optional[str]
 host = None  # type: Optional[str]
 on_error = None  # type: Optional[Callable]
@@ -371,6 +376,7 @@ sync_mode = False  # type: bool
 disabled = False  # type: bool
 secret_key = None  # type: Optional[str]
 personal_api_key = None  # type: Optional[str]  # Deprecated: use secret_key
+# Preferred project token setting; takes precedence over the legacy api_key alias.
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
 disable_geoip = True  # type: bool
@@ -1157,15 +1163,16 @@ def setup() -> Client:
     ``setup()`` is called automatically by global APIs such as ``capture()``.
 
     Returns:
-        The global ``Client`` instance. If ``api_key`` is missing or blank,
-        the client is disabled and module-level calls become no-ops.
+        The global ``Client`` instance. If both ``api_key`` and
+        ``project_api_key`` are missing or blank, the client is disabled and
+        module-level calls become no-ops.
 
     Category:
         Initialization
     """
     global default_client
     if not default_client:
-        configured_api_key = api_key.strip() if api_key else ""
+        configured_api_key = (project_api_key or "").strip() or (api_key or "").strip()
         default_client = Client(
             configured_api_key,
             host=host,
@@ -1188,6 +1195,8 @@ def setup() -> Client:
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
             enable_exception_autocapture=enable_exception_autocapture,
             log_captured_exceptions=log_captured_exceptions,
+            project_root=project_root,
+            privacy_mode=privacy_mode,
             before_send=before_send,
             enable_local_evaluation=enable_local_evaluation,
             flag_definition_cache_provider=flag_definition_cache_provider,
@@ -1208,6 +1217,7 @@ def setup() -> Client:
     # for API keys that become empty after trimming.
     default_client.disabled = disabled or not default_client.api_key
     default_client.debug = debug
+    default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)
     default_client._use_ai_lane = bool(_use_ai_lane)
     default_client._enable_multimodal_capture = bool(_enable_multimodal_capture)
