@@ -44,6 +44,18 @@ from posthog.ai.utils import _get_tokens_source
             "passthrough",
         ),
         (
+            "override_cache_creation_5m",
+            {"$ai_input_tokens": 100},
+            {"$ai_cache_creation_5m_input_tokens": 200},
+            "passthrough",
+        ),
+        (
+            "override_cache_creation_1h",
+            {"$ai_input_tokens": 100},
+            {"$ai_cache_creation_1h_input_tokens": 200},
+            "passthrough",
+        ),
+        (
             "override_reasoning_tokens",
             {"$ai_input_tokens": 100},
             {"$ai_reasoning_tokens": 300},

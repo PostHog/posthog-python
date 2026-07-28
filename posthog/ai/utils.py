@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from posthog import get_tags, identify_context, new_context, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
@@ -16,10 +16,34 @@ _TOKEN_PROPERTY_KEYS = frozenset(
         "$ai_output_tokens",
         "$ai_cache_read_input_tokens",
         "$ai_cache_creation_input_tokens",
+        "$ai_cache_creation_5m_input_tokens",
+        "$ai_cache_creation_1h_input_tokens",
         "$ai_total_tokens",
         "$ai_reasoning_tokens",
     }
 )
+
+
+def _extract_cache_creation_ttl_breakdown(
+    token_details: Any,
+) -> Optional[Tuple[int, int]]:
+    """Return a usable cache-write TTL pair from LangChain input token details."""
+    if not isinstance(token_details, dict):
+        return None
+
+    values = (
+        token_details.get("ephemeral_5m_input_tokens"),
+        token_details.get("ephemeral_1h_input_tokens"),
+    )
+    if not any(value is not None for value in values) or not all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in values
+        if value is not None
+    ):
+        return None
+
+    breakdown = (values[0] or 0, values[1] or 0)
+    return breakdown if sum(breakdown) > 0 else None
 
 
 def _get_tokens_source(
