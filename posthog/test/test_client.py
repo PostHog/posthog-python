@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, use_span
 from parameterized import parameterized
+import pytest
 
 from posthog.capture_compression import CaptureCompression
 from posthog.client import Client
@@ -19,6 +20,18 @@ from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, LegacyFlagMetadata
 from posthog.version import VERSION
 from posthog.contexts import tag
+
+
+# Legacy single-flag behavior remains covered here; warning emission itself is
+# asserted in test_evaluate_flags.py.
+pytestmark = [
+    pytest.mark.filterwarnings(
+        r"ignore:`(feature_enabled|get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:`send_feature_flags` is deprecated:DeprecationWarning"
+    ),
+]
 
 
 class TestClient(unittest.TestCase):
@@ -70,12 +83,13 @@ class TestClient(unittest.TestCase):
             mock_error.assert_not_called()
 
     def test_trims_host_and_personal_api_key_whitespace(self):
-        client = Client(
-            FAKE_TEST_API_KEY,
-            host=" \nhttps://eu.posthog.com/\t ",
-            personal_api_key=" \n\t ",
-            send=False,
-        )
+        with self.assertWarnsRegex(DeprecationWarning, "personal_api_key"):
+            client = Client(
+                FAKE_TEST_API_KEY,
+                host=" \nhttps://eu.posthog.com/\t ",
+                personal_api_key=" \n\t ",
+                send=False,
+            )
 
         self.assertEqual(client.raw_host, "https://eu.posthog.com/")
         self.assertEqual(client.host, "https://eu.i.posthog.com")
@@ -201,7 +215,7 @@ class TestClient(unittest.TestCase):
 
     @mock.patch("posthog.client.get")
     def test_disabled_client_does_not_load_feature_flags(self, patch_get):
-        client = Client("", personal_api_key="test", send=False)
+        client = Client("", secret_key="test", send=False)
 
         client.load_feature_flags()
 
@@ -677,7 +691,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             msg_uuid = client.capture(
@@ -800,7 +814,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, basic_flag, false_flag]
@@ -838,7 +852,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = []
@@ -865,7 +879,7 @@ class TestClient(unittest.TestCase):
         }
         patch_get.side_effect = APIError(402, mock_response["detail"])
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         with self.assertLogs("posthog", level="WARNING") as logs:
             client._load_feature_flags()
 
@@ -879,7 +893,7 @@ class TestClient(unittest.TestCase):
     def test_load_feature_flags_unauthorized(self, patch_get):
         patch_get.side_effect = APIError(401, "Unauthorized")
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         with self.assertLogs("posthog", level="ERROR") as logs:
             client._load_feature_flags()
 
@@ -970,7 +984,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, basic_flag]
@@ -1020,7 +1034,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             msg_uuid = client.capture(
@@ -1079,7 +1093,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 feature_flags_request_max_retries=expected_max_retries,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
             )
 
             client.get_all_flags("distinct_id")
@@ -1105,7 +1119,7 @@ class TestClient(unittest.TestCase):
                 FAKE_TEST_API_KEY,
                 host="https://app.posthog.com",
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 disable_geoip=True,
                 feature_flags_request_timeout_seconds=12,
                 sync_mode=True,
@@ -1164,7 +1178,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             msg_uuid = client.capture(
@@ -1242,7 +1256,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, simple_flag]
@@ -1324,7 +1338,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, simple_flag]
@@ -1370,7 +1384,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -1425,7 +1439,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -1471,7 +1485,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -1509,7 +1523,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -2416,7 +2430,7 @@ class TestClient(unittest.TestCase):
             raise Exception("http exception")
 
         patch_get.return_value.raiseError.side_effect = raise_effect
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [{"key": "example"}]
 
         self.assertFalse(client.feature_enabled("example", "distinct_id"))
@@ -2972,7 +2986,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             enable_local_evaluation=False,
         )
 
@@ -3008,7 +3022,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             enable_local_evaluation=True,
         )
 
@@ -3028,7 +3042,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             enable_local_evaluation=False,
         )
 
@@ -3148,7 +3162,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -3185,7 +3199,7 @@ class TestClient(unittest.TestCase):
         """Test that get_feature_flag_result returns a FeatureFlagResult when payload is empty string"""
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test_personal_api_key",
+            secret_key="test_personal_api_key",
             sync_mode=True,
         )
 
@@ -3236,7 +3250,7 @@ class TestClient(unittest.TestCase):
         """Test that get_all_flags_and_payloads includes flags with empty string payloads"""
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test_personal_api_key",
+            secret_key="test_personal_api_key",
             sync_mode=True,
         )
 

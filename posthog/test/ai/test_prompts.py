@@ -50,7 +50,7 @@ class TestPrompts(unittest.TestCase):
 
 
 class TestPromptsGet(TestPrompts):
-    """Tests for the Prompts.get() method."""
+    """Compatibility tests for the deprecated plain-string return value."""
 
     @patch("posthog.ai.prompts._get_session")
     def test_successfully_fetch_a_prompt(self, mock_get_session):
@@ -61,7 +61,7 @@ class TestPromptsGet(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog)
 
-        result = prompts.get("test-prompt")
+        result = prompts.get("test-prompt", with_metadata=False)
 
         self.assertEqual(result, self.mock_prompt_response["prompt"])
         mock_get.assert_called_once()
@@ -89,7 +89,7 @@ class TestPromptsGet(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog)
 
-        result = prompts.get("test-prompt", version=1)
+        result = prompts.get("test-prompt", version=1, with_metadata=False)
 
         self.assertEqual(result, versioned_prompt_response["prompt"])
         mock_get.assert_called_once()
@@ -111,7 +111,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         # First call - fetches from API
-        result1 = prompts.get("test-prompt", cache_ttl_seconds=300)
+        result1 = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=False)
         self.assertEqual(result1, self.mock_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 1)
 
@@ -119,7 +119,7 @@ class TestPromptsGet(TestPrompts):
         mock_time.return_value = 1060.0
 
         # Second call - should use cache
-        result2 = prompts.get("test-prompt", cache_ttl_seconds=300)
+        result2 = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=False)
         self.assertEqual(result2, self.mock_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 1)  # No additional fetch
 
@@ -146,14 +146,20 @@ class TestPromptsGet(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog)
 
-        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
         self.assertEqual(
-            prompts.get("test-prompt", version=1),
+            prompts.get("test-prompt", with_metadata=False),
+            latest_prompt_response["prompt"],
+        )
+        self.assertEqual(
+            prompts.get("test-prompt", version=1, with_metadata=False),
             versioned_prompt_response["prompt"],
         )
-        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
         self.assertEqual(
-            prompts.get("test-prompt", version=1),
+            prompts.get("test-prompt", with_metadata=False),
+            latest_prompt_response["prompt"],
+        )
+        self.assertEqual(
+            prompts.get("test-prompt", version=1, with_metadata=False),
             versioned_prompt_response["prompt"],
         )
         self.assertEqual(mock_get.call_count, 2)
@@ -206,7 +212,9 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(self.create_mock_posthog())
 
         with self.assertRaises(ValueError):
-            prompts.get("test-prompt", version=1, label="production")
+            prompts.get(
+                "test-prompt", version=1, label="production", with_metadata=False
+            )
 
     @patch("posthog.ai.prompts._get_session")
     def test_cache_labeled_and_latest_prompts_separately(self, mock_get_session):
@@ -233,14 +241,20 @@ class TestPromptsGet(TestPrompts):
 
         # A labeled fetch after a latest fetch must not be served from the
         # latest cache entry — that would silently return the wrong version.
-        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
         self.assertEqual(
-            prompts.get("test-prompt", label="production"),
+            prompts.get("test-prompt", with_metadata=False),
+            latest_prompt_response["prompt"],
+        )
+        self.assertEqual(
+            prompts.get("test-prompt", label="production", with_metadata=False),
             labeled_prompt_response["prompt"],
         )
-        self.assertEqual(prompts.get("test-prompt"), latest_prompt_response["prompt"])
         self.assertEqual(
-            prompts.get("test-prompt", label="production"),
+            prompts.get("test-prompt", with_metadata=False),
+            latest_prompt_response["prompt"],
+        )
+        self.assertEqual(
+            prompts.get("test-prompt", label="production", with_metadata=False),
             labeled_prompt_response["prompt"],
         )
         self.assertEqual(mock_get.call_count, 2)
@@ -265,7 +279,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         # First call - fetches from API
-        result1 = prompts.get("test-prompt", cache_ttl_seconds=60)
+        result1 = prompts.get("test-prompt", cache_ttl_seconds=60, with_metadata=False)
         self.assertEqual(result1, self.mock_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 1)
 
@@ -273,7 +287,7 @@ class TestPromptsGet(TestPrompts):
         mock_time.return_value = 1061.0
 
         # Second call - should refetch
-        result2 = prompts.get("test-prompt", cache_ttl_seconds=60)
+        result2 = prompts.get("test-prompt", cache_ttl_seconds=60, with_metadata=False)
         self.assertEqual(result2, updated_prompt_response["prompt"])
         self.assertEqual(mock_get.call_count, 2)
 
@@ -295,14 +309,14 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         # First call - populates cache
-        result1 = prompts.get("test-prompt", cache_ttl_seconds=60)
+        result1 = prompts.get("test-prompt", cache_ttl_seconds=60, with_metadata=False)
         self.assertEqual(result1, self.mock_prompt_response["prompt"])
 
         # Advance time past TTL
         mock_time.return_value = 1061.0
 
         # Second call - should use stale cache
-        result2 = prompts.get("test-prompt", cache_ttl_seconds=60)
+        result2 = prompts.get("test-prompt", cache_ttl_seconds=60, with_metadata=False)
         self.assertEqual(result2, self.mock_prompt_response["prompt"])
 
         # Check warning was logged
@@ -323,7 +337,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         fallback = "Default system prompt."
-        result = prompts.get("test-prompt", fallback=fallback)
+        result = prompts.get("test-prompt", fallback=fallback, with_metadata=False)
 
         self.assertEqual(result, fallback)
 
@@ -342,7 +356,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("test-prompt")
+            prompts.get("test-prompt", with_metadata=False)
 
         self.assertIn("Network error", str(context.exception))
 
@@ -368,7 +382,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("nonexistent-prompt", **get_kwargs)
+            prompts.get("nonexistent-prompt", with_metadata=False, **get_kwargs)
 
         self.assertIn(expected_message, str(context.exception))
 
@@ -382,7 +396,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("restricted-prompt")
+            prompts.get("restricted-prompt", with_metadata=False)
 
         self.assertIn(
             'Access denied for prompt "restricted-prompt"', str(context.exception)
@@ -394,7 +408,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("test-prompt")
+            prompts.get("test-prompt", with_metadata=False)
 
         self.assertIn(
             "personal_api_key is required to fetch prompts", str(context.exception)
@@ -406,7 +420,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("test-prompt")
+            prompts.get("test-prompt", with_metadata=False)
 
         self.assertIn(
             "project_api_key is required to fetch prompts", str(context.exception)
@@ -422,7 +436,7 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         with self.assertRaises(Exception) as context:
-            prompts.get("test-prompt")
+            prompts.get("test-prompt", with_metadata=False)
 
         self.assertIn("Invalid response format", str(context.exception))
 
@@ -435,7 +449,7 @@ class TestPromptsGet(TestPrompts):
         posthog = self.create_mock_posthog(host="https://eu.posthog.com")
         prompts = Prompts(posthog)
 
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
 
         call_args = mock_get.call_args
         self.assertTrue(
@@ -457,21 +471,21 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog)
 
         # First call
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 1)
 
         # Advance time by 4 minutes (within default 5-minute TTL)
         mock_time.return_value = 1000.0 + (4 * 60)
 
         # Second call - should use cache
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 1)
 
         # Advance time past 5-minute TTL
         mock_time.return_value = 1000.0 + (6 * 60)
 
         # Third call - should refetch
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 2)
 
     @patch("posthog.ai.prompts._get_session")
@@ -488,14 +502,14 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(posthog, default_cache_ttl_seconds=60)
 
         # First call
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 1)
 
         # Advance time past custom TTL
         mock_time.return_value = 1061.0
 
         # Second call - should refetch
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 2)
 
     @patch("posthog.ai.prompts._get_session")
@@ -507,7 +521,7 @@ class TestPromptsGet(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog)
 
-        prompts.get("prompt with spaces/and/slashes")
+        prompts.get("prompt with spaces/and/slashes", with_metadata=False)
 
         call_args = mock_get.call_args
         self.assertEqual(
@@ -525,7 +539,7 @@ class TestPromptsGet(TestPrompts):
             personal_api_key="phx_direct_key", project_api_key="phc_direct_key"
         )
 
-        result = prompts.get("test-prompt")
+        result = prompts.get("test-prompt", with_metadata=False)
 
         self.assertEqual(result, self.mock_prompt_response["prompt"])
         call_args = mock_get.call_args
@@ -549,7 +563,7 @@ class TestPromptsGet(TestPrompts):
             host="https://eu.posthog.com",
         )
 
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
 
         call_args = mock_get.call_args
         self.assertEqual(
@@ -574,14 +588,14 @@ class TestPromptsGet(TestPrompts):
         )
 
         # First call
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 1)
 
         # Advance time past custom TTL
         mock_time.return_value = 1061.0
 
         # Second call - should refetch
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 2)
 
 
@@ -949,9 +963,11 @@ class TestPromptsCaptureErrors(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog, capture_errors=True)
 
-        result = prompts.get("test-prompt", fallback="fallback prompt", version=3)
+        result = prompts.get(
+            "test-prompt", fallback="fallback prompt", version=3, with_metadata=True
+        )
 
-        self.assertEqual(result, "fallback prompt")
+        self.assertEqual(result.prompt, "fallback prompt")
         posthog.capture_exception.assert_called_once()
         captured_exc = posthog.capture_exception.call_args[0][0]
         self.assertIn("Network error", str(captured_exc))
@@ -979,14 +995,14 @@ class TestPromptsCaptureErrors(TestPrompts):
         prompts = Prompts(posthog, capture_errors=True)
 
         # First call populates cache
-        prompts.get("test-prompt", cache_ttl_seconds=60)
+        prompts.get("test-prompt", cache_ttl_seconds=60, with_metadata=True)
 
         # Expire cache
         mock_time.return_value = 1061.0
 
         # Second call falls back to stale cache
-        result = prompts.get("test-prompt", cache_ttl_seconds=60)
-        self.assertEqual(result, self.mock_prompt_response["prompt"])
+        result = prompts.get("test-prompt", cache_ttl_seconds=60, with_metadata=True)
+        self.assertEqual(result.prompt, self.mock_prompt_response["prompt"])
         posthog.capture_exception.assert_called_once()
 
     @patch("posthog.ai.prompts._get_session")
@@ -999,7 +1015,7 @@ class TestPromptsCaptureErrors(TestPrompts):
         prompts = Prompts(posthog, capture_errors=True)
 
         with self.assertRaises(Exception):
-            prompts.get("test-prompt")
+            prompts.get("test-prompt", with_metadata=True)
 
         posthog.capture_exception.assert_called_once()
 
@@ -1012,7 +1028,7 @@ class TestPromptsCaptureErrors(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog)
 
-        prompts.get("test-prompt", fallback="fallback prompt")
+        prompts.get("test-prompt", fallback="fallback prompt", with_metadata=True)
 
         posthog.capture_exception.assert_not_called()
 
@@ -1028,9 +1044,11 @@ class TestPromptsCaptureErrors(TestPrompts):
             capture_errors=True,
         )
 
-        result = prompts.get("test-prompt", fallback="fallback prompt")
+        result = prompts.get(
+            "test-prompt", fallback="fallback prompt", with_metadata=True
+        )
 
-        self.assertEqual(result, "fallback prompt")
+        self.assertEqual(result.prompt, "fallback prompt")
 
     @patch("posthog.ai.prompts._get_session")
     def test_no_capture_exception_on_successful_fetch(self, mock_get_session):
@@ -1041,7 +1059,7 @@ class TestPromptsCaptureErrors(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog, capture_errors=True)
 
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=True)
 
         posthog.capture_exception.assert_not_called()
 
@@ -1055,9 +1073,11 @@ class TestPromptsCaptureErrors(TestPrompts):
         posthog.capture_exception.side_effect = Exception("capture failed")
         prompts = Prompts(posthog, capture_errors=True)
 
-        result = prompts.get("test-prompt", fallback="fallback prompt")
+        result = prompts.get(
+            "test-prompt", fallback="fallback prompt", with_metadata=True
+        )
 
-        self.assertEqual(result, "fallback prompt")
+        self.assertEqual(result.prompt, "fallback prompt")
 
 
 class TestPromptsClearCache(TestPrompts):
@@ -1080,8 +1100,8 @@ class TestPromptsClearCache(TestPrompts):
             MockResponse(json_data=versioned_prompt_response),
         ]
 
-        prompts.get("test-prompt")
-        prompts.get("test-prompt", version=1)
+        prompts.get("test-prompt", with_metadata=True)
+        prompts.get("test-prompt", version=1, with_metadata=True)
 
         return latest_prompt_response, versioned_prompt_response
 
@@ -1111,19 +1131,19 @@ class TestPromptsClearCache(TestPrompts):
         prompts = Prompts(posthog)
 
         # Populate cache with two prompts
-        prompts.get("test-prompt")
-        prompts.get("other-prompt")
+        prompts.get("test-prompt", with_metadata=True)
+        prompts.get("other-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 2)
 
         # Clear only test-prompt
         prompts.clear_cache("test-prompt")
 
         # test-prompt should be refetched
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 3)
 
         # other-prompt should still be cached
-        prompts.get("other-prompt")
+        prompts.get("other-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 3)
 
     @patch("posthog.ai.prompts._get_session")
@@ -1140,10 +1160,10 @@ class TestPromptsClearCache(TestPrompts):
         mock_get.side_effect = [MockResponse(json_data=versioned_prompt_response)]
         prompts.clear_cache("test-prompt", version=1)
 
-        prompts.get("test-prompt")
+        prompts.get("test-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 2)
 
-        prompts.get("test-prompt", version=1)
+        prompts.get("test-prompt", version=1, with_metadata=True)
         self.assertEqual(mock_get.call_count, 3)
 
     @patch("posthog.ai.prompts._get_session")
@@ -1165,8 +1185,8 @@ class TestPromptsClearCache(TestPrompts):
         ]
         prompts.clear_cache("test-prompt")
 
-        prompts.get("test-prompt")
-        prompts.get("test-prompt", version=1)
+        prompts.get("test-prompt", with_metadata=True)
+        prompts.get("test-prompt", version=1, with_metadata=True)
         self.assertEqual(mock_get.call_count, 4)
 
     @patch("posthog.ai.prompts._get_session")
@@ -1186,16 +1206,16 @@ class TestPromptsClearCache(TestPrompts):
         prompts = Prompts(posthog)
 
         # Populate cache with two prompts
-        prompts.get("test-prompt")
-        prompts.get("other-prompt")
+        prompts.get("test-prompt", with_metadata=True)
+        prompts.get("other-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 2)
 
         # Clear all cache
         prompts.clear_cache()
 
         # Both prompts should be refetched
-        prompts.get("test-prompt")
-        prompts.get("other-prompt")
+        prompts.get("test-prompt", with_metadata=True)
+        prompts.get("other-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 4)
 
 

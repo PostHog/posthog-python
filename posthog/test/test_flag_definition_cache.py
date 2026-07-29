@@ -123,7 +123,7 @@ class TestFlagDefinitionCacheProvider(unittest.TestCase):
         """Create a client with the mock cache provider."""
         return Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             flag_definition_cache_provider=self.cache_provider,
             sync_mode=True,
             enable_local_evaluation=False,  # Disable poller for tests
@@ -636,7 +636,7 @@ class TestBackwardCompatibility(TestFlagDefinitionCacheProvider):
         # Create client without cache provider
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             sync_mode=True,
             enable_local_evaluation=False,
         )

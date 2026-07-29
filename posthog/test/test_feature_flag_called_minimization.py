@@ -281,7 +281,7 @@ class TestMinimizationViaLocalEvaluationPayload(
     def test_gated_non_experiment_flag_sends_exactly_the_allowlist(
         self, patch_get, _patch_poller
     ):
-        client, captured = self._make_client(personal_api_key="personal-key")
+        client, captured = self._make_client(secret_key="personal-key")
         self._load_definitions(
             client,
             patch_get,
@@ -313,7 +313,7 @@ class TestMinimizationViaLocalEvaluationPayload(
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_gated_experiment_flag_sends_full_event(self, patch_get, _patch_poller):
-        client, captured = self._make_client(personal_api_key="personal-key")
+        client, captured = self._make_client(secret_key="personal-key")
         self._load_definitions(
             client,
             patch_get,
@@ -331,7 +331,7 @@ class TestMinimizationViaLocalEvaluationPayload(
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_gate_absent_from_payload_sends_full_event(self, patch_get, _patch_poller):
-        client, captured = self._make_client(personal_api_key="personal-key")
+        client, captured = self._make_client(secret_key="personal-key")
         self._load_definitions(
             client,
             patch_get,
@@ -348,7 +348,7 @@ class TestMinimizationViaLocalEvaluationPayload(
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_gate_survives_not_modified_polls(self, patch_get, _patch_poller):
-        client, captured = self._make_client(personal_api_key="personal-key")
+        client, captured = self._make_client(secret_key="personal-key")
         self._load_definitions(
             client,
             patch_get,
