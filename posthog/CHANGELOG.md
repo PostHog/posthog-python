@@ -1,5 +1,11 @@
 # posthog
 
+## 7.33.0 — 2026-07-29
+
+### Minor changes
+
+- [170f4e2](https://github.com/posthog/posthog-python/commit/170f4e276fbfc71468cbc2ffcea45eb63637ca8b) feat(mcp): emit `$mcp_protocol_version` on MCP analytics events — the MCP spec version, recovered from the session token across stateless pods (parity with the TypeScript SDK). `PostHogMCP` capture methods gain a `protocol_version` argument. — Thanks @gesh for your first contribution 🎉!
+
 ## 7.32.0 — 2026-07-28
 
 ### Minor changes
