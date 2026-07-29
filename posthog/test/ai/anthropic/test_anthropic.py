@@ -917,9 +917,14 @@ def test_tool_calls_in_output_choices(
         )
 
         assert response == mock_anthropic_response_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        # $ai_generation plus one $ai_span for the tool call the model requested
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = next(
+            c[1]
+            for c in mock_client.capture.call_args_list
+            if c[1]["event"] == "$ai_generation"
+        )
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -980,9 +985,14 @@ def test_tool_calls_only_no_content(
         )
 
         assert response == mock_anthropic_response_tool_calls_only
-        assert mock_client.capture.call_count == 1
+        # $ai_generation plus one $ai_span for the requested tool call
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = next(
+            c[1]
+            for c in mock_client.capture.call_args_list
+            if c[1]["event"] == "$ai_generation"
+        )
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1049,9 +1059,14 @@ def test_async_tool_calls_in_output_choices(
         response = asyncio.run(run_test())
 
         assert response == mock_anthropic_response_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        # $ai_generation plus one $ai_span for the requested tool call
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = next(
+            c[1]
+            for c in mock_client.capture.call_args_list
+            if c[1]["event"] == "$ai_generation"
+        )
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1117,9 +1132,14 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         list(response)
 
         # Capture happens synchronously when generator is exhausted
-        assert mock_client.capture.call_count == 1
+        # ($ai_generation plus one $ai_span for the streamed tool call)
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = next(
+            c[1]
+            for c in mock_client.capture.call_args_list
+            if c[1]["event"] == "$ai_generation"
+        )
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1244,9 +1264,14 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
         asyncio.run(run_test())
 
         # Capture completes before asyncio.run() returns
-        assert mock_client.capture.call_count == 1
+        # ($ai_generation plus one $ai_span for the streamed tool call)
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = next(
+            c[1]
+            for c in mock_client.capture.call_args_list
+            if c[1]["event"] == "$ai_generation"
+        )
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"

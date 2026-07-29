@@ -718,9 +718,14 @@ def test_function_calls_in_output_choices(
     )
 
     assert response == mock_gemini_response_with_function_calls
-    assert mock_client.capture.call_count == 1
+    # $ai_generation plus one $ai_span for the function call the model requested
+    assert mock_client.capture.call_count == 2
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = next(
+        c[1]
+        for c in mock_client.capture.call_args_list
+        if c[1]["event"] == "$ai_generation"
+    )
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -767,9 +772,14 @@ def test_function_calls_only_no_content(
     )
 
     assert response == mock_gemini_response_function_calls_only
-    assert mock_client.capture.call_count == 1
+    # $ai_generation plus one $ai_span for the requested function call
+    assert mock_client.capture.call_count == 2
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = next(
+        c[1]
+        for c in mock_client.capture.call_args_list
+        if c[1]["event"] == "$ai_generation"
+    )
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -1553,8 +1563,13 @@ def test_stop_reason_streaming(mock_client, mock_google_genai_client):
 
     list(response)
 
-    assert mock_client.capture.call_count == 1
-    props = mock_client.capture.call_args[1]["properties"]
+    # $ai_generation plus one $ai_span for the streamed function call
+    assert mock_client.capture.call_count == 2
+    props = next(
+        c[1]
+        for c in mock_client.capture.call_args_list
+        if c[1]["event"] == "$ai_generation"
+    )["properties"]
     assert props["$ai_stop_reason"] == "STOP"
 
 

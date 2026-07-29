@@ -379,6 +379,88 @@ def merge_system_prompt(
     return []
 
 
+def _extract_response_tool_calls(formatted_output: Any) -> List[Dict[str, Any]]:
+    """Pull the tool calls the model requested out of an already-formatted response.
+
+    Every provider converter normalizes a tool call into a content item shaped
+    like ``{"type": "function", "id": ..., "function": {"name": ...,
+    "arguments": ...}}`` (see the ``format_*_output`` helpers in each
+    converter), so reading that shape keeps this provider agnostic.
+    """
+    tool_calls: List[Dict[str, Any]] = []
+    if not isinstance(formatted_output, list):
+        return tool_calls
+    for message in formatted_output:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "function":
+                fn = item.get("function") or {}
+                tool_calls.append(
+                    {
+                        "id": item.get("id"),
+                        "name": fn.get("name"),
+                        "arguments": fn.get("arguments"),
+                    }
+                )
+    return tool_calls
+
+
+def _capture_tool_call_spans(
+    ph_client: PostHogClient,
+    *,
+    formatted_output: Any,
+    trace_id: str,
+    parent_id: str,
+    distinct_id: Optional[str],
+    groups: Optional[Dict[str, Any]],
+    privacy_mode: bool,
+    include_person_profile: bool,
+) -> None:
+    """Emit one ``$ai_span`` per tool call the LLM requested in its response.
+
+    Each span records *which* tool the model chose (name + arguments), nested
+    under the generation via ``$ai_parent_id`` so it shows up in the trace tree.
+    The wrapper never runs the tool, so these spans carry no duration or result
+    — instrument the tool execution itself if you need that. Best-effort: a
+    failure here must never break the underlying LLM call.
+    """
+    try:
+        tool_calls = _extract_response_tool_calls(formatted_output)
+        if not tool_calls:
+            return
+        for tool_call in tool_calls:
+            properties: Dict[str, Any] = {
+                "$ai_trace_id": trace_id,
+                "$ai_span_id": str(uuid.uuid4()),
+                "$ai_parent_id": parent_id,
+                "$ai_span_name": tool_call.get("name") or "tool_call",
+                "$ai_span_type": "tool",
+                "$ai_input_state": with_privacy_mode(
+                    ph_client, privacy_mode, tool_call.get("arguments")
+                ),
+                "$ai_latency": 0,
+            }
+            tool_call_id = tool_call.get("id")
+            if tool_call_id is not None:
+                properties["$ai_tool_call_id"] = tool_call_id
+            if not include_person_profile:
+                properties["$process_person_profile"] = False
+            _capture_ai_event(
+                ph_client,
+                "$ai_span",
+                distinct_id=distinct_id,
+                properties=properties,
+                groups=groups,
+            )
+    except Exception:
+        # Span capture is best-effort telemetry; never surface to the caller.
+        pass
+
+
 def call_llm_and_track_usage(
     posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
@@ -453,19 +535,20 @@ def call_llm_and_track_usage(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
             )
+            formatted_output = finalize_ai_content(
+                format_response(response, provider), ph_client
+            )
             tag(
                 "$ai_output_choices",
-                with_privacy_mode(
-                    ph_client,
-                    posthog_privacy_mode,
-                    finalize_ai_content(format_response(response, provider), ph_client),
-                ),
+                with_privacy_mode(ph_client, posthog_privacy_mode, formatted_output),
             )
             tag("$ai_http_status", http_status)
             tag("$ai_input_tokens", usage.get("input_tokens", 0))
             tag("$ai_output_tokens", usage.get("output_tokens", 0))
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
+            generation_span_id = str(uuid.uuid4())
+            tag("$ai_span_id", generation_span_id)
             tag("$ai_base_url", str(base_url))
             warn_if_posthog_ai_gateway(base_url)
 
@@ -528,6 +611,16 @@ def call_llm_and_track_usage(
                     distinct_id=contexts.get_context_distinct_id(),
                     properties=merged_properties,
                     groups=posthog_groups,
+                )
+                _capture_tool_call_spans(
+                    ph_client,
+                    formatted_output=formatted_output,
+                    trace_id=posthog_trace_id,
+                    parent_id=generation_span_id,
+                    distinct_id=contexts.get_context_distinct_id(),
+                    groups=posthog_groups,
+                    privacy_mode=posthog_privacy_mode,
+                    include_person_profile=has_person_distinct_id,
                 )
 
         if error:
@@ -606,19 +699,20 @@ async def call_llm_and_track_usage_async(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
             )
+            formatted_output = finalize_ai_content(
+                format_response(response, provider), ph_client
+            )
             tag(
                 "$ai_output_choices",
-                with_privacy_mode(
-                    ph_client,
-                    posthog_privacy_mode,
-                    finalize_ai_content(format_response(response, provider), ph_client),
-                ),
+                with_privacy_mode(ph_client, posthog_privacy_mode, formatted_output),
             )
             tag("$ai_http_status", http_status)
             tag("$ai_input_tokens", usage.get("input_tokens", 0))
             tag("$ai_output_tokens", usage.get("output_tokens", 0))
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
+            generation_span_id = str(uuid.uuid4())
+            tag("$ai_span_id", generation_span_id)
             tag("$ai_base_url", str(base_url))
             warn_if_posthog_ai_gateway(base_url)
 
@@ -682,6 +776,16 @@ async def call_llm_and_track_usage_async(
                     properties=merged_properties,
                     groups=posthog_groups,
                 )
+                _capture_tool_call_spans(
+                    ph_client,
+                    formatted_output=formatted_output,
+                    trace_id=posthog_trace_id,
+                    parent_id=generation_span_id,
+                    distinct_id=contexts.get_context_distinct_id(),
+                    groups=posthog_groups,
+                    privacy_mode=posthog_privacy_mode,
+                    include_person_profile=has_person_distinct_id,
+                )
 
         if error:
             raise error
@@ -728,6 +832,7 @@ def capture_streaming_event(
         event_data: Standardized streaming event data containing all necessary information
     """
     trace_id = event_data.get("trace_id") or str(uuid.uuid4())
+    generation_span_id = str(uuid.uuid4())
 
     # Build base event properties
     event_properties = {
@@ -749,6 +854,7 @@ def capture_streaming_event(
         "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
         "$ai_latency": event_data["latency"],
         "$ai_trace_id": trace_id,
+        "$ai_span_id": generation_span_id,
         "$ai_base_url": str(event_data["base_url"]),
         **(event_data.get("properties") or {}),
     }
@@ -836,4 +942,14 @@ def capture_streaming_event(
             distinct_id=event_data.get("distinct_id") or trace_id,
             properties=event_properties,
             groups=event_data.get("groups"),
+        )
+        _capture_tool_call_spans(
+            ph_client,
+            formatted_output=event_data["formatted_output"],
+            trace_id=trace_id,
+            parent_id=generation_span_id,
+            distinct_id=event_data.get("distinct_id") or trace_id,
+            groups=event_data.get("groups"),
+            privacy_mode=event_data["privacy_mode"],
+            include_person_profile=event_data.get("distinct_id") is not None,
         )

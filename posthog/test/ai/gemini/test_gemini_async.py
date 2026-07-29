@@ -586,9 +586,14 @@ async def test_async_function_calls_in_output_choices(
     )
 
     assert response == mock_gemini_response_with_function_calls
-    assert mock_client.capture.call_count == 1
+    # $ai_generation plus one $ai_span for the function call the model requested
+    assert mock_client.capture.call_count == 2
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = next(
+        c[1]
+        for c in mock_client.capture.call_args_list
+        if c[1]["event"] == "$ai_generation"
+    )
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"

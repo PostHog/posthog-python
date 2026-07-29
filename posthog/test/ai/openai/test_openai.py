@@ -739,9 +739,13 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         )
 
         assert response == mock_openai_response_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        # One $ai_generation plus one $ai_span for the tool call the model requested
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        calls = mock_client.capture.call_args_list
+        generation_call = next(c[1] for c in calls if c[1]["event"] == "$ai_generation")
+        span_call = next(c[1] for c in calls if c[1]["event"] == "$ai_span")
+        call_args = generation_call
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -786,6 +790,20 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         assert props["$ai_output_tokens"] == 15
         assert props["$ai_http_status"] == 200
 
+        # The tool call the model requested is emitted as a child $ai_span,
+        # nested under the generation.
+        span_props = span_call["properties"]
+        assert span_call["distinct_id"] == "test-id"
+        assert span_props["$ai_span_type"] == "tool"
+        assert span_props["$ai_span_name"] == "get_weather"
+        assert span_props["$ai_tool_call_id"] == "call_abc123"
+        assert (
+            span_props["$ai_input_state"]
+            == '{"location": "San Francisco", "unit": "celsius"}'
+        )
+        assert span_props["$ai_trace_id"] == props["$ai_trace_id"]
+        assert span_props["$ai_parent_id"] == props["$ai_span_id"]
+
 
 def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls_only):
     with patch(
@@ -810,9 +828,13 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         )
 
         assert response == mock_openai_response_tool_calls_only
-        assert mock_client.capture.call_count == 1
+        # One $ai_generation plus one $ai_span for the requested tool call
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        calls = mock_client.capture.call_args_list
+        generation_call = next(c[1] for c in calls if c[1]["event"] == "$ai_generation")
+        span_call = next(c[1] for c in calls if c[1]["event"] == "$ai_span")
+        call_args = generation_call
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -840,6 +862,14 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
 
+        # Tool call emitted as a child $ai_span nested under the generation
+        span_props = span_call["properties"]
+        assert span_props["$ai_span_type"] == "tool"
+        assert span_props["$ai_span_name"] == "get_weather"
+        assert span_props["$ai_tool_call_id"] == "call_def456"
+        assert span_props["$ai_input_state"] == '{"location": "New York"}'
+        assert span_props["$ai_parent_id"] == props["$ai_span_id"]
+
 
 def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_calls):
     with patch(
@@ -865,9 +895,13 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         )
 
         assert response == mock_responses_api_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        # One $ai_generation plus one $ai_span for the requested tool call
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        calls = mock_client.capture.call_args_list
+        generation_call = next(c[1] for c in calls if c[1]["event"] == "$ai_generation")
+        span_call = next(c[1] for c in calls if c[1]["event"] == "$ai_span")
+        call_args = generation_call
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -896,6 +930,14 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         assert props["$ai_input_tokens"] == 30
         assert props["$ai_output_tokens"] == 20
         assert props["$ai_http_status"] == 200
+
+        # Tool call emitted as a child $ai_span nested under the generation
+        span_props = span_call["properties"]
+        assert span_props["$ai_span_type"] == "tool"
+        assert span_props["$ai_span_name"] == "get_weather"
+        assert span_props["$ai_tool_call_id"] == "call_xyz789"
+        assert span_props["$ai_input_state"] == '{"location": "Chicago"}'
+        assert span_props["$ai_parent_id"] == props["$ai_span_id"]
 
 
 def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
@@ -933,10 +975,14 @@ def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
         assert len(chunks) == 4
         assert chunks == streaming_tool_call_chunks
 
-        # Verify the capture was called with the right arguments
-        assert mock_client.capture.call_count == 1
+        # Verify the capture was called with the right arguments:
+        # one $ai_generation plus one $ai_span for the streamed tool call
+        assert mock_client.capture.call_count == 2
 
-        call_args = mock_client.capture.call_args[1]
+        calls = mock_client.capture.call_args_list
+        generation_call = next(c[1] for c in calls if c[1]["event"] == "$ai_generation")
+        span_call = next(c[1] for c in calls if c[1]["event"] == "$ai_span")
+        call_args = generation_call
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -994,6 +1040,17 @@ def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
         assert isinstance(props["$ai_usage"], dict)
         assert "prompt_tokens" in props["$ai_usage"]
         assert "completion_tokens" in props["$ai_usage"]
+
+        # The accumulated tool call is emitted as a child $ai_span
+        span_props = span_call["properties"]
+        assert span_props["$ai_span_type"] == "tool"
+        assert span_props["$ai_span_name"] == "get_weather"
+        assert span_props["$ai_tool_call_id"] == "call_abc123"
+        assert (
+            span_props["$ai_input_state"]
+            == '{"location": "San Francisco", "unit": "celsius"}'
+        )
+        assert span_props["$ai_parent_id"] == props["$ai_span_id"]
 
 
 # test responses api
