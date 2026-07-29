@@ -7,6 +7,7 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from freezegun import freeze_time
 from parameterized import parameterized
+import pytest
 
 from posthog.client import Client
 import posthog.feature_flags
@@ -18,6 +19,18 @@ from posthog.feature_flags import (
 )
 from posthog.request import APIError, GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+
+
+# This module preserves the legacy single-flag API's compatibility behavior;
+# warning emission itself is asserted in test_evaluate_flags.py.
+pytestmark = [
+    pytest.mark.filterwarnings(
+        r"ignore:`(feature_enabled|get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:send_feature_flag_events is deprecated in get_feature_flag_payload:DeprecationWarning"
+    ),
+]
 
 
 class TestLocalEvaluation(unittest.TestCase):
@@ -487,7 +500,7 @@ class TestLocalEvaluation(unittest.TestCase):
         patch_flags.return_value = {
             "featureFlags": {"complex-flag": "flags-fallback-value"}
         }
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -617,7 +630,7 @@ class TestLocalEvaluation(unittest.TestCase):
         patch_flags.return_value = {
             "featureFlags": {"beta-feature": "alakazam", "beta-feature2": "alakazam2"}
         }
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -685,7 +698,7 @@ class TestLocalEvaluation(unittest.TestCase):
         patch_flags.return_value = {
             "featureFlags": {"beta-feature": "alakazam", "beta-feature2": "alakazam2"}
         }
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -767,7 +780,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self, patch_get, patch_flags
     ):
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -802,7 +815,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self, patch_get, patch_flags
     ):
         patch_flags.side_effect = APIError(400, "Flags error")
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = []
 
         # beta-feature2 falls back to /flags, which on error returns None
@@ -817,7 +830,7 @@ class TestLocalEvaluation(unittest.TestCase):
         patch_flags.return_value = {
             "featureFlags": {"beta-feature": "flags-fallback-value"}
         }
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -1345,7 +1358,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
     def test_feature_flags_local_evaluation_None_values(self, patch_get, patch_flags):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 id: 1,
@@ -1420,7 +1433,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
     def test_feature_flags_local_evaluation_for_cohorts(self, patch_get, patch_flags):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 2,
@@ -1508,7 +1521,7 @@ class TestLocalEvaluation(unittest.TestCase):
     def test_feature_flags_local_evaluation_for_negated_cohorts(
         self, patch_get, patch_flags
     ):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 2,
@@ -1611,7 +1624,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         # Mock remote flags call to return empty for this flag (fallback returns None)
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1670,7 +1683,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_flag_dependencies_simple_chain(self, patch_get, patch_flags):
         """Test basic flag dependency: flag-b depends on flag-a"""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1739,7 +1752,7 @@ class TestLocalEvaluation(unittest.TestCase):
         """Test circular dependency handling: flag-a depends on flag-b, flag-b depends on flag-a"""
         # Mock remote flags call to return empty for these flags (fallback returns None)
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1801,7 +1814,7 @@ class TestLocalEvaluation(unittest.TestCase):
         """Test handling of missing flag dependency"""
         # Mock remote flags call to return empty for this flag (fallback returns None)
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1836,7 +1849,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_flag_dependencies_complex_chain(self, patch_get, patch_flags):
         """Test complex dependency chain: flag-d -> flag-c -> [flag-a, flag-b]"""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1932,7 +1945,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_flag_dependencies_mixed_conditions(self, patch_get, patch_flags):
         """Test flag dependency mixed with other property conditions"""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2009,7 +2022,7 @@ class TestLocalEvaluation(unittest.TestCase):
         """Test handling of malformed dependency chains"""
         # Mock remote flags call to return empty for this flag (fallback returns None)
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2087,7 +2100,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_flag_dependencies_evaluates_to_false(self, patch_get, patch_flags):
         """A `flag_evaluates_to: false` condition matches when the referenced flag is conclusively False, without falling back to /flags."""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2150,7 +2163,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self, patch_get, patch_flags
     ):
         """Multi-level chain with a legitimately-False ancestor: A(false) -> B(true) -> D(true)."""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2217,7 +2230,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self, patch_get, patch_flags
     ):
         """An inactive base flag caches False, so `flag_evaluates_to: false` matches."""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2260,7 +2273,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         """An inconclusive base (missing person properties) is distinct from False and falls back to /flags."""
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2319,7 +2332,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         """A malformed `value: null` condition is a definitive local no-match (False), never falling back to /flags."""
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2365,7 +2378,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         """A dependency condition with an empty/missing `key` is a definitive local no-match (False)."""
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2409,7 +2422,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         """A dependency condition with the wrong operator is a definitive local no-match (False)."""
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2453,7 +2466,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         """A malformed dependency condition warns on first eval, then stays quiet (dedup)."""
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2511,7 +2524,7 @@ class TestLocalEvaluation(unittest.TestCase):
     ):
         """A malformed dependency condition no-matches its group, but a second matching group still resolves the flag locally."""
         patch_flags.return_value = {"featureFlags": {}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -2579,7 +2592,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_multi_level_multivariate_dependency_chain(self, patch_get, patch_flags):
         """Test multi-level multivariate dependency chain: dependent-flag -> intermediate-flag -> leaf-flag"""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             # Leaf flag: multivariate with "control" and "test" variants using person property overrides
             {
@@ -2846,7 +2859,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self, patch_get, patch_flags
     ):
         """Test production-style multivariate dependency chain: multivariate-root-flag -> multivariate-intermediate-flag -> multivariate-leaf-flag"""
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             # Leaf flag: multivariate with fruit variants
             {
@@ -3109,7 +3122,7 @@ class TestLocalEvaluation(unittest.TestCase):
             },
             etag='"abc123"',
         )
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         with freeze_time("2020-01-01T12:01:00.0000Z"):
             client.load_feature_flags()
         self.assertEqual(len(client.feature_flags), 2)
@@ -3136,7 +3149,7 @@ class TestLocalEvaluation(unittest.TestCase):
             },
             etag='"initial-etag"',
         )
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.load_feature_flags()
 
         # First call should have no etag
@@ -3171,7 +3184,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         patch_get.side_effect = [initial_response, not_modified_response]
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.load_feature_flags()
 
         # Verify initial flags are loaded
@@ -3212,7 +3225,7 @@ class TestLocalEvaluation(unittest.TestCase):
             ),
         ]
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.load_feature_flags()
         self.assertEqual(client._flags_etag, '"etag-v1"')
 
@@ -3245,7 +3258,7 @@ class TestLocalEvaluation(unittest.TestCase):
             ),
         ]
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.load_feature_flags()
         self.assertEqual(client._flags_etag, '"etag-v1"')
 
@@ -3257,7 +3270,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_wrong_key(self, patch_get, _patch_poll):
         patch_get.side_effect = APIError(401, "Unauthorized")
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         with self.assertLogs("posthog", level="ERROR") as logs:
             client.load_feature_flags()
@@ -3367,7 +3380,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_feature_enabled_request_multi_variate(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -3412,7 +3425,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_get_feature_flag(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -3457,7 +3470,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.flags")
     def test_personal_api_key_doesnt_exist(self, patch_flags, patch_poll):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = []
 
         patch_flags.return_value = {"featureFlags": {"feature-flag": True}}
@@ -3471,7 +3484,7 @@ class TestLocalEvaluation(unittest.TestCase):
             raise Exception("http exception")
 
         patch_get.return_value.raiseError.side_effect = raise_effect
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = []
 
         self.assertFalse(client.feature_enabled("doesnt-exist", "distinct_id"))
@@ -3479,7 +3492,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_get_feature_flag_with_variant_overrides(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -3542,7 +3555,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_flag_with_clashing_variant_overrides(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -3623,7 +3636,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_flag_with_invalid_variant_overrides(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "variant-1"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -3686,7 +3699,7 @@ class TestLocalEvaluation(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_conditions_evaluated_in_order(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"order-test": "server-variant"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [
             {
                 "id": 1,
@@ -3907,7 +3920,7 @@ class TestLocalEvaluation(unittest.TestCase):
         This prevents returning wrong variants when later conditions could match
         locally but the user is actually in the static cohort.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # Mock the local flags response - cohort 999 is NOT in cohorts map (static cohort)
         client.feature_flags = [
@@ -3969,7 +3982,7 @@ class TestLocalEvaluation(unittest.TestCase):
         When a flag has bucketing_identifier: "device_id", the device_id should be
         used for hashing instead of distinct_id.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # This flag uses device_id for bucketing
         client.feature_flags = [
@@ -4048,7 +4061,7 @@ class TestLocalEvaluation(unittest.TestCase):
         When a flag uses device_id bucketing, different distinct_ids with the same
         device_id should get the same result.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4091,7 +4104,7 @@ class TestLocalEvaluation(unittest.TestCase):
         it should fallback to server evaluation.
         """
         patch_flags.return_value = {"featureFlags": {"device-bucketed-flag": True}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4125,7 +4138,7 @@ class TestLocalEvaluation(unittest.TestCase):
         When only_evaluate_locally=True and device_id is required but missing,
         should return None instead of falling back to API.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4159,7 +4172,7 @@ class TestLocalEvaluation(unittest.TestCase):
         When bucketing_identifier is not set or is 'distinct_id', should use
         distinct_id for hashing (default behavior).
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # Flag without bucketing_identifier (defaults to distinct_id)
         client.feature_flags = [
@@ -4192,7 +4205,7 @@ class TestLocalEvaluation(unittest.TestCase):
         Multivariate flag variant selection should use device_id when
         bucketing_identifier is set to device_id.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4239,7 +4252,7 @@ class TestLocalEvaluation(unittest.TestCase):
         """
         from posthog.contexts import new_context, set_context_device_id
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4273,7 +4286,7 @@ class TestLocalEvaluation(unittest.TestCase):
         Group flags should continue to use the group identifier for hashing,
         regardless of the bucketing_identifier setting.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4312,7 +4325,7 @@ class TestLocalEvaluation(unittest.TestCase):
         device_id-bucketed flags can be evaluated locally.
         """
         patch_flags.return_value = {"featureFlags": {"group-parent-flag": "from-api"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4373,7 +4386,7 @@ class TestLocalEvaluation(unittest.TestCase):
         the dependent group flag has bucketing_identifier set to device_id.
         """
         patch_flags.return_value = {"featureFlags": {"parent-group-flag": "from-api"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4489,7 +4502,7 @@ class TestLocalEvaluation(unittest.TestCase):
     )
     @mock.patch("posthog.client.flags")
     def test_mixed_targeting(self, _name, call_kwargs, expected, patch_flags):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [self.MIXED_FLAG]
         client.group_type_mapping = {"0": "company"}
 
@@ -4499,7 +4512,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     def test_mixed_targeting_only_group_conditions_no_groups_passed(self, patch_flags):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -4529,7 +4542,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.flags")
     def test_mixed_targeting_rollout_uses_correct_bucketing(self, patch_flags):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -4569,7 +4582,7 @@ class TestLocalEvaluation(unittest.TestCase):
         """
         get_all_flags_and_payloads should properly handle flags with device_id bucketing.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -4609,7 +4622,7 @@ class TestLocalEvaluation(unittest.TestCase):
         patch_flags.return_value = {
             "featureFlags": {"normal-flag": True, "device-flag": "from-api"}
         }
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -5573,7 +5586,7 @@ class TestCaptureCalls(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_capture_is_called(self, patch_flags, patch_capture):
         patch_flags.return_value = {"featureFlags": {"flags-flag": "flags-value"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -5800,7 +5813,7 @@ class TestCaptureCalls(unittest.TestCase):
     @mock.patch("posthog.client.flags")
     def test_capture_is_called_but_does_not_add_all_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"flags-flag": "flags-value"}}
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -5858,9 +5871,7 @@ class TestCaptureCalls(unittest.TestCase):
             "featureFlags": {"person-flag": True},
             "featureFlagPayloads": {"person-flag": 300},
         }
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         client.feature_flags = [
             {
@@ -5896,7 +5907,7 @@ class TestCaptureCalls(unittest.TestCase):
         Test that get_feature_flag_payload falls back to API when evaluating
         a flag with static cohorts, similar to get_feature_flag behavior.
         """
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # Mock the local flags response - cohort 999 is NOT in cohorts map (static cohort)
         client.feature_flags = [
@@ -5947,7 +5958,7 @@ class TestCaptureCalls(unittest.TestCase):
     def test_disable_geoip_get_flag_capture_call(self, patch_flags, patch_capture):
         patch_flags.return_value = {"featureFlags": {"flags-flag": "flags-value"}}
         client = Client(
-            FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY, disable_geoip=True
+            FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY, disable_geoip=True
         )
         client.feature_flags = [
             {
@@ -5989,7 +6000,7 @@ class TestCaptureCalls(unittest.TestCase):
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_capture_fires_per_group_context(self, patch_flags, patch_capture):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -6038,7 +6049,7 @@ class TestCaptureCalls(unittest.TestCase):
     def test_capture_dedupes_repeated_calls_under_same_group_context(
         self, _name, first_groups, second_groups, patch_flags, patch_capture
     ):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -6066,7 +6077,7 @@ class TestCaptureCalls(unittest.TestCase):
     def test_capture_multiple_users_doesnt_out_of_memory(
         self, patch_flags, patch_capture
     ):
-        client = Client(FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY)
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         # Set on the instance to avoid relying on module-constant patching behavior
         # across Python/runtime implementations.
         client.distinct_ids_feature_flags_reported.max_size = 100
@@ -6087,29 +6098,30 @@ class TestCaptureCalls(unittest.TestCase):
             }
         ]
 
-        for i in range(1000):
-            distinct_id = f"some-distinct-id{i}"
-            client.get_feature_flag(
-                "complex-flag",
-                distinct_id,
-                person_properties={"region": "USA", "name": "Aloha"},
-            )
-            patch_capture.assert_called_with(
-                "$feature_flag_called",
-                distinct_id=distinct_id,
-                properties={
-                    "$feature_flag": "complex-flag",
-                    "$feature_flag_response": True,
-                    "locally_evaluated": True,
-                    "$feature/complex-flag": True,
-                },
-                groups={},
-                disable_geoip=None,
-            )
+        with pytest.warns(DeprecationWarning, match="get_feature_flag.*deprecated"):
+            for i in range(1000):
+                distinct_id = f"some-distinct-id{i}"
+                client.get_feature_flag(
+                    "complex-flag",
+                    distinct_id,
+                    person_properties={"region": "USA", "name": "Aloha"},
+                )
+                patch_capture.assert_called_with(
+                    "$feature_flag_called",
+                    distinct_id=distinct_id,
+                    properties={
+                        "$feature_flag": "complex-flag",
+                        "$feature_flag_response": True,
+                        "locally_evaluated": True,
+                        "$feature/complex-flag": True,
+                    },
+                    groups={},
+                    disable_geoip=None,
+                )
 
-            self.assertEqual(
-                len(client.distinct_ids_feature_flags_reported), i % 100 + 1
-            )
+                self.assertEqual(
+                    len(client.distinct_ids_feature_flags_reported), i % 100 + 1
+                )
 
 
 class TestConsistency(unittest.TestCase):
@@ -7152,15 +7164,18 @@ class TestConsistency(unittest.TestCase):
             True,
         ]
 
-        for i in range(1000):
-            distinctID = f"distinct_id_{i}"
+        with pytest.warns(DeprecationWarning, match="feature_enabled.*deprecated"):
+            for i in range(1000):
+                distinctID = f"distinct_id_{i}"
 
-            feature_flag_match = self.client.feature_enabled("simple-flag", distinctID)
+                feature_flag_match = self.client.feature_enabled(
+                    "simple-flag", distinctID
+                )
 
-            if results[i]:
-                self.assertTrue(feature_flag_match)
-            else:
-                self.assertFalse(feature_flag_match)
+                if results[i]:
+                    self.assertTrue(feature_flag_match)
+                else:
+                    self.assertFalse(feature_flag_match)
 
     @mock.patch("posthog.client.get")
     def test_multivariate_flag_consistency(self, patch_get):
@@ -8208,16 +8223,17 @@ class TestConsistency(unittest.TestCase):
             "first-variant",
         ]
 
-        for i in range(1000):
-            distinctID = f"distinct_id_{i}"
-            feature_flag_match = self.client.get_feature_flag(
-                "multivariate-flag", distinctID
-            )
+        with pytest.warns(DeprecationWarning, match="get_feature_flag.*deprecated"):
+            for i in range(1000):
+                distinctID = f"distinct_id_{i}"
+                feature_flag_match = self.client.get_feature_flag(
+                    "multivariate-flag", distinctID
+                )
 
-            if results[i]:
-                self.assertEqual(feature_flag_match, results[i])
-            else:
-                self.assertFalse(feature_flag_match)
+                if results[i]:
+                    self.assertEqual(feature_flag_match, results[i])
+                else:
+                    self.assertFalse(feature_flag_match)
 
     @mock.patch("posthog.client.flags")
     def test_feature_flag_case_sensitive(self, mock_flags):
@@ -8225,9 +8241,7 @@ class TestConsistency(unittest.TestCase):
             "featureFlags": {}
         }  # Ensure /flags returns empty flags
 
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -8251,9 +8265,7 @@ class TestConsistency(unittest.TestCase):
             "featureFlagPayloads": {"Beta-Feature": {"some": "value"}},
         }
 
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -8282,9 +8294,7 @@ class TestConsistency(unittest.TestCase):
             "featureFlagPayloads": {"Beta-Feature": {"some": "value"}},
         }
 
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
         client.feature_flags = [
             {
                 "id": 1,
@@ -8321,9 +8331,7 @@ class TestConsistency(unittest.TestCase):
             }
         }
 
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # Call get_all_flags with flag_keys_to_evaluate
         result = client.get_all_flags(
@@ -8355,9 +8363,7 @@ class TestConsistency(unittest.TestCase):
             },
         }
 
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # Call get_all_flags_and_payloads with flag_keys_to_evaluate
         result = client.get_all_flags_and_payloads(
@@ -8384,9 +8390,7 @@ class TestConsistency(unittest.TestCase):
 
     def test_get_all_flags_locally_with_flag_keys_to_evaluate(self):
         """Test that local evaluation with flag_keys_to_evaluate only evaluates specified flags"""
-        client = Client(
-            project_api_key=FAKE_TEST_API_KEY, personal_api_key=FAKE_TEST_API_KEY
-        )
+        client = Client(project_api_key=FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
         # Set up multiple flags
         client.feature_flags = [

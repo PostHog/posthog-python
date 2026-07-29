@@ -59,7 +59,7 @@ class TestClientFork(unittest.TestCase):
     def test_reinit_after_fork_restarts_poller_when_enabled(self, mock_poller):
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key=FAKE_TEST_API_KEY,
+            secret_key=FAKE_TEST_API_KEY,
             send=False,
             enable_local_evaluation=True,
             poll_interval=123,
@@ -82,7 +82,7 @@ class TestClientFork(unittest.TestCase):
     def test_reinit_after_fork_clears_poller_when_local_evaluation_disabled(self):
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key=FAKE_TEST_API_KEY,
+            secret_key=FAKE_TEST_API_KEY,
             send=False,
             enable_local_evaluation=False,
         )
@@ -281,7 +281,7 @@ class TestClientForkEndToEnd(unittest.TestCase):
     def test_register_at_fork_reinitializes_poller_and_sessions_in_child_process(self):
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key=FAKE_TEST_API_KEY,
+            secret_key=FAKE_TEST_API_KEY,
             send=False,
             enable_local_evaluation=True,
             poll_interval=100,
