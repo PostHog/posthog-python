@@ -9,13 +9,11 @@ on:
 
 jobs:
     call-flags-project:
-        uses: PostHog/.github/.github/workflows/flags-project-board.yml@69336b569d22687f8982eea6ff7d450a885cda05
+        uses: PostHog/.github/.github/workflows/flags-project-board.yml@a0b36e0021c4bf3d8a5d99972ac993ae54686ba8
         with:
             pr_number: ${{ github.event.pull_request.number }}
             pr_node_id: ${{ github.event.pull_request.node_id }}
             is_draft: ${{ github.event.pull_request.draft }}
-        # The central .github reusable workflow does not declare workflow_call.secrets,
-        # so explicit secret mapping makes GitHub reject this caller at startup.
-        # It gates fork/Dependabot PRs before using secrets; keep this scoped call
-        # as an intentional exception to the broad-inheritance Semgrep rule.
-        secrets: inherit # nosemgrep
+        secrets:
+            PROJECT_BOARD_BOT_APP_ID: ${{ secrets.PROJECT_BOARD_BOT_APP_ID }}
+            PROJECT_BOARD_BOT_PRIVATE_KEY: ${{ secrets.PROJECT_BOARD_BOT_PRIVATE_KEY }}
