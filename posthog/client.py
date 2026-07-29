@@ -23,7 +23,7 @@ from posthog.capture_compression import (
 )
 from posthog.capture_mode import CaptureMode, _resolve_capture_mode
 from posthog.capture_v1 import _send_v1_batch
-from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer
+from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, DrainSignal
 from posthog.contexts import (
     _get_current_context,
     get_capture_exception_code_variables_context,
@@ -306,6 +306,7 @@ class _Lane:
         self._started = False
         self._closed = False
         self._start_lock = threading.Lock()
+        self._drain_signal = DrainSignal()
         if eager_start:
             self.start()
 
@@ -334,6 +335,7 @@ class _Lane:
                     max_msg_size=self.max_msg_size,
                     capture_mode=self.capture_mode,
                     capture_compression=self.capture_compression,
+                    drain_signal=self._drain_signal,
                 )
                 self.consumers.append(consumer)
 
@@ -359,8 +361,15 @@ class _Lane:
             self._closed = True
 
     def flush(self, timeout_seconds: Optional[float]) -> None:
-        """Block until this lane's queue drains, or until `timeout_seconds` elapse."""
+        """Block until this lane's queue drains, or until `timeout_seconds` elapse.
+
+        Signals the consumers first so a partial batch is delivered now instead
+        of waiting out `flush_at` / `flush_interval`.
+        """
         queue = self.queue
+        # Must happen before we start waiting: a consumer parked on a partial
+        # batch only learns to send it from this signal.
+        self._drain_signal.request()
         size = queue.qsize()
         if timeout_seconds is None:
             queue.join()
@@ -384,6 +393,9 @@ class _Lane:
 
     def join(self) -> None:
         """Pause this lane's consumers and wait for them to exit; a never-started lane is a no-op."""
+        # Teardown bypasses the batching wait too, so a consumer holding a
+        # partial batch delivers it instead of exiting `flush_interval` later.
+        self._drain_signal.request()
         for consumer in self.consumers:
             consumer.pause()
             try:
@@ -403,6 +415,7 @@ class _Lane:
         """
         self.queue = Queue(self._max_queue_size)
         self._start_lock = threading.Lock()
+        self._drain_signal = DrainSignal()
         self.consumers = []
         self._started = False
         if self._eager_start:

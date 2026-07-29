@@ -1,6 +1,7 @@
-from typing import Any
+from typing import Any, Optional
 import json
 import logging
+import threading
 import time
 from threading import Thread
 
@@ -31,8 +32,40 @@ AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per event
 # in case we want to lower it in the future.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 
+# How long a consumer that is already accumulating a batch may block on the
+# queue before re-checking its drain signal. An idle consumer (nothing
+# accumulated) still parks for the whole `flush_interval`, because anything a
+# caller enqueued before calling `flush()` is already in the queue and wakes the
+# blocking `get` on its own.
+DRAIN_POLL_INTERVAL = 0.05
+
 
 _configure_posthog_logging()
+
+
+class DrainSignal:
+    """Cross-thread "stop batching and send what is pending" signal.
+
+    Explicit flushes must not wait for `flush_at` or `flush_interval`, but a
+    consumer accumulating a partial batch is parked on its queue and cannot see
+    a plain flag flip. `flush()` bumps a generation counter here; each consumer
+    remembers the generation it last saw its queue empty at, so a request stays
+    pending until that consumer has actually handed off everything it holds.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._generation = 0
+
+    def request(self) -> None:
+        """Ask every consumer sharing this signal to deliver what it has now."""
+        with self._lock:
+            self._generation += 1
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
 
 
 class Consumer(Thread):
@@ -56,6 +89,7 @@ class Consumer(Thread):
         max_msg_size=MAX_MSG_SIZE,
         capture_mode=CaptureMode.V0,
         capture_compression=CaptureCompression.NONE,
+        drain_signal: Optional[DrainSignal] = None,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -72,6 +106,10 @@ class Consumer(Thread):
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self.drain_signal = drain_signal
+        # Start level with the signal: a consumer built after a flush must not
+        # inherit that flush's pending request.
+        self._drain_seen = drain_signal.generation if drain_signal else 0
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
@@ -118,6 +156,10 @@ class Consumer(Thread):
 
         return success
 
+    def _drain_generation(self) -> int:
+        """The drain request generation currently visible to this consumer."""
+        return self.drain_signal.generation if self.drain_signal is not None else 0
+
     def next(self):
         """Return the next batch of items to upload."""
         queue = self.queue
@@ -127,11 +169,27 @@ class Consumer(Thread):
         total_size = 0
 
         while len(items) < self.flush_at:
-            elapsed = time.monotonic() - start_time
-            if elapsed >= self.flush_interval:
+            # While draining we take only what is already queued, never waiting
+            # for `flush_interval` to elapse or for `flush_at` to be reached.
+            drain_generation = self._drain_generation()
+            draining = drain_generation != self._drain_seen
+            remaining = self.flush_interval - (time.monotonic() - start_time)
+            if not draining and remaining <= 0:
                 break
+
+            # A partial batch is pending, so break the wait into slices to
+            # notice a drain request that arrives while we are parked here. An
+            # idle consumer still parks for the whole interval: anything a
+            # caller enqueued before flush() is already in the queue and wakes
+            # the blocking get() by itself.
+            sliced = bool(items) and self.drain_signal is not None
+            timeout = min(remaining, DRAIN_POLL_INTERVAL) if sliced else remaining
+
             try:
-                item = queue.get(block=True, timeout=self.flush_interval - elapsed)
+                if draining:
+                    item = queue.get(block=False)
+                else:
+                    item = queue.get(block=True, timeout=timeout)
                 item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 if item_size > self.max_msg_size:
                     # Log only name and size: AI events may carry unredacted
@@ -151,6 +209,17 @@ class Consumer(Thread):
                     self.log.debug("hit batch size limit (size: %d)", total_size)
                     break
             except Empty:
+                if draining:
+                    # Everything that flush was waiting for is in `items` now.
+                    # Recording the generation read at the top of this iteration
+                    # (rather than the current one) leaves a request that landed
+                    # while we were draining pending for the next batch.
+                    self._drain_seen = drain_generation
+                    break
+                if timeout < remaining:
+                    # Only a poll slice expired, not the batch window: keep
+                    # accumulating so batching is unchanged without a flush.
+                    continue
                 break
 
         return items

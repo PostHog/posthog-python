@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 import unittest
 from typing import Any
@@ -13,7 +14,7 @@ except ImportError:
 
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
-from posthog.consumer import MAX_MSG_SIZE, Consumer
+from posthog.consumer import MAX_MSG_SIZE, Consumer, DrainSignal
 from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, APIError
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
@@ -153,6 +154,103 @@ class TestConsumer(unittest.TestCase):
         consumer = Consumer(None, TEST_API_KEY)
         consumer.pause()
         self.assertFalse(consumer.running)
+
+    def test_drain_signal_returns_partial_batch_without_waiting(self) -> None:
+        # A drain request means "send what is queued now", so `next()` must not
+        # hold a below-flush_at batch back for the rest of flush_interval.
+        q = Queue()
+        signal = DrainSignal()
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=100, flush_interval=30, drain_signal=signal
+        )
+        q.put(_track_event("first"))
+        q.put(_track_event("second"))
+        signal.request()
+
+        start = time.monotonic()
+        batch = consumer.next()
+
+        self.assertEqual(len(batch), 2)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_drain_signal_still_respects_flush_at(self) -> None:
+        # Draining must not degrade batching into one request per event.
+        q = Queue()
+        signal = DrainSignal()
+        flush_at = 10
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=flush_at, flush_interval=30, drain_signal=signal
+        )
+        for i in range(flush_at * 3):
+            q.put(_track_event("python event %d" % i))
+        signal.request()
+
+        self.assertEqual(len(consumer.next()), flush_at)
+
+    def test_drain_signal_is_satisfied_once_the_queue_empties(self) -> None:
+        # Once the queue has been observed empty the request is served, so the
+        # consumer goes back to normal timer-based batching instead of spinning.
+        q = Queue()
+        signal = DrainSignal()
+        flush_interval = 0.2
+        consumer = Consumer(
+            q,
+            TEST_API_KEY,
+            flush_at=100,
+            flush_interval=flush_interval,
+            drain_signal=signal,
+        )
+        q.put(_track_event())
+        signal.request()
+        self.assertEqual(len(consumer.next()), 1)
+
+        start = time.monotonic()
+        self.assertEqual(consumer.next(), [])
+        self.assertGreaterEqual(time.monotonic() - start, flush_interval * 0.5)
+
+    def test_consecutive_drain_requests_each_drain_immediately(self) -> None:
+        # A later flush must not be served by an earlier flush's bookkeeping.
+        q = Queue()
+        signal = DrainSignal()
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=100, flush_interval=30, drain_signal=signal
+        )
+
+        for i in range(3):
+            q.put(_track_event("python event %d" % i))
+            signal.request()
+            start = time.monotonic()
+            self.assertEqual(len(consumer.next()), 1)
+            self.assertLess(time.monotonic() - start, 5)
+
+    def test_drain_signal_wakes_a_consumer_mid_batch(self) -> None:
+        # The realistic ordering: the consumer is already parked on a partial
+        # batch when flush() signals it.
+        q = Queue()
+        signal = DrainSignal()
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=100, flush_interval=30, drain_signal=signal
+        )
+        q.put(_track_event())
+        threading.Timer(0.1, signal.request).start()
+
+        start = time.monotonic()
+        batch = consumer.next()
+
+        self.assertEqual(len(batch), 1)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_without_drain_signal_batching_is_unchanged(self) -> None:
+        q = Queue()
+        flush_interval = 0.3
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=100, flush_interval=flush_interval
+        )
+        q.put(_track_event())
+
+        start = time.monotonic()
+        self.assertEqual(len(consumer.next()), 1)
+        self.assertGreaterEqual(time.monotonic() - start, flush_interval * 0.5)
 
     def test_max_batch_size(self) -> None:
         q = Queue()

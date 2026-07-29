@@ -235,6 +235,7 @@ alias posthog.client.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_
 alias posthog.client.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
+alias posthog.client.DrainSignal -> posthog.consumer.DrainSignal
 alias posthog.client.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
 alias posthog.client.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.client.ExceptionCapture -> posthog.exception_capture.ExceptionCapture
@@ -586,6 +587,7 @@ attribute posthog.consumer.Consumer.api_key = api_key
 attribute posthog.consumer.Consumer.capture_compression = capture_compression
 attribute posthog.consumer.Consumer.capture_mode = capture_mode
 attribute posthog.consumer.Consumer.daemon = True
+attribute posthog.consumer.Consumer.drain_signal = drain_signal
 attribute posthog.consumer.Consumer.endpoint = endpoint
 attribute posthog.consumer.Consumer.flush_at = flush_at
 attribute posthog.consumer.Consumer.flush_interval = flush_interval
@@ -599,6 +601,8 @@ attribute posthog.consumer.Consumer.queue = queue
 attribute posthog.consumer.Consumer.retries = retries
 attribute posthog.consumer.Consumer.running = True
 attribute posthog.consumer.Consumer.timeout = timeout
+attribute posthog.consumer.DRAIN_POLL_INTERVAL = 0.05
+attribute posthog.consumer.DrainSignal.generation: int
 attribute posthog.consumer.MAX_MSG_SIZE = 900 * 1024
 attribute posthog.contexts.ContextScope.capture_exception_code_variables: Optional[bool] = None
 attribute posthog.contexts.ContextScope.capture_exceptions = capture_exceptions
@@ -907,7 +911,8 @@ class posthog.capture_compression.CaptureCompression
 class posthog.capture_mode.CaptureMode 
 class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
 class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, _use_ai_lane=False, _enable_multimodal_capture=False)
-class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
+class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE, drain_signal: Optional[DrainSignal] = None)
+class posthog.consumer.DrainSignal()
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
@@ -1263,6 +1268,7 @@ method posthog.consumer.Consumer.pause()
 method posthog.consumer.Consumer.request(batch)
 method posthog.consumer.Consumer.run()
 method posthog.consumer.Consumer.upload()
+method posthog.consumer.DrainSignal.request() -> None
 method posthog.contexts.ContextScope.add_tag(key: str, value: Any)
 method posthog.contexts.ContextScope.collect_tags() -> Dict[str, Any]
 method posthog.contexts.ContextScope.get_capture_exception_code_variables() -> Optional[bool]
