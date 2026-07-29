@@ -162,7 +162,7 @@ class WrappedResponses(_OpenAIWrapperResource):
 
         def generator():
             nonlocal usage_stats
-            nonlocal final_content  # noqa: F824
+            nonlocal final_content
             nonlocal model_from_response
             nonlocal stop_reason
 
@@ -417,7 +417,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_content
             nonlocal accumulated_tool_calls
             nonlocal model_from_response
             nonlocal stop_reason
