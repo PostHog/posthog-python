@@ -94,9 +94,12 @@ def _wrap_call_tool(
         name = req.params.name
         arguments = dict(req.params.arguments or {})
         client_name, client_version = _client_info(server)
+        protocol_version = _protocol_version(server)
         mcp_session_id = _mcp_session_id(server)
-        token, client_name, client_version = resolve_session_and_client(
-            mcp_session_id, client_name, client_version
+        token, client_name, client_version, protocol_version = (
+            resolve_session_and_client(
+                mcp_session_id, client_name, client_version, protocol_version
+            )
         )
         request = build_tool_call_request(name, arguments)
         extra = {"session_id": mcp_session_id}
@@ -106,6 +109,7 @@ def _wrap_call_tool(
             mcp_session_id=mcp_session_id,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             request=request,
             extra=extra,
             token=token,
@@ -121,6 +125,7 @@ def _wrap_call_tool(
                 arguments=arguments,
                 client_name=client_name,
                 client_version=client_version,
+                protocol_version=protocol_version,
                 extra=extra,
             )
             return mcp_types.ServerResult(
@@ -169,6 +174,7 @@ def _wrap_call_tool(
                 duration_ms=(time.monotonic() - start) * 1000,
                 client_name=client_name,
                 client_version=client_version,
+                protocol_version=protocol_version,
                 conversation_id=None if minted else conversation_id,
                 extra=extra,
             )
@@ -203,6 +209,7 @@ def _wrap_call_tool(
             duration_ms=duration_ms,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             conversation_id=delivered_conversation_id,
             extra=extra,
         )
@@ -227,9 +234,12 @@ def _wrap_list_tools(
             return await original(req)
 
         client_name, client_version = _client_info(server)
+        protocol_version = _protocol_version(server)
         mcp_session_id = _mcp_session_id(server)
-        token, client_name, client_version = resolve_session_and_client(
-            mcp_session_id, client_name, client_version
+        token, client_name, client_version, protocol_version = (
+            resolve_session_and_client(
+                mcp_session_id, client_name, client_version, protocol_version
+            )
         )
         request = request_to_dict(req)
         extra = {"session_id": mcp_session_id}
@@ -240,6 +250,7 @@ def _wrap_list_tools(
             mcp_session_id=mcp_session_id,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             request=request,
             extra=extra,
             token=token,
@@ -259,6 +270,7 @@ def _wrap_list_tools(
                 error=error,
                 client_name=client_name,
                 client_version=client_version,
+                protocol_version=protocol_version,
                 extra=extra,
             )
             raise
@@ -317,6 +329,7 @@ def _wrap_list_tools(
             error="tools/list returned no tools" if empty else None,
             client_name=client_name,
             client_version=client_version,
+            protocol_version=protocol_version,
             extra=extra,
         )
 
@@ -366,6 +379,17 @@ def _client_info(server: Any) -> Tuple[Optional[str], Optional[str]]:
     except Exception:  # noqa: BLE001
         pass
     return None, None
+
+
+def _protocol_version(server: Any) -> Optional[str]:
+    ctx = _request_context(server)
+    try:
+        client_params = ctx.session.client_params
+        if client_params:
+            return client_params.protocolVersion
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _mcp_session_id(server: Any) -> Optional[str]:

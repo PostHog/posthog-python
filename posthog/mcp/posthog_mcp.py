@@ -89,6 +89,7 @@ class PostHogMCP(Client):
         error: Any = None,
         category: Optional[str] = None,
         tool_description: Optional[str] = None,
+        protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
@@ -109,6 +110,7 @@ class PostHogMCP(Client):
         event["resource_name"] = tool_name
         event["tool_description"] = tool_description
         event["tool_category"] = category
+        event["protocol_version"] = protocol_version
         event["parameters"] = parameters
         event["response"] = response
         event["duration"] = duration_ms
@@ -125,6 +127,7 @@ class PostHogMCP(Client):
         *,
         client_name: Optional[str] = None,
         client_version: Optional[str] = None,
+        protocol_version: Optional[str] = None,
         parameters: Any = None,
         response: Any = None,
         duration_ms: Optional[float] = None,
@@ -147,6 +150,7 @@ class PostHogMCP(Client):
         )
         event["client_name"] = client_name
         event["client_version"] = client_version
+        event["protocol_version"] = protocol_version
         event["parameters"] = parameters
         event["response"] = response
         event["duration"] = duration_ms
@@ -161,6 +165,7 @@ class PostHogMCP(Client):
         duration_ms: Optional[float] = None,
         is_error: bool = False,
         error: Any = None,
+        protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
@@ -180,6 +185,7 @@ class PostHogMCP(Client):
             timestamp,
         )
         event["listed_tool_names"] = tool_names
+        event["protocol_version"] = protocol_version
         event["parameters"] = parameters
         event["response"] = response
         event["duration"] = duration_ms
@@ -195,6 +201,7 @@ class PostHogMCP(Client):
         *,
         context: Optional[str] = None,
         parameters: Any = None,
+        protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
@@ -214,6 +221,7 @@ class PostHogMCP(Client):
             timestamp,
         )
         event["resource_name"] = self._missing_capability_tool_name
+        event["protocol_version"] = protocol_version
         event["parameters"] = parameters
         _apply_intent(event, context, "context_parameter")
         self._emit(event)

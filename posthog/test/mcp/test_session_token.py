@@ -191,17 +191,24 @@ async def test_multi_pod_two_instances_resolve_same_session_and_harness():
     from posthog.mcp._instrumentation import resolve_session_and_client
 
     token_str = encode_session_id(
-        SessionTokenPayload(session_id="ses_shared", client_name="Claude Code")
+        SessionTokenPayload(
+            session_id="ses_shared",
+            client_name="Claude Code",
+            protocol_version="2025-06-18",
+        )
     )
     results = []
     for _ in range(2):  # two "pods"
         data = _data()
         token = decode_session_id(token_str)
         sid = await resolve_session_id(data, token_str, token=token)
-        # Harness comes back per request in the adapters (not from shared state).
-        _tok, name, _ver = resolve_session_and_client(token_str, None, None)
-        results.append((sid, data.session_source, name))
-    assert results[0] == results[1] == ("ses_shared", "token", "Claude Code")
+        # Harness + protocol version come back per request in the adapters
+        # (not from shared state).
+        _tok, name, _ver, protocol = resolve_session_and_client(token_str, None, None)
+        results.append((sid, data.session_source, name, protocol))
+    assert (
+        results[0] == results[1] == ("ses_shared", "token", "Claude Code", "2025-06-18")
+    )
 
 
 # --- ASGI minting middleware -------------------------------------------------

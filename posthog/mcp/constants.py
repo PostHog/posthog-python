@@ -57,6 +57,7 @@ class PostHogMCPAnalyticsProperty:
 
     CLIENT_NAME = "$mcp_client_name"
     CLIENT_VERSION = "$mcp_client_version"
+    PROTOCOL_VERSION = "$mcp_protocol_version"
     CONVERSATION_ID = "$mcp_conversation_id"
     DURATION_MS = "$mcp_duration_ms"
     IS_ERROR = "$mcp_is_error"
