@@ -75,7 +75,14 @@ class TestConsumer(unittest.TestCase):
                 success = consumer.upload()
 
         self.assertFalse(success)
-        self.assertEqual(logs.getvalue().strip(), "[PostHog] error uploading: boom")
+        # `capture_message_only_logs` taps the process-wide "posthog" logger and
+        # `upload()` spans a whole flush_interval, so background threads left by
+        # other tests can log into the same stream. Assert on the line under
+        # test rather than on the entire capture.
+        upload_logs = [
+            line for line in logs.getvalue().splitlines() if "error uploading" in line
+        ]
+        self.assertEqual(upload_logs, ["[PostHog] error uploading: boom"])
 
     def test_flush_interval(self) -> None:
         # Put _n_ items in the queue, pausing a little bit more than
