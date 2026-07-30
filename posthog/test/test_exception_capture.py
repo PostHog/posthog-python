@@ -1,6 +1,8 @@
 import subprocess
 import sys
+import threading
 from textwrap import dedent
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -131,6 +133,118 @@ def test_rate_limit_keys_on_outermost_of_chained_exceptions():
         assert client.capture_exception.call_count == 10
     finally:
         capture.close()
+
+
+def test_exception_hooks_delegate_and_restore_previous_hooks(monkeypatch):
+    from posthog.exception_capture import ExceptionCapture
+
+    sys_hook = MagicMock()
+    thread_hook = MagicMock()
+    monkeypatch.setattr(sys, "excepthook", sys_hook)
+    monkeypatch.setattr(threading, "excepthook", thread_hook)
+    client = MagicMock()
+    capture = ExceptionCapture(client)
+    exc_info = _exc_info(ValueError("boom"))
+    thread_args = SimpleNamespace(
+        exc_type=exc_info[0],
+        exc_value=exc_info[1],
+        exc_traceback=exc_info[2],
+        thread=threading.current_thread(),
+    )
+
+    capture.exception_handler(*exc_info)
+    capture.thread_exception_handler(thread_args)
+    capture.close()
+
+    assert client.capture_exception.call_count == 2
+    sys_hook.assert_called_once_with(*exc_info)
+    thread_hook.assert_called_once_with(thread_args)
+    assert sys.excepthook is sys_hook
+    assert threading.excepthook is thread_hook
+
+
+def test_close_does_not_overwrite_hooks_installed_later(monkeypatch):
+    from posthog.exception_capture import ExceptionCapture
+
+    monkeypatch.setattr(sys, "excepthook", MagicMock())
+    monkeypatch.setattr(threading, "excepthook", MagicMock())
+    capture = ExceptionCapture(MagicMock())
+    replacement_sys_hook = MagicMock()
+    replacement_thread_hook = MagicMock()
+    sys.excepthook = replacement_sys_hook
+    threading.excepthook = replacement_thread_hook
+
+    capture.close()
+
+    assert sys.excepthook is replacement_sys_hook
+    assert threading.excepthook is replacement_thread_hook
+
+
+def test_multiple_captures_support_out_of_order_close(monkeypatch):
+    from posthog.exception_capture import ExceptionCapture
+
+    sys_hook = MagicMock()
+    thread_hook = MagicMock()
+    monkeypatch.setattr(sys, "excepthook", sys_hook)
+    monkeypatch.setattr(threading, "excepthook", thread_hook)
+    first_client = MagicMock()
+    second_client = MagicMock()
+    first = ExceptionCapture(first_client)
+    second = ExceptionCapture(second_client)
+
+    first.close()
+    assert sys.excepthook == second.exception_handler
+    assert threading.excepthook == second.thread_exception_handler
+
+    exc_info = _exc_info(RuntimeError("boom"))
+    thread_args = SimpleNamespace(
+        exc_type=exc_info[0],
+        exc_value=exc_info[1],
+        exc_traceback=exc_info[2],
+        thread=threading.current_thread(),
+    )
+    second.exception_handler(*exc_info)
+    second.thread_exception_handler(thread_args)
+
+    assert first_client.capture_exception.call_count == 0
+    assert second_client.capture_exception.call_count == 2
+    sys_hook.assert_called_once_with(*exc_info)
+    thread_hook.assert_called_once_with(thread_args)
+
+    second.close()
+    assert sys.excepthook is sys_hook
+    assert threading.excepthook is thread_hook
+
+
+def test_uncaught_thread_exception_preserves_default_diagnostic():
+    script = dedent(
+        """
+        import threading
+        from posthog.exception_capture import ExceptionCapture
+
+        class Client:
+            def capture_exception(self, exception, distinct_id=None):
+                print(f"captured:{exception[0].__name__}")
+
+        capture = ExceptionCapture(Client())
+
+        def fail():
+            raise RuntimeError("thread failure")
+
+        thread = threading.Thread(target=fail, name="failing-thread")
+        thread.start()
+        thread.join()
+        capture.close()
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+
+    assert "captured:RuntimeError" in result.stdout
+    assert "Exception in thread failing-thread" in result.stderr
+    assert "RuntimeError: thread failure" in result.stderr
 
 
 def test_excepthook(tmpdir):
