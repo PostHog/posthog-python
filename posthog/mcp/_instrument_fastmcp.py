@@ -433,8 +433,13 @@ def _context_request_context(context: Any) -> Any:
 def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
     try:
         client_params = context.request_context.session.client_params
-        if client_params and client_params.clientInfo:
-            return client_params.clientInfo.name, client_params.clientInfo.version
+        # `clientInfo` on mcp 1.x; renamed `client_info` in mcp>=2, where the SDK
+        # synthesizes it from each request's `_meta` for us.
+        info = getattr(client_params, "clientInfo", None) or getattr(
+            client_params, "client_info", None
+        )
+        if info:
+            return info.name, info.version
     except Exception:  # noqa: BLE001
         pass
     return None, None
@@ -442,9 +447,15 @@ def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
 
 def _protocol_version(context: Any) -> Optional[str]:
     try:
-        client_params = context.request_context.session.client_params
-        if client_params:
-            return client_params.protocolVersion
+        # mcp>=2 puts the negotiated version straight on the request context.
+        ctx = context.request_context
+        version = getattr(ctx, "protocol_version", None)
+        if version:
+            return version
+        client_params = ctx.session.client_params
+        return getattr(client_params, "protocolVersion", None) or getattr(
+            client_params, "protocol_version", None
+        )
     except Exception:  # noqa: BLE001
         pass
     return None

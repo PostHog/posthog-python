@@ -109,10 +109,14 @@ def drain_pending_sync(timeout: Optional[float] = None) -> None:
 
 
 def is_tool_result_error(result: Any) -> bool:
-    """MCP tool results signal errors via ``isError: true`` rather than raising."""
+    """MCP tool results signal errors via ``isError: true`` rather than raising
+    (spelled ``is_error`` on mcp>=2)."""
     if isinstance(result, dict):
-        return result.get("isError") is True
-    return getattr(result, "isError", None) is True
+        return result.get("isError") is True or result.get("is_error") is True
+    return (
+        getattr(result, "isError", None) is True
+        or getattr(result, "is_error", None) is True
+    )
 
 
 def build_tool_call_request(

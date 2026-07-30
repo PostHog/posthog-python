@@ -152,9 +152,13 @@ def _resolve_client(posthog_client: Optional[Client]) -> Optional[Client]:
 
 def _warn_if_unsupported_mcp_version() -> None:
     """The adapters hook private MCP SDK seams (``_tool_manager``, ``_mcp_server``,
-    ``request_handlers``) tested against ``mcp>=1.26,<2``. Since ``mcp`` is a peer
+    ``request_handlers``) tested against ``mcp>=1.26,<3``. Since ``mcp`` is a peer
     dependency we don't pin, advise at runtime when the installed version is outside
-    that range rather than failing hard (older/newer may still mostly work)."""
+    that range rather than failing hard (older/newer may still mostly work).
+
+    On ``mcp>=2`` tool calls and client identity are captured, but ``tools/list``
+    is not: that release replaces the ``request_handlers`` dispatch the listing
+    seam hooks."""
     try:
         from importlib.metadata import version
 
@@ -162,10 +166,15 @@ def _warn_if_unsupported_mcp_version() -> None:
         major, minor = (int(p) for p in installed.split(".")[:2])
     except Exception:  # noqa: BLE001 - never let a version probe break instrument()
         return
-    if (major, minor) < (1, 26) or major >= 2:
+    if (major, minor) < (1, 26) or major >= 3:
         log(
-            f"Warning: PostHog MCP analytics is tested against mcp>=1.26,<2; found {installed}. "
+            f"Warning: PostHog MCP analytics is tested against mcp>=1.26,<3; found {installed}. "
             "Instrumentation hooks private SDK internals and may behave unexpectedly."
+        )
+    elif major >= 2:
+        log(
+            f"Note: on mcp {installed}, tool calls are captured but tools/list is not "
+            "(that release replaces the request_handlers dispatch)."
         )
 
 
