@@ -1,4 +1,5 @@
 import contextvars
+import os
 from contextlib import contextmanager
 from typing import Optional, Any, Callable, Dict, TypeVar, cast, TYPE_CHECKING
 
@@ -14,8 +15,10 @@ class ContextScope:
         fresh: bool = False,
         capture_exceptions: bool = True,
         client: Optional["Client"] = None,
+        generation: int = 0,
     ):
         self.client: Optional[Client] = client
+        self.generation = generation
         self.parent = parent
         self.fresh = fresh
         self.capture_exceptions = capture_exceptions
@@ -128,10 +131,28 @@ class ContextScope:
 _context_stack: contextvars.ContextVar[Optional[ContextScope]] = contextvars.ContextVar(
     "posthog_context_stack", default=None
 )
+_context_generation = 0
+
+
+def _reset_context_after_fork() -> None:
+    global _context_generation
+
+    _context_generation += 1
+    _context_stack.set(None)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_context_after_fork)
 
 
 def _get_current_context() -> Optional[ContextScope]:
-    return _context_stack.get()
+    current_context = _context_stack.get()
+    if (
+        current_context is not None
+        and current_context.generation != _context_generation
+    ):
+        return None
+    return current_context
 
 
 def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
@@ -199,13 +220,18 @@ def new_context(
     from . import capture_exception
 
     current_context = _get_current_context()
+    context_generation = _context_generation
     resolved_capture_exceptions = (
         capture_exceptions
         if capture_exceptions is not None
         else _default_capture_exceptions(client)
     )
     new_context = ContextScope(
-        current_context, fresh, resolved_capture_exceptions, client
+        current_context,
+        fresh,
+        resolved_capture_exceptions,
+        client,
+        context_generation,
     )
     _context_stack.set(new_context)
 
@@ -219,7 +245,8 @@ def new_context(
                 capture_exception(e)
         raise
     finally:
-        _context_stack.set(new_context.get_parent())
+        if context_generation == _context_generation:
+            _context_stack.set(new_context.get_parent())
 
 
 def tag(key: str, value: Any) -> None:
