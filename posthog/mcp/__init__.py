@@ -125,10 +125,14 @@ class McpAnalytics:
             await coro
 
     async def flush(self) -> None:
-        """Await in-flight auto-captured events scheduled on the current event loop.
+        """Await this server's in-flight auto-captures on the current event loop.
         Call this before ``posthog.shutdown()`` on exit so trailing tool-call events
         aren't dropped. (Then call ``posthog.flush()``/``shutdown()`` to send them.)"""
-        await drain_pending()
+        if self._key is None:
+            return
+        data = get_server_tracking_data(self._key)
+        if data is not None:
+            await drain_pending(data)
 
 
 class _NoopAnalytics(McpAnalytics):

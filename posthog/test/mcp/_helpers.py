@@ -32,9 +32,16 @@ async def flush_background():
     """Let fire-and-forget capture tasks run to completion."""
     import posthog.mcp._instrumentation as instr
 
+    loop = asyncio.get_running_loop()
     for _ in range(10):
         await asyncio.sleep(0)
-        pending = [t for t in list(instr._BACKGROUND_TASKS) if not t.done()]
+        pending = [
+            task
+            for task in list(instr._BACKGROUND_TASKS)
+            if isinstance(task, asyncio.Task)
+            and task.get_loop() is loop
+            and not task.done()
+        ]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
     await asyncio.sleep(0)
