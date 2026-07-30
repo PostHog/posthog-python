@@ -1,5 +1,11 @@
 # posthog
 
+## 7.35.0 — 2026-07-30
+
+### Minor changes
+
+- [4bf123e](https://github.com/posthog/posthog-python/commit/4bf123e08f838280f70d0c6fef9c76057a531b15) The OpenAI Agents SDK `group_id` now also maps to `$ai_session_id` on `$ai_trace` and span events, so grouped runs show up as sessions in PostHog AI observability. `$ai_group_id` is still emitted alongside it. — Thanks @marco-g-pm for your first contribution 🎉!
+
 ## 7.34.0 — 2026-07-30
 
 ### Minor changes
