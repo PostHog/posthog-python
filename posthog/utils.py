@@ -13,7 +13,7 @@ import sys
 import platform
 import distro  # For Linux OS detection
 
-from .types import FeatureFlagResult
+from .types import FeatureFlagResult as _FeatureFlagResult
 
 log = logging.getLogger("posthog")
 
@@ -324,7 +324,7 @@ class RedisFlagCache:
             "flag_version": flag_definition_version,
             "timestamp": timestamp,
         }
-        if isinstance(flag_result, FeatureFlagResult):
+        if isinstance(flag_result, _FeatureFlagResult):
             # Additive metadata keeps the existing entry shape readable by older SDKs.
             entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
             entry["flag_result_schema_version"] = _FEATURE_FLAG_RESULT_SCHEMA_VERSION
@@ -340,7 +340,7 @@ class RedisFlagCache:
                     != _FEATURE_FLAG_RESULT_SCHEMA_VERSION
                 ):
                     return None
-                flag_result = FeatureFlagResult(**flag_result)
+                flag_result = _FeatureFlagResult(**flag_result)
             return FlagCacheEntry(
                 flag_result=flag_result,
                 flag_definition_version=entry["flag_version"],
