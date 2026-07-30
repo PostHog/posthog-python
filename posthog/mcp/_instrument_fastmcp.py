@@ -99,7 +99,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 client_name,
                 client_version,
                 protocol_version,
-                meta_source=getattr(context, "request_context", None),
+                meta_source=_context_request_context(context),
             )
         )
         request = build_tool_call_request(name, arguments)
@@ -419,6 +419,15 @@ def _low_level_protocol_version(server: Any) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _context_request_context(context: Any) -> Any:
+    """``Context.request_context`` raises off-request rather than returning
+    ``None``, so a bare ``getattr`` default isn't enough."""
+    try:
+        return context.request_context
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
