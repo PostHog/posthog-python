@@ -1946,7 +1946,9 @@ class Client(object):
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
                     return None
-                msg = modified_msg
+                if not isinstance(modified_msg, dict):
+                    raise TypeError("before_send must return a dict or None")
+                msg = clean(modified_msg)
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
                 # Continue with the original message if callback fails
