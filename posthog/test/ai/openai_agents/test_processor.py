@@ -130,7 +130,7 @@ class TestPostHogTracingProcessor:
     def test_group_id_becomes_session_id(
         self, processor, mock_client, mock_trace, mock_span
     ):
-        """Test that the SDK's group_id lands on trace and span events as $ai_session_id."""
+        """Test that group_id lands on trace and span events as both session and group id."""
         processor.on_trace_start(mock_trace)
 
         mock_span.span_data = GenerationSpanData(model="gpt-4o")
@@ -142,7 +142,9 @@ class TestPostHogTracingProcessor:
         trace_kwargs = mock_client.capture.call_args[1]
 
         assert span_kwargs["properties"]["$ai_session_id"] == "group_123"
+        assert span_kwargs["properties"]["$ai_group_id"] == "group_123"
         assert trace_kwargs["properties"]["$ai_session_id"] == "group_123"
+        assert trace_kwargs["properties"]["$ai_group_id"] == "group_123"
 
     def test_personless_mode_when_no_distinct_id(self, mock_client, mock_trace):
         """Test that trace events use personless mode when no distinct_id is provided."""
