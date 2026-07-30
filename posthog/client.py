@@ -433,6 +433,7 @@ class Client(object):
 
     log = logging.getLogger("posthog")
     _client_registry_lock = threading.Lock()
+    _client_registry_pid = os.getpid()
     _client_registry: dict[tuple[str, str], weakref.WeakSet] = {}
     _duplicate_client_warnings: set[tuple[str, str]] = set()
 
@@ -1826,12 +1827,26 @@ class Client(object):
             self.log.exception(f"Failed to capture exception: {e}")
             return None
 
+    @classmethod
+    def _reinit_client_registry_after_fork(cls):
+        """Replace the inherited registry lock once in each forked child."""
+        child_pid = os.getpid()
+        if cls._client_registry_pid == child_pid:
+            return
+
+        # The lock may have been held by a parent thread at fork time. Replace it
+        # without acquiring it, while preserving inherited active-client records.
+        cls._client_registry_lock = threading.Lock()
+        cls._client_registry_pid = child_pid
+
     @staticmethod
     def _reinit_after_fork_weak(weak_self):
         """
         Reinitialize the client after a fork.
         Garbage collected if the client is deleted.
         """
+        Client._reinit_client_registry_after_fork()
+
         self = weak_self()
         if self is None:
             return
