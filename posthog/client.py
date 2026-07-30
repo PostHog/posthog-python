@@ -305,9 +305,37 @@ class _Lane:
         self.consumers: List[Consumer] = []
         self._started = False
         self._closed = False
+        self._active_sync_sends = 0
         self._start_lock = threading.Lock()
+        self._sync_sends_done = threading.Condition(self._start_lock)
         if eager_start:
             self.start()
+
+    def _start_locked(self) -> None:
+        if self._started or self._closed:
+            return
+        for _ in range(self._thread_count):
+            consumer = Consumer(
+                self.queue,
+                self.api_key,
+                host=self.host,
+                on_error=self.on_error,
+                flush_at=self.flush_at,
+                flush_interval=self.flush_interval,
+                gzip=self.gzip,
+                retries=self.max_retries,
+                timeout=self.timeout,
+                historical_migration=self.historical_migration,
+                endpoint=self.endpoint,
+                max_msg_size=self.max_msg_size,
+                capture_mode=self.capture_mode,
+                capture_compression=self.capture_compression,
+            )
+            self.consumers.append(consumer)
+
+            if self.send:
+                consumer.start()
+        self._started = True
 
     def start(self):
         """Construct this lane's consumer pool, starting its threads when sending is enabled.
@@ -316,47 +344,46 @@ class _Lane:
         one pool.
         """
         with self._start_lock:
-            if self._started or self._closed:
-                return
-            for _ in range(self._thread_count):
-                consumer = Consumer(
-                    self.queue,
-                    self.api_key,
-                    host=self.host,
-                    on_error=self.on_error,
-                    flush_at=self.flush_at,
-                    flush_interval=self.flush_interval,
-                    gzip=self.gzip,
-                    retries=self.max_retries,
-                    timeout=self.timeout,
-                    historical_migration=self.historical_migration,
-                    endpoint=self.endpoint,
-                    max_msg_size=self.max_msg_size,
-                    capture_mode=self.capture_mode,
-                    capture_compression=self.capture_compression,
-                )
-                self.consumers.append(consumer)
-
-                if self.send:
-                    consumer.start()
-            self._started = True
+            self._start_locked()
 
     def enqueue(self, msg) -> bool:
-        """Queue `msg` for upload, starting the lane on its first event."""
-        if self._closed:
-            return False
-        if not self._started:
-            self.start()
+        """Atomically admit and queue `msg`, starting the lane on its first event."""
+        with self._start_lock:
+            if self._closed:
+                return False
+            self._start_locked()
+            try:
+                self.queue.put(msg, block=False)
+                return True
+            except Full:
+                return False
+
+    def run_sync_if_open(self, send) -> bool:
+        """Run a synchronous send admitted before closure, and report whether it ran."""
+        with self._sync_sends_done:
+            if self._closed:
+                return False
+            self._active_sync_sends += 1
+
         try:
-            self.queue.put(msg, block=False)
-            return True
-        except Full:
-            return False
+            send()
+        finally:
+            with self._sync_sends_done:
+                self._active_sync_sends -= 1
+                if not self._active_sync_sends:
+                    self._sync_sends_done.notify_all()
+        return True
 
     def close(self) -> None:
-        """Terminal: refuse all future enqueues and consumer starts."""
+        """Terminal: atomically refuse all future queue and sync admissions."""
         with self._start_lock:
             self._closed = True
+
+    def wait_for_sync_sends(self) -> None:
+        """Wait for synchronous sends admitted before close to finish."""
+        with self._sync_sends_done:
+            while self._active_sync_sends:
+                self._sync_sends_done.wait()
 
     def flush(self, timeout_seconds: Optional[float]) -> None:
         """Block until this lane's queue drains, or until `timeout_seconds` elapse."""
@@ -402,7 +429,9 @@ class _Lane:
         a lazy lane returns to not-started and restarts on next use.
         """
         self.queue = Queue(self._max_queue_size)
+        self._active_sync_sends = 0
         self._start_lock = threading.Lock()
+        self._sync_sends_done = threading.Condition(self._start_lock)
         self.consumers = []
         self._started = False
         if self._eager_start:
@@ -1953,38 +1982,55 @@ class Client(object):
 
         self.log.debug("queueing: %s", msg)
 
-        # if send is False, return msg as if it was successfully queued
+        # if send is False, return msg as if it was successfully queued, unless
+        # shutdown has already closed this lane's admission.
         if not self.send:
-            return sent_uuid
+            if lane.run_sync_if_open(lambda: None):
+                return sent_uuid
+            self.log.warning(
+                "%s lane received event %s after shutdown, dropping it",
+                lane.name,
+                msg["event"],
+            )
+            return None
 
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
-            # Sync mode bypasses the lane's queue but keeps its wire config:
-            # the AI lane is pinned to v0, so its events post to the AI
-            # endpoint regardless of `capture_mode`.
-            if lane.capture_mode == CaptureMode.V1:
-                _send_v1_batch(
+
+            def send_sync() -> None:
+                # Sync mode bypasses the lane's queue but keeps its wire config:
+                # the AI lane is pinned to v0, so its events post to the AI
+                # endpoint regardless of `capture_mode`.
+                if lane.capture_mode == CaptureMode.V1:
+                    _send_v1_batch(
+                        self.api_key,
+                        self.host,
+                        [msg],
+                        compression=self.capture_compression,
+                        timeout=self.timeout,
+                        max_retries=self.max_retries,
+                        historical_migration=self.historical_migration,
+                    )
+                    return
+
+                batch_post(
                     self.api_key,
                     self.host,
-                    [msg],
-                    compression=self.capture_compression,
+                    gzip=self.gzip,
                     timeout=self.timeout,
-                    max_retries=self.max_retries,
+                    batch=[msg],
                     historical_migration=self.historical_migration,
+                    path=lane.endpoint,
                 )
+
+            if lane.run_sync_if_open(send_sync):
                 return sent_uuid
-
-            batch_post(
-                self.api_key,
-                self.host,
-                gzip=self.gzip,
-                timeout=self.timeout,
-                batch=[msg],
-                historical_migration=self.historical_migration,
-                path=lane.endpoint,
+            self.log.warning(
+                "%s lane received event %s after shutdown, dropping it",
+                lane.name,
+                msg["event"],
             )
-
-            return sent_uuid
+            return None
 
         if lane.enqueue(msg):
             self.log.debug("enqueued %s.", msg["event"])
@@ -2097,6 +2143,13 @@ class Client(object):
             posthog.shutdown()
             ```
         """
+        # Close every lane before draining any of them so no producer can be
+        # admitted between a completed flush and consumer shutdown.
+        for lane in self._lanes:
+            lane.close()
+        for lane in self._lanes:
+            lane.wait_for_sync_sends()
+
         self.flush(timeout_seconds=None)
         if self._metrics is not None:
             try:
@@ -2105,8 +2158,6 @@ class Client(object):
                 self.log.exception("Failed to flush metrics on shutdown")
             self._metrics.reset()
         self.join()
-        for lane in self._lanes:
-            lane.close()
         self.distinct_ids_feature_flags_reported.clear()
 
         if self.exception_capture:
