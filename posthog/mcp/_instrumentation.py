@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from ._capture import capture_event
+from ._client_identity import apply_meta_client_info
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._intent import resolve_tool_call_intent, set_event_intent
@@ -191,11 +192,18 @@ def resolve_session_and_client(
     client_name: Optional[str],
     client_version: Optional[str],
     protocol_version: Optional[str] = None,
+    meta_source: Any = None,
 ) -> tuple[Optional[SessionTokenPayload], Optional[str], Optional[str], Optional[str]]:
     """Decode a replayed ``Mcp-Session-Id`` value as a self-encoded session token,
     and backfill the client name/version/protocol version from it when the live
     transport supplied none (the stateless-pod case, where ``initialize`` was never
     seen here).
+
+    ``meta_source`` is anything carrying this request's ``params._meta`` (a
+    ``Context``, ``RequestContext``, or request object). Under the MCP 2026-07-28
+    revision there is no ``initialize`` and no session token, so ``_meta`` is the
+    only source of client identity — it therefore takes precedence over both. For
+    legacy clients it is absent and nothing changes.
 
     Returns ``(token, client_name, client_version, protocol_version)``; ``token`` is
     ``None`` when the header isn't one of our tokens (a plain UUID, JWT, or nothing)."""
@@ -204,7 +212,12 @@ def resolve_session_and_client(
         client_name = client_name or token.client_name
         client_version = client_version or token.client_version
         protocol_version = protocol_version or token.protocol_version
-    return token, client_name, client_version, protocol_version
+    return (
+        token,
+        *apply_meta_client_info(
+            meta_source, client_name, client_version, protocol_version
+        ),
+    )
 
 
 async def prepare_request(

@@ -95,7 +95,11 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         mcp_session_id = _mcp_session_id(context)
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
-                mcp_session_id, client_name, client_version, protocol_version
+                mcp_session_id,
+                client_name,
+                client_version,
+                protocol_version,
+                meta_source=getattr(context, "request_context", None),
             )
         )
         request = build_tool_call_request(name, arguments)
@@ -226,7 +230,11 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         mcp_session_id = _low_level_session_id(server)
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
-                mcp_session_id, client_name, client_version, protocol_version
+                mcp_session_id,
+                client_name,
+                client_version,
+                protocol_version,
+                meta_source=req,
             )
         )
         request = request_to_dict(req)

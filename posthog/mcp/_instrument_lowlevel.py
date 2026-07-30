@@ -98,7 +98,11 @@ def _wrap_call_tool(
         mcp_session_id = _mcp_session_id(server)
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
-                mcp_session_id, client_name, client_version, protocol_version
+                mcp_session_id,
+                client_name,
+                client_version,
+                protocol_version,
+                meta_source=req,
             )
         )
         request = build_tool_call_request(name, arguments)
@@ -238,7 +242,11 @@ def _wrap_list_tools(
         mcp_session_id = _mcp_session_id(server)
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
-                mcp_session_id, client_name, client_version, protocol_version
+                mcp_session_id,
+                client_name,
+                client_version,
+                protocol_version,
+                meta_source=req,
             )
         )
         request = request_to_dict(req)
