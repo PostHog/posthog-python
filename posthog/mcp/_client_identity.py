@@ -13,7 +13,7 @@ such constants. The strings match the 2026-07-28 schema either way.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 META_CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo"
 META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
@@ -40,15 +40,13 @@ def apply_meta_client_info(
     ``_meta``) leaves all three untouched."""
     try:
         # A RequestContext carries `_meta` directly; a request nests it under
-        # `params`.
+        # `params`. `dict()` normalizes both SDK generations: `mcp>=2` hands over
+        # a plain dict, 1.x a `RequestParams.Meta` model whose undeclared
+        # reverse-DNS keys iterate out just the same.
         params = getattr(source, "params", None)
-        meta = getattr(source, "meta", None) or getattr(params, "meta", None)
-        # `mcp>=2` hands it over as a plain dict. On 1.x it's a
-        # `RequestParams.Meta` model instead, and since that model is
-        # `extra="allow"`, these undeclared reverse-DNS keys land in
-        # `model_extra` — the dict we actually want.
-        if not isinstance(meta, Mapping):
-            meta = getattr(meta, "model_extra", None) or {}
+        meta = dict(
+            getattr(source, "meta", None) or getattr(params, "meta", None) or {}
+        )
 
         client_info = meta.get(META_CLIENT_INFO_KEY) or {}
         return (
