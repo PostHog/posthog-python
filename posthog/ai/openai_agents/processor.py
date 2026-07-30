@@ -236,9 +236,10 @@ class PostHogTracingProcessor(TracingProcessor):
             if latency is not None:
                 properties["$ai_latency"] = latency
 
-            # Include group_id for linking related traces (e.g., conversation threads)
+            # The Agents SDK group_id links traces from one conversation, which is
+            # exactly what PostHog calls a session
             if group_id:
-                properties["$ai_group_id"] = group_id
+                properties["$ai_session_id"] = group_id
 
             # Include trace metadata if present
             if metadata:
@@ -476,7 +477,7 @@ class PostHogTracingProcessor(TracingProcessor):
             **error_properties,
         }
         if group_id:
-            properties["$ai_group_id"] = group_id
+            properties["$ai_session_id"] = group_id
         return properties
 
     def _handle_generation_span(
