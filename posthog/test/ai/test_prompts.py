@@ -820,9 +820,15 @@ class TestPromptsConfig(TestPrompts):
         self, mock_get_session
     ):
         """Callers often mutate config before spreading it into an LLM call; that must not leak into later cache hits."""
+        # Nested values included: a shallow copy would pass the top-level mutations
+        # below but leak the nested one into the cache.
+        nested_config = {
+            "model": "gpt-4o",
+            "tools": [{"name": "search", "parameters": {"depth": 1}}],
+        }
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(
-            json_data={**self.mock_prompt_response, "config": self.mock_config}
+            json_data={**self.mock_prompt_response, "config": nested_config}
         )
 
         prompts = Prompts(self.create_mock_posthog())
@@ -831,11 +837,18 @@ class TestPromptsConfig(TestPrompts):
         assert first.config is not None
         first.config["temperature"] = 0.9
         first.config.pop("model")
+        first.config["tools"][0]["parameters"]["depth"] = 99
 
         second = prompts.get("test-prompt", with_metadata=True)
 
         self.assertEqual(second.source, "cache")
-        self.assertEqual(second.config, self.mock_config)
+        self.assertEqual(
+            second.config,
+            {
+                "model": "gpt-4o",
+                "tools": [{"name": "search", "parameters": {"depth": 1}}],
+            },
+        )
 
     @parameterized.expand(
         [
