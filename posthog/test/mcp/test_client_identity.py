@@ -122,6 +122,23 @@ def test_never_raises_on_an_unusable_source():
     )
 
 
+def test_reads_a_plain_dict_meta():
+    """`mcp>=2` drops `RequestParams.Meta` and hands `_meta` over as a plain
+    dict, so there is no `model_extra` to unwrap on that generation."""
+
+    class V2Params:
+        meta = FULL_META
+
+    class V2Request:
+        params = V2Params()
+
+    assert apply_meta_client_info(V2Request(), None, None, None) == (
+        "codex",
+        "1.2.3",
+        "2026-07-28",
+    )
+
+
 def test_falls_back_on_a_malformed_client_info():
     """`_meta` is arbitrary client-controlled JSON, so `clientInfo` need not be an
     object; the wrong shape must fall back rather than raise."""
