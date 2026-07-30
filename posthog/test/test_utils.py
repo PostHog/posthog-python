@@ -762,6 +762,86 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.cache._deserialize_entry("not json") is None
         assert self.cache._deserialize_entry(json.dumps({"flag_result": True})) is None
 
+    def test_feature_flag_result_round_trip(self):
+        flag_result = FeatureFlagResult(
+            key="checkout-redesign",
+            enabled=True,
+            variant="test",
+            payload={"discount": Decimal("12.5")},
+            reason="matched rollout condition",
+        )
+
+        serialized = self.cache._serialize_entry(flag_result, 3, timestamp=123)
+
+        assert json.loads(serialized) == {
+            "flag_result": {
+                "key": "checkout-redesign",
+                "enabled": True,
+                "variant": "test",
+                "payload": {"discount": 12.5},
+                "reason": "matched rollout condition",
+            },
+            "flag_version": 3,
+            "timestamp": 123,
+            "flag_result_type": "FeatureFlagResult",
+            "flag_result_schema_version": 1,
+        }
+        entry = self.cache._deserialize_entry(serialized)
+        assert entry is not None
+        assert entry.flag_result == FeatureFlagResult(
+            key="checkout-redesign",
+            enabled=True,
+            variant="test",
+            payload={"discount": 12.5},
+            reason="matched rollout condition",
+        )
+
+    @parameterized.expand(
+        [
+            ("boolean", True),
+            ("variant", "test"),
+            ("dictionary", {"enabled": True, "payload": {"plan": "pro"}}),
+        ]
+    )
+    def test_untyped_flag_result_round_trip(self, _name, flag_result):
+        serialized = self.cache._serialize_entry(flag_result, 3, timestamp=123)
+
+        assert "flag_result_type" not in json.loads(serialized)
+        entry = self.cache._deserialize_entry(serialized)
+        assert entry is not None
+        assert entry.flag_result == flag_result
+
+    def test_legacy_unmarked_feature_flag_result_remains_a_dict(self):
+        legacy_result = {
+            "key": "checkout-redesign",
+            "enabled": True,
+            "variant": None,
+            "payload": {"plan": "pro"},
+            "reason": "legacy entry",
+        }
+        serialized = json.dumps(
+            {"flag_result": legacy_result, "flag_version": 3, "timestamp": 123}
+        )
+
+        entry = self.cache._deserialize_entry(serialized)
+
+        assert entry is not None
+        assert entry.flag_result == legacy_result
+        assert isinstance(entry.flag_result, dict)
+
+    def test_unknown_feature_flag_result_schema_is_a_cache_miss(self):
+        serialized = json.dumps(
+            {
+                "flag_result": {},
+                "flag_version": 3,
+                "timestamp": 123,
+                "flag_result_type": "FeatureFlagResult",
+                "flag_result_schema_version": 2,
+            }
+        )
+
+        assert self.cache._deserialize_entry(serialized) is None
+
     def test_get_set_and_stale_cached_flags(self):
         self.cache.set_cached_flag("user123", "beta", True, 7)
 

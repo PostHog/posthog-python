@@ -2505,7 +2505,7 @@ class Client(object):
         """Returns a stale cached flag value if available, otherwise None."""
         if self.flag_cache:
             stale_result = self.flag_cache.get_stale_cached_flag(distinct_id, key)
-            if stale_result:
+            if isinstance(stale_result, FeatureFlagResult):
                 self.log.info(
                     f"[FEATURE FLAGS] Using stale cached value for flag {key}"
                 )
