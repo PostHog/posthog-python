@@ -35,7 +35,7 @@ class ExceptionCapture:
         self.client = client
         self._closed = False
         self.original_excepthook = sys.excepthook
-        self.original_threading_excepthook = threading.excepthook
+        self._original_threading_excepthook = threading.excepthook
         sys.excepthook = self.exception_handler
         threading.excepthook = self.thread_exception_handler
         # opt-in client-side rate limiting: per exception type, allow a burst
@@ -61,9 +61,9 @@ class ExceptionCapture:
             )
         if self._is_own_hook(threading.excepthook, "thread_exception_handler"):
             threading.excepthook = self._resolve_hook(
-                self.original_threading_excepthook,
+                self._original_threading_excepthook,
                 "thread_exception_handler",
-                "original_threading_excepthook",
+                "_original_threading_excepthook",
             )
         if self._rate_limiter is not None:
             self._rate_limiter.stop()
@@ -82,9 +82,9 @@ class ExceptionCapture:
         if not self._closed:
             self.capture_exception((args.exc_type, args.exc_value, args.exc_traceback))
         previous_hook = self._resolve_hook(
-            self.original_threading_excepthook,
+            self._original_threading_excepthook,
             "thread_exception_handler",
-            "original_threading_excepthook",
+            "_original_threading_excepthook",
         )
         previous_hook(args)
 
