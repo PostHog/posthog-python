@@ -304,6 +304,13 @@ class TestContexts(unittest.TestCase):
                 pid = os.fork()
                 if pid == 0:
                     os.close(read_fd)
+                    with new_context():
+                        identify_context("child-user")
+                        set_context_session("child-session")
+                        set_context_device_id("child-device")
+                        tag("child-tag", "child-value")
+                        child_local_state = context_state()
+                    child_state_after_local_scope = context_state()
                 else:
                     os.close(write_fd)
 
@@ -314,6 +321,8 @@ class TestContexts(unittest.TestCase):
 
         if pid == 0:
             child_states = (
+                child_local_state,
+                child_state_after_local_scope,
                 child_state_after_inner_scope,
                 context_state(),
                 copied_context.run(context_state),
@@ -328,8 +337,23 @@ class TestContexts(unittest.TestCase):
 
         empty_state = (None, None, None, {})
         self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)
+        child_local_state = (
+            "child-user",
+            "child-session",
+            "child-device",
+            {"child-tag": "child-value"},
+        )
         self.assertEqual(
-            child_states, repr((empty_state, empty_state, empty_state)).encode()
+            child_states,
+            repr(
+                (
+                    child_local_state,
+                    empty_state,
+                    empty_state,
+                    empty_state,
+                    empty_state,
+                )
+            ).encode(),
         )
         self.assertEqual(
             parent_state,
