@@ -1,4 +1,5 @@
 import datetime
+import threading
 import unittest
 
 from unittest import mock
@@ -3233,6 +3234,190 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(client._flags_etag, '"etag-v2"')
         self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
 
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_ignores_older_response_that_finishes_last(
+        self, patch_get
+    ):
+        first_request_started = threading.Event()
+        release_first_request = threading.Event()
+        second_load_finished = threading.Event()
+        call_count_lock = threading.Lock()
+        call_count = 0
+
+        old_response = GetResponse(
+            data={
+                "flags": [{"id": 1, "key": "old-flag", "active": True}],
+                "group_type_mapping": {"0": "old-group"},
+                "cohorts": {"old": {"properties": []}},
+                "minimal_flag_called_events": False,
+            },
+            etag='"old-etag"',
+        )
+        new_response = GetResponse(
+            data={
+                "flags": [{"id": 2, "key": "new-flag", "active": True}],
+                "group_type_mapping": {"0": "new-group"},
+                "cohorts": {"new": {"properties": []}},
+                "minimal_flag_called_events": True,
+            },
+            etag='"new-etag"',
+        )
+
+        def get_with_reversed_completion(*args, **kwargs):
+            nonlocal call_count
+            with call_count_lock:
+                request_number = call_count
+                call_count += 1
+
+            if request_number == 0:
+                first_request_started.set()
+                release_first_request.wait(timeout=5)
+                return old_response
+
+            return new_response
+
+        patch_get.side_effect = get_with_reversed_completion
+        client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+
+        def load_second_response():
+            client._load_feature_flags()
+            second_load_finished.set()
+
+        first_thread = threading.Thread(target=client._load_feature_flags)
+        second_thread = threading.Thread(target=load_second_response)
+
+        first_thread.start()
+        self.assertTrue(first_request_started.wait(timeout=5))
+        second_thread.start()
+        try:
+            self.assertTrue(second_load_finished.wait(timeout=5))
+        finally:
+            release_first_request.set()
+
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(client.feature_flags[0]["key"], "new-flag")
+        self.assertEqual(client.group_type_mapping, {"0": "new-group"})
+        self.assertEqual(client.cohorts, {"new": {"properties": []}})
+        self.assertTrue(client._minimal_flag_called_events)
+        self.assertEqual(client._flags_etag, '"new-etag"')
+
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_304_does_not_suppress_in_flight_update(self, patch_get):
+        first_request_started = threading.Event()
+        second_load_finished = threading.Event()
+        call_count_lock = threading.Lock()
+        call_count = 0
+
+        changed_response = GetResponse(
+            data={
+                "flags": [{"id": 2, "key": "new-flag", "active": True}],
+                "group_type_mapping": {},
+                "cohorts": {},
+            },
+            etag='"etag-b"',
+        )
+        not_modified_response = GetResponse(
+            data=None,
+            etag='"etag-a"',
+            not_modified=True,
+        )
+
+        def get_304_before_changed_response(*args, **kwargs):
+            nonlocal call_count
+            with call_count_lock:
+                request_number = call_count
+                call_count += 1
+
+            if request_number == 0:
+                first_request_started.set()
+                second_load_finished.wait(timeout=5)
+                return changed_response
+            return not_modified_response
+
+        patch_get.side_effect = get_304_before_changed_response
+        client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+        client._flags_etag = '"etag-a"'
+
+        def load_not_modified_response():
+            client._load_feature_flags()
+            second_load_finished.set()
+
+        first_thread = threading.Thread(target=client._load_feature_flags)
+        second_thread = threading.Thread(target=load_not_modified_response)
+        first_thread.start()
+        self.assertTrue(first_request_started.wait(timeout=5))
+        second_thread.start()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(client.feature_flags[0]["key"], "new-flag")
+        self.assertEqual(client._flags_etag, '"etag-b"')
+
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_ignores_304_for_superseded_etag(self, patch_get):
+        first_request_started = threading.Event()
+        second_request_started = threading.Event()
+        first_load_finished = threading.Event()
+        call_count_lock = threading.Lock()
+        call_count = 0
+
+        changed_response = GetResponse(
+            data={
+                "flags": [{"id": 2, "key": "new-flag", "active": True}],
+                "group_type_mapping": {"0": "new-group"},
+                "cohorts": {},
+            },
+            etag='"etag-b"',
+        )
+        stale_not_modified_response = GetResponse(
+            data=None,
+            etag='"etag-a"',
+            not_modified=True,
+        )
+
+        def get_changed_then_delayed_304(*args, **kwargs):
+            nonlocal call_count
+            with call_count_lock:
+                request_number = call_count
+                call_count += 1
+
+            if request_number == 0:
+                first_request_started.set()
+                second_request_started.wait(timeout=5)
+                return changed_response
+
+            second_request_started.set()
+            first_load_finished.wait(timeout=5)
+            return stale_not_modified_response
+
+        patch_get.side_effect = get_changed_then_delayed_304
+        client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+        client._flags_etag = '"etag-a"'
+
+        def load_changed_response():
+            client._load_feature_flags()
+            first_load_finished.set()
+
+        first_thread = threading.Thread(target=load_changed_response)
+        second_thread = threading.Thread(target=client._load_feature_flags)
+
+        first_thread.start()
+        self.assertTrue(first_request_started.wait(timeout=5))
+        second_thread.start()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(client.feature_flags[0]["key"], "new-flag")
+        self.assertEqual(client.group_type_mapping, {"0": "new-group"})
+        self.assertEqual(client._flags_etag, '"etag-b"')
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_clears_etag_when_server_stops_sending(
@@ -3265,6 +3450,41 @@ class TestLocalEvaluation(unittest.TestCase):
         client._load_feature_flags()
         self.assertIsNone(client._flags_etag)
         self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
+
+    @parameterized.expand([401, 402])
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_refetches_after_state_reset(self, status, patch_get):
+        patch_get.side_effect = [
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "old-flag", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"old-etag"',
+            ),
+            APIError(status, "reset flag definitions"),
+            GetResponse(
+                data={
+                    "flags": [{"id": 2, "key": "new-flag", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"new-etag"',
+            ),
+        ]
+        client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+
+        client._load_feature_flags()
+        client._load_feature_flags()
+        self.assertEqual(client.feature_flags, [])
+        self.assertIsNone(client._flags_etag)
+
+        client._load_feature_flags()
+
+        self.assertIsNone(patch_get.call_args_list[2].kwargs["etag"])
+        self.assertEqual(client.feature_flags[0]["key"], "new-flag")
+        self.assertEqual(client._flags_etag, '"new-etag"')
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
