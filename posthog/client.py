@@ -3373,6 +3373,7 @@ class Client(object):
             person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
+            device_id=device_id,
         )
 
         feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
