@@ -32,6 +32,11 @@ class PromptResult:
 
     ``label`` is the label the prompt resolved through, populated from the API
     response when fetching with the ``label`` option; ``None`` otherwise.
+
+    ``config`` is the JSON object of model parameters or agent configuration
+    stored with the prompt version, or ``None`` when the version has none
+    (including on ``code_fallback`` results). Use defensive access, e.g.
+    ``(result.config or {}).get("temperature", 0)``.
     """
 
     source: PromptSource
@@ -39,6 +44,7 @@ class PromptResult:
     name: Optional[str] = None
     version: Optional[int] = None
     label: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
 
 
 class CachedPrompt:
@@ -51,12 +57,14 @@ class CachedPrompt:
         name: str,
         version: int,
         label: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
     ):
         self.prompt = prompt
         self.fetched_at = fetched_at
         self.name = name
         self.version = version
         self.label = label
+        self.config = config
 
 
 def _cache_key(
@@ -81,6 +89,12 @@ def _prompt_reference(
     if label is not None:
         return f'{reference} label "{label}"'
     return reference
+
+
+def _extract_config(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Read config from an API response, tolerating servers that don't send it."""
+    config = data.get("config")
+    return config if isinstance(config, dict) else None
 
 
 def _is_prompt_api_response(data: Any) -> bool:
@@ -225,9 +239,9 @@ class Prompts:
         Fetch a prompt by name from the PostHog API.
 
         When ``with_metadata`` is ``True``, returns a :class:`PromptResult`
-        with ``source``, ``name``, and ``version`` metadata.  When omitted or
-        ``False``, returns a plain string (deprecated -- will be removed in a
-        future major version).
+        with ``source``, ``name``, ``version``, and ``config`` metadata.  When
+        omitted or ``False``, returns a plain string (deprecated -- will be
+        removed in a future major version).
 
         Args:
             name: The name of the prompt to fetch
@@ -319,6 +333,7 @@ class Prompts:
                     name=cached.name,
                     version=cached.version,
                     label=cached.label,
+                    config=cached.config,
                 )
 
         # Try to fetch from API
@@ -344,6 +359,7 @@ class Prompts:
                 name=data["name"],
                 version=data["version"],
                 label=data.get("label"),
+                config=_extract_config(data),
             )
 
             return PromptResult(
@@ -352,6 +368,7 @@ class Prompts:
                 name=data["name"],
                 version=data["version"],
                 label=data.get("label"),
+                config=_extract_config(data),
             )
 
         except Exception as error:
@@ -371,6 +388,7 @@ class Prompts:
                     name=cached.name,
                     version=cached.version,
                     label=cached.label,
+                    config=cached.config,
                 )
 
             raise

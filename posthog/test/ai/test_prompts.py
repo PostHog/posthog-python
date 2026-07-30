@@ -769,6 +769,75 @@ class TestPromptsGetWithMetadata(TestPrompts):
         self.assertEqual(mock_get.call_count, 1)
 
 
+class TestPromptsConfig(TestPrompts):
+    """Tests for the config object attached to prompt versions."""
+
+    mock_config = {"model": "gpt-4o", "temperature": 0.2}
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_config_flows_through_api_and_cache_results(self, mock_get_session):
+        """Config from the API response must survive both the fresh fetch and a cache hit."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(
+            json_data={**self.mock_prompt_response, "config": self.mock_config}
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        api_result = prompts.get("test-prompt", with_metadata=True)
+        cached_result = prompts.get("test-prompt", with_metadata=True)
+
+        self.assertEqual(api_result.source, "api")
+        self.assertEqual(api_result.config, self.mock_config)
+        self.assertEqual(cached_result.source, "cache")
+        self.assertEqual(cached_result.config, self.mock_config)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("posthog.ai.prompts._get_session")
+    @patch("posthog.ai.prompts.time.time")
+    def test_stale_cache_result_keeps_config(self, mock_time, mock_get_session):
+        """A fetch failure served from stale cache must not lose the config."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = [
+            MockResponse(
+                json_data={**self.mock_prompt_response, "config": self.mock_config}
+            ),
+            Exception("Network error"),
+        ]
+        mock_time.return_value = 1000.0
+
+        prompts = Prompts(self.create_mock_posthog())
+        prompts.get("test-prompt", with_metadata=True, cache_ttl_seconds=60)
+        mock_time.return_value = 1061.0
+
+        result = prompts.get("test-prompt", with_metadata=True, cache_ttl_seconds=60)
+
+        self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(result.config, self.mock_config)
+
+    @parameterized.expand(
+        [
+            ("absent", {}),
+            ("null", {"config": None}),
+            ("non_dict", {"config": "gpt-4o"}),
+        ]
+    )
+    @patch("posthog.ai.prompts._get_session")
+    def test_missing_or_invalid_config_reads_as_none(
+        self, _scenario, extra, mock_get_session
+    ):
+        """Servers that omit config or send unexpected shapes read as None."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(
+            json_data={**self.mock_prompt_response, **extra}
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+        result = prompts.get("test-prompt", with_metadata=True)
+
+        self.assertIsNone(result.config)
+
+
 class TestPromptsGetDeprecationWarning(TestPrompts):
     """Tests for the deprecation warning when with_metadata is not passed."""
 
