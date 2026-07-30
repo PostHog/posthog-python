@@ -4,6 +4,7 @@ Prompt management for PostHog AI SDK.
 Fetch and compile LLM prompts from PostHog with caching and fallback support.
 """
 
+import copy
 import logging
 import re
 import time
@@ -333,7 +334,9 @@ class Prompts:
                     name=cached.name,
                     version=cached.version,
                     label=cached.label,
-                    config=cached.config,
+                    # Copied so a caller mutating result.config can't pollute the
+                    # cache entry that later cache hits are served from.
+                    config=copy.deepcopy(cached.config),
                 )
 
         # Try to fetch from API
@@ -352,6 +355,8 @@ class Prompts:
                     data.get("label"),
                 )
 
+            config = _extract_config(data)
+
             # Update cache
             self._cache[cache_key] = CachedPrompt(
                 prompt=data["prompt"],
@@ -359,7 +364,7 @@ class Prompts:
                 name=data["name"],
                 version=data["version"],
                 label=data.get("label"),
-                config=_extract_config(data),
+                config=config,
             )
 
             return PromptResult(
@@ -368,7 +373,7 @@ class Prompts:
                 name=data["name"],
                 version=data["version"],
                 label=data.get("label"),
-                config=_extract_config(data),
+                config=copy.deepcopy(config),
             )
 
         except Exception as error:
@@ -388,7 +393,7 @@ class Prompts:
                     name=cached.name,
                     version=cached.version,
                     label=cached.label,
-                    config=cached.config,
+                    config=copy.deepcopy(cached.config),
                 )
 
             raise

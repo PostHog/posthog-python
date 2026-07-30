@@ -815,6 +815,28 @@ class TestPromptsConfig(TestPrompts):
         self.assertEqual(result.source, "stale_cache")
         self.assertEqual(result.config, self.mock_config)
 
+    @patch("posthog.ai.prompts._get_session")
+    def test_mutating_a_result_config_does_not_pollute_the_cache(
+        self, mock_get_session
+    ):
+        """Callers often mutate config before spreading it into an LLM call; that must not leak into later cache hits."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(
+            json_data={**self.mock_prompt_response, "config": self.mock_config}
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        first = prompts.get("test-prompt", with_metadata=True)
+        assert first.config is not None
+        first.config["temperature"] = 0.9
+        first.config.pop("model")
+
+        second = prompts.get("test-prompt", with_metadata=True)
+
+        self.assertEqual(second.source, "cache")
+        self.assertEqual(second.config, self.mock_config)
+
     @parameterized.expand(
         [
             ("absent", {}),
