@@ -36,14 +36,14 @@ def apply_meta_client_info(
     fields the request actually carries override, so a legacy request (no
     ``_meta``) leaves all three untouched."""
     try:
-        # A RequestContext carries the meta directly; a request nests it under
-        # `params`. Either way it's a `RequestParams.Meta`, which is
-        # `extra="allow"` — these keys aren't declared fields, so they land in
-        # `model_extra`.
-        meta = getattr(source, "meta", None) or getattr(
-            getattr(source, "params", None), "meta", None
-        )
+        # `_meta` reaches us as a `RequestParams.Meta` model, not a dict: a
+        # RequestContext carries it directly, a request nests it under `params`.
+        # The model is `extra="allow"` and these keys aren't declared fields, so
+        # they land in `model_extra` — the dict we actually want.
+        params = getattr(source, "params", None)
+        meta = getattr(source, "meta", None) or getattr(params, "meta", None)
         meta = getattr(meta, "model_extra", None) or {}
+
         client_info = meta.get(META_CLIENT_INFO_KEY) or {}
         return (
             _str(client_info.get("name")) or client_name,
