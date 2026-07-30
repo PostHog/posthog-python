@@ -1295,7 +1295,7 @@ method posthog.exception_utils.VariableSizeLimiter.can_add(size)
 method posthog.exception_utils.VariableSizeLimiter.get_remaining_space()
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str) -> Optional[FlagValue]
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload(key: str) -> Optional[Any]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str) -> bool
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only(keys: List[str]) -> FeatureFlagEvaluations
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed() -> FeatureFlagEvaluations
 method posthog.flag_definition_cache.FlagDefinitionCacheProvider.get_flag_definitions() -> Union[Optional[FlagDefinitionCacheData], Awaitable[Optional[FlagDefinitionCacheData]]]
