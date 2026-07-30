@@ -3775,7 +3775,7 @@ class TestLocalEvaluation(unittest.TestCase):
                         "rollout_percentage": 100,
                     }
                 ],
-                "payloads": {"true": 300},
+                "payloads": {"true": 300, "false": 400},
             },
         }
         self.client.feature_flags = [basic_flag]
@@ -3795,6 +3795,27 @@ class TestLocalEvaluation(unittest.TestCase):
                 person_properties={"region": "USA"},
             ),
             300,
+        )
+
+        # A false override must take precedence over a locally evaluated true value.
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag",
+                "some-distinct-id",
+                match_value=False,
+                person_properties={"region": "USA"},
+            ),
+            400,
+        )
+
+        # Locally evaluated false values use the lowercase "false" payload key.
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"region": "Canada"},
+            ),
+            400,
         )
         self.assertEqual(patch_flags.call_count, 0)
 

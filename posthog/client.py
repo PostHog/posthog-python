@@ -2566,7 +2566,9 @@ class Client(object):
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_was_locally_evaluated:
-            lookup_match_value = override_match_value or flag_value
+            lookup_match_value = (
+                override_match_value if override_match_value is not None else flag_value
+            )
             payload = (
                 self._compute_payload_locally(key, lookup_match_value)
                 if lookup_match_value is not None
@@ -3131,11 +3133,11 @@ class Client(object):
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
-            # For boolean flags, convert True to "true"
+            # For boolean flags, use lowercase keys ("true" or "false")
             # For multivariate flags, use the variant string as-is
             lookup_value = (
-                "true"
-                if isinstance(match_value, bool) and match_value
+                str(match_value).lower()
+                if isinstance(match_value, bool)
                 else str(match_value)
             )
             payload = flag_payloads.get(lookup_value, None)
