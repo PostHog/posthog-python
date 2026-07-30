@@ -1,5 +1,11 @@
 # posthog
 
+## 7.34.0 — 2026-07-30
+
+### Minor changes
+
+- [3c9aa59](https://github.com/posthog/posthog-python/commit/3c9aa59d1f2059e04bb802e93173cb7372dbbd0e) feat(ai): `Prompts.get(..., with_metadata=True)` results now include `config`, the JSON object of model parameters or agent configuration stored with the prompt version in PostHog prompt management (`None` when the version has none). Config is carried through the client-side cache and the stale-cache fallback. The hardcoded `fallback` string has no config, so use defensive access like `(result.config or {}).get("temperature", 0)`. — Thanks @jurajmajerik!
+
 ## 7.33.0 — 2026-07-29
 
 ### Minor changes
