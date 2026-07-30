@@ -122,6 +122,17 @@ def test_never_raises_on_an_unusable_source():
     )
 
 
+def test_falls_back_on_a_malformed_client_info():
+    """`_meta` is arbitrary client-controlled JSON, so `clientInfo` need not be an
+    object; the wrong shape must fall back rather than raise."""
+    for bad in ([1, 2], "codex", 7):
+        assert apply({META_CLIENT_INFO_KEY: bad}, "legacy", "0.0.1", "2025-11-25") == (
+            "legacy",
+            "0.0.1",
+            "2025-11-25",
+        )
+
+
 # --- precedence --------------------------------------------------------------
 
 

@@ -10,33 +10,16 @@ dependency of this package.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 META_CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo"
 META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
 
 
-def _text(value: Any) -> Optional[str]:
+def _str(value: Any) -> Optional[str]:
     """Non-empty strings only, so a client sending ``""`` or a non-string can't
-    blank out a good value from the transport or the session token."""
+    blank out (or put junk over) a good value from the token or ``initialize``."""
     return value if isinstance(value, str) and value else None
-
-
-def _meta_entries(source: Any) -> Optional[Mapping[str, Any]]:
-    """The request's ``_meta`` entries, or ``None``.
-
-    ``source`` is either a ``RequestContext`` (which carries it as ``.meta``) or
-    a request object (which nests it under ``.params``)."""
-    try:
-        meta = getattr(source, "meta", None) or getattr(
-            getattr(source, "params", None), "meta", None
-        )
-        # `RequestParams.Meta` is `extra="allow"`, and these reverse-DNS keys
-        # aren't declared fields, so they land in `model_extra`.
-        extra = getattr(meta, "model_extra", None)
-    except Exception:  # noqa: BLE001 - identity is best-effort, never fatal
-        return None
-    return extra if isinstance(extra, Mapping) else None
 
 
 def apply_meta_client_info(
@@ -52,17 +35,20 @@ def apply_meta_client_info(
     no session token to learn from, so it is the only per-request truth. Only the
     fields the request actually carries override, so a legacy request (no
     ``_meta``) leaves all three untouched."""
-    meta = _meta_entries(source)
-    if not meta:
+    try:
+        # A RequestContext carries the meta directly; a request nests it under
+        # `params`. Either way it's a `RequestParams.Meta`, which is
+        # `extra="allow"` — these keys aren't declared fields, so they land in
+        # `model_extra`.
+        meta = getattr(source, "meta", None) or getattr(
+            getattr(source, "params", None), "meta", None
+        )
+        meta = getattr(meta, "model_extra", None) or {}
+        client_info = meta.get(META_CLIENT_INFO_KEY) or {}
+        return (
+            _str(client_info.get("name")) or client_name,
+            _str(client_info.get("version")) or client_version,
+            _str(meta.get(META_PROTOCOL_VERSION_KEY)) or protocol_version,
+        )
+    except Exception:  # noqa: BLE001 - `_meta` is client-controlled; never fatal
         return client_name, client_version, protocol_version
-
-    client_info = meta.get(META_CLIENT_INFO_KEY)
-    if isinstance(client_info, Mapping):
-        client_name = _text(client_info.get("name")) or client_name
-        client_version = _text(client_info.get("version")) or client_version
-
-    return (
-        client_name,
-        client_version,
-        _text(meta.get(META_PROTOCOL_VERSION_KEY)) or protocol_version,
-    )
