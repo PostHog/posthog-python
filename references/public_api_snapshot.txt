@@ -37,6 +37,7 @@ alias posthog.ai.anthropic.AsyncAnthropic -> posthog.ai.anthropic.anthropic_asyn
 alias posthog.ai.anthropic.AsyncAnthropicBedrock -> posthog.ai.anthropic.anthropic_providers.AsyncAnthropicBedrock
 alias posthog.ai.anthropic.AsyncAnthropicVertex -> posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex
 alias posthog.ai.anthropic.anthropic.PostHogClient -> posthog.client.Client
+alias posthog.ai.anthropic.anthropic.StreamWrapper -> posthog.ai.stream.StreamWrapper
 alias posthog.ai.anthropic.anthropic.StreamingContentBlock -> posthog.ai.types.StreamingContentBlock
 alias posthog.ai.anthropic.anthropic.TokenUsage -> posthog.ai.types.TokenUsage
 alias posthog.ai.anthropic.anthropic.ToolInProgress -> posthog.ai.types.ToolInProgress
@@ -893,6 +894,7 @@ class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str,
 class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None, config: Optional[Dict[str, Any]] = None)
 class posthog.ai.prompts.Prompts(posthog: Optional[Any] = None, *, personal_api_key: Optional[str] = None, project_api_key: Optional[str] = None, host: Optional[str] = None, default_cache_ttl_seconds: Optional[int] = None, capture_errors: bool = False)
 class posthog.ai.stream.AsyncStreamWrapper(generator: AsyncGenerator[T, None], stream: Optional[Any] = None)
+class posthog.ai.stream.StreamWrapper(generator: Generator[T, None, None], stream: Any)
 class posthog.ai.types.FormattedFunctionCall 
 class posthog.ai.types.FormattedImageContent 
 class posthog.ai.types.FormattedMessage 
@@ -1228,6 +1230,9 @@ method posthog.ai.otel.processor.PostHogSpanProcessor.shutdown() -> None
 method posthog.ai.prompts.Prompts.clear_cache(name: Optional[str] = None, *, version: Optional[int] = None) -> None
 method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariables) -> str
 method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
+method posthog.ai.stream.AsyncStreamWrapper.aclose() -> None
+method posthog.ai.stream.AsyncStreamWrapper.close() -> None
+method posthog.ai.stream.StreamWrapper.close() -> None
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
 method posthog.client.Client.alias(previous_id: str, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
