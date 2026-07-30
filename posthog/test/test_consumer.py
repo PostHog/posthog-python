@@ -1,6 +1,8 @@
 import json
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from typing import Any
 
 from unittest import mock
@@ -230,6 +232,44 @@ class TestConsumer(unittest.TestCase):
                     mock.call(4),  # 2^2
                 ],
             )
+
+    @parameterized.expand(
+        [
+            ("huge_numeric", "1000000000", [30, 30]),
+            ("small_numeric", "0.25", [1, 2]),
+            ("huge_date", "Fri, 01 Jan 2100 00:00:00 GMT", [30, 30]),
+            ("small_date", None, [1, 2]),
+        ]
+    )
+    def test_request_bounds_retry_after_without_reducing_attempts(
+        self, _name: str, retry_after_header: str | None, expected_sleeps: list[int]
+    ) -> None:
+        if retry_after_header is None:
+            retry_after_header = format_datetime(
+                datetime.now(timezone.utc) + timedelta(seconds=1), usegmt=True
+            )
+
+        retry_response = mock.Mock(
+            status_code=503,
+            headers={"Retry-After": retry_after_header},
+            text="Service Unavailable",
+        )
+        retry_response.json.return_value = {"detail": "Service Unavailable"}
+        success_response = mock.Mock(status_code=200)
+        session = mock.Mock()
+        session.post.side_effect = [retry_response, retry_response, success_response]
+
+        consumer = Consumer(None, TEST_API_KEY, retries=2)
+        with (
+            mock.patch("posthog.request._get_session", return_value=session),
+            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
+        ):
+            consumer.request([_track_event()])
+
+        self.assertEqual(session.post.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in mock_sleep.call_args_list], expected_sleeps
+        )
 
     def test_request_retries_on_408(self) -> None:
         call_count = [0]
