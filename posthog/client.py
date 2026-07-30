@@ -503,7 +503,7 @@ class Client(object):
             flush_interval: Maximum seconds a background consumer waits before
                 flushing a partial batch.
             gzip: Whether to gzip event upload payloads.
-            max_retries: Number of upload retries for background consumers.
+            max_retries: Number of upload retries. Values below 0 are treated as 0.
             sync_mode: If True, send each event synchronously instead of using
                 background worker threads.
             timeout: HTTP request timeout in seconds for event uploads.
@@ -607,7 +607,7 @@ class Client(object):
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self.gzip = gzip
         self.timeout = timeout
-        self.max_retries = max_retries
+        self.max_retries = max(0, max_retries)
         self._feature_flags: Optional[list[Any]] = (
             None  # private variable to store flags
         )
@@ -766,7 +766,7 @@ class Client(object):
             flush_at=flush_at,
             flush_interval=flush_interval,
             gzip=gzip,
-            max_retries=max_retries,
+            max_retries=self.max_retries,
             timeout=timeout,
             historical_migration=historical_migration,
         )
