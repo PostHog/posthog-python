@@ -293,50 +293,69 @@ class TestContexts(unittest.TestCase):
             )
 
         read_fd, write_fd = os.pipe()
-        with new_context(fresh=True):
-            identify_context("parent-user")
-            set_context_session("parent-session")
-            set_context_device_id("parent-device")
-            tag("parent-tag", "parent-value")
+        pid = -1
+        child_result = b""
+        child_exit_code = 1
+        try:
+            with new_context(fresh=True):
+                identify_context("parent-user")
+                set_context_session("parent-session")
+                set_context_device_id("parent-device")
+                tag("parent-tag", "parent-value")
 
-            with new_context():
-                copied_context = contextvars.copy_context()
-                pid = os.fork()
+                with new_context():
+                    copied_context = contextvars.copy_context()
+                    pid = os.fork()
+                    if pid == 0:
+                        os.close(read_fd)
+                        with new_context():
+                            identify_context("child-user")
+                            set_context_session("child-session")
+                            set_context_device_id("child-device")
+                            tag("child-tag", "child-value")
+                            child_local_state = context_state()
+                        child_state_after_local_scope = context_state()
+                    else:
+                        os.close(write_fd)
+
                 if pid == 0:
-                    os.close(read_fd)
-                    with new_context():
-                        identify_context("child-user")
-                        set_context_session("child-session")
-                        set_context_device_id("child-device")
-                        tag("child-tag", "child-value")
-                        child_local_state = context_state()
-                    child_state_after_local_scope = context_state()
+                    child_state_after_inner_scope = context_state()
                 else:
-                    os.close(write_fd)
+                    parent_state = context_state()
 
             if pid == 0:
-                child_state_after_inner_scope = context_state()
-            else:
-                parent_state = context_state()
-
-        if pid == 0:
-            child_states = (
-                child_local_state,
-                child_state_after_local_scope,
-                child_state_after_inner_scope,
-                context_state(),
-                copied_context.run(context_state),
-            )
-            os.write(write_fd, repr(child_states).encode())
-            os.close(write_fd)
-            os._exit(0)
+                child_states = (
+                    child_local_state,
+                    child_state_after_local_scope,
+                    child_state_after_inner_scope,
+                    context_state(),
+                    copied_context.run(context_state),
+                )
+                child_result = repr(child_states).encode()
+                child_exit_code = 0
+        except BaseException as error:
+            if pid != 0:
+                raise
+            child_result = f"{type(error).__name__}: {error}".encode()
+        finally:
+            if pid == 0:
+                try:
+                    os.write(write_fd, child_result)
+                finally:
+                    try:
+                        os.close(write_fd)
+                    finally:
+                        os._exit(child_exit_code)
 
         child_states = os.read(read_fd, 4096)
         os.close(read_fd)
         _, status = os.waitpid(pid, 0)
 
         empty_state = (None, None, None, {})
-        self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0,
+            child_states.decode(errors="replace"),
+        )
         child_local_state = (
             "child-user",
             "child-session",
