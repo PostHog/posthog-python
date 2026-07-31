@@ -3357,6 +3357,58 @@ class TestClient(unittest.TestCase):
                 self.assertEqual(str(cm.exception), "Expected error")
 
 
+class TestClientCaptureRetrySemantics(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("v0_sync", "v0", True),
+            ("v1_sync", "v1", True),
+            ("v0_async", "v0", False),
+            ("v1_async", "v1", False),
+        ]
+    )
+    def test_negative_max_retries_still_attempts_delivery_once(
+        self, _name, capture_mode, sync_mode
+    ):
+        response = mock.Mock(status_code=200, headers={}, text="")
+        response.json.return_value = {"results": {}}
+        client = None
+
+        with (
+            mock.patch("posthog.client.batch_post") as sync_v0_post,
+            mock.patch("posthog.consumer.batch_post") as async_v0_post,
+            mock.patch("posthog.capture_v1._post_v1", return_value=response) as v1_post,
+        ):
+            try:
+                client = Client(
+                    FAKE_TEST_API_KEY,
+                    capture_mode=capture_mode,
+                    sync_mode=sync_mode,
+                    max_retries=-1,
+                    flush_at=1,
+                    flush_interval=0.01,
+                )
+                client.capture("evt", distinct_id="d")
+                if not sync_mode:
+                    client.flush()
+
+                self.assertEqual(client.max_retries, 0)
+                if capture_mode == "v1":
+                    v1_post.assert_called_once()
+                    sync_v0_post.assert_not_called()
+                    async_v0_post.assert_not_called()
+                elif sync_mode:
+                    sync_v0_post.assert_called_once()
+                    async_v0_post.assert_not_called()
+                    v1_post.assert_not_called()
+                else:
+                    async_v0_post.assert_called_once()
+                    sync_v0_post.assert_not_called()
+                    v1_post.assert_not_called()
+            finally:
+                if client is not None and not sync_mode:
+                    client.shutdown()
+
+
 class TestClientSyncCaptureMode(unittest.TestCase):
     """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`."""
 

@@ -149,6 +149,15 @@ class TestConsumer(unittest.TestCase):
     def test_request_fails_when_exceptions_exceed_retries(self) -> None:
         self._run_retry_test(APIError(500, "Internal Server Error"), 4, retries=3)
 
+    def test_negative_retries_still_attempts_delivery_once(self) -> None:
+        consumer = Consumer(None, TEST_API_KEY, retries=-1)
+
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            consumer.request([_track_event()])
+
+        self.assertEqual(consumer.retries, 0)
+        mock_post.assert_called_once()
+
     def test_pause(self) -> None:
         consumer = Consumer(None, TEST_API_KEY)
         consumer.pause()

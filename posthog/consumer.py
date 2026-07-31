@@ -77,7 +77,7 @@ class Consumer(Thread):
         # run() *after* we set it to False in pause... and keep running
         # forever.
         self.running = True
-        self.retries = retries
+        self.retries = max(0, retries)
         self.timeout = timeout
         self.historical_migration = historical_migration
 

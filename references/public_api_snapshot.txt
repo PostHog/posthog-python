@@ -562,7 +562,7 @@ attribute posthog.client.Client.in_app_modules = in_app_modules
 attribute posthog.client.Client.is_server = is_server
 attribute posthog.client.Client.log = logging.getLogger('posthog')
 attribute posthog.client.Client.log_captured_exceptions = log_captured_exceptions
-attribute posthog.client.Client.max_retries = max_retries
+attribute posthog.client.Client.max_retries = max(0, max_retries)
 attribute posthog.client.Client.metrics: PostHogMetrics
 attribute posthog.client.Client.on_error = on_error
 attribute posthog.client.Client.personal_api_key = self.secret_key
@@ -598,7 +598,7 @@ attribute posthog.consumer.Consumer.log = logging.getLogger('posthog')
 attribute posthog.consumer.Consumer.max_msg_size = max_msg_size
 attribute posthog.consumer.Consumer.on_error = on_error
 attribute posthog.consumer.Consumer.queue = queue
-attribute posthog.consumer.Consumer.retries = retries
+attribute posthog.consumer.Consumer.retries = max(0, retries)
 attribute posthog.consumer.Consumer.running = True
 attribute posthog.consumer.Consumer.timeout = timeout
 attribute posthog.consumer.MAX_MSG_SIZE = 900 * 1024
