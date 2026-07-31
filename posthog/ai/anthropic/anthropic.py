@@ -10,7 +10,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from posthog.ai.stream import StreamWrapper
+from ..stream import _StreamWrapper
 from posthog.ai.types import StreamingContentBlock, TokenUsage, ToolInProgress
 from posthog.ai.utils import (
     call_llm_and_track_usage,
@@ -262,7 +262,7 @@ class WrappedMessages(Messages):
                     stop_reason=stop_reason,
                 )
 
-        return StreamWrapper(generator(), stream=response)
+        return _StreamWrapper(generator(), stream=response)
 
     def _capture_streaming_event(
         self,

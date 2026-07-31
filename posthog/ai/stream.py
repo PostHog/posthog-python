@@ -5,7 +5,7 @@ from typing import Any, AsyncGenerator, Generator, Generic, Optional, TypeVar
 T = TypeVar("T")
 
 
-class StreamWrapper(Generic[T]):
+class _StreamWrapper(Generic[T]):
     """Preserves a provider stream's helpers while tracking its iteration."""
 
     def __init__(
@@ -16,13 +16,13 @@ class StreamWrapper(Generic[T]):
         self._generator = generator
         self._stream = stream
 
-    def __iter__(self) -> "StreamWrapper[T]":
+    def __iter__(self) -> "_StreamWrapper[T]":
         return self
 
     def __next__(self) -> T:
         return next(self._generator)
 
-    def __enter__(self) -> "StreamWrapper[T]":
+    def __enter__(self) -> "_StreamWrapper[T]":
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
