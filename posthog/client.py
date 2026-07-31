@@ -2578,10 +2578,15 @@ class Client(object):
                 key, lookup_match_value, payload
             )
 
-            # Cache successful local evaluation
-            if self.flag_cache and flag_result:
+            # Cache the local evaluation, not a payload lookup override.
+            cached_flag_result = flag_result
+            if override_match_value is not None:
+                cached_flag_result = FeatureFlagResult.from_value_and_payload(
+                    key, flag_value, self._compute_payload_locally(key, flag_value)
+                )
+            if self.flag_cache and cached_flag_result:
                 self.flag_cache.set_cached_flag(
-                    distinct_id, key, flag_result, self.flag_definition_version
+                    distinct_id, key, cached_flag_result, self.flag_definition_version
                 )
         elif only_evaluate_locally:
             if self.feature_flags is None:
