@@ -1,5 +1,13 @@
 # posthog
 
+## 7.35.3 — 2026-07-31
+
+### Patch changes
+
+- [0b353a7](https://github.com/posthog/posthog-python/commit/0b353a70c5cfedb04481354bc45445583f602157) Keep consumers alive after malformed before_send results — Thanks @marandaneto!
+- [3658ed1](https://github.com/posthog/posthog-python/commit/3658ed1a679315ebebb4ce35319f981fb21909c1) Cap capture v0 Retry-After delays — Thanks @marandaneto!
+- [1b30afa](https://github.com/posthog/posthog-python/commit/1b30afa1b400d137adb30628a015f18021571d7b) Reject negative capture retry counts — Thanks @marandaneto!
+
 ## 7.35.2 — 2026-07-31
 
 ### Patch changes
