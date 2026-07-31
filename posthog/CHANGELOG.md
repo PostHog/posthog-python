@@ -1,5 +1,11 @@
 # posthog
 
+## 7.35.2 — 2026-07-31
+
+### Patch changes
+
+- [aa00432](https://github.com/posthog/posthog-python/commit/aa00432e97fb5e270ac0ae4917b763a095c1496c) Restore exception hooks safely — Thanks @marandaneto!
+
 ## 7.35.1 — 2026-07-31
 
 ### Patch changes
