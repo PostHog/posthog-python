@@ -1,5 +1,11 @@
 # posthog
 
+## 7.35.1 — 2026-07-31
+
+### Patch changes
+
+- [bfec2b1](https://github.com/posthog/posthog-python/commit/bfec2b16cd80ce0588d95beee1e24eb757defc35) Reset MCP background capture state after fork — Thanks @marandaneto!
+
 ## 7.35.0 — 2026-07-30
 
 ### Minor changes
