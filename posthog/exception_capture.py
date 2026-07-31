@@ -36,8 +36,10 @@ class ExceptionCapture:
         self._closed = False
         self.original_excepthook = sys.excepthook
         self._original_threading_excepthook = threading.excepthook
-        sys.excepthook = self.exception_handler
-        threading.excepthook = self.thread_exception_handler
+        self._sys_excepthook = self.exception_handler
+        self._threading_excepthook = self.thread_exception_handler
+        sys.excepthook = self._sys_excepthook
+        threading.excepthook = self._threading_excepthook
         # opt-in client-side rate limiting: per exception type, allow a burst
         # of captures, then refill over time
         self._rate_limiter = None
@@ -53,18 +55,26 @@ class ExceptionCapture:
             return
 
         self._closed = True
-        if self._is_own_hook(sys.excepthook, "exception_handler"):
-            sys.excepthook = self._resolve_hook(
-                self.original_excepthook,
-                "exception_handler",
-                "original_excepthook",
-            )
-        if self._is_own_hook(threading.excepthook, "thread_exception_handler"):
-            threading.excepthook = self._resolve_hook(
-                self._original_threading_excepthook,
-                "thread_exception_handler",
-                "_original_threading_excepthook",
-            )
+        original_excepthook = self._resolve_hook(
+            self.original_excepthook,
+            "exception_handler",
+            "original_excepthook",
+        )
+        original_threading_excepthook = self._resolve_hook(
+            self._original_threading_excepthook,
+            "thread_exception_handler",
+            "_original_threading_excepthook",
+        )
+
+        # Keep each final ownership check and assignment together without a
+        # Python call between them. On supported GIL-enabled CPython builds,
+        # ordinary Python thread scheduling has no switch point inside either
+        # straight-line pair, minimizing the window for external hook writers.
+        if sys.excepthook is self._sys_excepthook:
+            sys.excepthook = original_excepthook
+        if threading.excepthook is self._threading_excepthook:
+            threading.excepthook = original_threading_excepthook
+
         if self._rate_limiter is not None:
             self._rate_limiter.stop()
 
@@ -87,11 +97,6 @@ class ExceptionCapture:
             "_original_threading_excepthook",
         )
         previous_hook(args)
-
-    def _is_own_hook(self, hook, handler_name):
-        return getattr(hook, "__self__", None) is self and hook == getattr(
-            self, handler_name
-        )
 
     @staticmethod
     def _resolve_hook(hook, handler_name, previous_hook_name):

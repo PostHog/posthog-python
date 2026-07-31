@@ -180,6 +180,31 @@ def test_close_does_not_overwrite_hooks_installed_later(monkeypatch):
     assert threading.excepthook is replacement_thread_hook
 
 
+def test_close_does_not_overwrite_hooks_replaced_while_resolving(monkeypatch):
+    from posthog.exception_capture import ExceptionCapture
+
+    monkeypatch.setattr(sys, "excepthook", MagicMock())
+    monkeypatch.setattr(threading, "excepthook", MagicMock())
+    capture = ExceptionCapture(MagicMock())
+    replacement_sys_hook = MagicMock()
+    replacement_thread_hook = MagicMock()
+    original_resolve_hook = capture._resolve_hook
+
+    def replace_hook_while_resolving(hook, handler_name, previous_hook_name):
+        if handler_name == "exception_handler":
+            sys.excepthook = replacement_sys_hook
+        else:
+            threading.excepthook = replacement_thread_hook
+        return original_resolve_hook(hook, handler_name, previous_hook_name)
+
+    monkeypatch.setattr(capture, "_resolve_hook", replace_hook_while_resolving)
+
+    capture.close()
+
+    assert sys.excepthook is replacement_sys_hook
+    assert threading.excepthook is replacement_thread_hook
+
+
 def test_multiple_captures_support_out_of_order_close(monkeypatch):
     from posthog.exception_capture import ExceptionCapture
 
