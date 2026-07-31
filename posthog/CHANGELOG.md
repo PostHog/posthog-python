@@ -1,5 +1,11 @@
 # posthog
 
+## 7.35.4 — 2026-07-31
+
+### Patch changes
+
+- [60a3e9c](https://github.com/posthog/posthog-python/commit/60a3e9ce987c1eeda64b9905e5bdf9124a670c8f) Reset the client registry lock after fork — Thanks @marandaneto!
+
 ## 7.35.3 — 2026-07-31
 
 ### Patch changes
