@@ -7,7 +7,7 @@ from threading import Thread
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
-from posthog.capture_v1 import _MAX_BACKOFF_SECONDS, _send_v1_batch
+from posthog.capture_v1 import _backoff, _send_v1_batch
 from posthog.request import (
     EVENTS_ENDPOINT,
     APIError,
@@ -209,14 +209,7 @@ class Consumer(Thread):
                 if not is_retryable(e):
                     raise
                 if attempt < self.retries:
-                    configured_backoff = min(2**attempt, _MAX_BACKOFF_SECONDS)
-                    retry_after = getattr(e, "retry_after", None)
-                    clamped_retry_after = (
-                        min(retry_after, _MAX_BACKOFF_SECONDS)
-                        if retry_after and retry_after > 0
-                        else 0
-                    )
-                    time.sleep(max(configured_backoff, clamped_retry_after))
+                    _backoff(attempt, getattr(e, "retry_after", None))
 
         if last_exc:
             raise last_exc
