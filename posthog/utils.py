@@ -150,13 +150,24 @@ def is_valid_regex(value) -> bool:
 
 
 class SizeLimitedDict(defaultdict):
+    """A ``defaultdict`` that evicts its oldest entries once it reaches ``max_size``.
+
+    Eviction is incremental: inserting a new key past capacity removes only the
+    least-recently-inserted key, never the whole mapping. This matters for the
+    ``$feature_flag_called`` dedupe tracker, whose only bound this is — wiping every
+    entry under capacity pressure would let the next flag read for every previously
+    seen ``distinct_id`` re-emit an event it had already deduped.
+    """
+
     def __init__(self, max_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
     def __setitem__(self, key, value):
-        if len(self) >= self.max_size:
-            self.clear()
+        if key not in self:
+            # dicts iterate in insertion order, so the first key is the oldest one.
+            while self and len(self) >= self.max_size:
+                del self[next(iter(self))]
 
         super().__setitem__(key, value)
 
