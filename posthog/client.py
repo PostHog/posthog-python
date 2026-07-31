@@ -419,6 +419,12 @@ class _Lane:
                 # consumer thread has not started
                 pass
 
+    def reset_sync_send_state_after_fork(self) -> None:
+        """Replace sync-send state inherited from threads that did not survive fork."""
+        self._active_sync_sends = 0
+        self._start_lock = threading.Lock()
+        self._sync_sends_done = threading.Condition(self._start_lock)
+
     def rebuild_after_fork(self) -> None:
         """Replace fork-unsafe lane state in a forked child.
 
@@ -429,9 +435,7 @@ class _Lane:
         a lazy lane returns to not-started and restarts on next use.
         """
         self.queue = Queue(self._max_queue_size)
-        self._active_sync_sends = 0
-        self._start_lock = threading.Lock()
-        self._sync_sends_done = threading.Condition(self._start_lock)
+        self.reset_sync_send_state_after_fork()
         self.consumers = []
         self._started = False
         if self._eager_start:
@@ -1876,8 +1880,10 @@ class Client(object):
         Python threads do not survive fork(), so each lane's queue and
         consumer pool are rebuilt (see `_Lane.rebuild_after_fork`).
         """
-        if not self.sync_mode:
-            for lane in self._lanes:
+        for lane in self._lanes:
+            if self.sync_mode:
+                lane.reset_sync_send_state_after_fork()
+            else:
                 lane.rebuild_after_fork()
 
         if self.enable_local_evaluation:

@@ -144,13 +144,20 @@ class TestClientFork(unittest.TestCase):
             self.assertIs(client.consumers[0].queue, client.queue)
             self.assertEqual(mock_start.call_count, expected_starts)
 
-    def test_reinit_after_fork_noop_for_sync_mode(self):
+    def test_reinit_after_fork_resets_sync_send_state_for_sync_mode(self):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
-        old_queue = client.queue
+        lane = client._analytics_lane
+        old_queue = lane.queue
+        old_lock = lane._start_lock
+        old_condition = lane._sync_sends_done
+        lane._active_sync_sends = 1
 
         client._reinit_after_fork()
 
-        self.assertIs(client.queue, old_queue)
+        self.assertIs(lane.queue, old_queue)
+        self.assertEqual(lane._active_sync_sends, 0)
+        self.assertIsNot(lane._start_lock, old_lock)
+        self.assertIsNot(lane._sync_sends_done, old_condition)
 
 
 @unittest.skipUnless(
