@@ -2259,6 +2259,8 @@ class Client(object):
                         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                         return
 
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
                     self.log.debug(
                         "[FEATURE FLAGS] Flags not modified (304), using cached data"
                     )

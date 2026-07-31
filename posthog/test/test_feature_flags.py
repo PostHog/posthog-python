@@ -3305,12 +3305,22 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(client._flags_etag, '"new-etag"')
 
     @mock.patch("posthog.client.get")
-    def test_load_feature_flags_304_does_not_suppress_in_flight_update(self, patch_get):
+    def test_load_feature_flags_accepted_304_suppresses_older_in_flight_update(
+        self, patch_get
+    ):
         first_request_started = threading.Event()
         second_load_finished = threading.Event()
         call_count_lock = threading.Lock()
         call_count = 0
 
+        initial_response = GetResponse(
+            data={
+                "flags": [{"id": 1, "key": "old-flag", "active": True}],
+                "group_type_mapping": {},
+                "cohorts": {},
+            },
+            etag='"etag-a"',
+        )
         changed_response = GetResponse(
             data={
                 "flags": [{"id": 2, "key": "new-flag", "active": True}],
@@ -3332,6 +3342,8 @@ class TestLocalEvaluation(unittest.TestCase):
                 call_count += 1
 
             if request_number == 0:
+                return initial_response
+            if request_number == 1:
                 first_request_started.set()
                 second_load_finished.wait(timeout=5)
                 return changed_response
@@ -3339,7 +3351,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         patch_get.side_effect = get_304_before_changed_response
         client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
-        client._flags_etag = '"etag-a"'
+        client._load_feature_flags()
 
         def load_not_modified_response():
             client._load_feature_flags()
@@ -3355,8 +3367,8 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertFalse(first_thread.is_alive())
         self.assertFalse(second_thread.is_alive())
-        self.assertEqual(client.feature_flags[0]["key"], "new-flag")
-        self.assertEqual(client._flags_etag, '"etag-b"')
+        self.assertEqual(client.feature_flags[0]["key"], "old-flag")
+        self.assertEqual(client._flags_etag, '"etag-a"')
 
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_ignores_304_for_superseded_etag(self, patch_get):
