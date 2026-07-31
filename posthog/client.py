@@ -2565,7 +2565,7 @@ class Client(object):
         )
         flag_was_locally_evaluated = flag_value is not None
 
-        if flag_was_locally_evaluated:
+        if flag_value is not None:
             lookup_match_value = (
                 override_match_value if override_match_value is not None else flag_value
             )
