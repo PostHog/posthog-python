@@ -132,7 +132,16 @@ class Consumer(Thread):
                 break
             try:
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
-                item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
+                try:
+                    item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
+                except Exception:
+                    # Callback-modified events can still contain invalid mapping
+                    # keys or circular references. Never log the payload here.
+                    self.log.error(
+                        "Unable to serialize queued event for sizing, dropping."
+                    )
+                    queue.task_done()
+                    continue
                 if item_size > self.max_msg_size:
                     # Log only name and size: AI events may carry unredacted
                     # multimodal payloads that must not leak into logs.
