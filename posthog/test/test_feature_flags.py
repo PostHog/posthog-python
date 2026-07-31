@@ -3180,7 +3180,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # Second response is 304 Not Modified
         not_modified_response = GetResponse(
             data=None,
-            etag='"test-etag"',
+            etag='"updated-etag"',
             not_modified=True,
         )
         patch_get.side_effect = [initial_response, not_modified_response]
@@ -3200,6 +3200,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(len(client.feature_flags), 1)
         self.assertEqual(client.feature_flags[0]["key"], "beta-feature")
         self.assertEqual(client.group_type_mapping, {"0": "company"})
+        self.assertEqual(client._flags_etag, '"updated-etag"')
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")

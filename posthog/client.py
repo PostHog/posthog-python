@@ -2259,6 +2259,7 @@ class Client(object):
                         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                         return
 
+                    self._flags_etag = response.etag
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
                     self.log.debug(
