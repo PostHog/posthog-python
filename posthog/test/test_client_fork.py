@@ -238,6 +238,59 @@ class TestClientForkEndToEnd(unittest.TestCase):
         )
         self.assertEqual(result, "ok")
 
+    def test_register_at_fork_replaces_duplicate_registry_lock_in_child_process(self):
+        Client._client_registry.clear()
+        Client._duplicate_client_warnings.clear()
+        host = "https://fork-registry.example.com"
+        registry_key = (FAKE_TEST_API_KEY, host)
+
+        with mock.patch("posthog.client.Consumer.start"):
+            inherited_client = Client(FAKE_TEST_API_KEY, host=host)
+            inherited_lock = Client._client_registry_lock
+
+            def child_probe():
+                # A deadlocked child gets killed by SIGALRM instead of hanging the
+                # test when constructing or unregistering a client.
+                signal.alarm(5)
+                try:
+                    if Client._client_registry_lock is inherited_lock:
+                        return "registry lock was not replaced"
+
+                    child_client = Client(FAKE_TEST_API_KEY, host=host)
+                    clients = Client._client_registry.get(registry_key)
+                    if clients is None or set(clients) != {
+                        inherited_client,
+                        child_client,
+                    }:
+                        return "child client was not registered"
+
+                    child_client.shutdown()
+                    clients = Client._client_registry.get(registry_key)
+                    if clients is None or set(clients) != {inherited_client}:
+                        return "child client was not unregistered"
+
+                    inherited_client.shutdown()
+                    if registry_key in Client._client_registry:
+                        return "inherited client was not unregistered"
+                finally:
+                    signal.alarm(0)
+
+                return "ok"
+
+            inherited_lock.acquire()
+            try:
+                status, result = self._run_fork_probe(child_probe)
+            finally:
+                inherited_lock.release()
+                inherited_client.shutdown()
+                Client._client_registry.clear()
+                Client._duplicate_client_warnings.clear()
+
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
+        self.assertEqual(result, "ok")
+
     def test_register_at_fork_replaces_metrics_locks_in_child_process(self):
         # Locks held at fork time are inherited locked, and their holders don't
         # exist in the child — the metrics path must not deadlock on them.

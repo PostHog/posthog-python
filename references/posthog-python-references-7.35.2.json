@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.35.4",
+    "version": "7.35.2",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -423,7 +423,7 @@
             },
             {
               "name": "max_retries",
-              "description": "Number of upload retries. Values below 0 are treated as 0.",
+              "description": "Number of upload retries for background consumers.",
               "isOptional": false,
               "type": "int"
             },

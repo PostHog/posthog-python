@@ -433,6 +433,7 @@ class Client(object):
 
     log = logging.getLogger("posthog")
     _client_registry_lock = threading.Lock()
+    _client_registry_pid = os.getpid()
     _client_registry: dict[tuple[str, str], weakref.WeakSet] = {}
     _duplicate_client_warnings: set[tuple[str, str]] = set()
 
@@ -503,7 +504,7 @@ class Client(object):
             flush_interval: Maximum seconds a background consumer waits before
                 flushing a partial batch.
             gzip: Whether to gzip event upload payloads.
-            max_retries: Number of upload retries for background consumers.
+            max_retries: Number of upload retries. Values below 0 are treated as 0.
             sync_mode: If True, send each event synchronously instead of using
                 background worker threads.
             timeout: HTTP request timeout in seconds for event uploads.
@@ -607,7 +608,7 @@ class Client(object):
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self.gzip = gzip
         self.timeout = timeout
-        self.max_retries = max_retries
+        self.max_retries = max(0, max_retries)
         self._feature_flags: Optional[list[Any]] = (
             None  # private variable to store flags
         )
@@ -766,7 +767,7 @@ class Client(object):
             flush_at=flush_at,
             flush_interval=flush_interval,
             gzip=gzip,
-            max_retries=max_retries,
+            max_retries=self.max_retries,
             timeout=timeout,
             historical_migration=historical_migration,
         )
@@ -1826,12 +1827,26 @@ class Client(object):
             self.log.exception(f"Failed to capture exception: {e}")
             return None
 
+    @classmethod
+    def _reinit_client_registry_after_fork(cls):
+        """Replace the inherited registry lock once in each forked child."""
+        child_pid = os.getpid()
+        if cls._client_registry_pid == child_pid:
+            return
+
+        # The lock may have been held by a parent thread at fork time. Replace it
+        # without acquiring it, while preserving inherited active-client records.
+        cls._client_registry_lock = threading.Lock()
+        cls._client_registry_pid = child_pid
+
     @staticmethod
     def _reinit_after_fork_weak(weak_self):
         """
         Reinitialize the client after a fork.
         Garbage collected if the client is deleted.
         """
+        Client._reinit_client_registry_after_fork()
+
         self = weak_self()
         if self is None:
             return
@@ -1946,7 +1961,9 @@ class Client(object):
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
                     return None
-                msg = modified_msg
+                if not isinstance(modified_msg, dict):
+                    raise TypeError("before_send must return a dict or None")
+                msg = clean(modified_msg)
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
                 # Continue with the original message if callback fails

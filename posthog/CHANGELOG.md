@@ -1,5 +1,31 @@
 # posthog
 
+## 7.35.4 — 2026-07-31
+
+### Patch changes
+
+- [60a3e9c](https://github.com/posthog/posthog-python/commit/60a3e9ce987c1eeda64b9905e5bdf9124a670c8f) Reset the client registry lock after fork — Thanks @marandaneto!
+
+## 7.35.3 — 2026-07-31
+
+### Patch changes
+
+- [0b353a7](https://github.com/posthog/posthog-python/commit/0b353a70c5cfedb04481354bc45445583f602157) Keep consumers alive after malformed before_send results — Thanks @marandaneto!
+- [3658ed1](https://github.com/posthog/posthog-python/commit/3658ed1a679315ebebb4ce35319f981fb21909c1) Cap capture v0 Retry-After delays — Thanks @marandaneto!
+- [1b30afa](https://github.com/posthog/posthog-python/commit/1b30afa1b400d137adb30628a015f18021571d7b) Reject negative capture retry counts — Thanks @marandaneto!
+
+## 7.35.2 — 2026-07-31
+
+### Patch changes
+
+- [aa00432](https://github.com/posthog/posthog-python/commit/aa00432e97fb5e270ac0ae4917b763a095c1496c) Restore exception hooks safely — Thanks @marandaneto!
+
+## 7.35.1 — 2026-07-31
+
+### Patch changes
+
+- [bfec2b1](https://github.com/posthog/posthog-python/commit/bfec2b16cd80ce0588d95beee1e24eb757defc35) Reset MCP background capture state after fork — Thanks @marandaneto!
+
 ## 7.35.0 — 2026-07-30
 
 ### Minor changes

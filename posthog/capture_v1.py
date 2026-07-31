@@ -491,8 +491,10 @@ def _send_v1_batch(
     unchanged. A transport failure re-raises the underlying exception (drops
     collected on an earlier attempt are still tallied in the DEBUG summary).
     ``request_id`` and the batch ``created_at`` are stable across attempts;
-    ``PostHog-Attempt`` increments.
+    ``PostHog-Attempt`` increments. Negative ``max_retries`` values are treated
+    as zero, so delivery is always attempted at least once.
     """
+    max_retries = max(0, max_retries)
     request_id = str(uuid4())
     # Hoisted once so the batch envelope is byte-identical across retry attempts
     # (only the events list shrinks and the attempt header increments).
@@ -606,7 +608,6 @@ def _send_v1_batch(
             continue
         raise v1_error
 
-    # Unreachable in practice (every branch returns or continues), but keeps the
-    # function total if max_retries is somehow negative.
+    # Unreachable in practice (every branch returns or continues).
     if last_exc:
         raise last_exc

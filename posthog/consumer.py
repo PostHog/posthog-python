@@ -7,7 +7,7 @@ from threading import Thread
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
-from posthog.capture_v1 import _send_v1_batch
+from posthog.capture_v1 import _backoff, _send_v1_batch
 from posthog.request import (
     EVENTS_ENDPOINT,
     APIError,
@@ -77,7 +77,7 @@ class Consumer(Thread):
         # run() *after* we set it to False in pause... and keep running
         # forever.
         self.running = True
-        self.retries = retries
+        self.retries = max(0, retries)
         self.timeout = timeout
         self.historical_migration = historical_migration
 
@@ -132,7 +132,16 @@ class Consumer(Thread):
                 break
             try:
                 item = queue.get(block=True, timeout=self.flush_interval - elapsed)
-                item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
+                try:
+                    item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
+                except Exception:
+                    # Callback-modified events can still contain invalid mapping
+                    # keys or circular references. Never log the payload here.
+                    self.log.error(
+                        "Unable to serialize queued event for sizing, dropping."
+                    )
+                    queue.task_done()
+                    continue
                 if item_size > self.max_msg_size:
                     # Log only name and size: AI events may carry unredacted
                     # multimodal payloads that must not leak into logs.
@@ -209,12 +218,7 @@ class Consumer(Thread):
                 if not is_retryable(e):
                     raise
                 if attempt < self.retries:
-                    # Respect Retry-After header if present, otherwise use exponential backoff
-                    retry_after = getattr(e, "retry_after", None)
-                    if retry_after and retry_after > 0:
-                        time.sleep(retry_after)
-                    else:
-                        time.sleep(min(2**attempt, 30))
+                    _backoff(attempt, getattr(e, "retry_after", None))
 
         if last_exc:
             raise last_exc
