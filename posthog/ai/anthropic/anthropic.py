@@ -126,7 +126,9 @@ class WrappedMessages(Messages):
         # cannot re-enter our tracked ``create`` override.
         manager = Messages(self._client).stream(**kwargs)
         request_attribute = "_MessageStreamManager__api_request"
-        request = getattr(manager, request_attribute)
+        request = getattr(manager, request_attribute, None)
+        if request is None:
+            return manager
 
         def tracked_request():
             start_time = time.time()

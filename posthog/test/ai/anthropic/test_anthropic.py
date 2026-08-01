@@ -1853,6 +1853,20 @@ def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(
     assert "posthog_distinct_id" not in client.post.call_args.kwargs
 
 
+def test_messages_stream_tolerates_provider_manager_internals_changing(mock_client):
+    manager = object()
+    client = Anthropic(api_key="test-key", posthog_client=mock_client)
+
+    with patch("anthropic.resources.messages.Messages.stream", return_value=manager):
+        response = client.messages.stream(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Foo"}],
+            max_tokens=1,
+        )
+
+    assert response is manager
+
+
 @pytest.mark.asyncio
 async def test_async_messages_stream_preserves_provider_contract_and_manager(
     mock_client,
@@ -1879,6 +1893,24 @@ async def test_async_messages_stream_preserves_provider_contract_and_manager(
     assert mock_client.capture.call_count == 1
     assert mock_client.capture.call_args.kwargs["distinct_id"] == "test-user"
     assert "posthog_distinct_id" not in client.post.call_args.kwargs
+
+
+def test_async_messages_stream_tolerates_provider_manager_internals_changing(
+    mock_client,
+):
+    manager = object()
+    client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.stream", return_value=manager
+    ):
+        response = client.messages.stream(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Foo"}],
+            max_tokens=1,
+        )
+
+    assert response is manager
 
 
 @pytest.mark.asyncio

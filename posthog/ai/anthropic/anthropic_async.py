@@ -126,7 +126,9 @@ class AsyncWrappedMessages(AsyncMessages):
         # cannot re-enter our tracked ``create`` override.
         manager = AsyncMessages(self._client).stream(**kwargs)
         request_attribute = "_AsyncMessageStreamManager__api_request"
-        request = getattr(manager, request_attribute)
+        request = getattr(manager, request_attribute, None)
+        if request is None:
+            return manager
 
         async def tracked_request():
             start_time = time.time()
