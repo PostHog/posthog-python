@@ -509,6 +509,55 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
 
         mock_client.capture.assert_not_called()
 
+    def test_task_filter_applies_to_failure_exception_and_lifecycle_event(self):
+        mock_client = Mock()
+        task_filter = Mock(return_value=False)
+        integration = PosthogCeleryIntegration(
+            client=mock_client,
+            task_filter=task_filter,
+        )
+        request = SimpleNamespace(headers={}, delivery_info={})
+        task = SimpleNamespace(name="app.tasks.filtered_failure", request=request)
+        exception = ValueError("task failed")
+        context_before = contexts._get_current_context()
+
+        integration._on_task_prerun(sender=task, task_id="task-filtered-failure")
+        task_filter.reset_mock()
+        integration._on_task_failure(
+            sender=task,
+            task_id="task-filtered-failure",
+            exception=exception,
+        )
+
+        task_filter.assert_called_once()
+        mock_client.capture.assert_not_called()
+        mock_client.capture_exception.assert_not_called()
+        self.assertIs(contexts._get_current_context(), context_before)
+
+    def test_task_filter_applies_to_retry_lifecycle_event(self):
+        mock_client = Mock()
+        task_filter = Mock(return_value=False)
+        integration = PosthogCeleryIntegration(
+            client=mock_client,
+            task_filter=task_filter,
+        )
+        request = SimpleNamespace(headers={}, delivery_info={})
+        task = SimpleNamespace(name="app.tasks.filtered_retry", request=request)
+        context_before = contexts._get_current_context()
+
+        integration._on_task_prerun(sender=task, task_id="task-filtered-retry")
+        task_filter.reset_mock()
+        integration._on_task_retry(
+            sender=task,
+            task_id="task-filtered-retry",
+            reason=ConnectionError("broker down"),
+        )
+
+        task_filter.assert_called_once()
+        mock_client.capture.assert_not_called()
+        mock_client.capture_exception.assert_not_called()
+        self.assertIs(contexts._get_current_context(), context_before)
+
     def test_task_failure_captures_exception_when_lifecycle_events_disabled(self):
         mock_client = Mock()
         integration = PosthogCeleryIntegration(
