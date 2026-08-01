@@ -1,4 +1,6 @@
 import asyncio
+import contextvars
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -11,8 +13,10 @@ from posthog.contexts import (
     tag,
     identify_context,
     set_context_session,
+    set_context_device_id,
     get_context_session_id,
     get_context_distinct_id,
+    get_context_device_id,
 )
 
 
@@ -274,6 +278,111 @@ class TestContexts(unittest.TestCase):
             # Original context should still have original values
             assert get_context_distinct_id() == "user123"
             assert get_context_session_id() == "session456"
+
+    @unittest.skipUnless(
+        hasattr(os, "fork") and hasattr(os, "register_at_fork"),
+        "requires os.fork and os.register_at_fork",
+    )
+    def test_fork_clears_context_in_child_and_preserves_parent(self):
+        def context_state():
+            return (
+                get_context_distinct_id(),
+                get_context_session_id(),
+                get_context_device_id(),
+                get_tags(),
+            )
+
+        read_fd, write_fd = os.pipe()
+        pid = -1
+        child_result = b""
+        child_exit_code = 1
+        try:
+            with new_context(fresh=True):
+                identify_context("parent-user")
+                set_context_session("parent-session")
+                set_context_device_id("parent-device")
+                tag("parent-tag", "parent-value")
+
+                with new_context():
+                    copied_context = contextvars.copy_context()
+                    pid = os.fork()
+                    if pid == 0:
+                        os.close(read_fd)
+                        with new_context():
+                            identify_context("child-user")
+                            set_context_session("child-session")
+                            set_context_device_id("child-device")
+                            tag("child-tag", "child-value")
+                            child_local_state = context_state()
+                        child_state_after_local_scope = context_state()
+                    else:
+                        os.close(write_fd)
+
+                if pid == 0:
+                    child_state_after_inner_scope = context_state()
+                else:
+                    parent_state = context_state()
+
+            if pid == 0:
+                child_states = (
+                    child_local_state,
+                    child_state_after_local_scope,
+                    child_state_after_inner_scope,
+                    context_state(),
+                    copied_context.run(context_state),
+                )
+                child_result = repr(child_states).encode()
+                child_exit_code = 0
+        except BaseException as error:
+            if pid != 0:
+                raise
+            child_result = f"{type(error).__name__}: {error}".encode()
+        finally:
+            if pid == 0:
+                try:
+                    os.write(write_fd, child_result)
+                finally:
+                    try:
+                        os.close(write_fd)
+                    finally:
+                        os._exit(child_exit_code)
+
+        child_states = os.read(read_fd, 4096)
+        os.close(read_fd)
+        _, status = os.waitpid(pid, 0)
+
+        empty_state = (None, None, None, {})
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0,
+            child_states.decode(errors="replace"),
+        )
+        child_local_state = (
+            "child-user",
+            "child-session",
+            "child-device",
+            {"child-tag": "child-value"},
+        )
+        self.assertEqual(
+            child_states,
+            repr(
+                (
+                    child_local_state,
+                    empty_state,
+                    empty_state,
+                    empty_state,
+                    empty_state,
+                )
+            ).encode(),
+        )
+        self.assertEqual(
+            parent_state,
+            (
+                "parent-user",
+                "parent-session",
+                "parent-device",
+                {"parent-tag": "parent-value"},
+            ),
+        )
 
     def test_child_tags_override_parent_tags_in_non_fresh_context(self):
         with new_context(fresh=True):
