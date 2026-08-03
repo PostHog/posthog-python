@@ -279,6 +279,10 @@ class TestUtils(unittest.TestCase):
         assert utils.str_icontains("Hello World", "python") is False
         assert utils.str_iequals("Hello World", "hello world") is True
         assert utils.str_iequals("Hello World", "hello") is False
+        assert utils.str_istartswith("Hello World", "HELLO") is True
+        assert utils.str_istartswith("Hello World", "World") is False
+        assert utils.str_iendswith("Hello World", "WORLD") is True
+        assert utils.str_iendswith("Hello World", "Hello") is False
 
     @parameterized.expand(
         [

@@ -664,7 +664,7 @@ attribute posthog.feature_flags.PROPERTY_OPERATORS = EQUALITY_OPERATORS + STRING
 attribute posthog.feature_flags.SEMVER_COMPARISON_OPERATORS = ('semver_eq', 'semver_neq', 'semver_gt', 'semver_gte', 'semver_lt', 'semver_lte')
 attribute posthog.feature_flags.SEMVER_OPERATORS = SEMVER_COMPARISON_OPERATORS + SEMVER_RANGE_OPERATORS
 attribute posthog.feature_flags.SEMVER_RANGE_OPERATORS = ('semver_tilde', 'semver_caret', 'semver_wildcard')
-attribute posthog.feature_flags.STRING_OPERATORS = ('icontains', 'not_icontains', 'regex', 'not_regex')
+attribute posthog.feature_flags.STRING_OPERATORS = ('icontains', 'not_icontains', 'regex', 'not_regex', 'starts_with', 'not_starts_with', 'ends_with', 'not_ends_with')
 attribute posthog.feature_flags.log = logging.getLogger('posthog')
 attribute posthog.feature_flags_request_max_retries = 1
 attribute posthog.feature_flags_request_timeout_seconds = 3
@@ -1163,7 +1163,9 @@ function posthog.utils.is_naive(dt: datetime) -> bool
 function posthog.utils.is_valid_regex(value) -> bool
 function posthog.utils.remove_trailing_slash(host: str) -> str
 function posthog.utils.str_icontains(source, search)
+function posthog.utils.str_iendswith(source, search)
 function posthog.utils.str_iequals(value, comparand)
+function posthog.utils.str_istartswith(source, search)
 function posthog.utils.system_context() -> dict[str, Any]
 function posthog.utils.total_seconds(delta: timedelta) -> float
 method posthog.ai.anthropic.anthropic.WrappedMessages.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)

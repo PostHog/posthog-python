@@ -58,7 +58,16 @@ class ConditionMatch(Enum):
 
 # All operators supported by match_property, grouped by category.
 EQUALITY_OPERATORS = ("exact", "is_not", "is_set", "is_not_set")
-STRING_OPERATORS = ("icontains", "not_icontains", "regex", "not_regex")
+STRING_OPERATORS = (
+    "icontains",
+    "not_icontains",
+    "regex",
+    "not_regex",
+    "starts_with",
+    "not_starts_with",
+    "ends_with",
+    "not_ends_with",
+)
 NUMERIC_OPERATORS = ("gt", "gte", "lt", "lte")
 DATE_OPERATORS = ("is_date_before", "is_date_after")
 SEMVER_COMPARISON_OPERATORS = (
@@ -537,6 +546,18 @@ def match_property(property, property_values) -> bool:
 
     if operator == "not_icontains":
         return not utils.str_icontains(override_value, value)
+
+    if operator == "starts_with":
+        return utils.str_istartswith(override_value, value)
+
+    if operator == "not_starts_with":
+        return not utils.str_istartswith(override_value, value)
+
+    if operator == "ends_with":
+        return utils.str_iendswith(override_value, value)
+
+    if operator == "not_ends_with":
+        return not utils.str_iendswith(override_value, value)
 
     if operator == "regex":
         return (
