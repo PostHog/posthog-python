@@ -1,5 +1,11 @@
 # posthog
 
+## 7.36.0 — 2026-08-03
+
+### Minor changes
+
+- [f805e5b](https://github.com/posthog/posthog-python/commit/f805e5b3d7046ee996017f7d913b54937ede49f2) `posthog.ai.openai.OpenAI` / `AsyncOpenAI` now accept a per-call `posthog_provider_override` argument. The wrapper is commonly pointed at OpenAI-compatible endpoints (DeepSeek, Groq, Mistral, Together, Fireworks, xAI, Perplexity, Ollama, Cerebras, and various gateways) via a custom `base_url`, but always reported `$ai_provider: "openai"`, which breaks PostHog's cost attribution for those calls. Passing `posthog_provider_override="deepseek"` (for example) sets `$ai_provider` on the emitted event without changing how the OpenAI-shaped response is parsed. Omitting it leaves `$ai_provider` as `"openai"`, exactly as before. Covers chat completions, the Responses API, `.parse()`, and embeddings, across sync, async, and streaming calls. — Thanks @marco-g-pm!
+
 ## 7.35.5 — 2026-08-03
 
 ### Patch changes
