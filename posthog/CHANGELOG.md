@@ -1,5 +1,11 @@
 # posthog
 
+## 7.37.0 — 2026-08-03
+
+### Minor changes
+
+- [c5d01c9](https://github.com/posthog/posthog-python/commit/c5d01c9b0cdec50d2ffb6ee363db49e4831ede72) Support the `starts_with`, `not_starts_with`, `ends_with`, and `not_ends_with` property filter operators in feature flag local evaluation. Matching is case-insensitive and mirrors `icontains`, so flags using these operators no longer fall back to remote evaluation. — Thanks @haacked!
+
 ## 7.36.0 — 2026-08-03
 
 ### Minor changes
