@@ -501,6 +501,12 @@ def is_condition_match(
     return ConditionMatch.MATCH
 
 
+# Raised when an operator passes the PROPERTY_OPERATORS gate but has no dispatch
+# branch in match_property. Distinct from the unknown-operator rejection at the top
+# of the function so the dispatch-completeness test can tell the two apart.
+_UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
+
+
 def match_property(property, property_values) -> bool:
     # only looks for matches where key exists in override_property_values
     # doesn't support operator is_not_set
@@ -701,7 +707,7 @@ def match_property(property, property_values) -> bool:
 
     # Unreachable: all operators in PROPERTY_OPERATORS are handled above,
     # and unknown operators are rejected at the top of this function.
-    raise InconclusiveMatchError(f"Unknown operator {operator}")
+    raise InconclusiveMatchError(f"Operator {operator} {_UNHANDLED_OPERATOR_MESSAGE}")
 
 
 def match_cohort(

@@ -13,6 +13,7 @@ from posthog.client import Client
 import posthog.feature_flags
 from posthog.feature_flags import (
     PROPERTY_OPERATORS,
+    _UNHANDLED_OPERATOR_MESSAGE,
     InconclusiveMatchError,
     match_property,
     parse_datetime,
@@ -4670,7 +4671,7 @@ class TestMatchProperties(unittest.TestCase):
             try:
                 match_property(prop, {"key": "1.0.0"})
             except InconclusiveMatchError as error:
-                self.assertNotIn("Unknown operator", str(error), operator)
+                self.assertNotIn(_UNHANDLED_OPERATOR_MESSAGE, str(error), operator)
 
     def test_match_properties_exact(self):
         property_a = self.property(key="key", value="value")
@@ -4781,12 +4782,17 @@ class TestMatchProperties(unittest.TestCase):
         for value in non_matching:
             self.assertFalse(match_property(prop, {"key": value}), value)
 
-        # The negated operator is the exact inverse.
+        # For non-None values, the negated operator is the exact inverse.
         negated = self.property(key="key", value=flag_value, operator=f"not_{operator}")
         for value in matching:
             self.assertFalse(match_property(negated, {"key": value}), value)
         for value in non_matching:
             self.assertTrue(match_property(negated, {"key": value}), value)
+
+        # A missing key is inconclusive rather than a non-match.
+        for missing_properties in ({"other_key": "value"}, {}):
+            with self.assertRaises(InconclusiveMatchError):
+                match_property(prop, missing_properties)
 
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")
