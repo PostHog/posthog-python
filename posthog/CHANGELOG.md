@@ -1,5 +1,13 @@
 # posthog
 
+## 7.35.5 — 2026-08-03
+
+### Patch changes
+
+- [340eb2a](https://github.com/posthog/posthog-python/commit/340eb2adb49bd4449253db9e2161363cfe1bee72) Reset PostHog context after fork. Forked children no longer retain the parent process's active lexical context; they start without inherited context and can establish a new child-local context. — Thanks @marandaneto!
+- [c95c9f9](https://github.com/posthog/posthog-python/commit/c95c9f91228c1bbd0bebbedb62e236c66d105d11) Make client shutdown an atomic terminal boundary — Thanks @marandaneto!
+- [c2b0972](https://github.com/posthog/posthog-python/commit/c2b09723ecf824060a8e1a08ecdd0e3a227a3aee) Respect Celery task filters for exception capture — Thanks @marandaneto!
+
 ## 7.35.4 — 2026-07-31
 
 ### Patch changes
