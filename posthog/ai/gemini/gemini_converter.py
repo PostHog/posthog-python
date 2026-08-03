@@ -47,6 +47,10 @@ def _format_part(part: Any) -> Optional[FormattedContentItem]:
     if not isinstance(plain, dict):
         return {"type": "unknown", "part": str(plain)}
     plain = normalize_part_keys(plain)
+    if plain.get("thought") is True and isinstance(plain.get("text"), str):
+        # Thought summaries (thinking_config.include_thoughts) become thinking
+        # blocks, matching the Anthropic shape the PostHog UI renders as reasoning.
+        return {"type": "thinking", "thinking": plain["text"]}
     if "text" in plain:
         return {"type": "text", "text": plain["text"]}
     if "inline_data" in plain:
@@ -245,7 +249,12 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                         # the _format_part delegation below.
                         text = getattr(part, "text", None)
                         if isinstance(text, str) and text:
-                            content.append({"type": "text", "text": text})
+                            # `is True` so loosely-specced mocks (whose .thought is a
+                            # truthy Mock) still land on the text branch below.
+                            if getattr(part, "thought", None) is True:
+                                content.append({"type": "thinking", "thinking": text})
+                            else:
+                                content.append({"type": "text", "text": text})
                             continue
 
                         if hasattr(part, "function_call") and part.function_call:
