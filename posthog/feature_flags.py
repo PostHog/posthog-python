@@ -58,7 +58,16 @@ class ConditionMatch(Enum):
 
 # All operators supported by match_property, grouped by category.
 EQUALITY_OPERATORS = ("exact", "is_not", "is_set", "is_not_set")
-STRING_OPERATORS = ("icontains", "not_icontains", "regex", "not_regex")
+STRING_OPERATORS = (
+    "icontains",
+    "not_icontains",
+    "regex",
+    "not_regex",
+    "starts_with",
+    "not_starts_with",
+    "ends_with",
+    "not_ends_with",
+)
 NUMERIC_OPERATORS = ("gt", "gte", "lt", "lte")
 DATE_OPERATORS = ("is_date_before", "is_date_after")
 SEMVER_COMPARISON_OPERATORS = (
@@ -492,6 +501,12 @@ def is_condition_match(
     return ConditionMatch.MATCH
 
 
+# Raised when an operator passes the PROPERTY_OPERATORS gate but has no dispatch
+# branch in match_property. Distinct from the unknown-operator rejection at the top
+# of the function so the dispatch-completeness test can tell the two apart.
+_UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
+
+
 def match_property(property, property_values) -> bool:
     # only looks for matches where key exists in override_property_values
     # doesn't support operator is_not_set
@@ -537,6 +552,18 @@ def match_property(property, property_values) -> bool:
 
     if operator == "not_icontains":
         return not utils.str_icontains(override_value, value)
+
+    if operator == "starts_with":
+        return utils.str_istartswith(override_value, value)
+
+    if operator == "not_starts_with":
+        return not utils.str_istartswith(override_value, value)
+
+    if operator == "ends_with":
+        return utils.str_iendswith(override_value, value)
+
+    if operator == "not_ends_with":
+        return not utils.str_iendswith(override_value, value)
 
     if operator == "regex":
         return (
@@ -680,7 +707,7 @@ def match_property(property, property_values) -> bool:
 
     # Unreachable: all operators in PROPERTY_OPERATORS are handled above,
     # and unknown operators are rejected at the top of this function.
-    raise InconclusiveMatchError(f"Unknown operator {operator}")
+    raise InconclusiveMatchError(f"Operator {operator} {_UNHANDLED_OPERATOR_MESSAGE}")
 
 
 def match_cohort(

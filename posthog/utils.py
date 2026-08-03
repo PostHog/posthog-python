@@ -495,6 +495,46 @@ def str_iequals(value, comparand):
     return str(value).casefold() == str(comparand).casefold()
 
 
+def str_istartswith(source, search):
+    """
+    Check if a string starts with another string, ignoring case.
+
+    Args:
+        source: The string to check
+        search: The prefix to look for
+
+    Returns:
+        bool: True if source starts with search (case-insensitive), False otherwise
+
+    Examples:
+        >>> str_istartswith("Hello World", "HELLO")
+        True
+        >>> str_istartswith("Hello World", "World")
+        False
+    """
+    return str(source).casefold().startswith(str(search).casefold())
+
+
+def str_iendswith(source, search):
+    """
+    Check if a string ends with another string, ignoring case.
+
+    Args:
+        source: The string to check
+        search: The suffix to look for
+
+    Returns:
+        bool: True if source ends with search (case-insensitive), False otherwise
+
+    Examples:
+        >>> str_iendswith("Hello World", "WORLD")
+        True
+        >>> str_iendswith("Hello World", "Hello")
+        False
+    """
+    return str(source).casefold().endswith(str(search).casefold())
+
+
 def _platform_release():
     release = getattr(platform, "release", None)
     if callable(release):
