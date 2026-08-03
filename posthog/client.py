@@ -2236,6 +2236,19 @@ class Client(object):
             self.flag_definition_version += 1
             self.flag_cache.invalidate_version(old_version)
 
+    def _reset_flag_definitions(self) -> None:
+        """Drop the loaded flag definitions and the conditional-fetch validator.
+
+        The ETag has to go with the definitions it describes: if we keep it, the
+        next poll sends `If-None-Match` for definitions we no longer hold, the
+        server answers 304, and local evaluation stays empty until the
+        definitions happen to change server-side.
+        """
+        self.feature_flags = []
+        self.group_type_mapping = {}
+        self.cohorts = {}
+        self._flags_etag = None
+
     def _load_feature_flags(self):
         should_fetch = True
         if self._flag_definition_cache_provider:
@@ -2346,9 +2359,7 @@ class Client(object):
                     "More information: https://posthog.com/docs/api/overview"
                 )
                 self.log.error("[FEATURE FLAGS] %s", detail)
-                self.feature_flags = []
-                self.group_type_mapping = {}
-                self.cohorts = {}
+                self._reset_flag_definitions()
 
                 if self.flag_cache:
                     self.flag_cache.clear()
@@ -2360,9 +2371,7 @@ class Client(object):
                     "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
                 )
                 # Reset all feature flag data when quota limited
-                self.feature_flags = []
-                self.group_type_mapping = {}
-                self.cohorts = {}
+                self._reset_flag_definitions()
 
                 # Clear flag cache when quota limited
                 if self.flag_cache:

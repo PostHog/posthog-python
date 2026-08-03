@@ -3266,6 +3266,57 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertIsNone(client._flags_etag)
         self.assertEqual(client.feature_flags[0]["key"], "flag-v2")
 
+    @parameterized.expand(
+        [
+            ("quota_limited", 402, "quota limited"),
+            ("unauthorized", 401, "Unauthorized"),
+        ]
+    )
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.get")
+    def test_load_feature_flags_clears_etag_when_definitions_are_reset(
+        self, _name, status, message, patch_get, _patch_poll
+    ):
+        """A reset drops the ETag too, so the next poll can repopulate definitions.
+
+        Keeping the ETag would make the next request conditional on definitions
+        we no longer hold: the server answers 304 and local evaluation stays
+        empty until the definitions change server-side.
+        """
+        patch_get.side_effect = [
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v1", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"etag-v1"',
+            ),
+            APIError(status, message),
+            GetResponse(
+                data={
+                    "flags": [{"id": 1, "key": "flag-v1", "active": True}],
+                    "group_type_mapping": {},
+                    "cohorts": {},
+                },
+                etag='"etag-v1"',
+            ),
+        ]
+
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        client.load_feature_flags()
+        self.assertEqual(client._flags_etag, '"etag-v1"')
+
+        client._load_feature_flags()
+        self.assertEqual(client.feature_flags, [])
+        self.assertIsNone(client._flags_etag)
+
+        # The recovery poll must be unconditional, otherwise a 304 leaves us empty.
+        client._load_feature_flags()
+        self.assertIsNone(patch_get.call_args_list[2].kwargs.get("etag"))
+        self.assertEqual(client.feature_flags[0]["key"], "flag-v1")
+        self.assertEqual(client._flags_etag, '"etag-v1"')
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_wrong_key(self, patch_get, _patch_poll):
