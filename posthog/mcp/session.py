@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
+from ._derived_sessions import derive_session_id
 from ._ids import deterministic_prefixed_id, new_prefixed_id
 from ._internal import MCPAnalyticsData
 from .session_token import SessionTokenPayload
+from .types import UserIdentity
 
 __all__ = ["derive_session_id_from_mcp_session"]
 
@@ -34,9 +36,14 @@ async def resolve_session_id(
     mcp_session_id: Optional[str],
     *,
     token: Optional[SessionTokenPayload] = None,
+    identity: Optional[UserIdentity] = None,
+    client_name: Optional[str] = None,
+    client_version: Optional[str] = None,
 ) -> str:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
+
+    Precedence: ``token`` > ``mcp_session_id`` > sticky-mcp > derived > generated.
 
     ``token`` is our self-encoded session token (see :mod:`.session_token`),
     decoded from the replayed ``Mcp-Session-Id`` header. It is the only source
@@ -47,6 +54,13 @@ async def resolve_session_id(
     for a request that didn't replay the token would merge unrelated clients under
     one ``$session_id``. A compliant client replays the header on every request, so
     a genuine token session never needs the fallback.
+
+    ``identity`` enables the *derived* source: on stateless traffic with no token
+    and no MCP session header (SEP-2567 dropped the header on 2026-07-28), an
+    identified request derives a stable session from ``(distinct_id, client_name,
+    client_version)`` via the process-shared registry. Only taken when a
+    ``distinct_id`` is present — deriving from an anonymous key would merge
+    unrelated users under one ``$session_id``, so those fall through to generated.
     """
     async with data.session_lock:
         now = datetime.now(timezone.utc)
@@ -70,6 +84,17 @@ async def resolve_session_id(
         # Once a session is MCP-derived, keep it even if a later request arrives
         # without the MCP session id, so the session doesn't fragment.
         if data.session_source == "mcp" and data.last_mcp_session_id:
+            data.last_activity = now
+            return data.session_id
+
+        # Derived: stateless traffic (no token, no MCP header) that is identified.
+        # The registry is process-shared, so per-request server instances correlate
+        # into one session per (distinct_id, client). Never derived anonymously.
+        if identity is not None and identity.distinct_id:
+            data.session_id = derive_session_id(
+                identity.distinct_id, client_name, client_version, now=now
+            )
+            data.session_source = "derived"
             data.last_activity = now
             return data.session_id
 

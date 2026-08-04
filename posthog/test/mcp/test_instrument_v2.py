@@ -164,6 +164,36 @@ async def test_mrtr_input_required_stamps_result_type_not_error():
     assert props["$mcp_result_type"] == "input_required"
 
 
+@pytest.mark.parametrize(
+    "identify, expected_source",
+    [
+        (UserIdentity(distinct_id="u1"), "derived"),
+        (None, "generated"),
+    ],
+)
+async def test_session_id_source_on_every_event(identify, expected_source):
+    # v2 traffic has no token and no Mcp-Session-Id header, so an identified
+    # request derives a stable session and an anonymous one gets a generated one.
+    # Every $mcp_* event (and $identify) carries the provenance.
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(identify=identify) if identify else None,
+    )
+
+    await drive(server, calls=(("add", {"a": 1, "b": 1}),))
+
+    names = ["$mcp_initialize", "$mcp_tools_list", "$mcp_tool_call"]
+    if identify:
+        names.append("$identify")
+    for name in names:
+        events = _events(client, name)
+        assert events, f"expected a {name} event"
+        assert events[0]["properties"]["$mcp_session_id_source"] == expected_source
+
+
 async def test_legacy_negotiation_on_v2_sdk_still_captures():
     # A client that runs the classic `initialize` handshake against the v2 SDK
     # negotiates an older protocol: the _meta envelope is absent, so client info

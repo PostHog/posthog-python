@@ -20,7 +20,12 @@ from ._capture import capture_event
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._intent import resolve_tool_call_intent, set_event_intent
-from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._internal import (
+    MCPAnalyticsData,
+    handle_identify,
+    resolve_event_properties,
+    resolve_identity,
+)
 from .logger import log
 from ._sanitization import build_captured_mcp_parameters
 from .session import resolve_session_id
@@ -185,6 +190,7 @@ async def _maybe_emit_initialize(
     client_version: Optional[str],
     extra: Optional[Dict[str, Any]],
     protocol_version: Optional[str] = None,
+    session_id_source: Optional[str] = None,
 ) -> None:
     """Lazily emit ``$mcp_initialize`` once per session. The Python MCP SDK handles
     ``InitializeRequest`` inside the session layer (not ``request_handlers``), so we
@@ -195,6 +201,7 @@ async def _maybe_emit_initialize(
     event: Dict[str, Any] = {
         "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
         "session_id": session_id,
+        "session_id_source": session_id_source,
         "client_name": client_name,
         "client_version": client_version,
         "protocol_version": protocol_version,
@@ -250,27 +257,51 @@ async def prepare_request(
     extra: Optional[Dict[str, Any]],
     token: Optional[SessionTokenPayload] = None,
     protocol_version: Optional[str] = None,
-) -> str:
-    """Resolve the session id, run identify, then lazily emit initialize. Returns
-    the session id to stamp on the event for this request.
+) -> tuple[str, str]:
+    """Resolve identity, then the session id, run identify, then lazily emit
+    initialize. Returns ``(session_id, session_id_source)`` to stamp on this
+    request's event; ``session_id_source`` is one of ``token`` | ``mcp`` |
+    ``derived`` | ``generated``.
 
     ``token`` is the decoded self-encoded session token (see ``session_token.py``);
     when present it takes precedence over ``mcp_session_id`` and carries the client
     identity across stateless pods.
 
-    Identify runs *before* initialize so the resolved identity is already in the cache
-    when ``capture_event`` builds the initialize event — otherwise the first
+    Identity is resolved FIRST (its callback invoked at most once), then passed to
+    both session resolution — so an identified stateless request can derive a stable
+    session from its ``distinct_id`` — and to ``handle_identify``. Identify runs
+    *before* initialize so the resolved identity is already in the cache when
+    ``capture_event`` builds the initialize event — otherwise the first
     ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
     (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
     the Python SDK handles initialize in the session layer, not ``request_handlers``.)"""
-    session_id = await resolve_session_id(data, mcp_session_id, token=token)
-    identify_event = await handle_identify(data, session_id, request, extra)
+    identity = await resolve_identity(data, request, extra)
+    session_id = await resolve_session_id(
+        data,
+        mcp_session_id,
+        token=token,
+        identity=identity,
+        client_name=client_name,
+        client_version=client_version,
+    )
+    # Snapshot the provenance under no further mutation: `data.session_source` is
+    # shared per-server state, so read it right after resolution and thread the
+    # value onto every event this request emits rather than re-reading at capture.
+    session_id_source = data.session_source
+    identify_event = await handle_identify(data, session_id, identity, request, extra)
     if identify_event:
+        identify_event["session_id_source"] = session_id_source
         fire_and_forget(capture_event(data, identify_event), data)
     await _maybe_emit_initialize(
-        data, session_id, client_name, client_version, extra, protocol_version
+        data,
+        session_id,
+        client_name,
+        client_version,
+        extra,
+        protocol_version,
+        session_id_source,
     )
-    return session_id
+    return session_id, session_id_source
 
 
 async def record_tool_call(
@@ -287,6 +318,7 @@ async def record_tool_call(
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
     result_type: Optional[str] = None,
+    session_id_source: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     # Analytics must never change what the tool returns or raises: any failure
@@ -296,6 +328,7 @@ async def record_tool_call(
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
             "session_id": session_id,
+            "session_id_source": session_id_source,
             "resource_name": name,
             "tool_description": data.tool_descriptions.get(name),
             "tool_category": data.tool_categories.get(name),
@@ -387,6 +420,7 @@ async def record_missing_capability(
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
     protocol_version: Optional[str] = None,
+    session_id_source: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record a ``get_more_tools`` call as ``$mcp_missing_capability``, with the
@@ -396,6 +430,7 @@ async def record_missing_capability(
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
             "session_id": session_id,
+            "session_id_source": session_id_source,
             "resource_name": tool_name,
             "parameters": build_captured_mcp_parameters(request),
             "client_name": client_name,
@@ -424,12 +459,14 @@ async def record_tools_list(
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
     protocol_version: Optional[str] = None,
+    session_id_source: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_TOOLS_LIST,
             "session_id": session_id,
+            "session_id_source": session_id_source,
             "listed_tool_names": names,
             "parameters": build_captured_mcp_parameters(request),
             "response": _wrap_response(response) if response is not None else None,

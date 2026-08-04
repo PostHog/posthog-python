@@ -141,18 +141,18 @@ def _protocol_version(ctx: Any) -> Optional[str]:
 
 async def _prepare(
     data: MCPAnalyticsData, ctx: Any, request: Dict[str, Any]
-) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
+) -> Tuple[str, str, Optional[str], Optional[str], Optional[str]]:
     """Resolve session (emitting identify + lazy initialize) for this request.
 
     v2 traffic has no self-encoded token and no ``Mcp-Session-Id`` header by
     construction (SEP-2567 removed it), so ``mcp_session_id``/``token`` are always
-    None here; sessions come out derived (Stage C) when identified, generated
-    otherwise. Returns the session id plus the resolved client/protocol info so
-    the caller stamps the same values on the captured event."""
+    None here; sessions come out ``derived`` (Stage C) when identified,
+    ``generated`` otherwise. Returns the session id, its provenance source, and the
+    resolved client/protocol info so the caller stamps them on the captured event."""
     client_name, client_version = _client_info(ctx)
     protocol_version = _protocol_version(ctx)
     extra = {"session_id": None}
-    session_id = await prepare_request(
+    session_id, session_id_source = await prepare_request(
         data,
         mcp_session_id=None,
         client_name=client_name,
@@ -161,7 +161,7 @@ async def _prepare(
         request=request,
         extra=extra,
     )
-    return session_id, client_name, client_version, protocol_version
+    return session_id, session_id_source, client_name, client_version, protocol_version
 
 
 def _result_type(result: Any) -> Optional[str]:
@@ -199,9 +199,13 @@ async def _on_tool_call(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any
     arguments = params.get("arguments") or {}
     request = build_tool_call_request(name, arguments)
 
-    session_id, client_name, client_version, protocol_version = await _prepare(
-        data, ctx, request
-    )
+    (
+        session_id,
+        session_id_source,
+        client_name,
+        client_version,
+        protocol_version,
+    ) = await _prepare(data, ctx, request)
 
     start = time.monotonic()
     try:
@@ -219,6 +223,7 @@ async def _on_tool_call(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
+            session_id_source=session_id_source,
         )
         raise
     duration_ms = (time.monotonic() - start) * 1000
@@ -234,6 +239,7 @@ async def _on_tool_call(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any
         client_version=client_version,
         protocol_version=protocol_version,
         result_type=_result_type(result),
+        session_id_source=session_id_source,
     )
     return result
 
@@ -255,9 +261,13 @@ class _ForceErrorFlag:
 
 async def _on_tools_list(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any:
     request = {"method": "tools/list", "params": {}}
-    session_id, client_name, client_version, protocol_version = await _prepare(
-        data, ctx, request
-    )
+    (
+        session_id,
+        session_id_source,
+        client_name,
+        client_version,
+        protocol_version,
+    ) = await _prepare(data, ctx, request)
 
     start = time.monotonic()
     try:
@@ -274,6 +284,7 @@ async def _on_tools_list(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> An
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
+            session_id_source=session_id_source,
         )
         raise
     duration_ms = (time.monotonic() - start) * 1000
@@ -292,6 +303,7 @@ async def _on_tools_list(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> An
         client_name=client_name,
         client_version=client_version,
         protocol_version=protocol_version,
+        session_id_source=session_id_source,
     )
     return result
 

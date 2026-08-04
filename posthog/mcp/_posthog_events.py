@@ -81,6 +81,9 @@ def _add_session_id(event: Event, properties: Dict[str, Any]) -> None:
     session_id = event.get("session_id")
     if isinstance(session_id, str) and len(session_id) > 0:
         properties[_P.SESSION_ID] = session_id
+    source = event.get("session_id_source")
+    if isinstance(source, str) and source:
+        properties[_P.SESSION_ID_SOURCE] = source
 
 
 def _add_conversation_id(event: Event, properties: Dict[str, Any]) -> None:

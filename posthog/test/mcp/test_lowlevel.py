@@ -1,9 +1,11 @@
 """End-to-end tests for the low-level mcp.server.Server adapter (Milestone 3)."""
 
 import mcp.types as mcp_types
+import pytest
 from mcp.server.lowlevel import Server
 
 from posthog.mcp import instrument
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
@@ -133,3 +135,37 @@ async def test_initialize_emitted_once():
 
     assert len(_events(client, "$mcp_initialize")) == 1
     assert len(_events(client, "$mcp_tool_call")) == 2
+
+
+@pytest.mark.parametrize(
+    "identify, expected_source",
+    [
+        (UserIdentity(distinct_id="u1"), "derived"),
+        (None, "generated"),
+    ],
+)
+async def test_session_id_source_on_every_v1_event(identify, expected_source):
+    # A low-level (stdio-style) call with no Mcp-Session-Id header and no token:
+    # identified -> derived, anonymous -> generated. Provenance rides every event.
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server, client, MCPAnalyticsOptions(identify=identify) if identify else None
+    )
+
+    await server.request_handlers[mcp_types.ListToolsRequest](
+        mcp_types.ListToolsRequest(method="tools/list")
+    )
+    handler = server.request_handlers[mcp_types.CallToolRequest]
+    await handler(
+        _call_request("echo", {"msg": "hi", "context": "listing then calling"})
+    )
+    await _flush()
+
+    names = ["$mcp_initialize", "$mcp_tools_list", "$mcp_tool_call"]
+    if identify:
+        names.append("$identify")
+    for name in names:
+        events = _events(client, name)
+        assert events, f"expected a {name} event"
+        assert events[0]["properties"]["$mcp_session_id_source"] == expected_source

@@ -75,6 +75,11 @@ class PostHogMCPAnalyticsProperty:
     SERVER_NAME = "$mcp_server_name"
     SERVER_VERSION = "$mcp_server_version"
     SESSION_ID = "$session_id"
+    # How the $session_id was resolved: "token" (self-encoded session token),
+    # "mcp" (transport Mcp-Session-Id), "derived" (from the identified principal +
+    # client, for stateless 2026-07-28 traffic), or "generated" (fresh). Lets
+    # downstream tell a correlated session from a per-request generated one.
+    SESSION_ID_SOURCE = "$mcp_session_id_source"
     SOURCE = "$mcp_source"
     TOOL_CATEGORY = "$mcp_tool_category"
     TOOL_DESCRIPTION = "$mcp_tool_description"
