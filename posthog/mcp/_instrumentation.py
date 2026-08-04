@@ -13,7 +13,7 @@ import asyncio
 import concurrent.futures
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from ._capture import capture_event
 from ._event_types import MCPAnalyticsEventType
@@ -25,12 +25,9 @@ from ._sanitization import build_captured_mcp_parameters
 from .session import resolve_session_id
 from .session_token import SessionTokenPayload, decode_session_id
 
-# Keep strong refs to in-flight capture tasks/futures so they aren't GC'd mid-flight.
-# The metadata lets lifecycle drains select only work belonging to their analytics
-# handle/client and, for asyncio tasks, only work bound to the current event loop.
-_BACKGROUND_TASKS: Set[Any] = set()
-_TASK_OWNERS: Dict[Any, Any] = {}
-_TASK_LOOPS: Dict[Any, asyncio.AbstractEventLoop] = {}
+# Keep strong refs to in-flight capture tasks/futures and their lifecycle owners so
+# they aren't GC'd mid-flight and lifecycle drains can select only their own work.
+_BACKGROUND_TASKS: Dict[Any, Any] = {}
 _tasks_lock = threading.Lock()
 
 # A single daemon event loop for hosts with no running loop (sync dispatchers
@@ -52,19 +49,15 @@ def _get_background_loop() -> asyncio.AbstractEventLoop:
     return _bg_loop
 
 
-def _track_task(task: Any, owner: Any, loop: asyncio.AbstractEventLoop) -> None:
+def _track_task(task: Any, owner: Any) -> None:
     with _tasks_lock:
-        _BACKGROUND_TASKS.add(task)
-        _TASK_OWNERS[task] = owner
-        _TASK_LOOPS[task] = loop
+        _BACKGROUND_TASKS[task] = owner
     task.add_done_callback(_on_task_done)
 
 
 def _on_task_done(task: Any) -> None:
     with _tasks_lock:
-        _BACKGROUND_TASKS.discard(task)
-        _TASK_OWNERS.pop(task, None)
-        _TASK_LOOPS.pop(task, None)
+        _BACKGROUND_TASKS.pop(task, None)
     try:
         if not task.cancelled() and task.exception() is not None:
             log(f"background capture task failed: {task.exception()}")
@@ -91,11 +84,11 @@ def fire_and_forget(
     if background or running_loop is None:
         loop = _get_background_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        _track_task(future, owner, loop)
+        _track_task(future, owner)
         return
 
     task = running_loop.create_task(coro)
-    _track_task(task, owner, running_loop)
+    _track_task(task, owner)
 
 
 async def drain_pending(owner: Any) -> None:
@@ -104,10 +97,10 @@ async def drain_pending(owner: Any) -> None:
     with _tasks_lock:
         tasks = [
             task
-            for task in _BACKGROUND_TASKS
-            if _TASK_OWNERS.get(task) is owner
-            and _TASK_LOOPS.get(task) is loop
+            for task, task_owner in _BACKGROUND_TASKS.items()
+            if task_owner is owner
             and isinstance(task, asyncio.Task)
+            and task.get_loop() is loop
             and not task.done()
         ]
     if tasks:
@@ -119,9 +112,8 @@ def drain_pending_sync(owner: Any, timeout: Optional[float] = None) -> None:
     with _tasks_lock:
         futures = [
             task
-            for task in _BACKGROUND_TASKS
-            if _TASK_OWNERS.get(task) is owner
-            and _TASK_LOOPS.get(task) is _bg_loop
+            for task, task_owner in _BACKGROUND_TASKS.items()
+            if task_owner is owner
             and isinstance(task, concurrent.futures.Future)
             and not task.done()
         ]
