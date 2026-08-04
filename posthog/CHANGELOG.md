@@ -1,5 +1,11 @@
 # posthog
 
+## 7.37.2 — 2026-08-04
+
+### Patch changes
+
+- [b16ec74](https://github.com/posthog/posthog-python/commit/b16ec7450d9c5edcce576ab0c73ce318ac0afeec) Isolate MCP pending capture tasks by owner and loop — Thanks @marandaneto!
+
 ## 7.37.1 — 2026-08-04
 
 ### Patch changes
