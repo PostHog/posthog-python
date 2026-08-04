@@ -1,5 +1,14 @@
 # posthog
 
+## 7.37.1 — 2026-08-04
+
+### Patch changes
+
+- [38a09b8](https://github.com/posthog/posthog-python/commit/38a09b8d39646ac03505b54ce7e4fe735901ac82) Preserve typed feature flag results in Redis fallback — Thanks @marandaneto!
+- [25b9d28](https://github.com/posthog/posthog-python/commit/25b9d287b0226b4252a9846eaf4404156c6c268c) Preserve Anthropic messages.stream compatibility — Thanks @marandaneto!
+- [f70602b](https://github.com/posthog/posthog-python/commit/f70602b9060451ac5ecd7389e0ea913d20c353c0) Honor false feature flag payload overrides — Thanks @marandaneto!
+- [b094725](https://github.com/posthog/posthog-python/commit/b094725a5eaee9ae3681dccdd0e682f47fc853f6) Use device IDs during local feature flag evaluation — Thanks @marandaneto!
+
 ## 7.37.0 — 2026-08-03
 
 ### Minor changes
