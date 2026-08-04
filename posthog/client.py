@@ -244,6 +244,20 @@ def _parse_has_experiment(value: Any) -> Optional[bool]:
     return value if isinstance(value, bool) else None
 
 
+def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
+    """Flag payloads are stored as JSON strings, both in the ``/flags`` response
+    metadata and in the local-evaluation flag definitions, so decode them before
+    handing them to callers. A string that isn't valid JSON is passed through as-is."""
+    if isinstance(raw_payload, str):
+        if not raw_payload:
+            return None
+        try:
+            return json.loads(raw_payload)
+        except (json.JSONDecodeError, TypeError):
+            return raw_payload
+    return raw_payload
+
+
 def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
     """Server-reported experiment linkage from flag metadata; ``None`` when absent
     (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
@@ -3458,7 +3472,7 @@ class Client(object):
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
-                payload=local_payloads.get(key),
+                payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
                 # The local-evaluation flag definition does not carry a version field;
                 # only the remote ``/flags`` response does via ``metadata.version``.
@@ -3497,19 +3511,11 @@ class Client(object):
                 for key, detail in response.get("flags", {}).items():
                     if key in locally_evaluated_keys:
                         continue
-                    payload: Optional[Any] = None
-                    raw_payload = (
+                    payload = _parse_flag_payload(
                         detail.metadata.payload
                         if isinstance(detail.metadata, FlagMetadata)
                         else getattr(detail.metadata, "payload", None)
                     )
-                    if isinstance(raw_payload, str) and raw_payload:
-                        try:
-                            payload = json.loads(raw_payload)
-                        except (json.JSONDecodeError, TypeError):
-                            payload = raw_payload
-                    elif raw_payload is not None:
-                        payload = raw_payload
                     records[key] = _EvaluatedFlagRecord(
                         key=key,
                         enabled=detail.enabled,
