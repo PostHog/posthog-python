@@ -64,6 +64,7 @@ def capture_event(
         "is_error": event_input.get("is_error"),
         "error": event_input.get("error"),
         "conversation_id": event_input.get("conversation_id"),
+        "result_type": event_input.get("result_type"),
         "properties": event_input.get("properties"),
     }
 

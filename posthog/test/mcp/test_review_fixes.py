@@ -340,4 +340,4 @@ def test_version_warning_uses_supplied_logger(monkeypatch):
         server, FakeClient(), MCPAnalyticsOptions(logger=lambda m: logs.append(m))
     )
 
-    assert any("tested against mcp>=1.26" in m for m in logs)
+    assert any("supports mcp>=1.26,<2 and mcp>=2,<3" in m for m in logs)

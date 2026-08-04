@@ -139,6 +139,8 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.INTENT_SOURCE] = event["user_intent_source"]
     if event.get("is_error") is not None:
         properties[_P.IS_ERROR] = event["is_error"]
+    if event.get("result_type") and _is_tool_call(event):
+        properties[_P.RESULT_TYPE] = event["result_type"]
     if event.get("parameters") is not None:
         properties[_P.PARAMETERS] = event["parameters"]
     if event.get("response") is not None:

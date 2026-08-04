@@ -67,6 +67,11 @@ class PostHogMCPAnalyticsProperty:
     PARAMETERS = "$mcp_parameters"
     RESOURCE_NAME = "$mcp_resource_name"
     RESPONSE = "$mcp_response"
+    # The 2026-07-28 `resultType` of a tool result (e.g. "input_required" for an
+    # MRTR interim result). Present only on mcp 2.x traffic that returns a
+    # non-"complete" result, so downstream can segment MRTR calls without full
+    # request stitching (which is out of scope here).
+    RESULT_TYPE = "$mcp_result_type"
     SERVER_NAME = "$mcp_server_name"
     SERVER_VERSION = "$mcp_server_version"
     SESSION_ID = "$session_id"

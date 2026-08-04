@@ -286,6 +286,7 @@ async def record_tool_call(
     client_version: Optional[str] = None,
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
+    result_type: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     # Analytics must never change what the tool returns or raises: any failure
@@ -304,6 +305,7 @@ async def record_tool_call(
             "client_version": client_version,
             "protocol_version": protocol_version,
             "conversation_id": conversation_id,
+            "result_type": result_type,
             "is_error": False,
         }
         set_event_intent(event, await resolve_tool_call_intent(data, request, extra))

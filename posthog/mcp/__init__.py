@@ -157,10 +157,11 @@ def _resolve_client(posthog_client: Optional[Client]) -> Optional[Client]:
 
 
 def _warn_if_unsupported_mcp_version() -> None:
-    """The adapters hook private MCP SDK seams (``_tool_manager``, ``_mcp_server``,
-    ``request_handlers``) tested against ``mcp>=1.26,<2``. Since ``mcp`` is a peer
-    dependency we don't pin, advise at runtime when the installed version is outside
-    that range rather than failing hard (older/newer may still mostly work)."""
+    """PostHog MCP analytics supports two generations of the ``mcp`` SDK: 1.x
+    (``mcp>=1.26,<2``, the ``request_handlers`` seam) and 2.x (``mcp>=2,<3``, the
+    2026-07-28 ``ServerMiddleware`` seam). Since ``mcp`` is an unpinned peer
+    dependency, advise at runtime when the installed version is outside both
+    supported ranges rather than failing hard (a near-neighbor may still work)."""
     try:
         from importlib.metadata import version
 
@@ -168,20 +169,73 @@ def _warn_if_unsupported_mcp_version() -> None:
         major, minor = (int(p) for p in installed.split(".")[:2])
     except Exception:  # noqa: BLE001 - never let a version probe break instrument()
         return
-    if (major, minor) < (1, 26) or major >= 2:
+    if (major, minor) < (1, 26) or major >= 3:
         log(
-            f"Warning: PostHog MCP analytics is tested against mcp>=1.26,<2; found {installed}. "
-            "Instrumentation hooks private SDK internals and may behave unexpectedly."
+            f"Warning: PostHog MCP analytics supports mcp>=1.26,<2 and mcp>=2,<3; found {installed}. "
+            "Instrumentation may behave unexpectedly on this version."
         )
 
 
 def _canonical_server(server: Any) -> Any:
-    """The underlying low-level server for high-level wrappers (official FastMCP and
-    jlowin's fastmcp 2.0 both expose ``_mcp_server``), else the server itself. Used as
-    the tracking key so instrumenting a wrapper and its underlying server resolve to
-    one state instead of two divergent ones (matching the TS SDK)."""
-    low_level = getattr(server, "_mcp_server", None)
+    """The underlying low-level server for high-level wrappers, else the server
+    itself. v1 FastMCP (official and jlowin's) exposes ``_mcp_server``; the mcp 2.x
+    ``MCPServer`` exposes ``_lowlevel_server``. Used as the tracking key so
+    instrumenting a wrapper and its underlying server resolve to one state instead
+    of two divergent ones (matching the TS SDK)."""
+    low_level = getattr(server, "_mcp_server", None) or getattr(
+        server, "_lowlevel_server", None
+    )
     return low_level if low_level is not None else server
+
+
+def _instrument_generation_1(
+    server: Any,
+    data: MCPAnalyticsData,
+    is_fastmcp: Any,
+    is_fastmcp_v2: Any,
+    is_low_level_server: Any,
+) -> None:
+    """Dispatch for the mcp 1.x SDK: the ``request_handlers`` monkey-patch seam
+    plus zero-config stateless minting (an ASGI wrap that is a no-op for stdio /
+    low-level servers)."""
+    from ._instrument_fastmcp import instrument_fastmcp
+    from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
+
+    if is_fastmcp(server):
+        instrument_fastmcp(server, data)
+    elif is_fastmcp_v2(server):
+        instrument_fastmcp_v2(server, data)
+    elif is_low_level_server(server):
+        instrument_low_level(server, data)
+    else:
+        raise TypeError(
+            f"Unsupported server type: {type(server)!r}. Pass a FastMCP (official or jlowin's "
+            "fastmcp 2.0) or a low-level mcp.server.Server."
+        )
+
+    # Zero-config stateless minting: wrap the server's ASGI-app factories so a
+    # stateless/multi-pod deployment keeps one $session_id + the client harness
+    # across pods with no extra setup. No-op for stdio / low-level servers.
+    autowire_stateless_mint(server)
+
+
+def _instrument_generation_2(server: Any, data: MCPAnalyticsData) -> None:
+    """Dispatch for the mcp 2.x SDK (2026-07-28): attach the analytics
+    ``ServerMiddleware`` to the ``MCPServer`` or low-level ``Server``. A capture-only
+    adapter — no context injection, no tool-list mutation, no stateless minting
+    (SEP-2567 removed the ``Mcp-Session-Id`` header, so there's nothing to mint)."""
+    from ._compatibility import is_low_level_server, is_mcpserver_v2
+    from ._instrument_v2 import instrument_low_level_v2, instrument_mcpserver_v2
+
+    if is_mcpserver_v2(server):
+        instrument_mcpserver_v2(server, data)
+    elif is_low_level_server(server):
+        instrument_low_level_v2(server, data)
+    else:
+        raise TypeError(
+            f"Unsupported server type for mcp 2.x: {type(server)!r}. Pass an "
+            "mcp.server.mcpserver.MCPServer or a low-level mcp.server.lowlevel.Server."
+        )
 
 
 def instrument(
@@ -222,10 +276,10 @@ def instrument(
             "(PostHogMCP for custom dispatchers works without it.)"
         )
     _warn_if_unsupported_mcp_version()
+    from ._mcp_version import installed_mcp_generation
     from ._compatibility import is_fastmcp, is_fastmcp_v2, is_low_level_server
-    from ._instrument_fastmcp import instrument_fastmcp
-    from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
 
+    generation = installed_mcp_generation()
     key = _canonical_server(server)
 
     try:
@@ -241,24 +295,20 @@ def instrument(
         data = MCPAnalyticsData(options=opts, sink=sink, session_id=new_session_id())
         set_server_tracking_data(key, data)
 
-        if is_fastmcp(server):
-            instrument_fastmcp(server, data)
-        elif is_fastmcp_v2(server):
-            instrument_fastmcp_v2(server, data)
-        elif is_low_level_server(server):
-            instrument_low_level(server, data)
+        if generation == 2:
+            _instrument_generation_2(server, data)
         else:
-            raise TypeError(
-                f"Unsupported server type: {type(server)!r}. Pass a FastMCP (official or jlowin's "
-                "fastmcp 2.0) or a low-level mcp.server.Server."
+            _instrument_generation_1(
+                server, data, is_fastmcp, is_fastmcp_v2, is_low_level_server
             )
-
-        # Zero-config stateless minting: wrap the server's ASGI-app factories so a
-        # stateless/multi-pod deployment keeps one $session_id + the client harness
-        # across pods with no extra setup. No-op for stdio / low-level servers.
-        autowire_stateless_mint(server)
 
         return McpAnalytics(key)
     except Exception as error:  # noqa: BLE001
-        log(f"Warning: failed to instrument server - {error}")
+        # Degrade to a no-op so the host app keeps working, but make the failure
+        # actionable: name what happened, the detected generation, and the
+        # versions we support — never a bare ModuleNotFoundError or silent no-op.
+        log(
+            f"Warning: failed to instrument server (mcp generation {generation}, "
+            f"supported: 1.x as mcp>=1.26,<2 and 2.x as mcp>=2,<3) - {error}"
+        )
         return _NoopAnalytics()
