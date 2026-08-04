@@ -44,8 +44,9 @@ def _reinit_background_loop_after_fork() -> None:
     been held by a vanished thread. Replace the state without acquiring the old
     lock or trying to close the inherited loop, which can no longer be driven.
     """
-    global _BACKGROUND_TASKS, _bg_loop, _bg_loop_lock
-    _BACKGROUND_TASKS = set()
+    global _BACKGROUND_TASKS, _tasks_lock, _bg_loop, _bg_loop_lock
+    _BACKGROUND_TASKS = {}
+    _tasks_lock = threading.Lock()
     _bg_loop = None
     _bg_loop_lock = threading.Lock()
 
