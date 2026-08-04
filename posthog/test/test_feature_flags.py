@@ -21,6 +21,7 @@ from posthog.feature_flags import (
 )
 from posthog.request import APIError, GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.utils import FlagCache
 
 
 # This module preserves the legacy single-flag API's compatibility behavior;
@@ -3777,10 +3778,11 @@ class TestLocalEvaluation(unittest.TestCase):
                         "rollout_percentage": 100,
                     }
                 ],
-                "payloads": {"true": 300},
+                "payloads": {"true": 300, "false": 400},
             },
         }
         self.client.feature_flags = [basic_flag]
+        self.client.flag_cache = FlagCache()
 
         self.assertEqual(
             self.client.get_feature_flag_payload(
@@ -3797,6 +3799,34 @@ class TestLocalEvaluation(unittest.TestCase):
                 person_properties={"region": "USA"},
             ),
             300,
+        )
+
+        # A false override must take precedence over a locally evaluated true value.
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag",
+                "some-distinct-id",
+                match_value=False,
+                person_properties={"region": "USA"},
+            ),
+            400,
+        )
+
+        cached_result = self.client.flag_cache.get_stale_cached_flag(
+            "some-distinct-id", "person-flag"
+        )
+        assert cached_result is not None
+        self.assertIs(cached_result.get_value(), True)
+        self.assertEqual(cached_result.payload, 300)
+
+        # Locally evaluated false values use the lowercase "false" payload key.
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"region": "Canada"},
+            ),
+            400,
         )
         self.assertEqual(patch_flags.call_count, 0)
 

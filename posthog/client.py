@@ -2639,8 +2639,10 @@ class Client(object):
         )
         flag_was_locally_evaluated = flag_value is not None
 
-        if flag_was_locally_evaluated:
-            lookup_match_value = override_match_value or flag_value
+        if flag_value is not None:
+            lookup_match_value = (
+                override_match_value if override_match_value is not None else flag_value
+            )
             payload = (
                 self._compute_payload_locally(key, lookup_match_value)
                 if lookup_match_value is not None
@@ -2650,10 +2652,15 @@ class Client(object):
                 key, lookup_match_value, payload
             )
 
-            # Cache successful local evaluation
-            if self.flag_cache and flag_result:
+            # Cache the local evaluation, not a payload lookup override.
+            cached_flag_result = flag_result
+            if override_match_value is not None:
+                cached_flag_result = FeatureFlagResult.from_value_and_payload(
+                    key, flag_value, self._compute_payload_locally(key, flag_value)
+                )
+            if self.flag_cache and cached_flag_result:
                 self.flag_cache.set_cached_flag(
-                    distinct_id, key, flag_result, self.flag_definition_version
+                    distinct_id, key, cached_flag_result, self.flag_definition_version
                 )
         elif only_evaluate_locally:
             if self.feature_flags is None:
@@ -3205,11 +3212,11 @@ class Client(object):
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
-            # For boolean flags, convert True to "true"
+            # For boolean flags, use lowercase keys ("true" or "false")
             # For multivariate flags, use the variant string as-is
             lookup_value = (
-                "true"
-                if isinstance(match_value, bool) and match_value
+                str(match_value).lower()
+                if isinstance(match_value, bool)
                 else str(match_value)
             )
             payload = flag_payloads.get(lookup_value, None)
