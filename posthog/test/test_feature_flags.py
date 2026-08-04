@@ -12,6 +12,8 @@ import pytest
 from posthog.client import Client
 import posthog.feature_flags
 from posthog.feature_flags import (
+    PROPERTY_OPERATORS,
+    _UNHANDLED_OPERATOR_MESSAGE,
     InconclusiveMatchError,
     match_property,
     parse_datetime,
@@ -19,6 +21,7 @@ from posthog.feature_flags import (
 )
 from posthog.request import APIError, GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.utils import FlagCache
 
 
 # This module preserves the legacy single-flag API's compatibility behavior;
@@ -3775,10 +3778,11 @@ class TestLocalEvaluation(unittest.TestCase):
                         "rollout_percentage": 100,
                     }
                 ],
-                "payloads": {"true": 300},
+                "payloads": {"true": 300, "false": 400},
             },
         }
         self.client.feature_flags = [basic_flag]
+        self.client.flag_cache = FlagCache()
 
         self.assertEqual(
             self.client.get_feature_flag_payload(
@@ -3795,6 +3799,34 @@ class TestLocalEvaluation(unittest.TestCase):
                 person_properties={"region": "USA"},
             ),
             300,
+        )
+
+        # A false override must take precedence over a locally evaluated true value.
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag",
+                "some-distinct-id",
+                match_value=False,
+                person_properties={"region": "USA"},
+            ),
+            400,
+        )
+
+        cached_result = self.client.flag_cache.get_stale_cached_flag(
+            "some-distinct-id", "person-flag"
+        )
+        assert cached_result is not None
+        self.assertIs(cached_result.get_value(), True)
+        self.assertEqual(cached_result.payload, 300)
+
+        # Locally evaluated false values use the lowercase "false" payload key.
+        self.assertEqual(
+            self.client.get_feature_flag_payload(
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"region": "Canada"},
+            ),
+            400,
         )
         self.assertEqual(patch_flags.call_count, 0)
 
@@ -4659,6 +4691,18 @@ class TestMatchProperties(unittest.TestCase):
 
         return result
 
+    def test_every_supported_operator_has_a_dispatch_branch(self):
+        # PROPERTY_OPERATORS gates local evaluation, but match_property dispatches
+        # on a hand-written if-chain. An operator listed in the tuple but missing a
+        # branch falls through to the "unreachable" raise at the end of the function,
+        # silently pushing the flag back to remote evaluation.
+        for operator in PROPERTY_OPERATORS:
+            prop = self.property(key="key", value="1.0.0", operator=operator)
+            try:
+                match_property(prop, {"key": "1.0.0"})
+            except InconclusiveMatchError as error:
+                self.assertNotIn(_UNHANDLED_OPERATOR_MESSAGE, str(error), operator)
+
     def test_match_properties_exact(self):
         property_a = self.property(key="key", value="value")
 
@@ -4740,6 +4784,45 @@ class TestMatchProperties(unittest.TestCase):
         self.assertTrue(match_property(property_b, {"key": "val3"}))
 
         self.assertFalse(match_property(property_b, {"key": "three"}))
+
+    @parameterized.expand(
+        [
+            (
+                "starts_with",
+                "Val",
+                ["value", "VALUE", "vaLue4"],
+                ["prevalue", "Alakazam", 123],
+            ),
+            ("starts_with", "3", ["3", 323], [123, "val3"]),
+            (
+                "ends_with",
+                "lUe",
+                ["value", "VALUE", "343tfvalue"],
+                ["value2", "Alakazam", 123],
+            ),
+            ("ends_with", "3", ["3", 323, 13], [321, "3val"]),
+        ]
+    )
+    def test_match_properties_starts_with_and_ends_with(
+        self, operator, flag_value, matching, non_matching
+    ):
+        prop = self.property(key="key", value=flag_value, operator=operator)
+        for value in matching:
+            self.assertTrue(match_property(prop, {"key": value}), value)
+        for value in non_matching:
+            self.assertFalse(match_property(prop, {"key": value}), value)
+
+        # For non-None values, the negated operator is the exact inverse.
+        negated = self.property(key="key", value=flag_value, operator=f"not_{operator}")
+        for value in matching:
+            self.assertFalse(match_property(negated, {"key": value}), value)
+        for value in non_matching:
+            self.assertTrue(match_property(negated, {"key": value}), value)
+
+        # A missing key is inconclusive rather than a non-match.
+        for missing_properties in ({"other_key": "value"}, {}):
+            with self.assertRaises(InconclusiveMatchError):
+                match_property(prop, missing_properties)
 
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")

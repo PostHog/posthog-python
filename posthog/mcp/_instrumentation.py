@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,23 @@ _tasks_lock = threading.Lock()
 # like PostHogMCP). Created lazily and reused, so we never leak a loop per call.
 _bg_loop: Optional[asyncio.AbstractEventLoop] = None
 _bg_loop_lock = threading.Lock()
+
+
+def _reinit_background_loop_after_fork() -> None:
+    """Drop background-loop state inherited by a forked child.
+
+    The loop's daemon thread does not survive ``fork()``, and its lock may have
+    been held by a vanished thread. Replace the state without acquiring the old
+    lock or trying to close the inherited loop, which can no longer be driven.
+    """
+    global _BACKGROUND_TASKS, _bg_loop, _bg_loop_lock
+    _BACKGROUND_TASKS = set()
+    _bg_loop = None
+    _bg_loop_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reinit_background_loop_after_fork)
 
 
 def _get_background_loop() -> asyncio.AbstractEventLoop:

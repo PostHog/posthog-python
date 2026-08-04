@@ -1,5 +1,57 @@
 # posthog
 
+## 7.37.0 — 2026-08-03
+
+### Minor changes
+
+- [c5d01c9](https://github.com/posthog/posthog-python/commit/c5d01c9b0cdec50d2ffb6ee363db49e4831ede72) Support the `starts_with`, `not_starts_with`, `ends_with`, and `not_ends_with` property filter operators in feature flag local evaluation. Matching is case-insensitive and mirrors `icontains`, so flags using these operators no longer fall back to remote evaluation. — Thanks @haacked!
+
+## 7.36.0 — 2026-08-03
+
+### Minor changes
+
+- [f805e5b](https://github.com/posthog/posthog-python/commit/f805e5b3d7046ee996017f7d913b54937ede49f2) `posthog.ai.openai.OpenAI` / `AsyncOpenAI` now accept a per-call `posthog_provider_override` argument. The wrapper is commonly pointed at OpenAI-compatible endpoints (DeepSeek, Groq, Mistral, Together, Fireworks, xAI, Perplexity, Ollama, Cerebras, and various gateways) via a custom `base_url`, but always reported `$ai_provider: "openai"`, which breaks PostHog's cost attribution for those calls. Passing `posthog_provider_override="deepseek"` (for example) sets `$ai_provider` on the emitted event without changing how the OpenAI-shaped response is parsed. Omitting it leaves `$ai_provider` as `"openai"`, exactly as before. Covers chat completions, the Responses API, `.parse()`, and embeddings, across sync, async, and streaming calls. — Thanks @marco-g-pm!
+
+## 7.35.5 — 2026-08-03
+
+### Patch changes
+
+- [340eb2a](https://github.com/posthog/posthog-python/commit/340eb2adb49bd4449253db9e2161363cfe1bee72) Reset PostHog context after fork. Forked children no longer retain the parent process's active lexical context; they start without inherited context and can establish a new child-local context. — Thanks @marandaneto!
+- [c95c9f9](https://github.com/posthog/posthog-python/commit/c95c9f91228c1bbd0bebbedb62e236c66d105d11) Make client shutdown an atomic terminal boundary — Thanks @marandaneto!
+- [c2b0972](https://github.com/posthog/posthog-python/commit/c2b09723ecf824060a8e1a08ecdd0e3a227a3aee) Respect Celery task filters for exception capture — Thanks @marandaneto!
+
+## 7.35.4 — 2026-07-31
+
+### Patch changes
+
+- [60a3e9c](https://github.com/posthog/posthog-python/commit/60a3e9ce987c1eeda64b9905e5bdf9124a670c8f) Reset the client registry lock after fork — Thanks @marandaneto!
+
+## 7.35.3 — 2026-07-31
+
+### Patch changes
+
+- [0b353a7](https://github.com/posthog/posthog-python/commit/0b353a70c5cfedb04481354bc45445583f602157) Keep consumers alive after malformed before_send results — Thanks @marandaneto!
+- [3658ed1](https://github.com/posthog/posthog-python/commit/3658ed1a679315ebebb4ce35319f981fb21909c1) Cap capture v0 Retry-After delays — Thanks @marandaneto!
+- [1b30afa](https://github.com/posthog/posthog-python/commit/1b30afa1b400d137adb30628a015f18021571d7b) Reject negative capture retry counts — Thanks @marandaneto!
+
+## 7.35.2 — 2026-07-31
+
+### Patch changes
+
+- [aa00432](https://github.com/posthog/posthog-python/commit/aa00432e97fb5e270ac0ae4917b763a095c1496c) Restore exception hooks safely — Thanks @marandaneto!
+
+## 7.35.1 — 2026-07-31
+
+### Patch changes
+
+- [bfec2b1](https://github.com/posthog/posthog-python/commit/bfec2b16cd80ce0588d95beee1e24eb757defc35) Reset MCP background capture state after fork — Thanks @marandaneto!
+
+## 7.35.0 — 2026-07-30
+
+### Minor changes
+
+- [4bf123e](https://github.com/posthog/posthog-python/commit/4bf123e08f838280f70d0c6fef9c76057a531b15) The OpenAI Agents SDK `group_id` now also maps to `$ai_session_id` on `$ai_trace` and span events, so grouped runs show up as sessions in PostHog AI observability. `$ai_group_id` is still emitted alongside it. — Thanks @marco-g-pm for your first contribution 🎉!
+
 ## 7.34.0 — 2026-07-30
 
 ### Minor changes

@@ -33,9 +33,13 @@ class ExceptionCapture:
         refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS,
     ):
         self.client = client
+        self._closed = False
         self.original_excepthook = sys.excepthook
-        sys.excepthook = self.exception_handler
-        threading.excepthook = self.thread_exception_handler
+        self._original_threading_excepthook = threading.excepthook
+        self._sys_excepthook = self.exception_handler
+        self._threading_excepthook = self.thread_exception_handler
+        sys.excepthook = self._sys_excepthook
+        threading.excepthook = self._threading_excepthook
         # opt-in client-side rate limiting: per exception type, allow a burst
         # of captures, then refill over time
         self._rate_limiter = None
@@ -47,17 +51,63 @@ class ExceptionCapture:
             )
 
     def close(self):
-        sys.excepthook = self.original_excepthook
+        if self._closed:
+            return
+
+        self._closed = True
+        original_excepthook = self._resolve_hook(
+            self.original_excepthook,
+            "exception_handler",
+            "original_excepthook",
+        )
+        original_threading_excepthook = self._resolve_hook(
+            self._original_threading_excepthook,
+            "thread_exception_handler",
+            "_original_threading_excepthook",
+        )
+
+        # Keep each final ownership check and assignment together without a
+        # Python call between them. On supported GIL-enabled CPython builds,
+        # ordinary Python thread scheduling has no switch point inside either
+        # straight-line pair, minimizing the window for external hook writers.
+        if sys.excepthook is self._sys_excepthook:
+            sys.excepthook = original_excepthook
+        if threading.excepthook is self._threading_excepthook:
+            threading.excepthook = original_threading_excepthook
+
         if self._rate_limiter is not None:
             self._rate_limiter.stop()
 
     def exception_handler(self, exc_type, exc_value, exc_traceback):
-        # don't affect default behaviour.
-        self.capture_exception((exc_type, exc_value, exc_traceback))
-        self.original_excepthook(exc_type, exc_value, exc_traceback)
+        if not self._closed:
+            self.capture_exception((exc_type, exc_value, exc_traceback))
+        previous_hook = self._resolve_hook(
+            self.original_excepthook,
+            "exception_handler",
+            "original_excepthook",
+        )
+        previous_hook(exc_type, exc_value, exc_traceback)
 
     def thread_exception_handler(self, args):
-        self.capture_exception((args.exc_type, args.exc_value, args.exc_traceback))
+        if not self._closed:
+            self.capture_exception((args.exc_type, args.exc_value, args.exc_traceback))
+        previous_hook = self._resolve_hook(
+            self._original_threading_excepthook,
+            "thread_exception_handler",
+            "_original_threading_excepthook",
+        )
+        previous_hook(args)
+
+    @staticmethod
+    def _resolve_hook(hook, handler_name, previous_hook_name):
+        """Skip closed ExceptionCapture hooks while preserving the hook chain."""
+        while True:
+            owner = getattr(hook, "__self__", None)
+            if not isinstance(owner, ExceptionCapture) or not owner._closed:
+                return hook
+            if hook != getattr(owner, handler_name):
+                return hook
+            hook = getattr(owner, previous_hook_name)
 
     def exception_receiver(self, exc_info, extra_properties):
         if "distinct_id" in extra_properties:

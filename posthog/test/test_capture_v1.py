@@ -668,6 +668,17 @@ class TestSendV1Batch(unittest.TestCase):
                 )
         self.assertEqual(len(stub.calls), 2)
 
+    def test_negative_max_retries_still_attempts_delivery_once(self) -> None:
+        stub = _PostV1Stub([_results_response({"u-1": "ok"})])
+
+        with mock.patch("posthog.capture_v1._post_v1", stub):
+            _send_v1_batch(
+                "phc_key", "https://app.posthog.com", [_msg("u-1")], max_retries=-1
+            )
+
+        self.assertEqual(len(stub.calls), 1)
+        self.assertEqual(stub.calls[0]["attempt"], 1)
+
     def test_small_retry_after_does_not_shorten_backoff(self) -> None:
         # A Retry-After smaller than the configured backoff must not make the
         # client retry earlier than its own schedule (Retry-After is a minimum).

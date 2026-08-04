@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import threading
 import time
 import unittest
 import warnings
@@ -17,7 +18,7 @@ from posthog.contexts import get_context_session_id, new_context, set_context_se
 from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
-from posthog.types import FeatureFlag, LegacyFlagMetadata
+from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
 from posthog.version import VERSION
 from posthog.contexts import tag
 
@@ -197,7 +198,9 @@ class TestClient(unittest.TestCase):
 
     def test_message_only_info_logs_include_posthog_prefix(self):
         self.client.flag_cache = mock.Mock()
-        self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()
+        self.client.flag_cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+            key="flag-key", enabled=True, variant=None, payload=None, reason=None
+        )
 
         with capture_message_only_logs(level=logging.INFO) as logs:
             self.client._get_stale_flag_fallback("distinct_id", "flag-key")
@@ -2161,6 +2164,88 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
+    def test_shutdown_waits_for_racing_enqueue_before_draining(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        put_started = threading.Event()
+        release_put = threading.Event()
+        shutdown_done = threading.Event()
+        original_put = client.queue.put
+        capture_result = []
+
+        def blocking_put(*args, **kwargs):
+            put_started.set()
+            self.assertTrue(release_put.wait(2))
+            return original_put(*args, **kwargs)
+
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("racing event", distinct_id="distinct_id")
+            )
+        )
+        shutdown_thread = threading.Thread(
+            target=lambda: (client.shutdown(), shutdown_done.set())
+        )
+
+        with mock.patch.object(client.queue, "put", side_effect=blocking_put):
+            capture_thread.start()
+            self.assertTrue(put_started.wait(2))
+            shutdown_thread.start()
+            try:
+                self.assertFalse(shutdown_done.wait(0.1))
+            finally:
+                release_put.set()
+
+            capture_thread.join(2)
+            shutdown_thread.join(2)
+
+        self.assertFalse(capture_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertTrue(shutdown_done.is_set())
+        self.assertIsNotNone(capture_result[0])
+        self.assertTrue(client.queue.empty())
+
+    def test_shutdown_waits_for_sync_send_and_rejects_later_sends(self):
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+        send_started = threading.Event()
+        release_send = threading.Event()
+        shutdown_done = threading.Event()
+        capture_result = []
+
+        def blocking_post(*args, **kwargs):
+            send_started.set()
+            self.assertTrue(release_send.wait(2))
+
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("in-flight event", distinct_id="distinct_id")
+            )
+        )
+        shutdown_thread = threading.Thread(
+            target=lambda: (client.shutdown(), shutdown_done.set())
+        )
+
+        with mock.patch("posthog.client.batch_post", side_effect=blocking_post) as post:
+            capture_thread.start()
+            self.assertTrue(send_started.wait(2))
+            shutdown_thread.start()
+            try:
+                self.assertFalse(shutdown_done.wait(0.1))
+            finally:
+                release_send.set()
+
+            capture_thread.join(2)
+            shutdown_thread.join(2)
+            later_result = client.capture(
+                "post-shutdown event", distinct_id="distinct_id"
+            )
+
+        self.assertFalse(capture_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertTrue(shutdown_done.is_set())
+        self.assertIsNotNone(capture_result[0])
+        self.assertIsNone(later_result)
+        post.assert_called_once()
+
     def test_synchronous(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
@@ -3355,6 +3440,58 @@ class TestClient(unittest.TestCase):
                 with self.assertRaises(Exception) as cm:
                     method(*args, **kwargs)
                 self.assertEqual(str(cm.exception), "Expected error")
+
+
+class TestClientCaptureRetrySemantics(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("v0_sync", "v0", True),
+            ("v1_sync", "v1", True),
+            ("v0_async", "v0", False),
+            ("v1_async", "v1", False),
+        ]
+    )
+    def test_negative_max_retries_still_attempts_delivery_once(
+        self, _name, capture_mode, sync_mode
+    ):
+        response = mock.Mock(status_code=200, headers={}, text="")
+        response.json.return_value = {"results": {}}
+        client = None
+
+        with (
+            mock.patch("posthog.client.batch_post") as sync_v0_post,
+            mock.patch("posthog.consumer.batch_post") as async_v0_post,
+            mock.patch("posthog.capture_v1._post_v1", return_value=response) as v1_post,
+        ):
+            try:
+                client = Client(
+                    FAKE_TEST_API_KEY,
+                    capture_mode=capture_mode,
+                    sync_mode=sync_mode,
+                    max_retries=-1,
+                    flush_at=1,
+                    flush_interval=0.01,
+                )
+                client.capture("evt", distinct_id="d")
+                if not sync_mode:
+                    client.flush()
+
+                self.assertEqual(client.max_retries, 0)
+                if capture_mode == "v1":
+                    v1_post.assert_called_once()
+                    sync_v0_post.assert_not_called()
+                    async_v0_post.assert_not_called()
+                elif sync_mode:
+                    sync_v0_post.assert_called_once()
+                    async_v0_post.assert_not_called()
+                    v1_post.assert_not_called()
+                else:
+                    async_v0_post.assert_called_once()
+                    sync_v0_post.assert_not_called()
+                    v1_post.assert_not_called()
+            finally:
+                if client is not None and not sync_mode:
+                    client.shutdown()
 
 
 class TestClientSyncCaptureMode(unittest.TestCase):

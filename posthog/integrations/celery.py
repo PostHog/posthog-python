@@ -365,13 +365,18 @@ class PosthogCeleryIntegration:
             if exception:
                 task_properties["error_type"] = type(exception).__name__
                 task_properties["error_message"] = str(exception)
-                if self.capture_exceptions:
-                    self._capture_exception(exception)
 
             task_name = task_properties.get("celery_task_name")
-            if self.capture_task_lifecycle_events and self._should_track(
-                task_name, task_properties
+            should_track = False
+            if self.capture_task_lifecycle_events or (
+                exception and self.capture_exceptions
             ):
+                should_track = self._should_track(task_name, task_properties)
+
+            if exception and self.capture_exceptions and should_track:
+                self._capture_exception(exception)
+
+            if self.capture_task_lifecycle_events and should_track:
                 self._capture_event(f"celery task {state}", properties=task_properties)
         except Exception:
             logger.exception("Failed to process Celery %s state", state)
