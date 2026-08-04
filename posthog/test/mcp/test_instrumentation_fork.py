@@ -22,7 +22,8 @@ def test_sync_capture_completes_after_fork():
         while not finish_parent_capture.is_set():
             await asyncio.sleep(0.01)
 
-    instrumentation.fire_and_forget(pending_parent_capture())
+    owner = object()
+    instrumentation.fire_and_forget(pending_parent_capture(), owner)
     assert parent_capture_started.wait(timeout=2)
     parent_loop = instrumentation._bg_loop
     assert parent_loop is not None
@@ -30,6 +31,7 @@ def test_sync_capture_completes_after_fork():
 
     read_fd, write_fd = os.pipe()
     instrumentation._bg_loop_lock.acquire()
+    instrumentation._tasks_lock.acquire()
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -44,8 +46,8 @@ def test_sync_capture_completes_after_fork():
                 async def child_capture():
                     child_capture_completed.append(True)
 
-                instrumentation.fire_and_forget(child_capture())
-                instrumentation.drain_pending_sync(timeout=2)
+                instrumentation.fire_and_forget(child_capture(), owner)
+                instrumentation.drain_pending_sync(owner, timeout=2)
                 new_loop_created = instrumentation._bg_loop is not parent_loop
 
                 if (
@@ -73,9 +75,10 @@ def test_sync_capture_completes_after_fork():
         os.close(read_fd)
         _, status = os.waitpid(pid, 0)
     finally:
+        instrumentation._tasks_lock.release()
         instrumentation._bg_loop_lock.release()
         finish_parent_capture.set()
-        instrumentation.drain_pending_sync(timeout=2)
+        instrumentation.drain_pending_sync(owner, timeout=2)
 
     assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, result
     assert result == "ok"

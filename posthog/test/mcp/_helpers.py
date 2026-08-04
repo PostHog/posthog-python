@@ -5,6 +5,7 @@ flush logic can't drift between the FastMCP, low-level, PostHogMCP, and M4 tests
 """
 
 import asyncio
+import concurrent.futures
 
 
 class FakeClient:
@@ -32,9 +33,15 @@ async def flush_background():
     """Let fire-and-forget capture tasks run to completion."""
     import posthog.mcp._instrumentation as instr
 
+    loop = asyncio.get_running_loop()
     for _ in range(10):
         await asyncio.sleep(0)
-        pending = [t for t in list(instr._BACKGROUND_TASKS) if not t.done()]
+        pending = []
+        for task in list(instr._BACKGROUND_TASKS):
+            if isinstance(task, asyncio.Task) and task.get_loop() is loop:
+                pending.append(task)
+            elif isinstance(task, concurrent.futures.Future):
+                pending.append(asyncio.wrap_future(task))
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
     await asyncio.sleep(0)
