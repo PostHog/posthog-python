@@ -144,17 +144,22 @@ async def _prepare(
 ) -> Tuple[str, str, Optional[str], Optional[str], Optional[str]]:
     """Resolve session (emitting identify + lazy initialize) for this request.
 
-    v2 traffic has no self-encoded token and no ``Mcp-Session-Id`` header by
-    construction (SEP-2567 removed it), so ``mcp_session_id``/``token`` are always
-    None here; sessions come out ``derived`` (Stage C) when identified,
-    ``generated`` otherwise. Returns the session id, its provenance source, and the
-    resolved client/protocol info so the caller stamps them on the captured event."""
+    2026-07-28 traffic has no self-encoded token and no ``Mcp-Session-Id`` header
+    (SEP-2567 removed it), so ``ctx.session_id`` is None and sessions come out
+    ``derived`` (Stage C) when identified, ``generated`` otherwise. A legacy-era
+    client on this SDK still gets a transport session id, which ``ctx.session_id``
+    surfaces — pass it through so mixed fleets keep MCP-session correlation.
+    Returns the session id, its provenance source, and the resolved
+    client/protocol info so the caller stamps them on the captured event."""
     client_name, client_version = _client_info(ctx)
     protocol_version = _protocol_version(ctx)
-    extra = {"session_id": None}
+    mcp_session_id = getattr(ctx, "session_id", None)
+    if not isinstance(mcp_session_id, str) or not mcp_session_id:
+        mcp_session_id = None
+    extra = {"session_id": mcp_session_id}
     session_id, session_id_source = await prepare_request(
         data,
-        mcp_session_id=None,
+        mcp_session_id=mcp_session_id,
         client_name=client_name,
         client_version=client_version,
         protocol_version=protocol_version,
@@ -175,19 +180,6 @@ def _result_type(result: Any) -> Optional[str]:
     if isinstance(value, str) and value and value != "complete":
         return value
     return None
-
-
-def _is_error_result(result: Any) -> bool:
-    """A v2 tool result signals a tool error via ``isError``/``is_error`` — but an
-    ``input_required`` interim result (MRTR) is NOT an error, just a continuation."""
-    if _result_type(result) == "input_required":
-        return False
-    if isinstance(result, dict):
-        return result.get("isError") is True
-    return (
-        getattr(result, "is_error", None) is True
-        or getattr(result, "isError", None) is True
-    )
 
 
 async def _on_tool_call(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any:
@@ -228,12 +220,15 @@ async def _on_tool_call(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any
         raise
     duration_ms = (time.monotonic() - start) * 1000
 
+    # The result passes through unwrapped: record_tool_call's error detection
+    # handles both the wire dict's `isError` and a 2.x model's `is_error`, and an
+    # MRTR `input_required` result carries neither, so it lands as a non-error.
     await record_tool_call(
         data,
         session_id,
         name=name,
         arguments=arguments,
-        result=_ForceErrorFlag(result) if _is_error_result(result) else result,
+        result=result,
         duration_ms=duration_ms,
         client_name=client_name,
         client_version=client_version,
@@ -242,21 +237,6 @@ async def _on_tool_call(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any
         session_id_source=session_id_source,
     )
     return result
-
-
-class _ForceErrorFlag:
-    """Adapts a v2 wire result so ``record_tool_call``'s ``isError`` detection
-    (which reads ``.isError``/``["isError"]``) fires for the value we already
-    classified as a tool error — including a model-shaped result whose flag is
-    ``is_error``. Wraps, never mutates, the result the tool actually returned."""
-
-    isError = True
-
-    def __init__(self, wrapped: Any) -> None:
-        self._wrapped = wrapped
-
-    def __getattr__(self, item: str) -> Any:
-        return getattr(self._wrapped, item)
 
 
 async def _on_tools_list(data: MCPAnalyticsData, ctx: Any, call_next: Any) -> Any:

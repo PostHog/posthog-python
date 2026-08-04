@@ -146,10 +146,14 @@ def drain_pending_sync(owner: Any, timeout: Optional[float] = None) -> None:
 
 
 def is_tool_result_error(result: Any) -> bool:
-    """MCP tool results signal errors via ``isError: true`` rather than raising."""
+    """MCP tool results signal errors via ``isError: true`` rather than raising.
+    mcp 2.x pydantic models expose the same flag as snake_case ``is_error``."""
     if isinstance(result, dict):
         return result.get("isError") is True
-    return getattr(result, "isError", None) is True
+    return (
+        getattr(result, "isError", None) is True
+        or getattr(result, "is_error", None) is True
+    )
 
 
 def build_tool_call_request(

@@ -92,6 +92,44 @@ async def test_tool_error_result_captured_as_error():
     assert calls and calls[0]["properties"]["$mcp_is_error"] is True
     exceptions = _events(client, "$exception")
     assert exceptions, "an isError tool result should also emit $exception"
+    # The captured response must be the tool's own JSON-shaped result, not an
+    # adapter wrapper: FakeClient never JSON-encodes, so guard serializability
+    # here or a wrapper leaks a repr into production payloads unnoticed.
+    import json
+
+    response = calls[0]["properties"].get("$mcp_response")
+    json.dumps(response)
+
+
+async def test_legacy_transport_session_id_resolves_mcp_source():
+    # A legacy-era client on the v2 SDK still gets a transport session id, which
+    # the middleware ctx surfaces as `ctx.session_id`. It must resolve with "mcp"
+    # provenance (deterministic per MCP session), not fall through to generated.
+    from posthog.mcp._instrument_v2 import _prepare
+    from posthog.mcp._internal import MCPAnalyticsData
+    from posthog.mcp._sink import McpEventSink
+    from posthog.mcp.session import new_session_id
+
+    class StubCtx:
+        method = "tools/call"
+        params = {"name": "add", "arguments": {}}
+        meta = None
+        protocol_version = "2025-06-18"
+        session_id = "legacy-transport-session"
+
+    client = FakeClient()
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(),
+        sink=McpEventSink(client),
+        session_id=new_session_id(),
+    )
+
+    request = {"method": "tools/call", "params": {"name": "add", "arguments": {}}}
+    session_a, source, *_ = await _prepare(data, StubCtx(), request)
+    session_b, _, *_ = await _prepare(data, StubCtx(), request)
+
+    assert source == "mcp"
+    assert session_a == session_b, "same MCP session must map to one $session_id"
 
 
 async def test_tools_list_captured_with_names():
