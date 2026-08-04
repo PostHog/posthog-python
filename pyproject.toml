@@ -88,7 +88,12 @@ test = [
     "pydantic>=2.12.0",
     "parameterized>=0.8.1",
     "claude-agent-sdk",
-    "mcp>=1.28.1",
+    # Pinned below 2.0: `mcp` 2.x is a breaking rewrite (2026-07-28 spec) that
+    # can't coexist with 1.x in one venv, and a lock refresh with no upper bound
+    # would silently flip this env to 2.0. The v2 SDK is exercised by the separate
+    # `tests-mcp-v2` CI job (and `scripts/validate-mcp-matrix.sh`), which installs
+    # `mcp>=2,<3` over this env.
+    "mcp>=1.28.1,<2",
     "fastmcp>=2.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",

@@ -1,16 +1,24 @@
 """Tests for M4 parity features: get_more_tools (missing capability) + conversation_id."""
 
-import mcp.types as mcp_types
-from mcp.server.fastmcp import FastMCP
-from mcp.server.lowlevel import Server
+import pytest
 
-from posthog.mcp import PostHogMCP, get_more_tools_result, instrument
-from posthog.mcp.types import MCPAnalyticsOptions
-from posthog.test.mcp._helpers import (
+# `mcp.server.fastmcp` was removed in mcp 2.x; skip the module there before import.
+pytest.importorskip("mcp.server.fastmcp")
+
+import mcp.types as mcp_types  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.lowlevel import Server  # noqa: E402
+
+from posthog.mcp import PostHogMCP, get_more_tools_result, instrument  # noqa: E402
+from posthog.mcp.types import MCPAnalyticsOptions  # noqa: E402
+from posthog.test.mcp._helpers import (  # noqa: E402
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    requires_mcp_v1,
 )
+
+pytestmark = requires_mcp_v1
 
 
 def make_fastmcp():

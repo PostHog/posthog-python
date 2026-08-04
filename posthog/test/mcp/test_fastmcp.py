@@ -4,16 +4,23 @@ import asyncio
 
 import pytest
 
-import mcp.types as mcp_types
-from mcp.server.fastmcp import FastMCP
+# `mcp.server.fastmcp` was removed in mcp 2.x, so importing it crashes collection
+# there; skip the whole module on any non-v1 generation before that import runs.
+pytest.importorskip("mcp.server.fastmcp")
 
-from posthog.mcp import instrument
-from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
-from posthog.test.mcp._helpers import (
+import mcp.types as mcp_types  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+
+from posthog.mcp import instrument  # noqa: E402
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity  # noqa: E402
+from posthog.test.mcp._helpers import (  # noqa: E402
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    requires_mcp_v1,
 )
+
+pytestmark = requires_mcp_v1
 
 
 def make_server():

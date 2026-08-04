@@ -8,7 +8,15 @@ from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    requires_mcp_v1,
 )
+
+# The v1 low-level server keeps handlers in a public `request_handlers` dict keyed
+# by request TYPE; mcp 2.x renamed it `_request_handlers` keyed by method string.
+# These tests drive the v1 shape directly, so they're v1-only. `mcp.server.lowlevel`
+# and `mcp.types` still import in v2, so a module marker (not `importorskip`) is the
+# right guard.
+pytestmark = requires_mcp_v1
 
 
 def make_server():

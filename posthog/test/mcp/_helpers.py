@@ -7,6 +7,27 @@ flush logic can't drift between the FastMCP, low-level, PostHogMCP, and M4 tests
 import asyncio
 import concurrent.futures
 
+import pytest
+
+from posthog.mcp._mcp_version import installed_mcp_generation
+
+# The 2026-07-28 SDK (`mcp` 2.x) is a breaking rewrite of the same PyPI package,
+# so the two generations can't share a venv. The suite runs unchanged in both:
+# tests that reach into a generation's private server internals (fastmcp import,
+# `request_handlers` shape, session-token flows) carry the matching marker and
+# skip cleanly in the other env. Prefer marking a whole module via
+# `pytestmark = requires_mcp_v1` when every test in it is generation-specific.
+_GENERATION = installed_mcp_generation()
+
+requires_mcp_v1 = pytest.mark.skipif(
+    _GENERATION != 1,
+    reason=f"requires mcp 1.x internals; installed generation is {_GENERATION}",
+)
+requires_mcp_v2 = pytest.mark.skipif(
+    _GENERATION != 2,
+    reason=f"requires mcp 2.x internals; installed generation is {_GENERATION}",
+)
+
 
 class FakeClient:
     """Records capture() calls instead of sending them."""
