@@ -1,5 +1,11 @@
 # posthog
 
+## 7.37.3 — 2026-08-04
+
+### Patch changes
+
+- [5ed7d0d](https://github.com/posthog/posthog-python/commit/5ed7d0d12fb2b18eb341c407e109f51ff31b75e4) Prevent stale feature flag definition publication — Thanks @marandaneto!
+
 ## 7.37.2 — 2026-08-04
 
 ### Patch changes
