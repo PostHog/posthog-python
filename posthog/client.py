@@ -2218,7 +2218,7 @@ class Client(object):
         if not self._is_lifecycle_callback_thread():
             return False
         with self._lifecycle_lock:
-            if self._lifecycle_in_progress or self._deferred_lifecycle_thread_pending:
+            if self._deferred_lifecycle_thread_pending:
                 return True
             self._deferred_lifecycle_thread_pending = True
 

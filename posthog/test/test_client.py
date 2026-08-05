@@ -2164,8 +2164,9 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
-    def test_callback_lifecycle_requests_are_coalesced(self):
+    def test_callback_lifecycle_requests_are_coalesced_while_owner_runs(self):
         client = Client(FAKE_TEST_API_KEY)
+        client._lifecycle_in_progress = True
 
         with (
             mock.patch.object(
