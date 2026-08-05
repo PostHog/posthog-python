@@ -2218,6 +2218,14 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
+    def test_shutdown_does_not_wait_for_idle_consumers_flush_interval(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=5)
+
+        start = time.monotonic()
+        client.shutdown()
+
+        self.assertLess(time.monotonic() - start, 1)
+
     def test_shutdown_waits_for_racing_enqueue_before_draining(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         put_started = threading.Event()

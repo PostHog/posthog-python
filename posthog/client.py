@@ -308,7 +308,7 @@ class _Lane:
         self._active_sync_sends = 0
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
-        self._drain_signal = _DrainSignal()
+        self._drain_signal = _DrainSignal(self.queue)
         if eager_start:
             self.start()
 
@@ -454,7 +454,7 @@ class _Lane:
         """
         self.queue = Queue(self._max_queue_size)
         self.reset_sync_send_state_after_fork()
-        self._drain_signal = _DrainSignal()
+        self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
         self._started = False
         if self._eager_start:

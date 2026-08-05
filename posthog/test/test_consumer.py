@@ -177,7 +177,7 @@ class TestConsumer(unittest.TestCase):
         # A drain request means "send what is queued now", so `next()` must not
         # hold a below-flush_at batch back for the rest of flush_interval.
         q = Queue()
-        signal = _DrainSignal()
+        signal = _DrainSignal(q)
         consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
         consumer._set_drain_signal(signal)
         q.put(_track_event("first"))
@@ -194,7 +194,7 @@ class TestConsumer(unittest.TestCase):
     def test_drain_signal_still_respects_flush_at(self) -> None:
         # Draining must not degrade batching into one request per event.
         q = Queue()
-        signal = _DrainSignal()
+        signal = _DrainSignal(q)
         flush_at = 10
         consumer = Consumer(q, TEST_API_KEY, flush_at=flush_at, flush_interval=30)
         consumer._set_drain_signal(signal)
@@ -209,7 +209,7 @@ class TestConsumer(unittest.TestCase):
         # Once the caller completes its request, later batches must go back to
         # normal timer-based batching instead of inheriting a stale drain.
         q = Queue()
-        signal = _DrainSignal()
+        signal = _DrainSignal(q)
         flush_interval = 0.2
         consumer = Consumer(
             q,
@@ -228,7 +228,8 @@ class TestConsumer(unittest.TestCase):
         self.assertGreaterEqual(time.monotonic() - start, flush_interval * 0.5)
 
     def test_overlapping_drain_requests_remain_active_until_all_complete(self) -> None:
-        signal = _DrainSignal()
+        q = Queue()
+        signal = _DrainSignal(q)
 
         signal.request()
         signal.request()
@@ -241,7 +242,7 @@ class TestConsumer(unittest.TestCase):
     def test_consecutive_drain_requests_each_drain_immediately(self) -> None:
         # A later flush must not be served by an earlier flush's bookkeeping.
         q = Queue()
-        signal = _DrainSignal()
+        signal = _DrainSignal(q)
         consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
         consumer._set_drain_signal(signal)
 
@@ -257,7 +258,7 @@ class TestConsumer(unittest.TestCase):
         # The realistic ordering: the consumer is already parked on a partial
         # batch when flush() signals it.
         q = Queue()
-        signal = _DrainSignal()
+        signal = _DrainSignal(q)
         consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
         consumer._set_drain_signal(signal)
         q.put(_track_event())
@@ -269,6 +270,20 @@ class TestConsumer(unittest.TestCase):
 
         self.assertEqual(len(batch), 1)
         self.assertLess(time.monotonic() - start, 5)
+
+    def test_drain_signal_wakes_an_idle_consumer(self) -> None:
+        q = Queue()
+        signal = _DrainSignal(q)
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=2)
+        consumer._set_drain_signal(signal)
+        threading.Timer(0.1, signal.request).start()
+
+        start = time.monotonic()
+        batch = consumer.next()
+        signal.complete()
+
+        self.assertEqual(batch, [])
+        self.assertLess(time.monotonic() - start, 1)
 
     def test_without_drain_signal_batching_is_unchanged(self) -> None:
         q = Queue()

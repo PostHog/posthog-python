@@ -1,7 +1,6 @@
 from typing import Any, Optional
 import json
 import logging
-import threading
 import time
 from threading import Thread
 
@@ -32,36 +31,44 @@ AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per event
 # in case we want to lower it in the future.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 
-# How long a consumer that is already accumulating a batch may block on the
-# queue before re-checking its drain signal. An idle consumer (nothing
-# accumulated) still parks for the whole `flush_interval`, because anything a
-# caller enqueued before calling `flush()` is already in the queue and wakes the
-# blocking `get` on its own.
-_DRAIN_POLL_INTERVAL = 0.05
-
-
 _configure_posthog_logging()
 
 
 class _DrainSignal:
-    """Tracks active requests to stop batching and send pending events."""
+    """Wake queue consumers while one or more drain requests are active."""
 
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
+    def __init__(self, queue) -> None:
+        self._queue = queue
         self._requests = 0
 
     def request(self) -> None:
-        with self._lock:
+        with self._queue.not_empty:
             self._requests += 1
+            self._queue.not_empty.notify_all()
 
     def complete(self) -> None:
-        with self._lock:
+        with self._queue.not_empty:
             self._requests -= 1
 
     @property
     def requested(self) -> bool:
-        with self._lock:
+        with self._queue.mutex:
             return self._requests > 0
+
+    def get(self, timeout: float):
+        """Get an item, or wake with ``Empty`` when draining an empty queue."""
+        with self._queue.not_empty:
+            deadline = time.monotonic() + timeout
+            while not self._queue._qsize():
+                if self._requests:
+                    raise Empty
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Empty
+                self._queue.not_empty.wait(remaining)
+            item = self._queue._get()
+            self._queue.not_full.notify()
+            return item
 
 
 class Consumer(Thread):
@@ -170,19 +177,13 @@ class Consumer(Thread):
             if not draining and remaining <= 0:
                 break
 
-            # A partial batch is pending, so break the wait into slices to
-            # notice a drain request that arrives while we are parked here. An
-            # idle consumer still parks for the whole interval: anything a
-            # caller enqueued before flush() is already in the queue and wakes
-            # the blocking get() by itself.
-            sliced = bool(items) and self._drain_signal is not None
-            timeout = min(remaining, _DRAIN_POLL_INTERVAL) if sliced else remaining
-
             try:
                 if draining:
                     item = queue.get(block=False)
+                elif self._drain_signal is not None:
+                    item = self._drain_signal.get(timeout=remaining)
                 else:
-                    item = queue.get(block=True, timeout=timeout)
+                    item = queue.get(block=True, timeout=remaining)
                 try:
                     item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 except Exception:
@@ -211,12 +212,6 @@ class Consumer(Thread):
                     self.log.debug("hit batch size limit (size: %d)", total_size)
                     break
             except Empty:
-                if draining:
-                    break
-                if timeout < remaining:
-                    # Only a poll slice expired, not the batch window: keep
-                    # accumulating so batching is unchanged without a flush.
-                    continue
                 break
 
         return items
