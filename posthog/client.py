@@ -659,6 +659,8 @@ class Client(object):
         self._shutdown_complete = False
         self._deferred_lifecycle_error: Optional[BaseException] = None
         self._deferred_lifecycle_failure = threading.Event()
+        self._deferred_flush_lock = threading.Lock()
+        self._deferred_flush_pending = False
         self._shutdown_complete_event = threading.Event()
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
@@ -1935,6 +1937,8 @@ class Client(object):
         self._lifecycle_owner = None
         self._deferred_lifecycle_error = None
         self._deferred_lifecycle_failure = threading.Event()
+        self._deferred_flush_lock = threading.Lock()
+        self._deferred_flush_pending = False
         self._shutdown_complete_event = threading.Event()
         if shutdown_complete:
             self._shutdown_complete_event.set()
@@ -2168,7 +2172,7 @@ class Client(object):
             posthog.flush()  # Ensures the event is sent immediately
             ```
         """
-        if self._defer_from_callback(self.flush, "flush", timeout_seconds):
+        if self._defer_flush_from_callback(timeout_seconds):
             return
         try:
             if timeout_seconds is None:
@@ -2221,6 +2225,24 @@ class Client(object):
         if not self._is_lifecycle_callback_thread():
             return False
         self._start_lifecycle_thread(target, name, *args)
+        return True
+
+    def _defer_flush_from_callback(self, timeout_seconds: Optional[float]) -> bool:
+        if not self._is_lifecycle_callback_thread():
+            return False
+        with self._deferred_flush_lock:
+            if self._deferred_flush_pending:
+                return True
+            self._deferred_flush_pending = True
+
+        def run() -> None:
+            try:
+                self.flush(timeout_seconds)
+            finally:
+                with self._deferred_flush_lock:
+                    self._deferred_flush_pending = False
+
+        self._start_lifecycle_thread(run, "flush")
         return True
 
     def _join_once(self) -> None:

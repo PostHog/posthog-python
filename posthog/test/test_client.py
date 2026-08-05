@@ -2164,6 +2164,20 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
+    def test_callback_flushes_are_coalesced(self):
+        client = Client(FAKE_TEST_API_KEY)
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(client, "_start_lifecycle_thread") as start_thread,
+        ):
+            client.flush()
+            client.flush()
+
+        start_thread.assert_called_once()
+
     def test_sync_send_failure_does_not_invoke_async_on_error(self):
         on_error = mock.Mock()
         client = Client(
