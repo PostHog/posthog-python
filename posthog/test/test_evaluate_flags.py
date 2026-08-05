@@ -271,6 +271,85 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
         self.assertEqual(len(feature_flag_called), 0)
 
 
+class TestEvaluateFlagsLocalPayloads(unittest.TestCase):
+    """Locally-evaluated payloads must be decoded the same way remote ones are,
+    so a flag's payload type doesn't depend on where it happened to resolve."""
+
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Checkout",
+                "key": "checkout",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "multivariate": {
+                        "variants": [{"key": "blue", "rollout_percentage": 100}]
+                    },
+                    "payloads": {"blue": '{"copy": "new"}'},
+                },
+            },
+            {
+                "id": 2,
+                "name": "Beta UI",
+                "key": "beta-ui",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "payloads": {"true": '{"color": "green"}'},
+                },
+            },
+            {
+                "id": 3,
+                "name": "Plain",
+                "key": "plain-payload",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "payloads": {"true": "not json"},
+                },
+            },
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @mock.patch("posthog.client.flags")
+    def test_local_payloads_are_parsed(self, patch_flags):
+        flags = self.client.evaluate_flags("user-1")
+
+        self.assertEqual(flags.get_flag_payload("checkout"), {"copy": "new"})
+        self.assertEqual(flags.get_flag_payload("beta-ui"), {"color": "green"})
+        # /flags is not called because everything evaluated locally
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_non_json_local_payload_is_passed_through(self, patch_flags):
+        flags = self.client.evaluate_flags("user-1")
+
+        self.assertEqual(flags.get_flag_payload("plain-payload"), "not json")
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_flag_called_event_carries_parsed_local_payload(
+        self, patch_capture, patch_flags
+    ):
+        flags = self.client.evaluate_flags("user-1")
+        flags.get_flag("checkout")
+
+        feature_flag_called = [
+            c
+            for c in patch_capture.call_args_list
+            if c[0] and c[0][0] == "$feature_flag_called"
+        ]
+        self.assertEqual(len(feature_flag_called), 1)
+        properties = feature_flag_called[0][1]["properties"]
+        self.assertEqual(properties["$feature_flag_payload"], {"copy": "new"})
+
+
 class TestEvaluateFlagsLocalDeviceBucketing(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY)
