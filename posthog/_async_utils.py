@@ -1,7 +1,7 @@
 import asyncio
+import sys
 import threading
 from collections.abc import Awaitable
-from concurrent.futures import ThreadPoolExecutor
 from contextvars import Context, copy_context
 from typing import Any
 
@@ -34,10 +34,16 @@ class _ContextExecutorCall:
         return (_PlainExecutorCall, (self._func, self._args, self._kwargs))
 
 
-class _ContextThreadPoolExecutor(ThreadPoolExecutor):
-    def submit(self, fn, /, *args, **kwargs):
-        call = _ContextExecutorCall(copy_context(), fn, args, kwargs)
-        return super().submit(call)
+if sys.platform == "win32":
+    from asyncio.windows_events import ProactorEventLoop as _PlatformEventLoop
+else:
+    _PlatformEventLoop = asyncio.SelectorEventLoop
+
+
+class _ContextEventLoop(_PlatformEventLoop):
+    def run_in_executor(self, executor, func, *args):  # type: ignore[override]
+        call = _ContextExecutorCall(copy_context(), func, args)
+        return super().run_in_executor(executor, call)
 
 
 class _BackgroundEventLoopRunner:
@@ -48,6 +54,8 @@ class _BackgroundEventLoopRunner:
         self._thread: threading.Thread | None = None
         self._closing_threads: set[threading.Thread] = set()
         self._started = threading.Event()
+        self._startup_error: BaseException | None = None
+        self._close_requested = False
         self._lock = threading.Lock()
 
     def run(self, awaitable: Awaitable[Any]) -> Any:
@@ -59,15 +67,23 @@ class _BackgroundEventLoopRunner:
         with self._lock:
             loop = self._loop
             thread = self._thread
-            self._loop = None
-            self._thread = None
-            if thread is not None:
+            if thread is None:
+                return
+            if loop is None:
+                self._close_requested = True
+            else:
+                self._loop = None
+                self._thread = None
                 self._closing_threads.add(thread)
 
-        if loop is None or thread is None or loop.is_closed():
+        if loop is None:
+            if thread is not threading.current_thread():
+                thread.join()
+            return
+
+        if loop.is_closed():
             with self._lock:
-                if thread is not None:
-                    self._closing_threads.discard(thread)
+                self._closing_threads.discard(thread)
             return
 
         if thread is threading.current_thread():
@@ -95,39 +111,42 @@ class _BackgroundEventLoopRunner:
             ):
                 return self._loop
 
-            self._started.clear()
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                name="PostHogBackgroundEventLoopRunner",
-                daemon=True,
-            )
-            self._thread.start()
+            if self._thread is None or not self._thread.is_alive():
+                self._started.clear()
+                self._startup_error = None
+                self._close_requested = False
+                self._thread = threading.Thread(
+                    target=self._run_loop,
+                    name="PostHogBackgroundEventLoopRunner",
+                    daemon=True,
+                )
+                self._thread.start()
 
         self._started.wait()
         with self._lock:
+            if self._startup_error is not None:
+                raise self._startup_error
             assert self._loop is not None
             return self._loop
 
     def _run_loop(self) -> None:
-        loop = asyncio.new_event_loop()
-        loop.set_default_executor(_ContextThreadPoolExecutor())
-        original_run_in_executor = loop.run_in_executor
-
-        def run_in_executor(executor, func, *args):
-            call = _ContextExecutorCall(copy_context(), func, args)
-            return original_run_in_executor(executor, call)
-
         try:
-            setattr(loop, "run_in_executor", run_in_executor)
-        except (AttributeError, TypeError):
-            # Policy-provided loops can expose read-only methods. Default
-            # executor calls still propagate context through our executor.
-            pass
+            loop = _ContextEventLoop()
+            asyncio.set_event_loop(loop)
+        except BaseException as error:
+            with self._lock:
+                self._startup_error = error
+                self._thread = None
+                self._started.set()
+            return
 
-        asyncio.set_event_loop(loop)
         with self._lock:
             self._loop = loop
+            close_requested = self._close_requested
             self._started.set()
+
+        if close_requested:
+            loop.call_soon(loop.stop)
 
         try:
             loop.run_forever()
@@ -143,5 +162,10 @@ class _BackgroundEventLoopRunner:
             loop.run_until_complete(loop.shutdown_default_executor())
             asyncio.set_event_loop(None)
             loop.close()
+            current = threading.current_thread()
             with self._lock:
-                self._closing_threads.discard(threading.current_thread())
+                if self._thread is current:
+                    self._thread = None
+                if self._loop is loop:
+                    self._loop = None
+                self._closing_threads.discard(current)
