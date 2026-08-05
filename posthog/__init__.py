@@ -612,7 +612,7 @@ def group_identify(
 
 
 def alias(
-    previous_id: str,
+    previous_id: ID_TYPES,
     distinct_id: str,
     timestamp: Optional[datetime.datetime] = None,
     uuid: Optional[str] = None,
