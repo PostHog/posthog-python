@@ -1,5 +1,11 @@
 # posthog
 
+## 7.37.6 — 2026-08-05
+
+### Patch changes
+
+- [c5f4e8f](https://github.com/posthog/posthog-python/commit/c5f4e8f034a5648f663bffa6cbde2a5d0786309b) Normalize Gemini tool calls and tool responses in captured input so they render in traces and reach evaluations — Thanks @marco-g-pm!
+
 ## 7.37.5 — 2026-08-05
 
 ### Patch changes
