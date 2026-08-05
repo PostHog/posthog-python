@@ -49,6 +49,16 @@ class _DrainSignal:
     def complete(self) -> None:
         with self._queue.not_empty:
             self._requests -= 1
+            self._queue.not_empty.notify_all()
+
+    def wake(self) -> None:
+        with self._queue.not_empty:
+            self._queue.not_empty.notify_all()
+
+    def wait_until_inactive_or_work(self, consumer) -> None:
+        with self._queue.not_empty:
+            while self._requests and not self._queue._qsize() and consumer.running:
+                self._queue.not_empty.wait()
 
     @property
     def requested(self) -> bool:
@@ -123,12 +133,16 @@ class Consumer(Thread):
         self.log.debug("consumer is running...")
         while self.running:
             self.upload()
+            if self._drain_signal is not None:
+                self._drain_signal.wait_until_inactive_or_work(self)
 
         self.log.debug("consumer exited.")
 
     def pause(self):
         """Pause the consumer."""
         self.running = False
+        if self._drain_signal is not None:
+            self._drain_signal.wake()
 
     def upload(self):
         """Upload the next batch of items, return whether successful."""

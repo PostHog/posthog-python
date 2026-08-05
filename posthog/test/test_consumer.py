@@ -285,6 +285,55 @@ class TestConsumer(unittest.TestCase):
         self.assertEqual(batch, [])
         self.assertLess(time.monotonic() - start, 1)
 
+    def test_idle_consumer_parks_while_drain_waits_for_an_upload(self) -> None:
+        q = Queue()
+        signal = _DrainSignal(q)
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+        idle_returned = threading.Event()
+        idle_next_calls = 0
+
+        uploading = Consumer(q, TEST_API_KEY, flush_at=1, flush_interval=30)
+        idle = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        uploading._set_drain_signal(signal)
+        idle._set_drain_signal(signal)
+
+        def blocking_request(batch) -> None:
+            upload_started.set()
+            self.assertTrue(release_upload.wait(2))
+
+        original_idle_next = idle.next
+
+        def counted_idle_next():
+            nonlocal idle_next_calls
+            batch = original_idle_next()
+            idle_next_calls += 1
+            idle_returned.set()
+            return batch
+
+        uploading.request = blocking_request
+        idle.next = counted_idle_next
+        q.put(_track_event())
+        uploading.start()
+        self.assertTrue(upload_started.wait(1))
+        idle.start()
+        signal.request()
+
+        try:
+            self.assertTrue(idle_returned.wait(1))
+            time.sleep(0.1)
+            self.assertEqual(idle_next_calls, 1)
+        finally:
+            uploading.pause()
+            idle.pause()
+            release_upload.set()
+            signal.complete()
+            uploading.join(2)
+            idle.join(2)
+
+        self.assertFalse(uploading.is_alive())
+        self.assertFalse(idle.is_alive())
+
     def test_without_drain_signal_batching_is_unchanged(self) -> None:
         q = Queue()
         flush_interval = 0.3
