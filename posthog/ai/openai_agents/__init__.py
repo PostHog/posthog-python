@@ -34,11 +34,18 @@ def instrument(
 
     Args:
         client: Optional PostHog client instance. If not provided, uses the default client.
-        distinct_id: Optional distinct ID to associate with all traces.
-            Can also be a callable that takes a trace and returns a distinct ID.
+        distinct_id: Optional default distinct ID for all traces. Only suitable
+            as a static value when one process serves one user (a CLI or
+            worker); servers should pass identity per run via
+            ``RunConfig(trace_metadata={"posthog_distinct_id": ...})``, which
+            takes precedence. Can also be a callable that takes a trace and
+            returns a distinct ID.
         privacy_mode: If True, redacts input/output content from events.
         groups: Optional PostHog groups to associate with events.
         properties: Optional additional properties to include with all events.
+            Per-run properties can be passed via
+            ``RunConfig(trace_metadata={"posthog_properties": {...}})`` and
+            override these defaults.
 
     Returns:
         PostHogTracingProcessor: The registered processor instance.
@@ -47,20 +54,25 @@ def instrument(
         ```python
         from posthog.ai.openai_agents import instrument
 
-        # Simple setup
+        # One-user process (CLI/worker): a static distinct ID is fine
         instrument(distinct_id="user@example.com")
 
-        # With custom properties
-        instrument(
-            distinct_id="user@example.com",
-            privacy_mode=True,
-            properties={"environment": "production"}
-        )
+        # Server: pass identity and session per run instead
+        instrument()
 
-        # Now run agents as normal - traces automatically sent to PostHog
-        from agents import Agent, Runner
+        from agents import Agent, Runner, RunConfig
         agent = Agent(name="Assistant", instructions="You are helpful.")
-        result = Runner.run_sync(agent, "Hello!")
+        result = Runner.run_sync(
+            agent,
+            "Hello!",
+            run_config=RunConfig(
+                group_id=conversation_id,  # becomes $ai_session_id
+                trace_metadata={
+                    "posthog_distinct_id": user_id,
+                    "posthog_properties": {"plan": "scale"},
+                },
+            ),
+        )
         ```
     """
     from agents.tracing import add_trace_processor

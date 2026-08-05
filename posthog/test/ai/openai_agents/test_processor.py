@@ -943,6 +943,109 @@ class TestPostHogTracingProcessor:
         assert len(processor._trace_metadata) <= 10
 
 
+class TestPerRunMetadata:
+    """Tests for per-run identity/properties via RunConfig(trace_metadata=...)."""
+
+    def test_trace_metadata_distinct_id_overrides_instrument_default(
+        self, processor, mock_client, mock_trace
+    ):
+        """posthog_distinct_id in trace_metadata wins over instrument()-level."""
+        mock_trace.metadata = {"posthog_distinct_id": "run-user"}
+
+        processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["distinct_id"] == "run-user"
+
+    def test_trace_metadata_distinct_id_used_for_spans(
+        self, processor, mock_client, mock_trace, mock_span
+    ):
+        """Spans inherit the per-run distinct_id resolved at trace start."""
+        mock_trace.metadata = {"posthog_distinct_id": "run-user"}
+        processor.on_trace_start(mock_trace)
+        mock_client.capture.reset_mock()
+
+        mock_span.span_data = GenerationSpanData(model="gpt-4o")
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["distinct_id"] == "run-user"
+
+    def test_trace_metadata_properties_merge_and_override_defaults(
+        self, mock_client, mock_trace
+    ):
+        """posthog_properties merge into events, winning over instrument()-level."""
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            distinct_id="test-user",
+            properties={"env": "instrument", "keep": "yes"},
+        )
+        mock_trace.metadata = {"posthog_properties": {"env": "run", "extra": 1}}
+
+        processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
+
+        properties = mock_client.capture.call_args[1]["properties"]
+        assert properties["env"] == "run"
+        assert properties["keep"] == "yes"
+        assert properties["extra"] == 1
+
+    def test_control_keys_stripped_from_trace_metadata_property(
+        self, processor, mock_client, mock_trace
+    ):
+        """posthog_* control keys never land in $ai_trace_metadata."""
+        mock_trace.metadata = {
+            "posthog_distinct_id": "run-user",
+            "posthog_properties": {"plan": "scale"},
+            "batch": "nightly",
+        }
+
+        processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
+
+        properties = mock_client.capture.call_args[1]["properties"]
+        assert properties["$ai_trace_metadata"] == {"batch": "nightly"}
+
+    def test_only_control_keys_omits_trace_metadata_property(
+        self, processor, mock_client, mock_trace
+    ):
+        """Metadata that is all control keys emits no $ai_trace_metadata."""
+        mock_trace.metadata = {"posthog_distinct_id": "run-user"}
+
+        processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
+
+        properties = mock_client.capture.call_args[1]["properties"]
+        assert "$ai_trace_metadata" not in properties
+
+    def test_without_control_keys_falls_back_to_instrument_default(
+        self, processor, mock_client, mock_trace
+    ):
+        """No posthog_* keys → instrument()-level distinct_id still applies."""
+        mock_trace.metadata = {"batch": "nightly"}
+
+        processor.on_trace_start(mock_trace)
+        processor.on_trace_end(mock_trace)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["distinct_id"] == "test-user"
+        assert call_kwargs["properties"]["$ai_trace_metadata"] == {"batch": "nightly"}
+
+    def test_trace_end_without_start_still_reads_control_keys(
+        self, processor, mock_client, mock_trace
+    ):
+        """A trace evicted before end still resolves per-run identity."""
+        mock_trace.metadata = {"posthog_distinct_id": "run-user"}
+
+        processor.on_trace_end(mock_trace)
+
+        call_kwargs = mock_client.capture.call_args[1]
+        assert call_kwargs["distinct_id"] == "run-user"
+        assert mock_trace.trace_id not in processor._trace_metadata
+
+
 class TestEnsureSerializableCycleGuard:
     def test_self_referencing_dict_returns_circular_marker(self):
         node = {"a": 1}

@@ -39,6 +39,41 @@ def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
         return None
 
 
+# PostHog control keys read from RunConfig(trace_metadata=...). Same names as
+# the per-call kwargs on the OpenAI/Anthropic wrappers, carried by the Agents
+# SDK's per-run surface instead.
+_METADATA_DISTINCT_ID_KEY = "posthog_distinct_id"
+_METADATA_PROPERTIES_KEY = "posthog_properties"
+
+
+def _extract_posthog_metadata(
+    metadata: Optional[Dict[str, Any]],
+) -> tuple[Optional[str], Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Split PostHog control keys out of RunConfig trace_metadata.
+
+    Returns (distinct_id, properties, remaining_metadata). The control keys are
+    removed from the metadata that lands in $ai_trace_metadata.
+    """
+    if not metadata or not isinstance(metadata, dict):
+        return None, {}, metadata
+
+    distinct_id = metadata.get(_METADATA_DISTINCT_ID_KEY)
+    properties = metadata.get(_METADATA_PROPERTIES_KEY)
+    if not isinstance(properties, dict):
+        properties = {}
+
+    remaining = {
+        k: v
+        for k, v in metadata.items()
+        if k not in (_METADATA_DISTINCT_ID_KEY, _METADATA_PROPERTIES_KEY)
+    }
+    return (
+        str(distinct_id) if distinct_id else None,
+        properties,
+        remaining or None,
+    )
+
+
 class PostHogTracingProcessor(TracingProcessor):
     """
     A tracing processor that sends OpenAI Agents SDK traces to PostHog.
@@ -80,6 +115,8 @@ class PostHogTracingProcessor(TracingProcessor):
             client: Optional PostHog client instance. If not provided, uses the default client.
             distinct_id: Either a string distinct ID or a callable that takes a Trace
                 and returns a distinct ID. If not provided, uses the trace_id.
+                A per-run ``RunConfig(trace_metadata={"posthog_distinct_id": ...})``
+                takes precedence over this default.
             privacy_mode: If True, redacts input/output content from events.
             groups: Optional PostHog groups to associate with all events.
             properties: Optional additional properties to include with all events.
@@ -173,9 +210,18 @@ class PostHogTracingProcessor(TracingProcessor):
             ):
                 return
 
+            # Per-run posthog_properties (from RunConfig trace_metadata) merge
+            # last so they win over the instrument()-level defaults.
+            trace_id = properties.get("$ai_trace_id")
+            run_properties = (
+                self._trace_metadata.get(trace_id, {}).get("run_properties")
+                if trace_id
+                else None
+            )
             final_properties = {
                 **properties,
                 **self._properties,
+                **(run_properties or {}),
             }
 
             _capture_ai_event(
@@ -195,9 +241,14 @@ class PostHogTracingProcessor(TracingProcessor):
             trace_id = trace.trace_id
             trace_name = trace.name
             group_id = getattr(trace, "group_id", None)
-            metadata = getattr(trace, "metadata", None)
+            raw_metadata = getattr(trace, "metadata", None)
 
-            distinct_id = self._get_distinct_id(trace)
+            # Per-run values from RunConfig(trace_metadata=...) win over the
+            # instrument()-level defaults, which are process-global.
+            run_distinct_id, run_properties, metadata = _extract_posthog_metadata(
+                raw_metadata
+            )
+            distinct_id = run_distinct_id or self._get_distinct_id(trace)
 
             # Store trace metadata for later (used by spans and on_trace_end)
             self._trace_metadata[trace_id] = {
@@ -205,6 +256,7 @@ class PostHogTracingProcessor(TracingProcessor):
                 "group_id": group_id,
                 "metadata": metadata,
                 "distinct_id": distinct_id,
+                "run_properties": run_properties,
                 "start_time": time.time(),
             }
         except Exception as e:
@@ -215,11 +267,26 @@ class PostHogTracingProcessor(TracingProcessor):
         try:
             trace_id = trace.trace_id
 
-            # Pop stored metadata (also cleans up)
-            trace_info = self._trace_metadata.pop(trace_id, {})
+            # Read stored metadata; popped after the capture below so
+            # _capture_event can still look up the trace's run_properties.
+            trace_info = self._trace_metadata.get(trace_id)
+            if trace_info is None:
+                # Evicted or never started — re-extract from the trace itself
+                # and seed the store so _capture_event finds run_properties.
+                (
+                    fallback_distinct_id,
+                    fallback_run_properties,
+                    fallback_metadata,
+                ) = _extract_posthog_metadata(getattr(trace, "metadata", None))
+                trace_info = {
+                    "metadata": fallback_metadata,
+                    "distinct_id": fallback_distinct_id,
+                    "run_properties": fallback_run_properties,
+                }
+                self._trace_metadata[trace_id] = trace_info
             trace_name = trace_info.get("name") or trace.name
             group_id = trace_info.get("group_id") or getattr(trace, "group_id", None)
-            metadata = trace_info.get("metadata") or getattr(trace, "metadata", None)
+            metadata = trace_info.get("metadata")
             distinct_id = trace_info.get("distinct_id") or self._get_distinct_id(trace)
 
             # Calculate trace-level latency
@@ -255,6 +322,7 @@ class PostHogTracingProcessor(TracingProcessor):
                 distinct_id=distinct_id or trace_id,
                 properties=properties,
             )
+            self._trace_metadata.pop(trace_id, None)
         except Exception as e:
             log.debug(f"Error in on_trace_end: {e}")
 
