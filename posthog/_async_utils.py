@@ -1,54 +1,43 @@
 import asyncio
-import os
 import threading
 from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import Context, copy_context
 from typing import Any
 
 
-_executor_contexts: dict[int, Context] = {}
-_executor_contexts_lock = threading.Lock()
-_executor_context_token = 0
+class _PlainExecutorCall:
+    def __init__(self, func, args, kwargs) -> None:
+        self._func = func
+        self._args = args
+        self._kwargs = kwargs
+
+    def __call__(self):
+        return self._func(*self._args, **self._kwargs)
 
 
-def _run_with_registered_context(origin_pid, token, func, *args):
-    if os.getpid() != origin_pid:
-        return func(*args)
-    with _executor_contexts_lock:
-        context = _executor_contexts.get(token)
-    if context is None:
-        return func(*args)
-    return context.run(func, *args)
+class _ContextExecutorCall:
+    """Carry context in-process while remaining safe for serializing executors."""
+
+    def __init__(self, context: Context, func, args, kwargs=None) -> None:
+        self._context = context
+        self._func = func
+        self._args = args
+        self._kwargs = kwargs or {}
+
+    def __call__(self):
+        return self._context.run(self._func, *self._args, **self._kwargs)
+
+    def __reduce__(self):
+        # Context objects are not picklable and are process-local. Executors
+        # that serialize work reconstruct a plain call instead.
+        return (_PlainExecutorCall, (self._func, self._args, self._kwargs))
 
 
-class _ContextEventLoop(asyncio.SelectorEventLoop):
-    def run_in_executor(self, executor, func, *args):  # type: ignore[override]
-        global _executor_context_token
-        with _executor_contexts_lock:
-            _executor_context_token += 1
-            token = _executor_context_token
-            _executor_contexts[token] = copy_context()
-
-        try:
-            future = super().run_in_executor(
-                executor,
-                _run_with_registered_context,
-                os.getpid(),
-                token,
-                func,
-                *args,
-            )
-        except BaseException:
-            with _executor_contexts_lock:
-                _executor_contexts.pop(token, None)
-            raise
-
-        def remove_context(_):
-            with _executor_contexts_lock:
-                _executor_contexts.pop(token, None)
-
-        future.add_done_callback(remove_context)
-        return future
+class _ContextThreadPoolExecutor(ThreadPoolExecutor):
+    def submit(self, fn, /, *args, **kwargs):
+        call = _ContextExecutorCall(copy_context(), fn, args, kwargs)
+        return super().submit(call)
 
 
 class _BackgroundEventLoopRunner:
@@ -120,7 +109,21 @@ class _BackgroundEventLoopRunner:
             return self._loop
 
     def _run_loop(self) -> None:
-        loop = _ContextEventLoop()
+        loop = asyncio.new_event_loop()
+        loop.set_default_executor(_ContextThreadPoolExecutor())
+        original_run_in_executor = loop.run_in_executor
+
+        def run_in_executor(executor, func, *args):
+            call = _ContextExecutorCall(copy_context(), func, args)
+            return original_run_in_executor(executor, call)
+
+        try:
+            setattr(loop, "run_in_executor", run_in_executor)
+        except (AttributeError, TypeError):
+            # Policy-provided loops can expose read-only methods. Default
+            # executor calls still propagate context through our executor.
+            pass
+
         asyncio.set_event_loop(loop)
         with self._lock:
             self._loop = loop
