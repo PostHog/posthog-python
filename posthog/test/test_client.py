@@ -1855,6 +1855,43 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
+            ("none", None),
+            ("empty_string", ""),
+        ]
+    )
+    def test_alias_without_previous_id_is_dropped(self, _name, previous_id):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.alias(previous_id, "distinct_id")
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("previous_id", logs.output[0])
+
+    def test_alias_accepts_non_string_previous_id(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.alias(0, "distinct_id")
+            self.assertIsNotNone(msg_uuid)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["distinct_id"], "0")
+            self.assertEqual(msg["properties"]["distinct_id"], "0")
+
+    def test_alias_without_distinct_id_is_dropped(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.alias("previousId", None)
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("distinct_id", logs.output[0])
+
+    @parameterized.expand(
+        [
             # test_name, session_id, additional_properties, expected_properties
             ("basic_session_id", "test-session-123", {}, {}),
             (

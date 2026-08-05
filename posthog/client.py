@@ -1678,8 +1678,11 @@ class Client(object):
         Create an alias between two distinct IDs.
 
         Args:
-            previous_id: The previous distinct ID.
-            distinct_id: The new distinct ID to alias to.
+            previous_id: The previous distinct ID. Required - the call is dropped
+                with a warning if it is missing or empty.
+            distinct_id: The new distinct ID to alias to. Falls back to the
+                context distinct ID; the call is dropped with a warning if
+                neither is available.
             timestamp: The timestamp of the event.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
@@ -1696,10 +1699,21 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
+        previous_id = stringify_id(previous_id)
+        if not previous_id:
+            self.log.warning(
+                "alias() called without a previous_id, dropping the $create_alias event"
+            )
+            return None
+
         (distinct_id, personless) = get_identity_state(distinct_id)
 
         if personless:
-            return None  # Personless alias() does nothing - should this throw?
+            # No alias target was passed and none is available from context.
+            self.log.warning(
+                "alias() called without a distinct_id, dropping the $create_alias event"
+            )
+            return None
 
         msg: Dict[str, Any] = {
             "properties": {
