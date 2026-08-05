@@ -271,6 +271,55 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
         self.assertEqual(len(feature_flag_called), 0)
 
 
+class TestEvaluateFlagsLocalDeviceBucketing(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY)
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "key": "device-bucketed-flag",
+                "active": True,
+                "filters": {
+                    "bucketing_identifier": "device_id",
+                    # user-1 hashes above 50%, while both test device IDs hash below
+                    # 50%, so these assertions prove device bucketing is used.
+                    "groups": [{"properties": [], "rollout_percentage": 50}],
+                },
+            }
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_explicit_device_id_is_used_for_local_evaluation(
+        self, _patch_capture, patch_flags
+    ):
+        flags = self.client.evaluate_flags(
+            "user-1",
+            device_id="explicit-device",
+            only_evaluate_locally=True,
+        )
+
+        self.assertTrue(flags.get_flag("device-bucketed-flag"))
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_context_device_id_is_used_for_local_evaluation(
+        self, _patch_capture, patch_flags
+    ):
+        from posthog.contexts import new_context, set_context_device_id
+
+        with new_context():
+            set_context_device_id("context-device-0")
+            flags = self.client.evaluate_flags("user-1", only_evaluate_locally=True)
+
+        self.assertTrue(flags.get_flag("device-bucketed-flag"))
+        patch_flags.assert_not_called()
+
+
 class TestEvaluateFlagsFiltering(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY)

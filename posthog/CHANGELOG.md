@@ -1,5 +1,84 @@
 # posthog
 
+## 7.37.3 — 2026-08-04
+
+### Patch changes
+
+- [5ed7d0d](https://github.com/posthog/posthog-python/commit/5ed7d0d12fb2b18eb341c407e109f51ff31b75e4) Prevent stale feature flag definition publication — Thanks @marandaneto!
+
+## 7.37.2 — 2026-08-04
+
+### Patch changes
+
+- [b16ec74](https://github.com/posthog/posthog-python/commit/b16ec7450d9c5edcce576ab0c73ce318ac0afeec) Isolate MCP pending capture tasks by owner and loop — Thanks @marandaneto!
+
+## 7.37.1 — 2026-08-04
+
+### Patch changes
+
+- [38a09b8](https://github.com/posthog/posthog-python/commit/38a09b8d39646ac03505b54ce7e4fe735901ac82) Preserve typed feature flag results in Redis fallback — Thanks @marandaneto!
+- [25b9d28](https://github.com/posthog/posthog-python/commit/25b9d287b0226b4252a9846eaf4404156c6c268c) Preserve Anthropic messages.stream compatibility — Thanks @marandaneto!
+- [f70602b](https://github.com/posthog/posthog-python/commit/f70602b9060451ac5ecd7389e0ea913d20c353c0) Honor false feature flag payload overrides — Thanks @marandaneto!
+- [b094725](https://github.com/posthog/posthog-python/commit/b094725a5eaee9ae3681dccdd0e682f47fc853f6) Use device IDs during local feature flag evaluation — Thanks @marandaneto!
+
+## 7.37.0 — 2026-08-03
+
+### Minor changes
+
+- [c5d01c9](https://github.com/posthog/posthog-python/commit/c5d01c9b0cdec50d2ffb6ee363db49e4831ede72) Support the `starts_with`, `not_starts_with`, `ends_with`, and `not_ends_with` property filter operators in feature flag local evaluation. Matching is case-insensitive and mirrors `icontains`, so flags using these operators no longer fall back to remote evaluation. — Thanks @haacked!
+
+## 7.36.0 — 2026-08-03
+
+### Minor changes
+
+- [f805e5b](https://github.com/posthog/posthog-python/commit/f805e5b3d7046ee996017f7d913b54937ede49f2) `posthog.ai.openai.OpenAI` / `AsyncOpenAI` now accept a per-call `posthog_provider_override` argument. The wrapper is commonly pointed at OpenAI-compatible endpoints (DeepSeek, Groq, Mistral, Together, Fireworks, xAI, Perplexity, Ollama, Cerebras, and various gateways) via a custom `base_url`, but always reported `$ai_provider: "openai"`, which breaks PostHog's cost attribution for those calls. Passing `posthog_provider_override="deepseek"` (for example) sets `$ai_provider` on the emitted event without changing how the OpenAI-shaped response is parsed. Omitting it leaves `$ai_provider` as `"openai"`, exactly as before. Covers chat completions, the Responses API, `.parse()`, and embeddings, across sync, async, and streaming calls. — Thanks @marco-g-pm!
+
+## 7.35.5 — 2026-08-03
+
+### Patch changes
+
+- [340eb2a](https://github.com/posthog/posthog-python/commit/340eb2adb49bd4449253db9e2161363cfe1bee72) Reset PostHog context after fork. Forked children no longer retain the parent process's active lexical context; they start without inherited context and can establish a new child-local context. — Thanks @marandaneto!
+- [c95c9f9](https://github.com/posthog/posthog-python/commit/c95c9f91228c1bbd0bebbedb62e236c66d105d11) Make client shutdown an atomic terminal boundary — Thanks @marandaneto!
+- [c2b0972](https://github.com/posthog/posthog-python/commit/c2b09723ecf824060a8e1a08ecdd0e3a227a3aee) Respect Celery task filters for exception capture — Thanks @marandaneto!
+
+## 7.35.4 — 2026-07-31
+
+### Patch changes
+
+- [60a3e9c](https://github.com/posthog/posthog-python/commit/60a3e9ce987c1eeda64b9905e5bdf9124a670c8f) Reset the client registry lock after fork — Thanks @marandaneto!
+
+## 7.35.3 — 2026-07-31
+
+### Patch changes
+
+- [0b353a7](https://github.com/posthog/posthog-python/commit/0b353a70c5cfedb04481354bc45445583f602157) Keep consumers alive after malformed before_send results — Thanks @marandaneto!
+- [3658ed1](https://github.com/posthog/posthog-python/commit/3658ed1a679315ebebb4ce35319f981fb21909c1) Cap capture v0 Retry-After delays — Thanks @marandaneto!
+- [1b30afa](https://github.com/posthog/posthog-python/commit/1b30afa1b400d137adb30628a015f18021571d7b) Reject negative capture retry counts — Thanks @marandaneto!
+
+## 7.35.2 — 2026-07-31
+
+### Patch changes
+
+- [aa00432](https://github.com/posthog/posthog-python/commit/aa00432e97fb5e270ac0ae4917b763a095c1496c) Restore exception hooks safely — Thanks @marandaneto!
+
+## 7.35.1 — 2026-07-31
+
+### Patch changes
+
+- [bfec2b1](https://github.com/posthog/posthog-python/commit/bfec2b16cd80ce0588d95beee1e24eb757defc35) Reset MCP background capture state after fork — Thanks @marandaneto!
+
+## 7.35.0 — 2026-07-30
+
+### Minor changes
+
+- [4bf123e](https://github.com/posthog/posthog-python/commit/4bf123e08f838280f70d0c6fef9c76057a531b15) The OpenAI Agents SDK `group_id` now also maps to `$ai_session_id` on `$ai_trace` and span events, so grouped runs show up as sessions in PostHog AI observability. `$ai_group_id` is still emitted alongside it. — Thanks @marco-g-pm for your first contribution 🎉!
+
+## 7.34.0 — 2026-07-30
+
+### Minor changes
+
+- [3c9aa59](https://github.com/posthog/posthog-python/commit/3c9aa59d1f2059e04bb802e93173cb7372dbbd0e) feat(ai): `Prompts.get(..., with_metadata=True)` results now include `config`, the JSON object of model parameters or agent configuration stored with the prompt version in PostHog prompt management (`None` when the version has none). Config is carried through the client-side cache and the stale-cache fallback. The hardcoded `fallback` string has no config, so use defensive access like `(result.config or {}).get("temperature", 0)`. — Thanks @jurajmajerik!
+
 ## 7.33.0 — 2026-07-29
 
 ### Minor changes

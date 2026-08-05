@@ -1,13 +1,32 @@
+import inspect
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from posthog import identify_context, new_context
 
 try:
-    from anthropic.types import CacheCreation, Message, Usage
+    from anthropic.lib.streaming._messages import (
+        AsyncMessageStreamManager,
+        MessageStreamManager,
+    )
+    from anthropic.types import (
+        CacheCreation,
+        Message,
+        MessageDeltaUsage,
+        RawContentBlockDeltaEvent,
+        RawContentBlockStartEvent,
+        RawContentBlockStopEvent,
+        RawMessageDeltaEvent,
+        RawMessageStartEvent,
+        RawMessageStopEvent,
+        TextBlock,
+        TextDelta,
+        Usage,
+    )
+    from anthropic.types.raw_message_delta_event import Delta
 
     from posthog.ai.anthropic import Anthropic, AnthropicBedrock, AsyncAnthropic
     from posthog.test.ai.utils import RecordingAsyncStream
@@ -1744,6 +1763,22 @@ def test_integration_stop_reason(mock_client):
     assert props["$ai_input_tokens"] > 0
 
 
+class RecordingStream:
+    def __init__(self, items):
+        self._items = iter(items)
+        self.closed = False
+        self.response = "provider-response"
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._items)
+
+    def close(self):
+        self.closed = True
+
+
 def _anthropic_stream_events():
     final = MockStreamEvent("message_delta")
     final.usage = MockUsage(
@@ -1757,6 +1792,125 @@ def _anthropic_stream_events():
         MockStreamEvent("content_block_delta", text="Hi"),
         final,
     ]
+
+
+def _anthropic_raw_stream_events():
+    message = Message(
+        id="message-id",
+        type="message",
+        role="assistant",
+        content=[],
+        model="claude-3-opus-20240229",
+        usage=Usage(input_tokens=10, output_tokens=0),
+        stop_reason=None,
+        stop_sequence=None,
+    )
+    return [
+        RawMessageStartEvent(type="message_start", message=message),
+        RawContentBlockStartEvent(
+            type="content_block_start",
+            index=0,
+            content_block=TextBlock(type="text", text=""),
+        ),
+        RawContentBlockDeltaEvent(
+            type="content_block_delta",
+            index=0,
+            delta=TextDelta(type="text_delta", text="Hi"),
+        ),
+        RawContentBlockStopEvent(type="content_block_stop", index=0),
+        RawMessageDeltaEvent(
+            type="message_delta",
+            delta=Delta(stop_reason="end_turn", stop_sequence=None),
+            usage=MessageDeltaUsage(output_tokens=5),
+        ),
+        RawMessageStopEvent(type="message_stop"),
+    ]
+
+
+def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(
+    mock_client,
+):
+    source = RecordingStream(_anthropic_raw_stream_events())
+    client = Anthropic(api_key="test-key", posthog_client=mock_client)
+    client.post = Mock(return_value=source)
+
+    response = client.messages.stream(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Foo"}],
+        max_tokens=1,
+        posthog_distinct_id="test-user",
+    )
+
+    assert isinstance(response, MessageStreamManager)
+    with response as stream:
+        assert stream.response == "provider-response"
+        text = list(stream.text_stream)
+
+    assert text == ["Hi"]
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_args.kwargs["distinct_id"] == "test-user"
+    assert "posthog_distinct_id" not in client.post.call_args.kwargs
+
+
+def test_messages_stream_tolerates_provider_manager_internals_changing(mock_client):
+    manager = object()
+    client = Anthropic(api_key="test-key", posthog_client=mock_client)
+
+    with patch("anthropic.resources.messages.Messages.stream", return_value=manager):
+        response = client.messages.stream(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Foo"}],
+            max_tokens=1,
+        )
+
+    assert response is manager
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_preserves_provider_contract_and_manager(
+    mock_client,
+):
+    source = RecordingAsyncStream(_anthropic_raw_stream_events())
+    client = AsyncAnthropic(posthog_client=mock_client)
+    client.post = AsyncMock(return_value=source)
+
+    response = client.messages.stream(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Foo"}],
+        max_tokens=1,
+        posthog_distinct_id="test-user",
+    )
+
+    assert isinstance(response, AsyncMessageStreamManager)
+    assert not inspect.isawaitable(response)
+    async with response as stream:
+        assert stream.response == "provider-response"
+        text = [chunk async for chunk in stream.text_stream]
+
+    assert text == ["Hi"]
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
+    assert mock_client.capture.call_args.kwargs["distinct_id"] == "test-user"
+    assert "posthog_distinct_id" not in client.post.call_args.kwargs
+
+
+def test_async_messages_stream_tolerates_provider_manager_internals_changing(
+    mock_client,
+):
+    manager = object()
+    client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.stream", return_value=manager
+    ):
+        response = client.messages.stream(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Foo"}],
+            max_tokens=1,
+        )
+
+    assert response is manager
 
 
 @pytest.mark.asyncio

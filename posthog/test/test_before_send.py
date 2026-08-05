@@ -121,6 +121,70 @@ class TestClient(unittest.TestCase):
             enqueued_msg = batch_data[0]
             self.assertEqual(enqueued_msg["event"], "robust_event")
 
+    def test_before_send_callback_output_is_recleaned(self):
+        marker = object()
+
+        def add_unsupported_value(event):
+            event["properties"]["marker"] = marker
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                before_send=add_unsupported_value,
+                sync_mode=True,
+            )
+            self.assertIsNotNone(client.capture("recleaned", distinct_id="user1"))
+
+        sent_event = mock_post.call_args.kwargs["batch"][0]
+        self.assertIsNone(sent_event["properties"]["marker"])
+
+    def test_before_send_callback_non_dict_output_uses_original_event(self):
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client.Client.log.exception") as mock_log,
+        ):
+            client = Client(
+                FAKE_TEST_API_KEY,
+                before_send=lambda _event: "invalid",
+                sync_mode=True,
+            )
+            self.assertIsNotNone(client.capture("original", distinct_id="user1"))
+
+        sent_event = mock_post.call_args.kwargs["batch"][0]
+        self.assertEqual(sent_event["event"], "original")
+        self.assertIn(
+            "before_send must return a dict or None", mock_log.call_args.args[0]
+        )
+
+    def test_malformed_before_send_event_does_not_stop_consumer_or_shutdown(self):
+        def add_invalid_mapping_key(event):
+            if event["event"] == "malformed":
+                event["properties"][("private-key",)] = "private-value"
+            return event
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            before_send=add_invalid_mapping_key,
+            flush_at=1,
+            flush_interval=0.01,
+        )
+        with (
+            mock.patch("posthog.consumer.batch_post") as mock_post,
+            self.assertLogs("posthog", level="ERROR") as logs,
+        ):
+            client.capture("malformed", distinct_id="user1")
+            client.capture("valid", distinct_id="user1")
+            client.shutdown()
+
+        mock_post.assert_called_once()
+        sent_batch = mock_post.call_args.kwargs["batch"]
+        self.assertEqual([event["event"] for event in sent_batch], ["valid"])
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+        self.assertTrue(all(not consumer.is_alive() for consumer in client.consumers))
+        self.assertNotIn("private-key", "\n".join(logs.output))
+        self.assertNotIn("private-value", "\n".join(logs.output))
+
     def test_before_send_callback_works_with_all_event_types(self):
         """Test that before_send works with capture, set, etc."""
 

@@ -95,7 +95,7 @@ class AsyncWrappedMessages(AsyncMessages):
             **kwargs,
         )
 
-    async def stream(
+    def stream(
         self,
         posthog_distinct_id: Optional[str] = None,
         posthog_trace_id: Optional[str] = None,
@@ -116,19 +116,36 @@ class AsyncWrappedMessages(AsyncMessages):
             **kwargs: Arguments passed to Anthropic's async ``messages.create`` API.
 
         Returns:
-            An async streaming iterator yielding Anthropic events.
+            Anthropic's native async streaming context manager, without awaiting.
         """
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
 
-        return await self._create_streaming(
-            posthog_distinct_id,
-            posthog_trace_id,
-            posthog_properties,
-            posthog_privacy_mode,
-            posthog_groups,
-            **kwargs,
-        )
+        # Construct the provider resource directly so older Anthropic versions,
+        # whose stream manager delegates through ``self.create(stream=True)``,
+        # cannot re-enter our tracked ``create`` override.
+        manager = AsyncMessages(self._client).stream(**kwargs)
+        request_attribute = "_AsyncMessageStreamManager__api_request"
+        request = getattr(manager, request_attribute, None)
+        if request is None:
+            return manager
+
+        async def tracked_request():
+            start_time = time.time()
+            response = await request
+            return self._track_streaming_response(
+                response,
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+                kwargs,
+                start_time,
+            )
+
+        setattr(manager, request_attribute, tracked_request())
+        return manager
 
     async def _create_streaming(
         self,
@@ -140,13 +157,35 @@ class AsyncWrappedMessages(AsyncMessages):
         **kwargs: Any,
     ):
         start_time = time.time()
+        response = await super().create(**kwargs)
+        return self._track_streaming_response(
+            response,
+            posthog_distinct_id,
+            posthog_trace_id,
+            posthog_properties,
+            posthog_privacy_mode,
+            posthog_groups,
+            kwargs,
+            start_time,
+        )
+
+    def _track_streaming_response(
+        self,
+        response: Any,
+        posthog_distinct_id: Optional[str],
+        posthog_trace_id: Optional[str],
+        posthog_properties: Optional[Dict[str, Any]],
+        posthog_privacy_mode: bool,
+        posthog_groups: Optional[Dict[str, Any]],
+        kwargs: Dict[str, Any],
+        start_time: float,
+    ):
         usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
         accumulated_content = ""
         content_blocks: List[StreamingContentBlock] = []
         tools_in_progress: Dict[str, ToolInProgress] = {}
         current_text_block: Optional[StreamingContentBlock] = None
         stop_reason: Optional[str] = None
-        response = await super().create(**kwargs)
 
         async def generator():
             nonlocal usage_stats

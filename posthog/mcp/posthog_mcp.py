@@ -64,14 +64,14 @@ class PostHogMCP(Client):
 
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """Drain in-flight MCP captures scheduled on the background loop, then flush
-        the underlying client. The capture methods are fire-and-forget on a sync host,
-        so without this drain a trailing event could still be in flight at flush time."""
-        drain_pending_sync(timeout=timeout_seconds)
+        the underlying client. The capture methods are fire-and-forget, so without
+        this drain a trailing event could still be in flight at flush time."""
+        drain_pending_sync(self, timeout=timeout_seconds)
         return super().flush(timeout_seconds=timeout_seconds)
 
     def shutdown(self) -> None:
         """Drain in-flight MCP captures, then shut the underlying client down."""
-        drain_pending_sync()
+        drain_pending_sync(self)
         return super().shutdown()
 
     # --- capture methods -----------------------------------------------------
@@ -300,7 +300,10 @@ class PostHogMCP(Client):
         options = McpCaptureOptions(
             enable_exception_autocapture=self._mcp_exception_autocapture
         )
-        fire_and_forget(self._mcp_sink.capture(event, options))
+        # PostHogMCP exposes synchronous lifecycle methods, so always use the shared
+        # background loop even when capture is called by an async host. This keeps
+        # flush()/shutdown() able to drain without blocking their own event loop's tasks.
+        fire_and_forget(self._mcp_sink.capture(event, options), self, background=True)
 
     def _inject_context(self, tool: Any, description: Optional[str]) -> Any:
         if isinstance(tool, dict):

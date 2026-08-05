@@ -2480,3 +2480,296 @@ def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_respon
         props = call_args["properties"]
 
         assert props["$ai_input"][0]["content"][0]["image_url"]["url"] == image
+
+
+# --- posthog_provider_override -----------------------------------------------
+#
+# OpenAI-compatible providers (DeepSeek, Groq, Mistral, etc.) are used through
+# this same wrapper via a custom `base_url`. Without an override, every event
+# reports `$ai_provider: "openai"`, which breaks PostHog's cost attribution for
+# those calls. `posthog_provider_override` lets a caller correct just the
+# reported provider without changing how the (OpenAI-shaped) response is
+# parsed.
+
+
+def test_provider_override_chat_completions(mock_client, mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ) as mock_create:
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_properties={"foo": "bar"},
+            posthog_provider_override="deepseek",
+        )
+
+        assert response == mock_openai_response
+        assert mock_create.call_count == 1
+        # The override must never reach the underlying OpenAI request.
+        assert "posthog_provider_override" not in mock_create.call_args.kwargs
+
+        assert mock_client.capture.call_count == 1
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+
+        assert props["$ai_provider"] == "deepseek"
+        assert props["$ai_model"] == "gpt-4"
+        # Overriding the provider must not clobber other posthog_properties.
+        assert props["foo"] == "bar"
+
+
+def test_provider_override_omitted_defaults_to_openai(
+    mock_client, mock_openai_response
+):
+    """Regression guard: omitting posthog_provider_override must leave
+    $ai_provider exactly as it was before the parameter existed."""
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        assert mock_client.capture.call_count == 1
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_provider"] == "openai"
+
+
+def test_provider_override_streaming_chat_completions(mock_client):
+    chunks = [
+        ChatCompletionChunk(
+            id="chunk1",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=0,
+                    delta=ChoiceDelta(role="assistant", content="Hello"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=CompletionUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+            ),
+        ),
+    ]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = chunks
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response_generator = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+            posthog_provider_override="groq",
+        )
+
+        list(response_generator)
+
+        assert "posthog_provider_override" not in mock_create.call_args.kwargs
+        assert mock_client.capture.call_count == 1
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_provider"] == "groq"
+        assert props["$ai_model"] == "gpt-4"
+
+
+def test_provider_override_responses_api(
+    mock_client, mock_openai_response_with_responses_api
+):
+    with patch(
+        "openai.resources.responses.Responses.create",
+        return_value=mock_openai_response_with_responses_api,
+    ) as mock_create:
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input="Hello",
+            posthog_distinct_id="test-id",
+            posthog_provider_override="xai",
+        )
+
+        assert response == mock_openai_response_with_responses_api
+        assert "posthog_provider_override" not in mock_create.call_args.kwargs
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_provider"] == "xai"
+        assert props["$ai_model"] == "gpt-4o-mini"
+
+
+def test_provider_override_embeddings(mock_client, mock_embedding_response):
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        return_value=mock_embedding_response,
+    ) as mock_create:
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input="Hello world",
+            posthog_distinct_id="test-id",
+            posthog_provider_override="mistral",
+        )
+
+        assert response == mock_embedding_response
+        assert "posthog_provider_override" not in mock_create.call_args.kwargs
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_provider"] == "mistral"
+        assert props["$ai_model"] == "text-embedding-3-small"
+
+
+def test_provider_override_chat_completions_parse(mock_client, mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.parse",
+        return_value=mock_openai_response,
+    ) as mock_parse:
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response = client.chat.completions.parse(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            response_format={"type": "json_object"},
+            posthog_distinct_id="test-id",
+            posthog_provider_override="cerebras",
+        )
+
+        assert response == mock_openai_response
+        assert mock_parse.call_count == 1
+        assert "posthog_provider_override" not in mock_parse.call_args.kwargs
+        assert mock_client.capture.call_count == 1
+
+        call_args = mock_client.capture.call_args[1]
+        props = call_args["properties"]
+        assert props["$ai_provider"] == "cerebras"
+        assert props["$ai_model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_async_provider_override_chat_completions(
+    mock_client, mock_openai_response
+):
+    mock_create = AsyncMock(return_value=mock_openai_response)
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+            posthog_provider_override="together",
+        )
+
+    assert response == mock_openai_response
+    mock_create.assert_awaited_once()
+    assert "posthog_provider_override" not in mock_create.call_args.kwargs
+    assert mock_client.capture.call_count == 1
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_provider"] == "together"
+    assert props["$ai_model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_async_provider_override_omitted_defaults_to_openai(
+    mock_client, mock_openai_response
+):
+    """Regression guard for the async path: omitting posthog_provider_override
+    must leave $ai_provider exactly as it was before the parameter existed."""
+    mock_create = AsyncMock(return_value=mock_openai_response)
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_async_provider_override_streaming_chat_completions(
+    mock_client, streaming_tool_call_chunks
+):
+    captured_kwargs = {}
+
+    async def mock_create(self, **kwargs):
+        captured_kwargs["kwargs"] = kwargs
+
+        async def chunk_iterable():
+            for chunk in streaming_tool_call_chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response_stream = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+            posthog_provider_override="fireworks",
+        )
+
+        chunks = []
+        async for chunk in response_stream:
+            chunks.append(chunk)
+
+    assert "posthog_provider_override" not in captured_kwargs["kwargs"]
+    assert len(chunks) == len(streaming_tool_call_chunks)
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_provider"] == "fireworks"
+    assert props["$ai_model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_async_provider_override_embeddings(mock_client, mock_embedding_response):
+    mock_create = AsyncMock(return_value=mock_embedding_response)
+
+    with patch("openai.resources.embeddings.AsyncEmbeddings.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = await client.embeddings.create(
+            model="text-embedding-3-small",
+            input="Hello world",
+            posthog_distinct_id="test-id",
+            posthog_provider_override="perplexity",
+        )
+
+    assert response == mock_embedding_response
+    assert mock_create.await_count == 1
+    assert "posthog_provider_override" not in mock_create.call_args.kwargs
+    assert mock_client.capture.call_count == 1
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_provider"] == "perplexity"
+    assert props["$ai_model"] == "text-embedding-3-small"

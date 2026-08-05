@@ -1,8 +1,36 @@
 import logging
+from typing import Any, Dict, Optional
 
 
 log = logging.getLogger("posthog")
 _fallback_warnings: set[tuple[str, str]] = set()
+
+
+def merge_provider_override(
+    posthog_properties: Optional[Dict[str, Any]],
+    posthog_provider_override: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Fold ``posthog_provider_override`` into ``posthog_properties``.
+
+    The wrapper always drives OpenAI's own response-format parsing with the
+    literal provider name "openai" -- that must stay untouched even when
+    talking to an OpenAI-compatible endpoint (DeepSeek, Groq, etc. via a
+    custom ``base_url``), since those responses are still shaped like
+    OpenAI's. What callers want to override is only the ``$ai_provider``
+    value reported on the captured event, so PostHog's cost attribution
+    matches the real provider.
+
+    Every capture path merges ``posthog_properties`` into the event's
+    properties *after* the default ``$ai_provider`` value, so setting the
+    key here is sufficient to win without touching format selection.
+
+    Returns ``posthog_properties`` unchanged when no override is supplied,
+    so omitting the parameter leaves behavior identical to before it
+    existed.
+    """
+    if posthog_provider_override is None:
+        return posthog_properties
+    return {**(posthog_properties or {}), "$ai_provider": posthog_provider_override}
 
 
 def reset_fallback_warnings() -> None:

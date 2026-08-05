@@ -27,7 +27,10 @@ from posthog.ai.openai.openai_converter import (
 )
 from posthog.client import Client as PostHogClient
 from posthog import setup
-from posthog.ai.openai.wrapper_utils import _OpenAIWrapperResource
+from posthog.ai.openai.wrapper_utils import (
+    _OpenAIWrapperResource,
+    merge_provider_override,
+)
 
 
 class OpenAI(openai.OpenAI):
@@ -76,6 +79,7 @@ def _parse_and_track(
     posthog_properties: Optional[Dict[str, Any]],
     posthog_privacy_mode: bool,
     posthog_groups: Optional[Dict[str, Any]],
+    posthog_provider_override: Optional[str] = None,
     **kwargs: Any,
 ):
     return call_llm_and_track_usage(
@@ -83,7 +87,7 @@ def _parse_and_track(
         wrapper._client._ph_client,
         "openai",
         posthog_trace_id,
-        posthog_properties,
+        merge_provider_override(posthog_properties, posthog_provider_override),
         posthog_privacy_mode,
         posthog_groups,
         wrapper._client.base_url,
@@ -102,6 +106,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_provider_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -113,6 +118,11 @@ class WrappedResponses(_OpenAIWrapperResource):
             posthog_properties: Additional properties to include with the usage event.
             posthog_privacy_mode: Whether to redact captured input and output.
             posthog_groups: Optional PostHog groups to associate with the event.
+            posthog_provider_override: Optional override for the ``$ai_provider``
+                reported on the usage event. Useful when this client is pointed at
+                an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
+                ``base_url``, so cost attribution matches the real provider.
+                Defaults to ``"openai"`` when omitted.
             **kwargs: Arguments passed to OpenAI's ``responses.create`` API.
 
         Returns:
@@ -120,6 +130,10 @@ class WrappedResponses(_OpenAIWrapperResource):
         """
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
+
+        posthog_properties = merge_provider_override(
+            posthog_properties, posthog_provider_override
+        )
 
         if kwargs.get("stream", False):
             return self._create_streaming(
@@ -162,7 +176,7 @@ class WrappedResponses(_OpenAIWrapperResource):
 
         def generator():
             nonlocal usage_stats
-            nonlocal final_content  # noqa: F824
+            nonlocal final_content
             nonlocal model_from_response
             nonlocal stop_reason
 
@@ -274,6 +288,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_provider_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -285,6 +300,11 @@ class WrappedResponses(_OpenAIWrapperResource):
             posthog_properties: Optional dictionary of extra properties to include in the event.
             posthog_privacy_mode: Whether to anonymize the input and output.
             posthog_groups: Optional dictionary of groups to associate with the event.
+            posthog_provider_override: Optional override for the ``$ai_provider``
+                reported on the usage event. Useful when this client is pointed at
+                an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
+                ``base_url``, so cost attribution matches the real provider.
+                Defaults to ``"openai"`` when omitted.
             **kwargs: Any additional parameters for the OpenAI Responses Parse API.
 
         Returns:
@@ -297,6 +317,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             posthog_properties,
             posthog_privacy_mode,
             posthog_groups,
+            posthog_provider_override,
             **kwargs,
         )
 
@@ -320,6 +341,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_provider_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -331,6 +353,11 @@ class WrappedCompletions(_OpenAIWrapperResource):
             posthog_properties: Additional properties to include with the usage event.
             posthog_privacy_mode: Whether to redact captured input and output.
             posthog_groups: Optional PostHog groups to associate with the event.
+            posthog_provider_override: Optional override for the ``$ai_provider``
+                reported on the usage event. Useful when this client is pointed at
+                an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
+                ``base_url``, so cost attribution matches the real provider.
+                Defaults to ``"openai"`` when omitted.
             **kwargs: Arguments passed to OpenAI's ``chat.completions.parse`` API.
 
         Returns:
@@ -343,6 +370,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             posthog_properties,
             posthog_privacy_mode,
             posthog_groups,
+            posthog_provider_override,
             **kwargs,
         )
 
@@ -353,6 +381,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_provider_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -364,6 +393,11 @@ class WrappedCompletions(_OpenAIWrapperResource):
             posthog_properties: Additional properties to include with the usage event.
             posthog_privacy_mode: Whether to redact captured input and output.
             posthog_groups: Optional PostHog groups to associate with the event.
+            posthog_provider_override: Optional override for the ``$ai_provider``
+                reported on the usage event. Useful when this client is pointed at
+                an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
+                ``base_url``, so cost attribution matches the real provider.
+                Defaults to ``"openai"`` when omitted.
             **kwargs: Arguments passed to OpenAI's ``chat.completions.create`` API.
 
         Returns:
@@ -371,6 +405,10 @@ class WrappedCompletions(_OpenAIWrapperResource):
         """
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
+
+        posthog_properties = merge_provider_override(
+            posthog_properties, posthog_provider_override
+        )
 
         if kwargs.get("stream", False):
             return self._create_streaming(
@@ -417,7 +455,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
 
         def generator():
             nonlocal usage_stats
-            nonlocal accumulated_content  # noqa: F824
+            nonlocal accumulated_content
             nonlocal accumulated_tool_calls
             nonlocal model_from_response
             nonlocal stop_reason
@@ -545,6 +583,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_provider_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -556,6 +595,11 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
             posthog_properties: Optional dictionary of extra properties to include in the event.
             posthog_privacy_mode: Whether to anonymize the input and output.
             posthog_groups: Optional dictionary of groups to associate with the event.
+            posthog_provider_override: Optional override for the ``$ai_provider``
+                reported on the usage event. Useful when this client is pointed at
+                an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
+                ``base_url``, so cost attribution matches the real provider.
+                Defaults to ``"openai"`` when omitted.
             **kwargs: Any additional parameters for the OpenAI Embeddings API.
 
         Returns:
@@ -564,6 +608,10 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
 
         if posthog_trace_id is None:
             posthog_trace_id = str(uuid.uuid4())
+
+        posthog_properties = merge_provider_override(
+            posthog_properties, posthog_provider_override
+        )
 
         start_time = time.time()
         response = self._original.create(**kwargs)
@@ -640,6 +688,7 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_provider_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -651,6 +700,11 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
             posthog_properties: Additional properties to include with the usage event.
             posthog_privacy_mode: Whether to redact captured input and output.
             posthog_groups: Optional PostHog groups to associate with the event.
+            posthog_provider_override: Optional override for the ``$ai_provider``
+                reported on the usage event. Useful when this client is pointed at
+                an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
+                ``base_url``, so cost attribution matches the real provider.
+                Defaults to ``"openai"`` when omitted.
             **kwargs: Arguments passed to OpenAI's beta ``chat.completions.parse`` API.
 
         Returns:
@@ -663,5 +717,6 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
             posthog_properties,
             posthog_privacy_mode,
             posthog_groups,
+            posthog_provider_override,
             **kwargs,
         )

@@ -13,6 +13,8 @@ import sys
 import platform
 import distro  # For Linux OS detection
 
+from .types import FeatureFlagResult as _FeatureFlagResult
+
 log = logging.getLogger("posthog")
 
 
@@ -165,6 +167,8 @@ CACHE_MAX_SIZE = 10000
 CACHE_TTL = 300
 CACHE_STALE_TTL = 3600
 CACHE_KEY_PREFIX = "posthog:flags:"
+_FEATURE_FLAG_RESULT_TYPE = "FeatureFlagResult"
+_FEATURE_FLAG_RESULT_SCHEMA_VERSION = 1
 
 
 class FlagCacheEntry:
@@ -320,18 +324,29 @@ class RedisFlagCache:
             "flag_version": flag_definition_version,
             "timestamp": timestamp,
         }
+        if isinstance(flag_result, _FeatureFlagResult):
+            # Additive metadata keeps the existing entry shape readable by older SDKs.
+            entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
+            entry["flag_result_schema_version"] = _FEATURE_FLAG_RESULT_SCHEMA_VERSION
         return json.dumps(entry)
 
     def _deserialize_entry(self, data):
         try:
             entry = json.loads(data)
             flag_result = entry["flag_result"]
+            if entry.get("flag_result_type") == _FEATURE_FLAG_RESULT_TYPE:
+                if (
+                    entry.get("flag_result_schema_version")
+                    != _FEATURE_FLAG_RESULT_SCHEMA_VERSION
+                ):
+                    return None
+                flag_result = _FeatureFlagResult(**flag_result)
             return FlagCacheEntry(
                 flag_result=flag_result,
                 flag_definition_version=entry["flag_version"],
                 timestamp=entry["timestamp"],
             )
-        except (json.JSONDecodeError, KeyError, ValueError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # If deserialization fails, treat as cache miss
             return None
 
@@ -493,6 +508,46 @@ def str_iequals(value, comparand):
         False
     """
     return str(value).casefold() == str(comparand).casefold()
+
+
+def str_istartswith(source, search):
+    """
+    Check if a string starts with another string, ignoring case.
+
+    Args:
+        source: The string to check
+        search: The prefix to look for
+
+    Returns:
+        bool: True if source starts with search (case-insensitive), False otherwise
+
+    Examples:
+        >>> str_istartswith("Hello World", "HELLO")
+        True
+        >>> str_istartswith("Hello World", "World")
+        False
+    """
+    return str(source).casefold().startswith(str(search).casefold())
+
+
+def str_iendswith(source, search):
+    """
+    Check if a string ends with another string, ignoring case.
+
+    Args:
+        source: The string to check
+        search: The suffix to look for
+
+    Returns:
+        bool: True if source ends with search (case-insensitive), False otherwise
+
+    Examples:
+        >>> str_iendswith("Hello World", "WORLD")
+        True
+        >>> str_iendswith("Hello World", "Hello")
+        False
+    """
+    return str(source).casefold().endswith(str(search).casefold())
 
 
 def _platform_release():

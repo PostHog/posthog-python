@@ -2,6 +2,8 @@ import json
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from typing import Any
 
 from unittest import mock
@@ -14,7 +16,7 @@ except ImportError:
 
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
-from posthog.consumer import MAX_MSG_SIZE, Consumer, DrainSignal
+from posthog.consumer import MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, APIError
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
@@ -157,6 +159,15 @@ class TestConsumer(unittest.TestCase):
     def test_request_fails_when_exceptions_exceed_retries(self) -> None:
         self._run_retry_test(APIError(500, "Internal Server Error"), 4, retries=3)
 
+    def test_negative_retries_still_attempts_delivery_once(self) -> None:
+        consumer = Consumer(None, TEST_API_KEY, retries=-1)
+
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            consumer.request([_track_event()])
+
+        self.assertEqual(consumer.retries, 0)
+        mock_post.assert_called_once()
+
     def test_pause(self) -> None:
         consumer = Consumer(None, TEST_API_KEY)
         consumer.pause()
@@ -166,16 +177,16 @@ class TestConsumer(unittest.TestCase):
         # A drain request means "send what is queued now", so `next()` must not
         # hold a below-flush_at batch back for the rest of flush_interval.
         q = Queue()
-        signal = DrainSignal()
-        consumer = Consumer(
-            q, TEST_API_KEY, flush_at=100, flush_interval=30, drain_signal=signal
-        )
+        signal = _DrainSignal()
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        consumer._set_drain_signal(signal)
         q.put(_track_event("first"))
         q.put(_track_event("second"))
         signal.request()
 
         start = time.monotonic()
         batch = consumer.next()
+        signal.complete()
 
         self.assertEqual(len(batch), 2)
         self.assertLess(time.monotonic() - start, 5)
@@ -183,66 +194,78 @@ class TestConsumer(unittest.TestCase):
     def test_drain_signal_still_respects_flush_at(self) -> None:
         # Draining must not degrade batching into one request per event.
         q = Queue()
-        signal = DrainSignal()
+        signal = _DrainSignal()
         flush_at = 10
-        consumer = Consumer(
-            q, TEST_API_KEY, flush_at=flush_at, flush_interval=30, drain_signal=signal
-        )
+        consumer = Consumer(q, TEST_API_KEY, flush_at=flush_at, flush_interval=30)
+        consumer._set_drain_signal(signal)
         for i in range(flush_at * 3):
             q.put(_track_event("python event %d" % i))
         signal.request()
 
         self.assertEqual(len(consumer.next()), flush_at)
+        signal.complete()
 
-    def test_drain_signal_is_satisfied_once_the_queue_empties(self) -> None:
-        # Once the queue has been observed empty the request is served, so the
-        # consumer goes back to normal timer-based batching instead of spinning.
+    def test_completed_drain_request_restores_normal_batching(self) -> None:
+        # Once the caller completes its request, later batches must go back to
+        # normal timer-based batching instead of inheriting a stale drain.
         q = Queue()
-        signal = DrainSignal()
+        signal = _DrainSignal()
         flush_interval = 0.2
         consumer = Consumer(
             q,
             TEST_API_KEY,
             flush_at=100,
             flush_interval=flush_interval,
-            drain_signal=signal,
         )
+        consumer._set_drain_signal(signal)
         q.put(_track_event())
         signal.request()
         self.assertEqual(len(consumer.next()), 1)
+        signal.complete()
 
         start = time.monotonic()
         self.assertEqual(consumer.next(), [])
         self.assertGreaterEqual(time.monotonic() - start, flush_interval * 0.5)
 
+    def test_overlapping_drain_requests_remain_active_until_all_complete(self) -> None:
+        signal = _DrainSignal()
+
+        signal.request()
+        signal.request()
+        signal.complete()
+        self.assertTrue(signal.requested)
+
+        signal.complete()
+        self.assertFalse(signal.requested)
+
     def test_consecutive_drain_requests_each_drain_immediately(self) -> None:
         # A later flush must not be served by an earlier flush's bookkeeping.
         q = Queue()
-        signal = DrainSignal()
-        consumer = Consumer(
-            q, TEST_API_KEY, flush_at=100, flush_interval=30, drain_signal=signal
-        )
+        signal = _DrainSignal()
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        consumer._set_drain_signal(signal)
 
         for i in range(3):
             q.put(_track_event("python event %d" % i))
             signal.request()
             start = time.monotonic()
             self.assertEqual(len(consumer.next()), 1)
+            signal.complete()
             self.assertLess(time.monotonic() - start, 5)
 
     def test_drain_signal_wakes_a_consumer_mid_batch(self) -> None:
         # The realistic ordering: the consumer is already parked on a partial
         # batch when flush() signals it.
         q = Queue()
-        signal = DrainSignal()
-        consumer = Consumer(
-            q, TEST_API_KEY, flush_at=100, flush_interval=30, drain_signal=signal
-        )
+        signal = _DrainSignal()
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        consumer._set_drain_signal(signal)
         q.put(_track_event())
         threading.Timer(0.1, signal.request).start()
 
         start = time.monotonic()
         batch = consumer.next()
+        signal.complete()
 
         self.assertEqual(len(batch), 1)
         self.assertLess(time.monotonic() - start, 5)
@@ -335,6 +358,44 @@ class TestConsumer(unittest.TestCase):
                     mock.call(4),  # 2^2
                 ],
             )
+
+    @parameterized.expand(
+        [
+            ("huge_numeric", "1000000000", [30, 30]),
+            ("small_numeric", "0.25", [1, 2]),
+            ("huge_date", "Fri, 01 Jan 2100 00:00:00 GMT", [30, 30]),
+            ("small_date", None, [1, 2]),
+        ]
+    )
+    def test_request_bounds_retry_after_without_reducing_attempts(
+        self, _name: str, retry_after_header: str | None, expected_sleeps: list[int]
+    ) -> None:
+        if retry_after_header is None:
+            retry_after_header = format_datetime(
+                datetime.now(timezone.utc) + timedelta(seconds=1), usegmt=True
+            )
+
+        retry_response = mock.Mock(
+            status_code=503,
+            headers={"Retry-After": retry_after_header},
+            text="Service Unavailable",
+        )
+        retry_response.json.return_value = {"detail": "Service Unavailable"}
+        success_response = mock.Mock(status_code=200)
+        session = mock.Mock()
+        session.post.side_effect = [retry_response, retry_response, success_response]
+
+        consumer = Consumer(None, TEST_API_KEY, retries=2)
+        with (
+            mock.patch("posthog.request._get_session", return_value=session),
+            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
+        ):
+            consumer.request([_track_event()])
+
+        self.assertEqual(session.post.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in mock_sleep.call_args_list], expected_sleeps
+        )
 
     def test_request_retries_on_408(self) -> None:
         call_count = [0]

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import threading
 import time
 import unittest
 import warnings
@@ -9,6 +10,7 @@ from uuid import UUID, uuid4
 
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, use_span
 from parameterized import parameterized
+import pytest
 
 from posthog.capture_compression import CaptureCompression
 from posthog.client import Client
@@ -16,9 +18,21 @@ from posthog.contexts import get_context_session_id, new_context, set_context_se
 from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
-from posthog.types import FeatureFlag, LegacyFlagMetadata
+from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
 from posthog.version import VERSION
 from posthog.contexts import tag
+
+
+# Legacy single-flag behavior remains covered here; warning emission itself is
+# asserted in test_evaluate_flags.py.
+pytestmark = [
+    pytest.mark.filterwarnings(
+        r"ignore:`(feature_enabled|get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:`send_feature_flags` is deprecated:DeprecationWarning"
+    ),
+]
 
 
 class TestClient(unittest.TestCase):
@@ -70,12 +84,13 @@ class TestClient(unittest.TestCase):
             mock_error.assert_not_called()
 
     def test_trims_host_and_personal_api_key_whitespace(self):
-        client = Client(
-            FAKE_TEST_API_KEY,
-            host=" \nhttps://eu.posthog.com/\t ",
-            personal_api_key=" \n\t ",
-            send=False,
-        )
+        with self.assertWarnsRegex(DeprecationWarning, "personal_api_key"):
+            client = Client(
+                FAKE_TEST_API_KEY,
+                host=" \nhttps://eu.posthog.com/\t ",
+                personal_api_key=" \n\t ",
+                send=False,
+            )
 
         self.assertEqual(client.raw_host, "https://eu.posthog.com/")
         self.assertEqual(client.host, "https://eu.i.posthog.com")
@@ -183,7 +198,9 @@ class TestClient(unittest.TestCase):
 
     def test_message_only_info_logs_include_posthog_prefix(self):
         self.client.flag_cache = mock.Mock()
-        self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()
+        self.client.flag_cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+            key="flag-key", enabled=True, variant=None, payload=None, reason=None
+        )
 
         with capture_message_only_logs(level=logging.INFO) as logs:
             self.client._get_stale_flag_fallback("distinct_id", "flag-key")
@@ -201,7 +218,7 @@ class TestClient(unittest.TestCase):
 
     @mock.patch("posthog.client.get")
     def test_disabled_client_does_not_load_feature_flags(self, patch_get):
-        client = Client("", personal_api_key="test", send=False)
+        client = Client("", secret_key="test", send=False)
 
         client.load_feature_flags()
 
@@ -259,6 +276,18 @@ class TestClient(unittest.TestCase):
 
     def test_empty_flush(self):
         self.client.flush()
+
+    def test_empty_flush_does_not_drain_a_later_event(self):
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_at=100, flush_interval=0.5)
+
+            client.flush()
+            client.capture("after empty flush", distinct_id="distinct_id")
+            time.sleep(0.05)
+
+            mock_post.assert_not_called()
+            client.flush()
+            mock_post.assert_called_once()
 
     def test_flush_timeout_returns_when_queue_does_not_drain(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
@@ -719,7 +748,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             msg_uuid = client.capture(
@@ -842,7 +871,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, basic_flag, false_flag]
@@ -880,7 +909,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = []
@@ -907,7 +936,7 @@ class TestClient(unittest.TestCase):
         }
         patch_get.side_effect = APIError(402, mock_response["detail"])
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         with self.assertLogs("posthog", level="WARNING") as logs:
             client._load_feature_flags()
 
@@ -921,7 +950,7 @@ class TestClient(unittest.TestCase):
     def test_load_feature_flags_unauthorized(self, patch_get):
         patch_get.side_effect = APIError(401, "Unauthorized")
 
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         with self.assertLogs("posthog", level="ERROR") as logs:
             client._load_feature_flags()
 
@@ -1012,7 +1041,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, basic_flag]
@@ -1062,7 +1091,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             msg_uuid = client.capture(
@@ -1121,7 +1150,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 feature_flags_request_max_retries=expected_max_retries,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
             )
 
             client.get_all_flags("distinct_id")
@@ -1147,7 +1176,7 @@ class TestClient(unittest.TestCase):
                 FAKE_TEST_API_KEY,
                 host="https://app.posthog.com",
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 disable_geoip=True,
                 feature_flags_request_timeout_seconds=12,
                 sync_mode=True,
@@ -1206,7 +1235,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             msg_uuid = client.capture(
@@ -1284,7 +1313,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, simple_flag]
@@ -1366,7 +1395,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
             client.feature_flags = [multivariate_flag, simple_flag]
@@ -1412,7 +1441,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -1467,7 +1496,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -1513,7 +1542,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -1551,7 +1580,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -2189,6 +2218,88 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
+    def test_shutdown_waits_for_racing_enqueue_before_draining(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        put_started = threading.Event()
+        release_put = threading.Event()
+        shutdown_done = threading.Event()
+        original_put = client.queue.put
+        capture_result = []
+
+        def blocking_put(*args, **kwargs):
+            put_started.set()
+            self.assertTrue(release_put.wait(2))
+            return original_put(*args, **kwargs)
+
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("racing event", distinct_id="distinct_id")
+            )
+        )
+        shutdown_thread = threading.Thread(
+            target=lambda: (client.shutdown(), shutdown_done.set())
+        )
+
+        with mock.patch.object(client.queue, "put", side_effect=blocking_put):
+            capture_thread.start()
+            self.assertTrue(put_started.wait(2))
+            shutdown_thread.start()
+            try:
+                self.assertFalse(shutdown_done.wait(0.1))
+            finally:
+                release_put.set()
+
+            capture_thread.join(2)
+            shutdown_thread.join(2)
+
+        self.assertFalse(capture_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertTrue(shutdown_done.is_set())
+        self.assertIsNotNone(capture_result[0])
+        self.assertTrue(client.queue.empty())
+
+    def test_shutdown_waits_for_sync_send_and_rejects_later_sends(self):
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+        send_started = threading.Event()
+        release_send = threading.Event()
+        shutdown_done = threading.Event()
+        capture_result = []
+
+        def blocking_post(*args, **kwargs):
+            send_started.set()
+            self.assertTrue(release_send.wait(2))
+
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("in-flight event", distinct_id="distinct_id")
+            )
+        )
+        shutdown_thread = threading.Thread(
+            target=lambda: (client.shutdown(), shutdown_done.set())
+        )
+
+        with mock.patch("posthog.client.batch_post", side_effect=blocking_post) as post:
+            capture_thread.start()
+            self.assertTrue(send_started.wait(2))
+            shutdown_thread.start()
+            try:
+                self.assertFalse(shutdown_done.wait(0.1))
+            finally:
+                release_send.set()
+
+            capture_thread.join(2)
+            shutdown_thread.join(2)
+            later_result = client.capture(
+                "post-shutdown event", distinct_id="distinct_id"
+            )
+
+        self.assertFalse(capture_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertTrue(shutdown_done.is_set())
+        self.assertIsNotNone(capture_result[0])
+        self.assertIsNone(later_result)
+        post.assert_called_once()
+
     def test_synchronous(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
@@ -2458,7 +2569,7 @@ class TestClient(unittest.TestCase):
             raise Exception("http exception")
 
         patch_get.return_value.raiseError.side_effect = raise_effect
-        client = Client(FAKE_TEST_API_KEY, personal_api_key="test")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = [{"key": "example"}]
 
         self.assertFalse(client.feature_enabled("example", "distinct_id"))
@@ -3014,7 +3125,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             enable_local_evaluation=False,
         )
 
@@ -3050,7 +3161,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             enable_local_evaluation=True,
         )
 
@@ -3070,7 +3181,7 @@ class TestClient(unittest.TestCase):
 
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test-personal-key",
+            secret_key="test-personal-key",
             enable_local_evaluation=False,
         )
 
@@ -3190,7 +3301,7 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
-                personal_api_key=FAKE_TEST_API_KEY,
+                secret_key=FAKE_TEST_API_KEY,
                 sync_mode=True,
             )
 
@@ -3227,7 +3338,7 @@ class TestClient(unittest.TestCase):
         """Test that get_feature_flag_result returns a FeatureFlagResult when payload is empty string"""
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test_personal_api_key",
+            secret_key="test_personal_api_key",
             sync_mode=True,
         )
 
@@ -3278,7 +3389,7 @@ class TestClient(unittest.TestCase):
         """Test that get_all_flags_and_payloads includes flags with empty string payloads"""
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key="test_personal_api_key",
+            secret_key="test_personal_api_key",
             sync_mode=True,
         )
 
@@ -3383,6 +3494,58 @@ class TestClient(unittest.TestCase):
                 with self.assertRaises(Exception) as cm:
                     method(*args, **kwargs)
                 self.assertEqual(str(cm.exception), "Expected error")
+
+
+class TestClientCaptureRetrySemantics(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("v0_sync", "v0", True),
+            ("v1_sync", "v1", True),
+            ("v0_async", "v0", False),
+            ("v1_async", "v1", False),
+        ]
+    )
+    def test_negative_max_retries_still_attempts_delivery_once(
+        self, _name, capture_mode, sync_mode
+    ):
+        response = mock.Mock(status_code=200, headers={}, text="")
+        response.json.return_value = {"results": {}}
+        client = None
+
+        with (
+            mock.patch("posthog.client.batch_post") as sync_v0_post,
+            mock.patch("posthog.consumer.batch_post") as async_v0_post,
+            mock.patch("posthog.capture_v1._post_v1", return_value=response) as v1_post,
+        ):
+            try:
+                client = Client(
+                    FAKE_TEST_API_KEY,
+                    capture_mode=capture_mode,
+                    sync_mode=sync_mode,
+                    max_retries=-1,
+                    flush_at=1,
+                    flush_interval=0.01,
+                )
+                client.capture("evt", distinct_id="d")
+                if not sync_mode:
+                    client.flush()
+
+                self.assertEqual(client.max_retries, 0)
+                if capture_mode == "v1":
+                    v1_post.assert_called_once()
+                    sync_v0_post.assert_not_called()
+                    async_v0_post.assert_not_called()
+                elif sync_mode:
+                    sync_v0_post.assert_called_once()
+                    async_v0_post.assert_not_called()
+                    v1_post.assert_not_called()
+                else:
+                    async_v0_post.assert_called_once()
+                    sync_v0_post.assert_not_called()
+                    v1_post.assert_not_called()
+            finally:
+                if client is not None and not sync_mode:
+                    client.shutdown()
 
 
 class TestClientSyncCaptureMode(unittest.TestCase):

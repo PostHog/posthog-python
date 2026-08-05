@@ -59,7 +59,7 @@ class TestClientFork(unittest.TestCase):
     def test_reinit_after_fork_restarts_poller_when_enabled(self, mock_poller):
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key=FAKE_TEST_API_KEY,
+            secret_key=FAKE_TEST_API_KEY,
             send=False,
             enable_local_evaluation=True,
             poll_interval=123,
@@ -82,7 +82,7 @@ class TestClientFork(unittest.TestCase):
     def test_reinit_after_fork_clears_poller_when_local_evaluation_disabled(self):
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key=FAKE_TEST_API_KEY,
+            secret_key=FAKE_TEST_API_KEY,
             send=False,
             enable_local_evaluation=False,
         )
@@ -91,6 +91,26 @@ class TestClientFork(unittest.TestCase):
         client._reinit_after_fork()
 
         self.assertIsNone(client.poller)
+
+    def test_reinit_after_fork_replaces_flag_definition_locks(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        old_publication_lock = client._flag_definition_publication_lock
+        old_cache_write_lock = client._flag_definition_cache_write_lock
+        old_publication_lock.acquire()
+        old_cache_write_lock.acquire()
+
+        try:
+            client._reinit_after_fork()
+            for new_lock, old_lock in (
+                (client._flag_definition_publication_lock, old_publication_lock),
+                (client._flag_definition_cache_write_lock, old_cache_write_lock),
+            ):
+                self.assertIsNot(new_lock, old_lock)
+                self.assertTrue(new_lock.acquire(blocking=False))
+                new_lock.release()
+        finally:
+            old_cache_write_lock.release()
+            old_publication_lock.release()
 
     @mock.patch("posthog.client.reset_sessions")
     def test_reinit_after_fork_resets_sessions(self, mock_reset_sessions):
@@ -144,13 +164,20 @@ class TestClientFork(unittest.TestCase):
             self.assertIs(client.consumers[0].queue, client.queue)
             self.assertEqual(mock_start.call_count, expected_starts)
 
-    def test_reinit_after_fork_noop_for_sync_mode(self):
+    def test_reinit_after_fork_resets_sync_send_state_for_sync_mode(self):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
-        old_queue = client.queue
+        lane = client._analytics_lane
+        old_queue = lane.queue
+        old_lock = lane._start_lock
+        old_condition = lane._sync_sends_done
+        lane._active_sync_sends = 1
 
         client._reinit_after_fork()
 
-        self.assertIs(client.queue, old_queue)
+        self.assertIs(lane.queue, old_queue)
+        self.assertEqual(lane._active_sync_sends, 0)
+        self.assertIsNot(lane._start_lock, old_lock)
+        self.assertIsNot(lane._sync_sends_done, old_condition)
 
 
 @unittest.skipUnless(
@@ -238,6 +265,59 @@ class TestClientForkEndToEnd(unittest.TestCase):
         )
         self.assertEqual(result, "ok")
 
+    def test_register_at_fork_replaces_duplicate_registry_lock_in_child_process(self):
+        Client._client_registry.clear()
+        Client._duplicate_client_warnings.clear()
+        host = "https://fork-registry.example.com"
+        registry_key = (FAKE_TEST_API_KEY, host)
+
+        with mock.patch("posthog.client.Consumer.start"):
+            inherited_client = Client(FAKE_TEST_API_KEY, host=host)
+            inherited_lock = Client._client_registry_lock
+
+            def child_probe():
+                # A deadlocked child gets killed by SIGALRM instead of hanging the
+                # test when constructing or unregistering a client.
+                signal.alarm(5)
+                try:
+                    if Client._client_registry_lock is inherited_lock:
+                        return "registry lock was not replaced"
+
+                    child_client = Client(FAKE_TEST_API_KEY, host=host)
+                    clients = Client._client_registry.get(registry_key)
+                    if clients is None or set(clients) != {
+                        inherited_client,
+                        child_client,
+                    }:
+                        return "child client was not registered"
+
+                    child_client.shutdown()
+                    clients = Client._client_registry.get(registry_key)
+                    if clients is None or set(clients) != {inherited_client}:
+                        return "child client was not unregistered"
+
+                    inherited_client.shutdown()
+                    if registry_key in Client._client_registry:
+                        return "inherited client was not unregistered"
+                finally:
+                    signal.alarm(0)
+
+                return "ok"
+
+            inherited_lock.acquire()
+            try:
+                status, result = self._run_fork_probe(child_probe)
+            finally:
+                inherited_lock.release()
+                inherited_client.shutdown()
+                Client._client_registry.clear()
+                Client._duplicate_client_warnings.clear()
+
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
+        self.assertEqual(result, "ok")
+
     def test_register_at_fork_replaces_metrics_locks_in_child_process(self):
         # Locks held at fork time are inherited locked, and their holders don't
         # exist in the child — the metrics path must not deadlock on them.
@@ -281,7 +361,7 @@ class TestClientForkEndToEnd(unittest.TestCase):
     def test_register_at_fork_reinitializes_poller_and_sessions_in_child_process(self):
         client = Client(
             FAKE_TEST_API_KEY,
-            personal_api_key=FAKE_TEST_API_KEY,
+            secret_key=FAKE_TEST_API_KEY,
             send=False,
             enable_local_evaluation=True,
             poll_interval=100,

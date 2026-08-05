@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from ._capture import capture_event
 from ._event_types import MCPAnalyticsEventType
@@ -25,15 +26,33 @@ from ._sanitization import build_captured_mcp_parameters
 from .session import resolve_session_id
 from .session_token import SessionTokenPayload, decode_session_id
 
-# Keep strong refs to in-flight capture tasks/futures so they aren't GC'd mid-flight,
-# and so the asyncio ones can be awaited via drain_pending() before shutdown. Holds
-# asyncio.Task (running-loop path) or concurrent.futures.Future (sync background-loop path).
-_BACKGROUND_TASKS: Set[Any] = set()
+# Keep strong refs to in-flight capture tasks/futures and their lifecycle owners so
+# they aren't GC'd mid-flight and lifecycle drains can select only their own work.
+_BACKGROUND_TASKS: Dict[Any, Any] = {}
+_tasks_lock = threading.Lock()
 
 # A single daemon event loop for hosts with no running loop (sync dispatchers
 # like PostHogMCP). Created lazily and reused, so we never leak a loop per call.
 _bg_loop: Optional[asyncio.AbstractEventLoop] = None
 _bg_loop_lock = threading.Lock()
+
+
+def _reinit_background_loop_after_fork() -> None:
+    """Drop background-loop state inherited by a forked child.
+
+    The loop's daemon thread does not survive ``fork()``, and its lock may have
+    been held by a vanished thread. Replace the state without acquiring the old
+    lock or trying to close the inherited loop, which can no longer be driven.
+    """
+    global _BACKGROUND_TASKS, _tasks_lock, _bg_loop, _bg_loop_lock
+    _BACKGROUND_TASKS = {}
+    _tasks_lock = threading.Lock()
+    _bg_loop = None
+    _bg_loop_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reinit_background_loop_after_fork)
 
 
 def _get_background_loop() -> asyncio.AbstractEventLoop:
@@ -49,8 +68,15 @@ def _get_background_loop() -> asyncio.AbstractEventLoop:
     return _bg_loop
 
 
+def _track_task(task: Any, owner: Any) -> None:
+    with _tasks_lock:
+        _BACKGROUND_TASKS[task] = owner
+    task.add_done_callback(_on_task_done)
+
+
 def _on_task_done(task: Any) -> None:
-    _BACKGROUND_TASKS.discard(task)
+    with _tasks_lock:
+        _BACKGROUND_TASKS.pop(task, None)
     try:
         if not task.cancelled() and task.exception() is not None:
             log(f"background capture task failed: {task.exception()}")
@@ -58,51 +84,58 @@ def _on_task_done(task: Any) -> None:
         pass
 
 
-def fire_and_forget(coro: Optional[Any]) -> None:
-    """Schedule a capture coroutine without blocking the tool path. No-ops if the
-    coroutine is ``None`` (no sink). Runs on the current loop when there is one,
-    otherwise on a shared daemon loop (sync hosts) — never creates a throwaway loop."""
+def fire_and_forget(
+    coro: Optional[Any], owner: Any, *, background: bool = False
+) -> None:
+    """Schedule capture work and associate it with its lifecycle owner.
+
+    Async instrumentation uses its current loop. Sync-only owners can request the
+    shared background loop so their synchronous lifecycle methods can safely drain
+    captures even when invoked by a host that also has a running event loop.
+    """
     if coro is None:
         return
     try:
-        asyncio.get_running_loop()
+        running_loop = asyncio.get_running_loop()
     except RuntimeError:
-        # No running loop (sync host) — schedule on the shared background loop.
-        future = asyncio.run_coroutine_threadsafe(coro, _get_background_loop())
-        _BACKGROUND_TASKS.add(future)
-        future.add_done_callback(_on_task_done)
+        running_loop = None
+
+    if background or running_loop is None:
+        loop = _get_background_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        _track_task(future, owner)
         return
-    task = asyncio.ensure_future(coro)
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_on_task_done)
+
+    task = running_loop.create_task(coro)
+    _track_task(task, owner)
 
 
-async def drain_pending() -> None:
-    """Await in-flight capture work before ``posthog.shutdown()`` instead of racing a
-    sleep. Covers both paths: ``asyncio.Task`` (running-loop hosts) and the
-    ``concurrent.futures.Future`` scheduled on the background loop (sync hosts like
-    PostHogMCP) — the latter wrapped so it can be awaited on the current loop."""
-    awaitables: List[Any] = []
-    for t in list(_BACKGROUND_TASKS):
-        if isinstance(t, asyncio.Task):
-            if not t.done():
-                awaitables.append(t)
-        elif isinstance(t, concurrent.futures.Future):
-            if not t.done():
-                awaitables.append(asyncio.wrap_future(t))
-    if awaitables:
-        await asyncio.gather(*awaitables, return_exceptions=True)
+async def drain_pending(owner: Any) -> None:
+    """Await this owner's in-flight captures bound to the current event loop."""
+    loop = asyncio.get_running_loop()
+    with _tasks_lock:
+        tasks = [
+            task
+            for task, task_owner in _BACKGROUND_TASKS.items()
+            if task_owner is owner
+            and isinstance(task, asyncio.Task)
+            and task.get_loop() is loop
+            and not task.done()
+        ]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def drain_pending_sync(timeout: Optional[float] = None) -> None:
-    """Block until background-loop captures finish. For sync hosts (PostHogMCP) that
-    can't await :func:`drain_pending` — call it before ``flush()``/``shutdown()`` so
-    trailing events aren't still in flight when the client tears down."""
-    futures = [
-        t
-        for t in list(_BACKGROUND_TASKS)
-        if isinstance(t, concurrent.futures.Future) and not t.done()
-    ]
+def drain_pending_sync(owner: Any, timeout: Optional[float] = None) -> None:
+    """Block until this owner's shared-background-loop captures finish."""
+    with _tasks_lock:
+        futures = [
+            task
+            for task, task_owner in _BACKGROUND_TASKS.items()
+            if task_owner is owner
+            and isinstance(task, concurrent.futures.Future)
+            and not task.done()
+        ]
     if futures:
         concurrent.futures.wait(futures, timeout=timeout)
 
@@ -170,7 +203,7 @@ async def _maybe_emit_initialize(
     await _apply_event_properties(
         data, event, {"method": "initialize", "params": {}}, extra
     )
-    fire_and_forget(capture_event(data, event))
+    fire_and_forget(capture_event(data, event), data)
 
 
 async def _apply_event_properties(
@@ -233,7 +266,7 @@ async def prepare_request(
     session_id = await resolve_session_id(data, mcp_session_id, token=token)
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
-        fire_and_forget(capture_event(data, identify_event))
+        fire_and_forget(capture_event(data, identify_event), data)
     await _maybe_emit_initialize(
         data, session_id, client_name, client_version, extra, protocol_version
     )
@@ -288,7 +321,7 @@ async def record_tool_call(
         if props is not None:
             event["properties"] = props
 
-        fire_and_forget(capture_event(data, event))
+        fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_tool_call failed (event dropped, tool unaffected): {err}")
 
@@ -371,7 +404,7 @@ async def record_missing_capability(
             event["user_intent"] = context.strip()
             event["user_intent_source"] = "context_parameter"
         await _apply_event_properties(data, event, request, extra)
-        fire_and_forget(capture_event(data, event))
+        fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_missing_capability failed (event dropped): {err}")
 
@@ -408,6 +441,6 @@ async def record_tools_list(
         if error is not None:
             event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
-        fire_and_forget(capture_event(data, event))
+        fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_tools_list failed (event dropped): {err}")
