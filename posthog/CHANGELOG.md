@@ -1,5 +1,16 @@
 # posthog
 
+## 7.38.0 — 2026-08-05
+
+### Minor changes
+
+- [77821ce](https://github.com/posthog/posthog-python/commit/77821ce5c106f489bac5afedccebb40ecd033e0b) feat: `FeatureFlagEvaluations.is_enabled()` accepts a `default_value` returned when the flag has no value in the evaluation — the key was not part of the evaluated set, or the evaluation came back empty (failed `/flags` request, quota limit, no resolvable `distinct_id`). A flag that has a value still wins, so a disabled flag returns `False` even with `default_value=True`. The default is `False`, so existing calls behave exactly as before. — Thanks @posthog[bot]!
+
+### Patch changes
+
+- [7b6a8d8](https://github.com/posthog/posthog-python/commit/7b6a8d8e73db82b08c3e4e4a21ee99b488801037) `evaluate_flags()` now JSON-decodes payloads for locally-evaluated flags, the same way it already did for flags resolved remotely. Previously `get_flag_payload()` returned a parsed value (`{"copy": "new"}`) when the flag came back from `/flags` but the raw JSON string (`'{"copy": "new"}'`) when the poller evaluated it locally, so the payload's type depended on where the flag happened to resolve. The `$feature_flag_payload` property on `$feature_flag_called` events is decoded for locally-evaluated flags too. Payload strings that aren't valid JSON are still passed through unchanged. — Thanks @posthog[bot]!
+- [92625cf](https://github.com/posthog/posthog-python/commit/92625cfb766e31f24e70ec93d4b63d922bb6ebf3) The `$feature_flag_called` dedupe tracker now evicts its oldest entry when it reaches capacity instead of clearing every entry. Previously, each time a client accumulated 50,000 distinct IDs the whole tracker was wiped, so the next flag read for every previously seen distinct ID re-emitted a `$feature_flag_called` event it had already deduped. — Thanks @posthog[bot]!
+
 ## 7.37.6 — 2026-08-05
 
 ### Patch changes
