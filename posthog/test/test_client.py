@@ -4,7 +4,7 @@ import threading
 import time
 import unittest
 import warnings
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import datetime
 from unittest import mock
 from uuid import UUID, uuid4
@@ -2533,13 +2533,23 @@ class TestClient(unittest.TestCase):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         executor_called = threading.Event()
 
+        class DelegatingExecutor(Executor):
+            def __init__(self):
+                self.executor = ThreadPoolExecutor(max_workers=1)
+
+            def submit(self, fn, /, *args, **kwargs):
+                return self.executor.submit(fn, *args, **kwargs)
+
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                self.executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+
         class AsyncProvider:
             async def shutdown(self):
                 def reenter_join():
                     client.join()
                     executor_called.set()
 
-                with ThreadPoolExecutor(max_workers=1) as executor:
+                with DelegatingExecutor() as executor:
                     await asyncio.get_running_loop().run_in_executor(
                         executor, reenter_join
                     )

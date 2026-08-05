@@ -1,15 +1,54 @@
 import asyncio
+import os
 import threading
 from collections.abc import Awaitable
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
+from contextvars import Context, copy_context
 from typing import Any
 
 
-class _ContextThreadPoolExecutor(ThreadPoolExecutor):
-    def submit(self, fn, /, *args, **kwargs):
-        context = copy_context()
-        return super().submit(context.run, fn, *args, **kwargs)
+_executor_contexts: dict[int, Context] = {}
+_executor_contexts_lock = threading.Lock()
+_executor_context_token = 0
+
+
+def _run_with_registered_context(origin_pid, token, func, *args):
+    if os.getpid() != origin_pid:
+        return func(*args)
+    with _executor_contexts_lock:
+        context = _executor_contexts.get(token)
+    if context is None:
+        return func(*args)
+    return context.run(func, *args)
+
+
+class _ContextEventLoop(asyncio.SelectorEventLoop):
+    def run_in_executor(self, executor, func, *args):  # type: ignore[override]
+        global _executor_context_token
+        with _executor_contexts_lock:
+            _executor_context_token += 1
+            token = _executor_context_token
+            _executor_contexts[token] = copy_context()
+
+        try:
+            future = super().run_in_executor(
+                executor,
+                _run_with_registered_context,
+                os.getpid(),
+                token,
+                func,
+                *args,
+            )
+        except BaseException:
+            with _executor_contexts_lock:
+                _executor_contexts.pop(token, None)
+            raise
+
+        def remove_context(_):
+            with _executor_contexts_lock:
+                _executor_contexts.pop(token, None)
+
+        future.add_done_callback(remove_context)
+        return future
 
 
 class _BackgroundEventLoopRunner:
@@ -81,22 +120,7 @@ class _BackgroundEventLoopRunner:
             return self._loop
 
     def _run_loop(self) -> None:
-        loop = asyncio.new_event_loop()
-        loop.set_default_executor(_ContextThreadPoolExecutor())
-        original_run_in_executor = loop.run_in_executor
-
-        def run_in_executor(executor, func, *args):
-            if not isinstance(executor, ThreadPoolExecutor):
-                return original_run_in_executor(executor, func, *args)
-            context = copy_context()
-            return original_run_in_executor(executor, context.run, func, *args)
-
-        try:
-            setattr(loop, "run_in_executor", run_in_executor)
-        except (AttributeError, TypeError):
-            # Some policy-provided loops expose read-only methods. Their default
-            # executor still propagates context through _ContextThreadPoolExecutor.
-            pass
+        loop = _ContextEventLoop()
         asyncio.set_event_loop(loop)
         with self._lock:
             self._loop = loop
