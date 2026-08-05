@@ -53,6 +53,18 @@ class TestConsumer(unittest.TestCase):
         self.assertTrue(q.empty())
         self.assertEqual(q.unfinished_tasks, 0)
 
+    def test_next_balances_dequeued_work_if_batching_is_interrupted(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "")
+        q.put(_track_event())
+
+        with mock.patch("posthog.consumer.json.dumps", side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                consumer.next()
+
+        self.assertTrue(q.empty())
+        self.assertEqual(q.unfinished_tasks, 0)
+
     def test_max_msg_size_param_raises_per_event_ceiling(self) -> None:
         q = Queue()
         consumer = Consumer(q, "", flush_at=1, max_msg_size=4 * MAX_MSG_SIZE)

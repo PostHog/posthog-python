@@ -8,6 +8,7 @@ import threading
 import time
 import warnings
 import weakref
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Union
 from uuid import UUID, uuid4
@@ -697,7 +698,9 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
-        self._async_provider_call_active = threading.Event()
+        self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
+            "posthog_lifecycle_callback", default=False
+        )
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -1994,7 +1997,9 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
-        self._async_provider_call_active = threading.Event()
+        self._lifecycle_callback_context = ContextVar(
+            "posthog_lifecycle_callback", default=False
+        )
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -2255,7 +2260,7 @@ class Client(object):
         return any(current in lane.consumers for lane in self._lanes)
 
     def _is_lifecycle_callback_thread(self) -> bool:
-        if self._async_provider_call_active.is_set():
+        if self._lifecycle_callback_context.get():
             return True
         current = threading.current_thread()
         if self._is_consumer_thread() or current is self.poller:
@@ -2491,11 +2496,11 @@ class Client(object):
                 self._flag_definition_cache_provider_async_runner = (
                     _BackgroundEventLoopRunner()
                 )
-            self._async_provider_call_active.set()
+            token = self._lifecycle_callback_context.set(True)
             try:
                 return self._flag_definition_cache_provider_async_runner.run(result)
             finally:
-                self._async_provider_call_active.clear()
+                self._lifecycle_callback_context.reset(token)
 
     def _shutdown_flag_definition_cache_provider(self):
         if not self._flag_definition_cache_provider:

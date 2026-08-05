@@ -1,7 +1,15 @@
 import asyncio
 import threading
 from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
+
+
+class _ContextThreadPoolExecutor(ThreadPoolExecutor):
+    def submit(self, fn, /, *args, **kwargs):
+        context = copy_context()
+        return super().submit(context.run, fn, *args, **kwargs)
 
 
 class _BackgroundEventLoopRunner:
@@ -74,6 +82,21 @@ class _BackgroundEventLoopRunner:
 
     def _run_loop(self) -> None:
         loop = asyncio.new_event_loop()
+        loop.set_default_executor(_ContextThreadPoolExecutor())
+        original_run_in_executor = loop.run_in_executor
+
+        def run_in_executor(executor, func, *args):
+            if not isinstance(executor, ThreadPoolExecutor):
+                return original_run_in_executor(executor, func, *args)
+            context = copy_context()
+            return original_run_in_executor(executor, context.run, func, *args)
+
+        try:
+            setattr(loop, "run_in_executor", run_in_executor)
+        except (AttributeError, TypeError):
+            # Some policy-provided loops expose read-only methods. Their default
+            # executor still propagates context through _ContextThreadPoolExecutor.
+            pass
         asyncio.set_event_loop(loop)
         with self._lock:
             self._loop = loop

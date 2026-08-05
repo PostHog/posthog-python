@@ -2572,7 +2572,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(provider.result, 6)
         self.assertTrue(client._join_cleanup_complete)
 
-    def test_async_cache_provider_task_can_reenter_join_during_runner_close(self):
+    def test_async_cache_provider_executor_can_reenter_join_during_runner_close(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         finalizer_called = threading.Event()
 
@@ -2582,7 +2582,7 @@ class TestClient(unittest.TestCase):
                     try:
                         await asyncio.Event().wait()
                     finally:
-                        client.join()
+                        await asyncio.to_thread(client.join)
                         finalizer_called.set()
 
                 asyncio.create_task(pending_task())

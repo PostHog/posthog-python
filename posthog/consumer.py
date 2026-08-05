@@ -182,51 +182,62 @@ class Consumer(Thread):
 
         start_time = time.monotonic()
         total_size = 0
+        pending_items = 0
 
-        while len(items) < self.flush_at:
-            # While draining we take only what is already queued, never waiting
-            # for `flush_interval` to elapse or for `flush_at` to be reached.
-            draining = self._draining()
-            remaining = self.flush_interval - (time.monotonic() - start_time)
-            if not draining and remaining <= 0:
-                break
-
-            try:
-                if draining:
-                    item = queue.get(block=False)
-                elif self._drain_signal is not None:
-                    item = self._drain_signal.get(timeout=remaining)
-                else:
-                    item = queue.get(block=True, timeout=remaining)
-                try:
-                    item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
-                except Exception:
-                    # Callback-modified events can still contain invalid mapping
-                    # keys or circular references. Never log the payload here.
-                    self.log.error(
-                        "Unable to serialize queued event for sizing, dropping."
-                    )
-                    queue.task_done()
-                    continue
-                if item_size > self.max_msg_size:
-                    # Log only name and size: AI events may carry unredacted
-                    # multimodal payloads that must not leak into logs.
-                    self.log.error(
-                        "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
-                        item.get("event") if isinstance(item, dict) else type(item),
-                        item_size,
-                        self.max_msg_size // 1024,
-                        self.endpoint,
-                    )
-                    queue.task_done()
-                    continue
-                items.append(item)
-                total_size += item_size
-                if total_size >= BATCH_SIZE_LIMIT:
-                    self.log.debug("hit batch size limit (size: %d)", total_size)
+        try:
+            while len(items) < self.flush_at:
+                # While draining we take only what is already queued, never waiting
+                # for `flush_interval` to elapse or for `flush_at` to be reached.
+                draining = self._draining()
+                remaining = self.flush_interval - (time.monotonic() - start_time)
+                if not draining and remaining <= 0:
                     break
-            except Empty:
-                break
+
+                try:
+                    if draining:
+                        item = queue.get(block=False)
+                    elif self._drain_signal is not None:
+                        item = self._drain_signal.get(timeout=remaining)
+                    else:
+                        item = queue.get(block=True, timeout=remaining)
+                    pending_items += 1
+                    try:
+                        item_size = len(
+                            json.dumps(item, cls=DatetimeSerializer).encode()
+                        )
+                    except Exception:
+                        # Callback-modified events can still contain invalid mapping
+                        # keys or circular references. Never log the payload here.
+                        self.log.error(
+                            "Unable to serialize queued event for sizing, dropping."
+                        )
+                        queue.task_done()
+                        pending_items -= 1
+                        continue
+                    if item_size > self.max_msg_size:
+                        # Log only name and size: AI events may carry unredacted
+                        # multimodal payloads that must not leak into logs.
+                        self.log.error(
+                            "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
+                            item.get("event") if isinstance(item, dict) else type(item),
+                            item_size,
+                            self.max_msg_size // 1024,
+                            self.endpoint,
+                        )
+                        queue.task_done()
+                        pending_items -= 1
+                        continue
+                    items.append(item)
+                    total_size += item_size
+                    if total_size >= BATCH_SIZE_LIMIT:
+                        self.log.debug("hit batch size limit (size: %d)", total_size)
+                        break
+                except Empty:
+                    break
+        except BaseException:
+            for _ in range(pending_items):
+                queue.task_done()
+            raise
 
         return items
 
