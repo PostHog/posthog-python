@@ -2410,7 +2410,7 @@ class TestClient(unittest.TestCase):
         self.assertFalse(second_join.is_alive())
         self.assertTrue(client._join_cleanup_complete)
 
-    def test_join_winning_shutdown_race_discards_pending_work_without_deadlock(self):
+    def test_join_winning_shutdown_race_drains_pending_work_without_deadlock(self):
         first_send_started = threading.Event()
         release_first_send = threading.Event()
         join_started = threading.Event()
@@ -2447,7 +2447,7 @@ class TestClient(unittest.TestCase):
 
         self.assertFalse(join_thread.is_alive())
         self.assertFalse(shutdown_thread.is_alive())
-        self.assertEqual(sent_events, ["first"])
+        self.assertEqual(sent_events, ["first", "second"])
         self.assertEqual(client.queue.unfinished_tasks, 0)
         self.assertTrue(client._shutdown_complete)
 
@@ -2506,6 +2506,27 @@ class TestClient(unittest.TestCase):
         metrics.reset.assert_called_once()
         exception_capture.close.assert_called_once()
         self.assertTrue(client._shutdown_complete)
+
+    def test_async_cache_provider_executor_can_reenter_join(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        executor_called = threading.Event()
+
+        class AsyncProvider:
+            async def shutdown(self):
+                def reenter_join():
+                    client.join()
+                    executor_called.set()
+
+                await asyncio.to_thread(reenter_join)
+
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        join_thread = threading.Thread(target=client.join)
+        join_thread.start()
+        join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(executor_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
 
     def test_async_cache_provider_task_can_reenter_join_during_runner_close(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)

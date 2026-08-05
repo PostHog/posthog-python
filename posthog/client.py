@@ -8,6 +8,7 @@ import threading
 import time
 import warnings
 import weakref
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Union
 from uuid import UUID, uuid4
@@ -113,7 +114,7 @@ from posthog.utils import (
 from posthog.version import VERSION
 
 
-from queue import Empty, Full, Queue
+from queue import Full, Queue
 
 
 _configure_posthog_logging()
@@ -422,7 +423,7 @@ class _Lane:
             self._drain_signal.complete()
 
     def join(self) -> None:
-        """Pause this lane's consumers, wait for them, and discard queued work."""
+        """Pause this lane's consumers and wait for them to exit."""
         # Teardown bypasses the batching wait too, so a consumer holding a
         # partial batch delivers it instead of exiting `flush_interval` later.
         self._drain_signal.request()
@@ -437,19 +438,6 @@ class _Lane:
                     pass
         finally:
             self._drain_signal.complete()
-
-        dropped = 0
-        while True:
-            try:
-                self.queue.get_nowait()
-            except Empty:
-                break
-            self.queue.task_done()
-            dropped += 1
-        if dropped:
-            self.log.warning(
-                "%s lane discarded %d queued events during join", self.name, dropped
-            )
 
     def reset_sync_send_state_after_fork(self) -> None:
         """Replace sync-send state inherited from threads that did not survive fork."""
@@ -680,6 +668,9 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
+        self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
+            "posthog_lifecycle_callback", default=False
+        )
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -1976,6 +1967,9 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
+        self._lifecycle_callback_context = ContextVar(
+            "posthog_lifecycle_callback", default=False
+        )
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -1983,17 +1977,6 @@ class Client(object):
         self._shutdown_complete_event = threading.Event()
         if shutdown_complete:
             self._shutdown_complete_event.set()
-
-        if self._workers_joined:
-            self.poller = None
-        elif self.enable_local_evaluation:
-            self.poller = Poller(
-                interval=timedelta(seconds=self.poll_interval),
-                execute=self._load_feature_flags,
-            )
-            self.poller.start()
-        else:
-            self.poller = None
 
         # Async runner threads do not survive fork(); recreate lazily on next async cache call.
         self._flag_definition_cache_provider_async_runner = None
@@ -2016,6 +1999,18 @@ class Client(object):
             self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
 
         reset_sessions()
+
+        # Start child threads only after replacing every lock they can touch.
+        if self._workers_joined:
+            self.poller = None
+        elif self.enable_local_evaluation:
+            self.poller = Poller(
+                interval=timedelta(seconds=self.poll_interval),
+                execute=self._load_feature_flags,
+            )
+            self.poller.start()
+        else:
+            self.poller = None
 
     def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
         # type: (...) -> Optional[str]
@@ -2235,6 +2230,8 @@ class Client(object):
         return any(current in lane.consumers for lane in self._lanes)
 
     def _is_lifecycle_callback_thread(self) -> bool:
+        if self._lifecycle_callback_context.get():
+            return True
         current = threading.current_thread()
         if self._is_consumer_thread() or current is self.poller:
             return True
@@ -2326,12 +2323,14 @@ class Client(object):
         self._start_lifecycle_thread(run, "flush")
         return True
 
-    def _join_once(self) -> None:
+    def _join_once(self, flush_queues: bool = True) -> None:
         if not self._workers_joined:
             for lane in self._lanes:
                 lane.close()
             for lane in self._lanes:
                 lane.wait_for_sync_sends()
+            if flush_queues:
+                self.flush(timeout_seconds=None)
             for lane in self._lanes:
                 lane.join()
             self._workers_joined = True
@@ -2361,7 +2360,7 @@ class Client(object):
             except Exception:
                 self.log.exception("Failed to flush metrics on shutdown")
             self._metrics.reset()
-        self._join_once()
+        self._join_once(flush_queues=False)
         self.distinct_ids_feature_flags_reported.clear()
 
         if self.exception_capture:
@@ -2420,7 +2419,7 @@ class Client(object):
 
     def join(self) -> None:
         """
-        End the consumer threads without flushing queued events. Do not use directly, call `shutdown()` instead.
+        Flush queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
 
         Examples:
             ```python
@@ -2460,7 +2459,11 @@ class Client(object):
                 self._flag_definition_cache_provider_async_runner = (
                     _BackgroundEventLoopRunner()
                 )
-            return self._flag_definition_cache_provider_async_runner.run(result)
+            token = self._lifecycle_callback_context.set(True)
+            try:
+                return self._flag_definition_cache_provider_async_runner.run(result)
+            finally:
+                self._lifecycle_callback_context.reset(token)
 
     def _shutdown_flag_definition_cache_provider(self):
         if not self._flag_definition_cache_provider:

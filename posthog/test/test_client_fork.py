@@ -181,6 +181,33 @@ class TestClientFork(unittest.TestCase):
         self.assertIsNot(lane._sync_sends_done, old_condition)
         self.assertIsNot(client._lifecycle_lock, old_lifecycle_lock)
 
+    def test_reinit_after_fork_replaces_locks_before_starting_poller(self):
+        client = Client(FAKE_TEST_API_KEY)
+        client.enable_local_evaluation = True
+        old_runner_lock = client._flag_definition_cache_provider_async_runner_lock
+        old_publication_lock = client._flag_definition_publication_lock
+        old_cache_write_lock = client._flag_definition_cache_write_lock
+        old_metrics_lock = client._metrics_lock
+
+        def assert_locks_replaced():
+            self.assertIsNot(
+                client._flag_definition_cache_provider_async_runner_lock,
+                old_runner_lock,
+            )
+            self.assertIsNot(
+                client._flag_definition_publication_lock, old_publication_lock
+            )
+            self.assertIsNot(
+                client._flag_definition_cache_write_lock, old_cache_write_lock
+            )
+            self.assertIsNot(client._metrics_lock, old_metrics_lock)
+
+        with mock.patch("posthog.client.Poller") as mock_poller:
+            mock_poller.return_value.start.side_effect = assert_locks_replaced
+            client._reinit_after_fork()
+
+        mock_poller.return_value.start.assert_called_once()
+
     def test_reinit_after_fork_preserves_terminal_client_state(self):
         client = Client(FAKE_TEST_API_KEY)
         client.join()

@@ -1124,7 +1124,7 @@ def flush(timeout_seconds: Optional[float] = 10) -> None:
 
 def join() -> None:
     """
-    Stop the client's background workers without flushing queued events. Pending events may be discarded; use `shutdown()` when delivery is required.
+    Block until queued events are delivered and stop the client's background workers. Use `shutdown()` directly in most cases.
 
     Examples:
         ```python
