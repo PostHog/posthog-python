@@ -659,6 +659,7 @@ class Client(object):
         self._shutdown_complete = False
         self._deferred_lifecycle_error: Optional[BaseException] = None
         self._deferred_lifecycle_failure = threading.Event()
+        self._deferred_lifecycle_thread_pending = False
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -1939,6 +1940,7 @@ class Client(object):
         self._lifecycle_owner = None
         self._deferred_lifecycle_error = None
         self._deferred_lifecycle_failure = threading.Event()
+        self._deferred_lifecycle_thread_pending = False
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -2205,22 +2207,9 @@ class Client(object):
         return runner is not None and current is runner._thread
 
     def _start_lifecycle_thread(self, target, name: str, *args) -> None:
-        def run() -> None:
-            for attempt in range(2):
-                try:
-                    target(*args)
-                    return
-                except BaseException as error:
-                    self.log.exception(
-                        "Deferred %s attempt %d failed", name, attempt + 1
-                    )
-                    if attempt == 1:
-                        with self._lifecycle_lock:
-                            self._deferred_lifecycle_error = error
-                            self._deferred_lifecycle_failure.set()
-
         threading.Thread(
-            target=run,
+            target=target,
+            args=args,
             name=f"posthog-{name}",
             daemon=False,
         ).start()
@@ -2228,7 +2217,30 @@ class Client(object):
     def _defer_from_callback(self, target, name: str, *args) -> bool:
         if not self._is_lifecycle_callback_thread():
             return False
-        self._start_lifecycle_thread(target, name, *args)
+        with self._lifecycle_lock:
+            if self._lifecycle_in_progress or self._deferred_lifecycle_thread_pending:
+                return True
+            self._deferred_lifecycle_thread_pending = True
+
+        def run() -> None:
+            try:
+                for attempt in range(2):
+                    try:
+                        target(*args)
+                        return
+                    except BaseException as error:
+                        self.log.exception(
+                            "Deferred %s attempt %d failed", name, attempt + 1
+                        )
+                        if attempt == 1:
+                            with self._lifecycle_lock:
+                                self._deferred_lifecycle_error = error
+                                self._deferred_lifecycle_failure.set()
+            finally:
+                with self._lifecycle_lock:
+                    self._deferred_lifecycle_thread_pending = False
+
+        self._start_lifecycle_thread(run, name)
         return True
 
     def _defer_flush_from_callback(self, timeout_seconds: Optional[float]) -> bool:
