@@ -1668,7 +1668,7 @@ class Client(object):
     @no_throw()
     def alias(
         self,
-        previous_id: str,
+        previous_id: ID_TYPES,
         distinct_id: Optional[str],
         timestamp: Optional[Union[datetime, str]] = None,
         uuid: Optional[str] = None,
