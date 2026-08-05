@@ -2875,6 +2875,31 @@ class TestClient(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 1)
         self.assertEqual(client.queue.unfinished_tasks, 0)
 
+    def test_join_discards_remaining_work_if_consumer_stops_during_drain(self):
+        send_started = threading.Event()
+        release_send = threading.Event()
+
+        def request(batch):
+            send_started.set()
+            self.assertTrue(release_send.wait(2))
+
+        client = Client(FAKE_TEST_API_KEY, flush_at=1)
+        consumer = client.consumers[0]
+        with mock.patch.object(consumer, "request", side_effect=request):
+            client.capture("first", distinct_id="distinct_id")
+            self.assertTrue(send_started.wait(1))
+            client.capture("second", distinct_id="distinct_id")
+
+            join_thread = threading.Thread(target=client.join)
+            join_thread.start()
+            time.sleep(0.05)
+            consumer.pause()
+            release_send.set()
+            join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+
     def test_shutdown_discards_queued_work_when_no_consumer_can_drain_it(self):
         client = Client(FAKE_TEST_API_KEY, thread=0)
         client.capture("test event", distinct_id="distinct_id")

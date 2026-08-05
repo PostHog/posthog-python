@@ -8,7 +8,6 @@ import threading
 import time
 import warnings
 import weakref
-from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Union
 from uuid import UUID, uuid4
@@ -400,12 +399,21 @@ class _Lane:
         self._drain_signal.request()
         try:
             size = queue.qsize()
-            if timeout_seconds is None:
-                queue.join()
-            else:
-                deadline = time.monotonic() + timeout_seconds
+            deadline = (
+                None if timeout_seconds is None else time.monotonic() + timeout_seconds
+            )
+            while queue.unfinished_tasks:
+                if deadline is None and not any(
+                    consumer.is_alive() for consumer in self.consumers
+                ):
+                    self.discard_undrainable_queued_work()
+                    break
                 with queue.all_tasks_done:
-                    while queue.unfinished_tasks:
+                    if not queue.unfinished_tasks:
+                        break
+                    if deadline is None:
+                        wait_seconds = 0.05
+                    else:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             self.log.warning(
@@ -415,7 +423,8 @@ class _Lane:
                                 queue.unfinished_tasks,
                             )
                             return
-                        queue.all_tasks_done.wait(remaining)
+                        wait_seconds = min(0.05, remaining)
+                    queue.all_tasks_done.wait(wait_seconds)
 
             # Note that this message may not be precise, because of threading.
             self.log.debug("successfully flushed about %s items.", size)
@@ -688,9 +697,7 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
-        self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
-            "posthog_lifecycle_callback", default=False
-        )
+        self._async_provider_call_active = threading.Event()
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -1987,9 +1994,7 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
-        self._lifecycle_callback_context = ContextVar(
-            "posthog_lifecycle_callback", default=False
-        )
+        self._async_provider_call_active = threading.Event()
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -2250,7 +2255,7 @@ class Client(object):
         return any(current in lane.consumers for lane in self._lanes)
 
     def _is_lifecycle_callback_thread(self) -> bool:
-        if self._lifecycle_callback_context.get():
+        if self._async_provider_call_active.is_set():
             return True
         current = threading.current_thread()
         if self._is_consumer_thread() or current is self.poller:
@@ -2486,11 +2491,11 @@ class Client(object):
                 self._flag_definition_cache_provider_async_runner = (
                     _BackgroundEventLoopRunner()
                 )
-            token = self._lifecycle_callback_context.set(True)
+            self._async_provider_call_active.set()
             try:
                 return self._flag_definition_cache_provider_async_runner.run(result)
             finally:
-                self._lifecycle_callback_context.reset(token)
+                self._async_provider_call_active.clear()
 
     def _shutdown_flag_definition_cache_provider(self):
         if not self._flag_definition_cache_provider:
