@@ -1593,3 +1593,68 @@ def test_ai_lane_client_routes_through_capture_ai(
     mock_client.capture.assert_not_called()
     assert mock_client._capture_ai.call_count == 1
     assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+
+
+def test_tool_response_turn_captured_in_ai_input(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
+    """A manual function-calling turn reaches $ai_input as normalized tool blocks.
+
+    Covers the regression in #725: Gemini's own function_call/function_response
+    parts reached the payload unconverted, and no PostHog consumer matched them.
+    Uses real google-genai types, so the whole conversion path runs.
+    """
+    from google.genai import types
+
+    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[
+            types.Content(
+                role="user", parts=[types.Part(text="What is the weather in SF?")]
+            ),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            name="get_weather", args={"city": "SF"}
+                        )
+                    )
+                ],
+            ),
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            name="get_weather", response={"temp_c": 18}
+                        )
+                    )
+                ],
+            ),
+        ],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    ai_input = props["$ai_input"]
+
+    assert ai_input[0]["content"] == [
+        {"type": "text", "text": "What is the weather in SF?"}
+    ]
+    assert ai_input[1]["content"] == [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": {"city": "SF"}},
+        }
+    ]
+    assert ai_input[2]["content"] == [
+        {"type": "function", "tool_name": "get_weather", "content": {"temp_c": 18}}
+    ]
+
+    # The payload has to survive JSON transport to reach PostHog at all.
+    assert json.loads(json.dumps(ai_input)) == ai_input
