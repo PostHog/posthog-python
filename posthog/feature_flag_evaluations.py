@@ -90,16 +90,23 @@ class FeatureFlagEvaluations:
         self._minimal_flag_called_events = minimal_flag_called_events
         self._accessed: Set[str] = set(accessed) if accessed is not None else set()
 
-    def is_enabled(self, key: str) -> bool:
+    def is_enabled(self, key: str, default_value: bool = False) -> bool:
         """Return whether the flag is enabled. Fires ``$feature_flag_called`` on the
         first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
 
-        Flags that were not returned from the underlying evaluation are treated as
-        disabled (returns ``False``).
+        Args:
+            key: The feature flag key.
+            default_value: Returned when the flag has no value in this evaluation —
+                the key was not part of the evaluated set, or the evaluation itself
+                came back empty (failed ``/flags`` request, quota limit, or no
+                resolvable ``distinct_id``). Defaults to ``False``.
+
+        A flag that has a value always wins over ``default_value``, including a
+        disabled flag, which returns ``False`` even when ``default_value=True``.
         """
         flag = self._flags.get(key)
         self._record_access(key)
-        return bool(flag.enabled) if flag else False
+        return bool(flag.enabled) if flag else default_value
 
     def get_flag(self, key: str) -> Optional[FlagValue]:
         """Return the flag value. Fires ``$feature_flag_called`` on first access.

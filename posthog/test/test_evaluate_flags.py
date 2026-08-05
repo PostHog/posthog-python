@@ -96,6 +96,51 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
 
     @parameterized.expand(
         [
+            ("default_false", False),
+            ("default_true", True),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_is_enabled_returns_default_value_for_missing_flag(
+        self, _name, default_value, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        self.assertEqual(flags.is_enabled("missing-flag", default_value), default_value)
+
+    @parameterized.expand(
+        [
+            ("disabled_flag_beats_default_true", "disabled-flag", True, False),
+            ("boolean_flag_beats_default_false", "boolean-flag", False, True),
+            ("variant_flag_beats_default_false", "variant-flag", False, True),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_is_enabled_prefers_flag_value_over_default_value(
+        self, _name, key, default_value, expected, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        self.assertEqual(flags.is_enabled(key, default_value), expected)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_is_enabled_returns_default_value_when_flags_request_fails(
+        self, patch_capture, patch_flags
+    ):
+        patch_flags.side_effect = Exception("flags request failed")
+        flags = self.client.evaluate_flags("user-1")
+
+        self.assertEqual(flags.keys, [])
+        self.assertTrue(flags.is_enabled("boolean-flag", True))
+        self.assertFalse(flags.is_enabled("boolean-flag"))
+
+    @parameterized.expand(
+        [
             (
                 "variant_flag_returns_variant_string",
                 "variant-flag",
