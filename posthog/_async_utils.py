@@ -143,7 +143,21 @@ class _BackgroundEventLoopRunner:
     def _run_loop(self) -> None:
         loop = None
         try:
-            loop = _ContextEventLoop()
+            loop = asyncio.new_event_loop()
+            original_run_in_executor = loop.run_in_executor
+
+            def run_in_executor(executor, func, *args):
+                call = _ContextExecutorCall(copy_context(), func, args)
+                return original_run_in_executor(executor, call)
+
+            try:
+                setattr(loop, "run_in_executor", run_in_executor)
+            except (AttributeError, TypeError):
+                # Preserve custom policy loops when they are extensible. For a
+                # read-only implementation, use the platform-equivalent loop
+                # so explicit executors retain callback context safely.
+                loop.close()
+                loop = _ContextEventLoop()
             asyncio.set_event_loop(loop)
         except BaseException as error:
             if loop is not None and not loop.is_closed():
