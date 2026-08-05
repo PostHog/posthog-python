@@ -113,7 +113,7 @@ from posthog.utils import (
 from posthog.version import VERSION
 
 
-from queue import Queue, Full
+from queue import Empty, Full, Queue
 
 
 _configure_posthog_logging()
@@ -410,14 +410,28 @@ class _Lane:
         self.log.debug("successfully flushed about %s items.", size)
 
     def join(self) -> None:
-        """Pause this lane's consumers and wait for them to exit; a never-started lane is a no-op."""
+        """Pause this lane's consumers, wait for them, and discard queued work."""
         for consumer in self.consumers:
             consumer.pause()
+        for consumer in self.consumers:
             try:
                 consumer.join()
             except RuntimeError:
                 # consumer thread has not started
                 pass
+
+        dropped = 0
+        while True:
+            try:
+                self.queue.get_nowait()
+            except Empty:
+                break
+            self.queue.task_done()
+            dropped += 1
+        if dropped:
+            self.log.warning(
+                "%s lane discarded %d queued events during join", self.name, dropped
+            )
 
     def reset_sync_send_state_after_fork(self) -> None:
         """Replace sync-send state inherited from threads that did not survive fork."""
@@ -635,6 +649,17 @@ class Client(object):
         self.debug = debug
         self.send = send
         self.sync_mode = sync_mode
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
+        self._lifecycle_in_progress = False
+        self._lifecycle_owner: Optional[threading.Thread] = None
+        self._workers_joined = False
+        self._join_cleanup_complete = False
+        self._shutdown_requested = False
+        self._shutdown_complete = False
+        self._deferred_lifecycle_error: Optional[BaseException] = None
+        self._deferred_lifecycle_failure = threading.Event()
+        self._shutdown_complete_event = threading.Event()
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
@@ -1901,12 +1926,22 @@ class Client(object):
         consumer pool are rebuilt (see `_Lane.rebuild_after_fork`).
         """
         for lane in self._lanes:
-            if self.sync_mode:
-                lane.reset_sync_send_state_after_fork()
-            else:
-                lane.rebuild_after_fork()
+            lane.rebuild_after_fork()
 
-        if self.enable_local_evaluation:
+        shutdown_complete = self._shutdown_complete
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
+        self._lifecycle_in_progress = False
+        self._lifecycle_owner = None
+        self._deferred_lifecycle_error = None
+        self._deferred_lifecycle_failure = threading.Event()
+        self._shutdown_complete_event = threading.Event()
+        if shutdown_complete:
+            self._shutdown_complete_event.set()
+
+        if self._workers_joined:
+            self.poller = None
+        elif self.enable_local_evaluation:
             self.poller = Poller(
                 interval=timedelta(seconds=self.poll_interval),
                 execute=self._load_feature_flags,
@@ -2133,6 +2168,8 @@ class Client(object):
             posthog.flush()  # Ensures the event is sent immediately
             ```
         """
+        if self._defer_from_callback(self.flush, "flush", timeout_seconds):
+            return
         try:
             if timeout_seconds is None:
                 for lane in self._lanes:
@@ -2148,24 +2185,148 @@ class Client(object):
             self.log.exception("error flushing queue: %s", e)
             return
 
+    def _is_consumer_thread(self) -> bool:
+        current = threading.current_thread()
+        return any(current in lane.consumers for lane in self._lanes)
+
+    def _is_lifecycle_callback_thread(self) -> bool:
+        current = threading.current_thread()
+        if self._is_consumer_thread() or current is self.poller:
+            return True
+        runner = self._flag_definition_cache_provider_async_runner
+        return runner is not None and current is runner._thread
+
+    def _start_lifecycle_thread(self, target, name: str, *args) -> None:
+        def run() -> None:
+            for attempt in range(2):
+                try:
+                    target(*args)
+                    return
+                except BaseException as error:
+                    self.log.exception(
+                        "Deferred %s attempt %d failed", name, attempt + 1
+                    )
+                    if attempt == 1:
+                        with self._lifecycle_lock:
+                            self._deferred_lifecycle_error = error
+                            self._deferred_lifecycle_failure.set()
+
+        threading.Thread(
+            target=run,
+            name=f"posthog-{name}",
+            daemon=False,
+        ).start()
+
+    def _defer_from_callback(self, target, name: str, *args) -> bool:
+        if not self._is_lifecycle_callback_thread():
+            return False
+        self._start_lifecycle_thread(target, name, *args)
+        return True
+
+    def _join_once(self) -> None:
+        if not self._workers_joined:
+            for lane in self._lanes:
+                lane.close()
+            for lane in self._lanes:
+                lane.wait_for_sync_sends()
+            for lane in self._lanes:
+                lane.join()
+            self._workers_joined = True
+
+        if not self._join_cleanup_complete:
+            if self.poller:
+                self.poller.stop()
+
+            # Shutdown the cache provider (release locks, cleanup)
+            self._shutdown_flag_definition_cache_provider()
+            self._unregister_duplicate_client()
+            self._join_cleanup_complete = True
+
+    def _shutdown_once(self) -> None:
+        if not self._workers_joined:
+            # Close every lane before draining any of them so no producer can be
+            # admitted between a completed flush and consumer shutdown.
+            for lane in self._lanes:
+                lane.close()
+            for lane in self._lanes:
+                lane.wait_for_sync_sends()
+            self.flush(timeout_seconds=None)
+
+        if self._metrics is not None:
+            try:
+                self._metrics.flush()
+            except Exception:
+                self.log.exception("Failed to flush metrics on shutdown")
+            self._metrics.reset()
+        self._join_once()
+        self.distinct_ids_feature_flags_reported.clear()
+
+        if self.exception_capture:
+            self.exception_capture.close()
+        self._shutdown_complete = True
+        self._deferred_lifecycle_error = None
+        self._deferred_lifecycle_failure.clear()
+        self._shutdown_complete_event.set()
+
+    def _run_lifecycle(self, require_shutdown: bool = False) -> None:
+        while True:
+            with self._lifecycle_condition:
+                if require_shutdown and self._shutdown_complete:
+                    return
+                if not require_shutdown and (
+                    self._join_cleanup_complete or self._shutdown_complete
+                ):
+                    return
+                if self._lifecycle_in_progress:
+                    if self._is_lifecycle_callback_thread() or (
+                        threading.current_thread() is self._lifecycle_owner
+                    ):
+                        return
+                    self._lifecycle_condition.wait()
+                    continue
+                self._lifecycle_in_progress = True
+                self._lifecycle_owner = threading.current_thread()
+
+            try:
+                while True:
+                    with self._lifecycle_lock:
+                        run_shutdown = self._shutdown_requested
+
+                    if run_shutdown:
+                        self._shutdown_once()
+                    else:
+                        self._join_once()
+
+                    with self._lifecycle_condition:
+                        if (
+                            self._shutdown_requested
+                            and not self._shutdown_complete
+                            and not run_shutdown
+                        ):
+                            continue
+                        self._lifecycle_in_progress = False
+                        self._lifecycle_owner = None
+                        self._lifecycle_condition.notify_all()
+                        return
+            except BaseException:
+                with self._lifecycle_condition:
+                    self._lifecycle_in_progress = False
+                    self._lifecycle_owner = None
+                    self._lifecycle_condition.notify_all()
+                raise
+
     def join(self) -> None:
         """
-        End the consumer thread once the queue is empty. Do not use directly, call `shutdown()` instead.
+        End the consumer threads without flushing queued events. Do not use directly, call `shutdown()` instead.
 
         Examples:
             ```python
             posthog.join()
             ```
         """
-        for lane in self._lanes:
-            lane.join()
-
-        if self.poller:
-            self.poller.stop()
-
-        # Shutdown the cache provider (release locks, cleanup)
-        self._shutdown_flag_definition_cache_provider()
-        self._unregister_duplicate_client()
+        if self._defer_from_callback(self._run_lifecycle, "join"):
+            return
+        self._run_lifecycle()
 
     def shutdown(self) -> None:
         """
@@ -2176,25 +2337,16 @@ class Client(object):
             posthog.shutdown()
             ```
         """
-        # Close every lane before draining any of them so no producer can be
-        # admitted between a completed flush and consumer shutdown.
-        for lane in self._lanes:
-            lane.close()
-        for lane in self._lanes:
-            lane.wait_for_sync_sends()
-
-        self.flush(timeout_seconds=None)
-        if self._metrics is not None:
-            try:
-                self._metrics.flush()
-            except Exception:
-                self.log.exception("Failed to flush metrics on shutdown")
-            self._metrics.reset()
-        self.join()
-        self.distinct_ids_feature_flags_reported.clear()
-
-        if self.exception_capture:
-            self.exception_capture.close()
+        with self._lifecycle_lock:
+            if self._shutdown_complete:
+                return
+            self._shutdown_requested = True
+            if not self._lifecycle_in_progress:
+                self._deferred_lifecycle_error = None
+                self._deferred_lifecycle_failure.clear()
+        if self._defer_from_callback(self._run_lifecycle, "shutdown", True):
+            return
+        self._run_lifecycle(require_shutdown=True)
 
     def _resolve_flag_definition_cache_provider_result(self, result):
         if not inspect.isawaitable(result):

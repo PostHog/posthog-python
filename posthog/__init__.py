@@ -1124,7 +1124,7 @@ def flush(timeout_seconds: Optional[float] = 10) -> None:
 
 def join() -> None:
     """
-    Block program until the client clears the queue. Used during program shutdown. You should use `shutdown()` directly in most cases.
+    Stop the client's background workers without flushing queued events. Pending events may be discarded; use `shutdown()` when delivery is required.
 
     Examples:
         ```python
