@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from unittest import mock
 from uuid import UUID, uuid4
@@ -2248,9 +2249,9 @@ class TestClient(unittest.TestCase):
         self.assertEqual(len(client.distinct_ids_feature_flags_reported), 0)
 
     def test_shutdown_flushes_without_timeout(self):
-        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
 
-        with mock.patch.object(client, "flush") as mock_flush:
+        with mock.patch.object(client._analytics_lane, "flush") as mock_flush:
             client.shutdown()
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
@@ -2518,6 +2519,30 @@ class TestClient(unittest.TestCase):
                     executor_called.set()
 
                 await asyncio.get_running_loop().run_in_executor(None, reenter_join)
+
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        join_thread = threading.Thread(target=client.join)
+        join_thread.start()
+        join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(executor_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_custom_executor_can_reenter_join(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        executor_called = threading.Event()
+
+        class AsyncProvider:
+            async def shutdown(self):
+                def reenter_join():
+                    client.join()
+                    executor_called.set()
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    await asyncio.get_running_loop().run_in_executor(
+                        executor, reenter_join
+                    )
 
         client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
         join_thread = threading.Thread(target=client.join)
@@ -2830,6 +2855,17 @@ class TestClient(unittest.TestCase):
 
         self.assertLess(time.monotonic() - start, 1)
         self.assertEqual(client.queue.unfinished_tasks, 0)
+
+    def test_shutdown_discards_queued_work_when_no_consumer_can_drain_it(self):
+        client = Client(FAKE_TEST_API_KEY, thread=0)
+        client.capture("test event", distinct_id="distinct_id")
+
+        start = time.monotonic()
+        client.shutdown()
+
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+        self.assertTrue(client._shutdown_complete)
 
     def test_unicode(self):
         Client("unicode_key")

@@ -2343,6 +2343,13 @@ class Client(object):
         self._start_lifecycle_thread(run, "flush")
         return True
 
+    def _flush_or_discard_queues(self) -> None:
+        for lane in self._lanes:
+            if any(consumer.is_alive() for consumer in lane.consumers):
+                lane.flush(timeout_seconds=None)
+            else:
+                lane.discard_undrainable_queued_work()
+
     def _join_once(self, flush_queues: bool = True) -> None:
         if not self._workers_joined:
             for lane in self._lanes:
@@ -2350,11 +2357,7 @@ class Client(object):
             for lane in self._lanes:
                 lane.wait_for_sync_sends()
             if flush_queues:
-                for lane in self._lanes:
-                    if any(consumer.is_alive() for consumer in lane.consumers):
-                        lane.flush(timeout_seconds=None)
-                    else:
-                        lane.discard_undrainable_queued_work()
+                self._flush_or_discard_queues()
             for lane in self._lanes:
                 lane.join()
             self._workers_joined = True
@@ -2376,7 +2379,7 @@ class Client(object):
                 lane.close()
             for lane in self._lanes:
                 lane.wait_for_sync_sends()
-            self.flush(timeout_seconds=None)
+            self._flush_or_discard_queues()
 
         if self._metrics is not None:
             try:
