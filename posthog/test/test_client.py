@@ -2255,20 +2255,40 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
-    def test_callback_lifecycle_requests_are_coalesced_while_owner_runs(self):
+    def test_callback_shutdown_escalates_pending_deferred_join(self):
         client = Client(FAKE_TEST_API_KEY)
-        client._lifecycle_in_progress = True
+        first_run_started = threading.Event()
+        release_first_run = threading.Event()
+        shutdown_run_complete = threading.Event()
+        require_shutdown_calls = []
+
+        def run_lifecycle(require_shutdown=False):
+            require_shutdown_calls.append(require_shutdown)
+            if len(require_shutdown_calls) == 1:
+                first_run_started.set()
+                self.assertTrue(release_first_run.wait(2))
+            else:
+                shutdown_run_complete.set()
 
         with (
             mock.patch.object(
                 client, "_is_lifecycle_callback_thread", return_value=True
             ),
-            mock.patch.object(client, "_start_lifecycle_thread") as start_thread,
+            mock.patch.object(client, "_run_lifecycle", side_effect=run_lifecycle),
+            mock.patch.object(
+                client,
+                "_start_lifecycle_thread",
+                wraps=client._start_lifecycle_thread,
+            ) as start_thread,
         ):
+            client.join()
+            self.assertTrue(first_run_started.wait(1))
             client.shutdown()
-            client.shutdown()
+            release_first_run.set()
+            self.assertTrue(shutdown_run_complete.wait(1))
 
         start_thread.assert_called_once()
+        self.assertEqual(require_shutdown_calls, [False, True])
 
     def test_callback_flushes_are_coalesced_with_strongest_followup(self):
         client = Client(FAKE_TEST_API_KEY)
@@ -2487,6 +2507,31 @@ class TestClient(unittest.TestCase):
         exception_capture.close.assert_called_once()
         self.assertTrue(client._shutdown_complete)
 
+    def test_async_cache_provider_task_can_reenter_join_during_runner_close(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        finalizer_called = threading.Event()
+
+        class AsyncProvider:
+            async def shutdown(self):
+                async def pending_task():
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        client.join()
+                        finalizer_called.set()
+
+                asyncio.create_task(pending_task())
+                await asyncio.sleep(0)
+
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        join_thread = threading.Thread(target=client.join)
+        join_thread.start()
+        join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(finalizer_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
     def test_cache_provider_shutdown_can_reenter_join(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
 
@@ -2504,8 +2549,15 @@ class TestClient(unittest.TestCase):
 
     def test_cache_provider_shutdown_can_reenter_join_from_another_thread(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
-        runner = mock.Mock()
-        client._flag_definition_cache_provider_async_runner = runner
+
+        class Runner:
+            _thread = None
+
+            def owns_thread(self, thread):
+                return thread is self._thread
+
+        runner = Runner()
+        client._flag_definition_cache_provider_async_runner = runner  # type: ignore[assignment]
 
         def reenter_join():
             reentrant_thread = threading.Thread(target=client.join)

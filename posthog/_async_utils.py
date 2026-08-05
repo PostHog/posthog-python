@@ -10,6 +10,7 @@ class _BackgroundEventLoopRunner:
     def __init__(self) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._closing_threads: set[threading.Thread] = set()
         self._started = threading.Event()
         self._lock = threading.Lock()
 
@@ -24,8 +25,13 @@ class _BackgroundEventLoopRunner:
             thread = self._thread
             self._loop = None
             self._thread = None
+            if thread is not None:
+                self._closing_threads.add(thread)
 
         if loop is None or thread is None or loop.is_closed():
+            with self._lock:
+                if thread is not None:
+                    self._closing_threads.discard(thread)
             return
 
         if thread is threading.current_thread():
@@ -34,6 +40,10 @@ class _BackgroundEventLoopRunner:
 
         loop.call_soon_threadsafe(loop.stop)
         thread.join()
+
+    def owns_thread(self, thread: threading.Thread) -> bool:
+        with self._lock:
+            return thread is self._thread or thread in self._closing_threads
 
     @staticmethod
     async def _await_result(awaitable: Awaitable[Any]) -> Any:
@@ -83,3 +93,5 @@ class _BackgroundEventLoopRunner:
             loop.run_until_complete(loop.shutdown_default_executor())
             asyncio.set_event_loop(None)
             loop.close()
+            with self._lock:
+                self._closing_threads.discard(threading.current_thread())

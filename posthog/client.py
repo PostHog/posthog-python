@@ -679,6 +679,7 @@ class Client(object):
         self._deferred_lifecycle_error: Optional[BaseException] = None
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
+        self._deferred_lifecycle_generation = 0
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -1974,6 +1975,7 @@ class Client(object):
         self._deferred_lifecycle_error = None
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
+        self._deferred_lifecycle_generation = 0
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
@@ -2237,7 +2239,7 @@ class Client(object):
         if self._is_consumer_thread() or current is self.poller:
             return True
         runner = self._flag_definition_cache_provider_async_runner
-        return runner is not None and current is runner._thread
+        return runner is not None and runner.owns_thread(current)
 
     def _start_lifecycle_thread(self, target, name: str, *args) -> None:
         threading.Thread(
@@ -2247,31 +2249,43 @@ class Client(object):
             daemon=False,
         ).start()
 
-    def _defer_from_callback(self, target, name: str, *args) -> bool:
+    def _defer_lifecycle_from_callback(self, name: str) -> bool:
         if not self._is_lifecycle_callback_thread():
             return False
         with self._lifecycle_lock:
+            self._deferred_lifecycle_generation += 1
             if self._deferred_lifecycle_thread_pending:
                 return True
             self._deferred_lifecycle_thread_pending = True
 
         def run() -> None:
-            try:
-                for attempt in range(2):
-                    try:
-                        target(*args)
-                        return
-                    except BaseException as error:
-                        self.log.exception(
-                            "Deferred %s attempt %d failed", name, attempt + 1
-                        )
-                        if attempt == 1:
-                            with self._lifecycle_lock:
-                                self._deferred_lifecycle_error = error
-                                self._deferred_lifecycle_failure.set()
-            finally:
+            attempt = 0
+            while True:
                 with self._lifecycle_lock:
+                    generation = self._deferred_lifecycle_generation
+                    require_shutdown = self._shutdown_requested
+                try:
+                    self._run_lifecycle(require_shutdown=require_shutdown)
+                except BaseException as error:
+                    attempt += 1
+                    self.log.exception("Deferred %s attempt %d failed", name, attempt)
+                    with self._lifecycle_lock:
+                        if generation != self._deferred_lifecycle_generation:
+                            attempt = 0
+                            continue
+                        if attempt < 2:
+                            continue
+                        self._deferred_lifecycle_error = error
+                        self._deferred_lifecycle_failure.set()
+                        self._deferred_lifecycle_thread_pending = False
+                        return
+
+                with self._lifecycle_lock:
+                    if generation != self._deferred_lifecycle_generation:
+                        attempt = 0
+                        continue
                     self._deferred_lifecycle_thread_pending = False
+                    return
 
         self._start_lifecycle_thread(run, name)
         return True
@@ -2413,7 +2427,7 @@ class Client(object):
             posthog.join()
             ```
         """
-        if self._defer_from_callback(self._run_lifecycle, "join"):
+        if self._defer_lifecycle_from_callback("join"):
             return
         self._run_lifecycle()
 
@@ -2433,7 +2447,7 @@ class Client(object):
             if not self._lifecycle_in_progress:
                 self._deferred_lifecycle_error = None
                 self._deferred_lifecycle_failure.clear()
-        if self._defer_from_callback(self._run_lifecycle, "shutdown", True):
+        if self._defer_lifecycle_from_callback("shutdown"):
             return
         self._run_lifecycle(require_shutdown=True)
 

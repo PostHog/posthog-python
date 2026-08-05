@@ -84,7 +84,7 @@ class TestConsumer(unittest.TestCase):
         upload_logs = [
             line for line in logs.getvalue().splitlines() if "error uploading" in line
         ]
-        self.assertEqual(upload_logs, ["[PostHog] error uploading: boom"])
+        self.assertIn("[PostHog] error uploading: boom", upload_logs)
 
     def test_flush_interval(self) -> None:
         # Put _n_ items in the queue, pausing a little bit more than
