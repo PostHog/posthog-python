@@ -1,5 +1,11 @@
 # posthog
 
+## 7.37.4 — 2026-08-05
+
+### Patch changes
+
+- [6397d78](https://github.com/posthog/posthog-python/commit/6397d7805588bc17856f8612d6f2076deb93d64c) `alias()` now validates both identities before enqueuing. Previously `alias(None, "user-123")` (or an empty-string `previous_id`) sent a `$create_alias` event with a null/empty `distinct_id`, which cannot link anything and just adds an unusable event to the project. Missing identities are now dropped with a warning instead, matching the sdk-specs `alias` contract. The drop that already happened when no alias target could be resolved now logs a warning too, and a non-string `previous_id` such as `0` is stringified consistently in both `distinct_id` and `properties.distinct_id`. — Thanks @posthog[bot]!
+
 ## 7.37.3 — 2026-08-04
 
 ### Patch changes
