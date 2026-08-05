@@ -114,7 +114,7 @@ from posthog.utils import (
 from posthog.version import VERSION
 
 
-from queue import Full, Queue
+from queue import Empty, Full, Queue
 
 
 _configure_posthog_logging()
@@ -421,6 +421,26 @@ class _Lane:
             self.log.debug("successfully flushed about %s items.", size)
         finally:
             self._drain_signal.complete()
+
+    def discard_undrainable_queued_work(self) -> None:
+        """Balance queued work when this lane has no running sender."""
+        if any(consumer.is_alive() for consumer in self.consumers):
+            return
+
+        dropped = 0
+        while True:
+            try:
+                self.queue.get_nowait()
+            except Empty:
+                break
+            self.queue.task_done()
+            dropped += 1
+        if dropped:
+            self.log.warning(
+                "%s lane discarded %d queued events because no consumer is running",
+                self.name,
+                dropped,
+            )
 
     def join(self) -> None:
         """Pause this lane's consumers and wait for them to exit."""
@@ -2330,7 +2350,11 @@ class Client(object):
             for lane in self._lanes:
                 lane.wait_for_sync_sends()
             if flush_queues:
-                self.flush(timeout_seconds=None)
+                for lane in self._lanes:
+                    if any(consumer.is_alive() for consumer in lane.consumers):
+                        lane.flush(timeout_seconds=None)
+                    else:
+                        lane.discard_undrainable_queued_work()
             for lane in self._lanes:
                 lane.join()
             self._workers_joined = True

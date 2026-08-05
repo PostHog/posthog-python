@@ -2507,7 +2507,7 @@ class TestClient(unittest.TestCase):
         exception_capture.close.assert_called_once()
         self.assertTrue(client._shutdown_complete)
 
-    def test_async_cache_provider_executor_can_reenter_join(self):
+    def test_async_cache_provider_default_executor_can_reenter_join(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         executor_called = threading.Event()
 
@@ -2517,7 +2517,7 @@ class TestClient(unittest.TestCase):
                     client.join()
                     executor_called.set()
 
-                await asyncio.to_thread(reenter_join)
+                await asyncio.get_running_loop().run_in_executor(None, reenter_join)
 
         client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
         join_thread = threading.Thread(target=client.join)
@@ -2820,6 +2820,16 @@ class TestClient(unittest.TestCase):
         # Make sure we are informed that the queue is at capacity
         self.assertIsNone(msg_uuid)
         self.assertIn("dropping event", logs.output[0])
+
+    def test_join_discards_queued_work_when_no_consumer_can_drain_it(self):
+        client = Client(FAKE_TEST_API_KEY, thread=0)
+        client.capture("test event", distinct_id="distinct_id")
+
+        start = time.monotonic()
+        client.join()
+
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(client.queue.unfinished_tasks, 0)
 
     def test_unicode(self):
         Client("unicode_key")
