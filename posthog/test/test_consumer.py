@@ -93,12 +93,12 @@ class TestConsumer(unittest.TestCase):
         q = Queue()
         flush_interval = 0.3
         consumer = Consumer(q, TEST_API_KEY, flush_at=10, flush_interval=flush_interval)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with mock.patch.object(consumer, "request") as mock_request:
             consumer.start()
             for i in range(3):
                 q.put(_track_event("python event %d" % i))
                 time.sleep(flush_interval * 1.1)
-            self.assertEqual(mock_post.call_count, 3)
+            self.assertEqual(mock_request.call_count, 3)
 
     def test_multiple_uploads_per_interval(self) -> None:
         # Put _flush_at*2_ items in the queue at once, then pause for
@@ -362,25 +362,22 @@ class TestConsumer(unittest.TestCase):
         # Let's capture 8MB of data to trigger two batches
         n_msgs = int(8_000_000 / msg_size)
 
-        def mock_post_fn(_: str, data: str, **kwargs: Any) -> mock.Mock:
-            res = mock.Mock()
-            res.status_code = 200
-            request_size = len(data.encode())
+        def mock_send_fn(batch: list[dict[str, Any]], _path: str) -> None:
+            request_size = len(json.dumps({"batch": batch}).encode())
             # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 10% of margin
             self.assertTrue(
                 request_size < (5 * 1024 * 1024) * 1.1,
                 "batch size (%d) higher than limit" % request_size,
             )
-            return res
 
-        with mock.patch(
-            "posthog.request._session.post", side_effect=mock_post_fn
-        ) as mock_post:
+        with mock.patch.object(
+            consumer, "_send", side_effect=mock_send_fn
+        ) as mock_send:
             consumer.start()
             for _ in range(0, n_msgs + 2):
                 q.put(track)
             q.join()
-            self.assertEqual(mock_post.call_count, 2)
+            self.assertEqual(mock_send.call_count, 2)
 
     def test_request_sleeps_with_retry_after(self) -> None:
         error = APIError(429, "Too Many Requests", retry_after=5.0)
