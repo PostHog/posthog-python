@@ -310,7 +310,9 @@ Attributes:
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
     on_error: Optional callback invoked by background consumers when event upload
-        fails.
+        fails. Keep it short and non-blocking. Lifecycle methods can be called
+        directly and will be deferred, but the callback must not wait for another
+        thread or task that calls ``flush()``, ``join()``, or ``shutdown()``.
     debug: Enable verbose SDK logging and re-raise errors from public APIs.
     send: If False, queueing succeeds but events are not sent to PostHog.
     sync_mode: If True, send events synchronously instead of using background
@@ -1141,6 +1143,13 @@ def join() -> None:
 def shutdown() -> None:
     """
     Flush all messages and cleanly shutdown the client.
+
+    This normally blocks until delivery and cleanup finish. Calls made directly
+    from SDK callbacks such as ``on_error`` are deferred to avoid deadlocking the
+    worker. If blocking completion is required, signal an application-owned
+    thread, return from the callback, and call ``shutdown()`` from that thread.
+    Do not wait inside a callback for another thread or task calling a lifecycle
+    method.
 
     Examples:
         ```python

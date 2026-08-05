@@ -583,7 +583,10 @@ class Client(object):
             max_queue_size: Maximum number of events buffered before upload.
             send: If False, queueing succeeds but events are not sent.
             on_error: Optional callback invoked by background consumers when an
-                upload fails.
+                upload fails. Keep it short and non-blocking. Calling lifecycle
+                methods directly is safe and deferred, but do not start another
+                thread or task that calls ``flush()``, ``join()``, or
+                ``shutdown()`` and then wait for it from the callback.
             flush_at: Number of queued events that triggers a batch upload.
             flush_interval: Maximum seconds a background consumer waits before
                 flushing a partial batch.
@@ -2470,6 +2473,14 @@ class Client(object):
     def shutdown(self) -> None:
         """
         Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
+
+        Normally this method blocks until delivery and cleanup finish. When
+        called directly from an SDK callback such as ``on_error``, shutdown is
+        deferred to avoid blocking the worker that invoked the callback. If the
+        callback must coordinate a blocking shutdown, have it signal an
+        application-owned thread and return before that thread calls shutdown.
+        Do not wait inside the callback for another thread or task that calls a
+        lifecycle method.
 
         Examples:
             ```python
