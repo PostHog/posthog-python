@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from collections.abc import Awaitable
+from concurrent.futures import ProcessPoolExecutor
 from contextvars import copy_context
 from typing import Any
 
@@ -78,6 +79,8 @@ class _BackgroundEventLoopRunner:
         original_run_in_executor = loop.run_in_executor
 
         def run_in_executor(executor, func, *args):
+            if isinstance(executor, ProcessPoolExecutor):
+                return original_run_in_executor(executor, func, *args)
             context = copy_context()
             return original_run_in_executor(executor, context.run, func, *args)
 

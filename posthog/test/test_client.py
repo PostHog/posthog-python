@@ -4,7 +4,7 @@ import threading
 import time
 import unittest
 import warnings
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import datetime
 from unittest import mock
 from uuid import UUID, uuid4
@@ -2551,6 +2551,25 @@ class TestClient(unittest.TestCase):
 
         self.assertFalse(join_thread.is_alive())
         self.assertTrue(executor_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_process_executor_remains_supported(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+
+        class AsyncProvider:
+            result = None
+
+            async def shutdown(self):
+                with ProcessPoolExecutor(max_workers=1) as executor:
+                    self.result = await asyncio.get_running_loop().run_in_executor(
+                        executor, abs, -6
+                    )
+
+        provider = AsyncProvider()
+        client._flag_definition_cache_provider = provider  # type: ignore[assignment]
+        client.join()
+
+        self.assertEqual(provider.result, 6)
         self.assertTrue(client._join_cleanup_complete)
 
     def test_async_cache_provider_task_can_reenter_join_during_runner_close(self):
