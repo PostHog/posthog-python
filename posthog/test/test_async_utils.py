@@ -32,9 +32,11 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
             return _ContextEventLoop()
 
         def run():
+            awaitable = asyncio.sleep(0)
             try:
-                runner.run(asyncio.sleep(0))
+                runner.run(awaitable)
             except BaseException as error:
+                awaitable.close()
                 run_errors.append(error)
 
         with mock.patch(
@@ -52,6 +54,31 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
 
         self.assertFalse(run_thread.is_alive())
         self.assertFalse(close_thread.is_alive())
-        self.assertEqual(run_errors, [])
+        self.assertEqual(len(run_errors), 1)
+        self.assertRegex(str(run_errors[0]), "closed during startup")
         self.assertIsNone(runner._thread)
         self.assertIsNone(runner._loop)
+
+    def test_run_from_runner_thread_fails_instead_of_deadlocking(self):
+        runner = _BackgroundEventLoopRunner()
+
+        async def reenter():
+            awaitable = asyncio.sleep(0)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "runner thread"):
+                    runner.run(awaitable)
+            finally:
+                awaitable.close()
+
+        runner.run(reenter())
+        runner.close()
+
+    def test_close_from_runner_thread_allows_fresh_loop(self):
+        runner = _BackgroundEventLoopRunner()
+
+        async def close_runner():
+            runner.close()
+
+        runner.run(close_runner())
+        runner.run(asyncio.sleep(0))
+        runner.close()
