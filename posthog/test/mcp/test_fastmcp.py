@@ -1,5 +1,7 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
+import asyncio
+
 import pytest
 
 import mcp.types as mcp_types
@@ -101,6 +103,27 @@ async def test_tool_call_captures_intent_and_strips_context():
     assert "context" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
+async def test_analytics_flush_drains_its_own_captures():
+    async def slow_before_send(event):
+        await asyncio.sleep(0.05)
+        return event
+
+    server = make_server()
+    client = FakeClient()
+    analytics = instrument(
+        server, client, MCPAnalyticsOptions(before_send=slow_before_send)
+    )
+
+    await server._tool_manager.call_tool(
+        "add", {"a": 2, "b": 3, "context": "summing two numbers"}
+    )
+    assert _events(client, "$mcp_tool_call") == []
+
+    await analytics.flush()
+
+    assert len(_events(client, "$mcp_tool_call")) == 1
+
+
 async def test_initialize_emitted_once_per_session():
     server = make_server()
     client = FakeClient()
@@ -179,5 +202,6 @@ async def test_instrument_is_idempotent():
 
 async def test_unsupported_server_returns_noop_handle():
     handle = instrument(object(), FakeClient())
-    # graceful no-op: capture does nothing and does not raise
+    # graceful no-op: capture and flush do nothing and do not raise
     await handle.capture("anything")
+    await handle.flush()

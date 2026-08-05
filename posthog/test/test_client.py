@@ -18,7 +18,7 @@ from posthog.contexts import get_context_session_id, new_context, set_context_se
 from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
-from posthog.types import FeatureFlag, LegacyFlagMetadata
+from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
 from posthog.version import VERSION
 from posthog.contexts import tag
 
@@ -198,7 +198,9 @@ class TestClient(unittest.TestCase):
 
     def test_message_only_info_logs_include_posthog_prefix(self):
         self.client.flag_cache = mock.Mock()
-        self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()
+        self.client.flag_cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+            key="flag-key", enabled=True, variant=None, payload=None, reason=None
+        )
 
         with capture_message_only_logs(level=logging.INFO) as logs:
             self.client._get_stale_flag_fallback("distinct_id", "flag-key")

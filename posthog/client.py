@@ -675,6 +675,11 @@ class Client(object):
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
+        self._flag_definition_fetch_generation = 0
+        self._flag_definition_published_generation = 0
+        self._flag_definition_cache_generation = 0
+        self._flag_definition_publication_lock = threading.Lock()
+        self._flag_definition_cache_write_lock = threading.RLock()
         self._flag_definition_cache_provider = flag_definition_cache_provider
         self._flag_definition_cache_provider_async_runner: Optional[
             _BackgroundEventLoopRunner
@@ -1928,6 +1933,11 @@ class Client(object):
         self._flag_definition_cache_provider_async_runner = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
 
+        # A parent thread may have been publishing or caching flag definitions at
+        # fork time.
+        self._flag_definition_publication_lock = threading.Lock()
+        self._flag_definition_cache_write_lock = threading.RLock()
+
         # Metrics locks may have been held by a parent thread at fork time; replace
         # them (never acquire them) so the child can't deadlock on a vanished holder.
         self._metrics_lock = threading.Lock()
@@ -2304,91 +2314,140 @@ class Client(object):
             )
             return
 
-        try:
-            # Store old flags to detect changes
-            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+        with self._flag_definition_publication_lock:
+            self._flag_definition_fetch_generation += 1
+            fetch_generation = self._flag_definition_fetch_generation
+            request_etag = self._flags_etag
 
+        cache_data_to_store: Optional[FlagDefinitionCacheData] = None
+        try:
             response = get(
                 personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
-                etag=self._flags_etag,
+                etag=request_etag,
             )
 
-            # Update stored ETag (clear if server stops sending one)
-            self._flags_etag = response.etag
-
-            # If 304 Not Modified, flags haven't changed - skip processing
-            if response.not_modified:
-                self.log.debug(
-                    "[FEATURE FLAGS] Flags not modified (304), using cached data"
-                )
-                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
-                return
-
-            if response.data is None:
-                self.log.error(
-                    "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
-                )
-                return
-
-            self._update_flag_state(response.data, old_flags_by_key=old_flags_by_key)
-
-            # Store in external cache if provider is configured
-            if self._flag_definition_cache_provider:
-                try:
-                    self._resolve_flag_definition_cache_provider_result(
-                        self._flag_definition_cache_provider.on_flag_definitions_received(
-                            {
-                                "flags": self.feature_flags or [],
-                                "group_type_mapping": self.group_type_mapping or {},
-                                "cohorts": self.cohorts or {},
-                                "minimal_flag_called_events": self._minimal_flag_called_events,
-                            }
-                        )
+            with self._flag_definition_publication_lock:
+                if fetch_generation <= self._flag_definition_published_generation:
+                    self.log.debug(
+                        "[FEATURE FLAGS] Ignoring stale flag definition response"
                     )
-                except Exception as e:
-                    self.log.error(f"[FEATURE FLAGS] Cache provider store error: {e}")
-                    # Flags are already in memory, so continue normally
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                    return
+
+                # A 304 is valid only for the ETag used by this request. Another
+                # overlapping response may already have installed newer definitions.
+                if response.not_modified:
+                    if self._flags_etag != request_etag:
+                        self.log.debug(
+                            "[FEATURE FLAGS] Ignoring stale 304 flag definition response"
+                        )
+                        self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                        return
+
+                    self._flags_etag = response.etag
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
+                    self.log.debug(
+                        "[FEATURE FLAGS] Flags not modified (304), using cached data"
+                    )
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                    return
+
+                if response.data is None:
+                    self.log.error(
+                        "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
+                    )
+                    return
+
+                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+                self._update_flag_state(
+                    response.data, old_flags_by_key=old_flags_by_key
+                )
+
+                if self._flag_definition_cache_provider:
+                    cache_data_to_store = {
+                        "flags": self.feature_flags or [],
+                        "group_type_mapping": self.group_type_mapping or {},
+                        "cohorts": self.cohorts or {},
+                        "minimal_flag_called_events": self._minimal_flag_called_events,
+                    }
+
+                # Publish the ETag only after its matching flag state is installed.
+                self._flags_etag = response.etag
+                self._flag_definition_published_generation = fetch_generation
+                self._flag_definition_cache_generation = fetch_generation
+
+            if cache_data_to_store and self._flag_definition_cache_provider:
+                # Keep provider I/O out of the publication lock. The separate lock
+                # preserves cache write order without delaying newer API fetches or
+                # in-memory publication.
+                with self._flag_definition_cache_write_lock:
+                    with self._flag_definition_publication_lock:
+                        should_store = (
+                            fetch_generation == self._flag_definition_cache_generation
+                        )
+                    if should_store:
+                        try:
+                            self._resolve_flag_definition_cache_provider_result(
+                                self._flag_definition_cache_provider.on_flag_definitions_received(
+                                    cache_data_to_store
+                                )
+                            )
+                        except Exception as e:
+                            self.log.error(
+                                f"[FEATURE FLAGS] Cache provider store error: {e}"
+                            )
+                            # Flags are already in memory, so continue normally
 
         except APIError as e:
-            if e.status == 401:
-                detail = (
-                    f"Error loading feature flags: {e.message}. "
-                    "Please verify both your project_api_key and secret_key. "
-                    "More information: https://posthog.com/docs/api/overview"
-                )
-                self.log.error("[FEATURE FLAGS] %s", detail)
-                self.feature_flags = []
-                self.group_type_mapping = {}
-                self.cohorts = {}
-
-                if self.flag_cache:
-                    self.flag_cache.clear()
-
-                if self.debug:
-                    raise APIError(status=401, message=detail)
-            elif e.status == 402:
-                self.log.warning(
-                    "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
-                )
-                # Reset all feature flag data when quota limited
-                self.feature_flags = []
-                self.group_type_mapping = {}
-                self.cohorts = {}
-
-                # Clear flag cache when quota limited
-                if self.flag_cache:
-                    self.flag_cache.clear()
-
-                if self.debug:
-                    raise APIError(
-                        status=402,
-                        message="PostHog feature flags quota limited",
+            with self._flag_definition_publication_lock:
+                if fetch_generation <= self._flag_definition_published_generation:
+                    self.log.debug("[FEATURE FLAGS] Ignoring stale API error response")
+                elif e.status == 401:
+                    detail = (
+                        f"Error loading feature flags: {e.message}. "
+                        "Please verify both your project_api_key and secret_key. "
+                        "More information: https://posthog.com/docs/api/overview"
                     )
-            else:
-                self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
+                    self.log.error("[FEATURE FLAGS] %s", detail)
+                    self.feature_flags = []
+                    self.group_type_mapping = {}
+                    self.cohorts = {}
+                    self._flags_etag = None
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
+
+                    if self.flag_cache:
+                        self.flag_cache.clear()
+
+                    if self.debug:
+                        raise APIError(status=401, message=detail)
+                elif e.status == 402:
+                    self.log.warning(
+                        "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
+                    )
+                    # Reset all feature flag data when quota limited
+                    self.feature_flags = []
+                    self.group_type_mapping = {}
+                    self.cohorts = {}
+                    self._flags_etag = None
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
+
+                    # Clear flag cache when quota limited
+                    if self.flag_cache:
+                        self.flag_cache.clear()
+
+                    if self.debug:
+                        raise APIError(
+                            status=402,
+                            message="PostHog feature flags quota limited",
+                        )
+                else:
+                    self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
             self.log.warning(
                 "[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds."
@@ -2593,7 +2652,7 @@ class Client(object):
         """Returns a stale cached flag value if available, otherwise None."""
         if self.flag_cache:
             stale_result = self.flag_cache.get_stale_cached_flag(distinct_id, key)
-            if stale_result:
+            if isinstance(stale_result, FeatureFlagResult):
                 self.log.info(
                     f"[FEATURE FLAGS] Using stale cached value for flag {key}"
                 )
@@ -2653,8 +2712,10 @@ class Client(object):
         )
         flag_was_locally_evaluated = flag_value is not None
 
-        if flag_was_locally_evaluated:
-            lookup_match_value = override_match_value or flag_value
+        if flag_value is not None:
+            lookup_match_value = (
+                override_match_value if override_match_value is not None else flag_value
+            )
             payload = (
                 self._compute_payload_locally(key, lookup_match_value)
                 if lookup_match_value is not None
@@ -2664,10 +2725,15 @@ class Client(object):
                 key, lookup_match_value, payload
             )
 
-            # Cache successful local evaluation
-            if self.flag_cache and flag_result:
+            # Cache the local evaluation, not a payload lookup override.
+            cached_flag_result = flag_result
+            if override_match_value is not None:
+                cached_flag_result = FeatureFlagResult.from_value_and_payload(
+                    key, flag_value, self._compute_payload_locally(key, flag_value)
+                )
+            if self.flag_cache and cached_flag_result:
                 self.flag_cache.set_cached_flag(
-                    distinct_id, key, flag_result, self.flag_definition_version
+                    distinct_id, key, cached_flag_result, self.flag_definition_version
                 )
         elif only_evaluate_locally:
             if self.feature_flags is None:
@@ -3219,11 +3285,11 @@ class Client(object):
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
-            # For boolean flags, convert True to "true"
+            # For boolean flags, use lowercase keys ("true" or "false")
             # For multivariate flags, use the variant string as-is
             lookup_value = (
-                "true"
-                if isinstance(match_value, bool) and match_value
+                str(match_value).lower()
+                if isinstance(match_value, bool)
                 else str(match_value)
             )
             payload = flag_payloads.get(lookup_value, None)
@@ -3461,6 +3527,7 @@ class Client(object):
             person_properties=local_person_properties,
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
+            device_id=device_id,
         )
 
         feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}

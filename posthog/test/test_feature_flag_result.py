@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from posthog.client import Client
-from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.test.test_utils import FAKE_TEST_API_KEY, FakeRedis
 from posthog.types import (
     FeatureFlag,
     FeatureFlagError,
@@ -10,6 +10,7 @@ from posthog.types import (
     FlagMetadata,
     FlagReason,
 )
+from posthog.utils import RedisFlagCache
 
 
 class TestFeatureFlagResult(unittest.TestCase):
@@ -739,6 +740,103 @@ class TestFeatureFlagErrorWithStaleCacheFallback(unittest.TestCase):
             flag_result,
             flag_definition_version=self.client.flag_definition_version,
         )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_redis_timeout_returns_stale_cached_value_and_event(
+        self, patch_capture, patch_flags
+    ):
+        """Redis stale fallback reconstructs the result used by flag-called events."""
+        from posthog.request import RequestsTimeout
+
+        self.client.flag_cache = RedisFlagCache(FakeRedis())
+        cached_result = FeatureFlagResult(
+            key="my-flag",
+            enabled=True,
+            variant="cached-variant",
+            payload={"from": "redis"},
+            reason="cached reason",
+        )
+        self._populate_stale_cache("some-distinct-id", "my-flag", cached_result)
+        patch_flags.side_effect = RequestsTimeout("Request timed out")
+
+        flag_result = self.client.get_feature_flag_result("my-flag", "some-distinct-id")
+
+        self.assertEqual(flag_result, cached_result)
+        patch_capture.assert_called_once_with(
+            "$feature_flag_called",
+            distinct_id="some-distinct-id",
+            properties={
+                "$feature_flag": "my-flag",
+                "$feature_flag_response": "cached-variant",
+                "locally_evaluated": False,
+                "$feature/my-flag": "cached-variant",
+                "$feature_flag_payload": {"from": "redis"},
+                "$feature_flag_error": FeatureFlagError.TIMEOUT,
+            },
+            groups={},
+            disable_geoip=None,
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_redis_timeout_returns_stale_cached_value_without_event(
+        self, patch_capture, patch_flags
+    ):
+        """Redis stale fallback is reconstructed when event capture is disabled."""
+        from posthog.request import RequestsTimeout
+
+        self.client.flag_cache = RedisFlagCache(FakeRedis())
+        cached_result = FeatureFlagResult(
+            key="my-flag",
+            enabled=False,
+            variant=None,
+            payload={"from": "redis"},
+            reason="cached reason",
+        )
+        self._populate_stale_cache("some-distinct-id", "my-flag", cached_result)
+        patch_flags.side_effect = RequestsTimeout("Request timed out")
+
+        flag_result = self.client.get_feature_flag_result(
+            "my-flag", "some-distinct-id", send_feature_flag_events=False
+        )
+
+        self.assertEqual(flag_result, cached_result)
+        patch_capture.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_legacy_redis_entry_is_safely_ignored(self, patch_capture, patch_flags):
+        """Unmarked entries from older SDKs are not returned as result dictionaries."""
+        import json
+        import time
+
+        from posthog.request import RequestsTimeout
+
+        redis = FakeRedis()
+        self.client.flag_cache = RedisFlagCache(redis)
+        cache_key = self.client.flag_cache._get_cache_key("some-distinct-id", "my-flag")
+        redis.store[cache_key] = json.dumps(
+            {
+                "flag_result": {
+                    "key": "my-flag",
+                    "enabled": True,
+                    "variant": None,
+                    "payload": {"from": "legacy"},
+                    "reason": None,
+                },
+                "flag_version": self.client.flag_definition_version,
+                "timestamp": time.time(),
+            }
+        )
+        patch_flags.side_effect = RequestsTimeout("Request timed out")
+
+        flag_result = self.client.get_feature_flag_result(
+            "my-flag", "some-distinct-id", send_feature_flag_events=False
+        )
+
+        self.assertIsNone(flag_result)
+        patch_capture.assert_not_called()
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")

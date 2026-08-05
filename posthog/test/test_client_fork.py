@@ -92,6 +92,26 @@ class TestClientFork(unittest.TestCase):
 
         self.assertIsNone(client.poller)
 
+    def test_reinit_after_fork_replaces_flag_definition_locks(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        old_publication_lock = client._flag_definition_publication_lock
+        old_cache_write_lock = client._flag_definition_cache_write_lock
+        old_publication_lock.acquire()
+        old_cache_write_lock.acquire()
+
+        try:
+            client._reinit_after_fork()
+            for new_lock, old_lock in (
+                (client._flag_definition_publication_lock, old_publication_lock),
+                (client._flag_definition_cache_write_lock, old_cache_write_lock),
+            ):
+                self.assertIsNot(new_lock, old_lock)
+                self.assertTrue(new_lock.acquire(blocking=False))
+                new_lock.release()
+        finally:
+            old_cache_write_lock.release()
+            old_publication_lock.release()
+
     @mock.patch("posthog.client.reset_sessions")
     def test_reinit_after_fork_resets_sessions(self, mock_reset_sessions):
         client = Client(FAKE_TEST_API_KEY, send=False)
