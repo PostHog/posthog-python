@@ -2164,19 +2164,35 @@ class TestClient(unittest.TestCase):
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
 
-    def test_callback_flushes_are_coalesced(self):
+    def test_callback_flushes_are_coalesced_with_strongest_followup(self):
         client = Client(FAKE_TEST_API_KEY)
+        first_flush_started = threading.Event()
+        release_first_flush = threading.Event()
+        followup_complete = threading.Event()
+        timeouts = []
+
+        def flush(timeout_seconds):
+            timeouts.append(timeout_seconds)
+            if len(timeouts) == 1:
+                first_flush_started.set()
+                self.assertTrue(release_first_flush.wait(2))
+            else:
+                followup_complete.set()
 
         with (
             mock.patch.object(
                 client, "_is_lifecycle_callback_thread", return_value=True
             ),
-            mock.patch.object(client, "_start_lifecycle_thread") as start_thread,
+            mock.patch.object(client, "flush", side_effect=flush),
         ):
-            client.flush()
-            client.flush()
+            self.assertTrue(client._defer_flush_from_callback(0))
+            self.assertTrue(first_flush_started.wait(1))
+            self.assertTrue(client._defer_flush_from_callback(1))
+            self.assertTrue(client._defer_flush_from_callback(None))
+            release_first_flush.set()
+            self.assertTrue(followup_complete.wait(1))
 
-        start_thread.assert_called_once()
+        self.assertEqual(timeouts, [0, None])
 
     def test_sync_send_failure_does_not_invoke_async_on_error(self):
         on_error = mock.Mock()

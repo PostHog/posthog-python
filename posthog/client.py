@@ -661,6 +661,8 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
+        self._deferred_flush_followup = False
+        self._deferred_flush_followup_timeout: Optional[float] = None
         self._shutdown_complete_event = threading.Event()
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
@@ -1939,6 +1941,8 @@ class Client(object):
         self._deferred_lifecycle_failure = threading.Event()
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
+        self._deferred_flush_followup = False
+        self._deferred_flush_followup_timeout = None
         self._shutdown_complete_event = threading.Event()
         if shutdown_complete:
             self._shutdown_complete_event.set()
@@ -2232,15 +2236,33 @@ class Client(object):
             return False
         with self._deferred_flush_lock:
             if self._deferred_flush_pending:
+                if not self._deferred_flush_followup:
+                    self._deferred_flush_followup = True
+                    self._deferred_flush_followup_timeout = timeout_seconds
+                elif (
+                    self._deferred_flush_followup_timeout is not None
+                    and timeout_seconds is not None
+                ):
+                    self._deferred_flush_followup_timeout = max(
+                        self._deferred_flush_followup_timeout, timeout_seconds
+                    )
+                else:
+                    self._deferred_flush_followup_timeout = None
                 return True
             self._deferred_flush_pending = True
 
         def run() -> None:
-            try:
-                self.flush(timeout_seconds)
-            finally:
+            next_timeout = timeout_seconds
+            while True:
+                self.flush(next_timeout)
                 with self._deferred_flush_lock:
+                    if self._deferred_flush_followup:
+                        next_timeout = self._deferred_flush_followup_timeout
+                        self._deferred_flush_followup = False
+                        self._deferred_flush_followup_timeout = None
+                        continue
                     self._deferred_flush_pending = False
+                    return
 
         self._start_lifecycle_thread(run, "flush")
         return True
