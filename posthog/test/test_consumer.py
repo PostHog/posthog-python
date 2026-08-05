@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ except ImportError:
 
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
-from posthog.consumer import MAX_MSG_SIZE, Consumer
+from posthog.consumer import MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, APIError
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
@@ -76,7 +77,14 @@ class TestConsumer(unittest.TestCase):
                 success = consumer.upload()
 
         self.assertFalse(success)
-        self.assertEqual(logs.getvalue().strip(), "[PostHog] error uploading: boom")
+        # `capture_message_only_logs` taps the process-wide "posthog" logger and
+        # `upload()` spans a whole flush_interval, so background threads left by
+        # other tests can log into the same stream. Assert on the line under
+        # test rather than on the entire capture.
+        upload_logs = [
+            line for line in logs.getvalue().splitlines() if "error uploading" in line
+        ]
+        self.assertEqual(upload_logs, ["[PostHog] error uploading: boom"])
 
     def test_flush_interval(self) -> None:
         # Put _n_ items in the queue, pausing a little bit more than
@@ -85,12 +93,12 @@ class TestConsumer(unittest.TestCase):
         q = Queue()
         flush_interval = 0.3
         consumer = Consumer(q, TEST_API_KEY, flush_at=10, flush_interval=flush_interval)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with mock.patch.object(consumer, "request") as mock_request:
             consumer.start()
             for i in range(3):
                 q.put(_track_event("python event %d" % i))
                 time.sleep(flush_interval * 1.1)
-            self.assertEqual(mock_post.call_count, 3)
+            self.assertEqual(mock_request.call_count, 3)
 
     def test_multiple_uploads_per_interval(self) -> None:
         # Put _flush_at*2_ items in the queue at once, then pause for
@@ -165,6 +173,179 @@ class TestConsumer(unittest.TestCase):
         consumer.pause()
         self.assertFalse(consumer.running)
 
+    def test_drain_signal_returns_partial_batch_without_waiting(self) -> None:
+        # A drain request means "send what is queued now", so `next()` must not
+        # hold a below-flush_at batch back for the rest of flush_interval.
+        q = Queue()
+        signal = _DrainSignal(q)
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        consumer._set_drain_signal(signal)
+        q.put(_track_event("first"))
+        q.put(_track_event("second"))
+        signal.request()
+
+        start = time.monotonic()
+        batch = consumer.next()
+        signal.complete()
+
+        self.assertEqual(len(batch), 2)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_drain_signal_still_respects_flush_at(self) -> None:
+        # Draining must not degrade batching into one request per event.
+        q = Queue()
+        signal = _DrainSignal(q)
+        flush_at = 10
+        consumer = Consumer(q, TEST_API_KEY, flush_at=flush_at, flush_interval=30)
+        consumer._set_drain_signal(signal)
+        for i in range(flush_at * 3):
+            q.put(_track_event("python event %d" % i))
+        signal.request()
+
+        self.assertEqual(len(consumer.next()), flush_at)
+        signal.complete()
+
+    def test_completed_drain_request_restores_normal_batching(self) -> None:
+        # Once the caller completes its request, later batches must go back to
+        # normal timer-based batching instead of inheriting a stale drain.
+        q = Queue()
+        signal = _DrainSignal(q)
+        flush_interval = 0.2
+        consumer = Consumer(
+            q,
+            TEST_API_KEY,
+            flush_at=100,
+            flush_interval=flush_interval,
+        )
+        consumer._set_drain_signal(signal)
+        q.put(_track_event())
+        signal.request()
+        self.assertEqual(len(consumer.next()), 1)
+        signal.complete()
+
+        start = time.monotonic()
+        self.assertEqual(consumer.next(), [])
+        self.assertGreaterEqual(time.monotonic() - start, flush_interval * 0.5)
+
+    def test_overlapping_drain_requests_remain_active_until_all_complete(self) -> None:
+        q = Queue()
+        signal = _DrainSignal(q)
+
+        signal.request()
+        signal.request()
+        signal.complete()
+        self.assertTrue(signal.requested)
+
+        signal.complete()
+        self.assertFalse(signal.requested)
+
+    def test_consecutive_drain_requests_each_drain_immediately(self) -> None:
+        # A later flush must not be served by an earlier flush's bookkeeping.
+        q = Queue()
+        signal = _DrainSignal(q)
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        consumer._set_drain_signal(signal)
+
+        for i in range(3):
+            q.put(_track_event("python event %d" % i))
+            signal.request()
+            start = time.monotonic()
+            self.assertEqual(len(consumer.next()), 1)
+            signal.complete()
+            self.assertLess(time.monotonic() - start, 5)
+
+    def test_drain_signal_wakes_a_consumer_mid_batch(self) -> None:
+        # The realistic ordering: the consumer is already parked on a partial
+        # batch when flush() signals it.
+        q = Queue()
+        signal = _DrainSignal(q)
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        consumer._set_drain_signal(signal)
+        q.put(_track_event())
+        threading.Timer(0.1, signal.request).start()
+
+        start = time.monotonic()
+        batch = consumer.next()
+        signal.complete()
+
+        self.assertEqual(len(batch), 1)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_drain_signal_wakes_an_idle_consumer(self) -> None:
+        q = Queue()
+        signal = _DrainSignal(q)
+        consumer = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=2)
+        consumer._set_drain_signal(signal)
+        threading.Timer(0.1, signal.request).start()
+
+        start = time.monotonic()
+        batch = consumer.next()
+        signal.complete()
+
+        self.assertEqual(batch, [])
+        self.assertLess(time.monotonic() - start, 1)
+
+    def test_idle_consumer_parks_while_drain_waits_for_an_upload(self) -> None:
+        q = Queue()
+        signal = _DrainSignal(q)
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+        idle_returned = threading.Event()
+        idle_next_calls = 0
+
+        uploading = Consumer(q, TEST_API_KEY, flush_at=1, flush_interval=30)
+        idle = Consumer(q, TEST_API_KEY, flush_at=100, flush_interval=30)
+        uploading._set_drain_signal(signal)
+        idle._set_drain_signal(signal)
+
+        def blocking_request(batch) -> None:
+            upload_started.set()
+            self.assertTrue(release_upload.wait(2))
+
+        original_idle_next = idle.next
+
+        def counted_idle_next():
+            nonlocal idle_next_calls
+            batch = original_idle_next()
+            idle_next_calls += 1
+            idle_returned.set()
+            return batch
+
+        uploading.request = blocking_request
+        idle.next = counted_idle_next
+        q.put(_track_event())
+        uploading.start()
+        self.assertTrue(upload_started.wait(1))
+        idle.start()
+        signal.request()
+
+        try:
+            self.assertTrue(idle_returned.wait(1))
+            time.sleep(0.1)
+            self.assertEqual(idle_next_calls, 1)
+        finally:
+            uploading.pause()
+            idle.pause()
+            release_upload.set()
+            signal.complete()
+            uploading.join(2)
+            idle.join(2)
+
+        self.assertFalse(uploading.is_alive())
+        self.assertFalse(idle.is_alive())
+
+    def test_without_drain_signal_batching_is_unchanged(self) -> None:
+        q = Queue()
+        flush_interval = 0.3
+        consumer = Consumer(
+            q, TEST_API_KEY, flush_at=100, flush_interval=flush_interval
+        )
+        q.put(_track_event())
+
+        start = time.monotonic()
+        self.assertEqual(len(consumer.next()), 1)
+        self.assertGreaterEqual(time.monotonic() - start, flush_interval * 0.5)
+
     def test_max_batch_size(self) -> None:
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY, flush_at=100000, flush_interval=3)
@@ -181,25 +362,22 @@ class TestConsumer(unittest.TestCase):
         # Let's capture 8MB of data to trigger two batches
         n_msgs = int(8_000_000 / msg_size)
 
-        def mock_post_fn(_: str, data: str, **kwargs: Any) -> mock.Mock:
-            res = mock.Mock()
-            res.status_code = 200
-            request_size = len(data.encode())
+        def mock_send_fn(batch: list[dict[str, Any]], _path: str) -> None:
+            request_size = len(json.dumps({"batch": batch}).encode())
             # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 10% of margin
             self.assertTrue(
                 request_size < (5 * 1024 * 1024) * 1.1,
                 "batch size (%d) higher than limit" % request_size,
             )
-            return res
 
-        with mock.patch(
-            "posthog.request._session.post", side_effect=mock_post_fn
-        ) as mock_post:
+        with mock.patch.object(
+            consumer, "_send", side_effect=mock_send_fn
+        ) as mock_send:
             consumer.start()
             for _ in range(0, n_msgs + 2):
                 q.put(track)
             q.join()
-            self.assertEqual(mock_post.call_count, 2)
+            self.assertEqual(mock_send.call_count, 2)
 
     def test_request_sleeps_with_retry_after(self) -> None:
         error = APIError(429, "Too Many Requests", retry_after=5.0)

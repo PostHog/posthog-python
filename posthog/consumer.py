@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import json
 import logging
 import time
@@ -31,8 +31,54 @@ AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per event
 # in case we want to lower it in the future.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 
-
 _configure_posthog_logging()
+
+
+class _DrainSignal:
+    """Wake queue consumers while one or more drain requests are active."""
+
+    def __init__(self, queue) -> None:
+        self._queue = queue
+        self._requests = 0
+
+    def request(self) -> None:
+        with self._queue.not_empty:
+            self._requests += 1
+            self._queue.not_empty.notify_all()
+
+    def complete(self) -> None:
+        with self._queue.not_empty:
+            self._requests -= 1
+            self._queue.not_empty.notify_all()
+
+    def wake(self) -> None:
+        with self._queue.not_empty:
+            self._queue.not_empty.notify_all()
+
+    def wait_until_inactive_or_work(self, consumer) -> None:
+        with self._queue.not_empty:
+            while self._requests and not self._queue._qsize() and consumer.running:
+                self._queue.not_empty.wait()
+
+    @property
+    def requested(self) -> bool:
+        with self._queue.mutex:
+            return self._requests > 0
+
+    def get(self, timeout: float):
+        """Get an item, or wake with ``Empty`` when draining an empty queue."""
+        with self._queue.not_empty:
+            deadline = time.monotonic() + timeout
+            while not self._queue._qsize():
+                if self._requests:
+                    raise Empty
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Empty
+                self._queue.not_empty.wait(remaining)
+            item = self._queue._get()
+            self._queue.not_full.notify()
+            return item
 
 
 class Consumer(Thread):
@@ -72,6 +118,7 @@ class Consumer(Thread):
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self._drain_signal: Optional[_DrainSignal] = None
         # It's important to set running in the constructor: if we are asked to
         # pause immediately after construction, we might set running to True in
         # run() *after* we set it to False in pause... and keep running
@@ -86,12 +133,16 @@ class Consumer(Thread):
         self.log.debug("consumer is running...")
         while self.running:
             self.upload()
+            if self._drain_signal is not None:
+                self._drain_signal.wait_until_inactive_or_work(self)
 
         self.log.debug("consumer exited.")
 
     def pause(self):
         """Pause the consumer."""
         self.running = False
+        if self._drain_signal is not None:
+            self._drain_signal.wake()
 
     def upload(self):
         """Upload the next batch of items, return whether successful."""
@@ -118,6 +169,12 @@ class Consumer(Thread):
 
         return success
 
+    def _set_drain_signal(self, drain_signal: _DrainSignal) -> None:
+        self._drain_signal = drain_signal
+
+    def _draining(self) -> bool:
+        return self._drain_signal.requested if self._drain_signal is not None else False
+
     def next(self):
         """Return the next batch of items to upload."""
         queue = self.queue
@@ -127,11 +184,20 @@ class Consumer(Thread):
         total_size = 0
 
         while len(items) < self.flush_at:
-            elapsed = time.monotonic() - start_time
-            if elapsed >= self.flush_interval:
+            # While draining we take only what is already queued, never waiting
+            # for `flush_interval` to elapse or for `flush_at` to be reached.
+            draining = self._draining()
+            remaining = self.flush_interval - (time.monotonic() - start_time)
+            if not draining and remaining <= 0:
                 break
+
             try:
-                item = queue.get(block=True, timeout=self.flush_interval - elapsed)
+                if draining:
+                    item = queue.get(block=False)
+                elif self._drain_signal is not None:
+                    item = self._drain_signal.get(timeout=remaining)
+                else:
+                    item = queue.get(block=True, timeout=remaining)
                 try:
                     item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
                 except Exception:

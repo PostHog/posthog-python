@@ -277,6 +277,18 @@ class TestClient(unittest.TestCase):
     def test_empty_flush(self):
         self.client.flush()
 
+    def test_empty_flush_does_not_drain_a_later_event(self):
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_at=100, flush_interval=0.5)
+
+            client.flush()
+            client.capture("after empty flush", distinct_id="distinct_id")
+            time.sleep(0.05)
+
+            mock_post.assert_not_called()
+            client.flush()
+            mock_post.assert_called_once()
+
     def test_flush_timeout_returns_when_queue_does_not_drain(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
         client.queue.put({"event": "stuck"})
@@ -291,6 +303,48 @@ class TestClient(unittest.TestCase):
 
         client.queue.get_nowait()
         client.queue.task_done()
+
+    def test_flush_does_not_wait_for_flush_interval(self):
+        # flush() must attempt delivery now rather than letting the consumer sit
+        # on a below-flush_at batch until flush_interval elapses.
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_interval=30)
+            client.capture("event", distinct_id="distinct_id")
+
+            start = time.monotonic()
+            client.flush()
+
+            self.assertLess(time.monotonic() - start, 5)
+            self.assertTrue(client.queue.empty())
+            mock_post.assert_called_once()
+
+    def test_flush_delivers_when_flush_interval_exceeds_the_flush_timeout(self):
+        # Waiting out flush_interval meant a flush_interval longer than the
+        # flush timeout delivered nothing at all.
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_interval=30)
+            client.capture("event", distinct_id="distinct_id")
+
+            client.flush(timeout_seconds=5)
+
+            mock_post.assert_called_once()
+            self.assertEqual(client.queue.unfinished_tasks, 0)
+
+    def test_flush_keeps_batches_whole(self):
+        # Draining early must not turn a full queue into one request per event.
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_at=10, flush_interval=30)
+            for _ in range(30):
+                client.capture("event", distinct_id="distinct_id")
+
+            client.flush()
+
+            self.assertTrue(client.queue.empty())
+            batch_sizes = [
+                len(call.kwargs["batch"]) for call in mock_post.call_args_list
+            ]
+            self.assertEqual(sum(batch_sizes), 30)
+            self.assertLessEqual(len(batch_sizes), 5)
 
     def test_flush_logs_and_returns_on_unexpected_error(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
@@ -2200,6 +2254,14 @@ class TestClient(unittest.TestCase):
             client.shutdown()
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
+
+    def test_shutdown_does_not_wait_for_idle_consumers_flush_interval(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=5)
+
+        start = time.monotonic()
+        client.shutdown()
+
+        self.assertLess(time.monotonic() - start, 1)
 
     def test_shutdown_waits_for_racing_enqueue_before_draining(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
