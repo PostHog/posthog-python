@@ -57,41 +57,47 @@ class _BackgroundEventLoopRunner:
         self._startup_error: BaseException | None = None
         self._close_requested = False
         self._lock = threading.Lock()
+        self._operation_lock = threading.Lock()
 
     def run(self, awaitable: Awaitable[Any]) -> Any:
-        loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(self._await_result(awaitable), loop)
-        return future.result()
+        with self._operation_lock:
+            loop = self._ensure_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                self._await_result(awaitable), loop
+            )
+            return future.result()
 
     def close(self) -> None:
+        current = threading.current_thread()
         with self._lock:
-            loop = self._loop
-            thread = self._thread
-            if thread is None:
+            if current is self._thread and self._loop is not None:
+                self._loop.call_soon(self._loop.stop)
                 return
-            if loop is None:
-                self._close_requested = True
-            else:
-                self._loop = None
-                self._thread = None
-                self._closing_threads.add(thread)
 
-        if loop is None:
-            if thread is not threading.current_thread():
-                thread.join()
-            return
-
-        if loop.is_closed():
+        with self._operation_lock:
             with self._lock:
-                self._closing_threads.discard(thread)
-            return
+                loop = self._loop
+                thread = self._thread
+                if thread is None:
+                    return
+                if loop is None:
+                    self._close_requested = True
+                else:
+                    self._loop = None
+                    self._thread = None
+                    self._closing_threads.add(thread)
 
-        if thread is threading.current_thread():
-            loop.call_soon(loop.stop)
-            return
+            if loop is None:
+                thread.join()
+                return
 
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join()
+            if loop.is_closed():
+                with self._lock:
+                    self._closing_threads.discard(thread)
+                return
+
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join()
 
     def owns_thread(self, thread: threading.Thread) -> bool:
         with self._lock:
@@ -130,10 +136,13 @@ class _BackgroundEventLoopRunner:
             return self._loop
 
     def _run_loop(self) -> None:
+        loop = None
         try:
             loop = _ContextEventLoop()
             asyncio.set_event_loop(loop)
         except BaseException as error:
+            if loop is not None and not loop.is_closed():
+                loop.close()
             with self._lock:
                 self._startup_error = error
                 self._thread = None

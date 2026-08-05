@@ -20,30 +20,38 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
 
         awaitable.close()
 
-    def test_close_during_startup_does_not_orphan_thread(self):
+    def test_close_waits_for_run_during_startup(self):
         runner = _BackgroundEventLoopRunner()
         construction_started = threading.Event()
         release_construction = threading.Event()
+        run_errors = []
 
         def create_loop():
             construction_started.set()
             self.assertTrue(release_construction.wait(2))
             return _ContextEventLoop()
 
+        def run():
+            try:
+                runner.run(asyncio.sleep(0))
+            except BaseException as error:
+                run_errors.append(error)
+
         with mock.patch(
             "posthog._async_utils._ContextEventLoop", side_effect=create_loop
         ):
-            ensure_thread = threading.Thread(target=runner._ensure_loop)
-            ensure_thread.start()
+            run_thread = threading.Thread(target=run)
+            run_thread.start()
             self.assertTrue(construction_started.wait(1))
 
             close_thread = threading.Thread(target=runner.close)
             close_thread.start()
             release_construction.set()
-            ensure_thread.join(2)
+            run_thread.join(2)
             close_thread.join(2)
 
-        self.assertFalse(ensure_thread.is_alive())
+        self.assertFalse(run_thread.is_alive())
         self.assertFalse(close_thread.is_alive())
+        self.assertEqual(run_errors, [])
         self.assertIsNone(runner._thread)
         self.assertIsNone(runner._loop)
