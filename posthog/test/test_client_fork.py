@@ -164,20 +164,81 @@ class TestClientFork(unittest.TestCase):
             self.assertIs(client.consumers[0].queue, client.queue)
             self.assertEqual(mock_start.call_count, expected_starts)
 
-    def test_reinit_after_fork_resets_sync_send_state_for_sync_mode(self):
+    def test_reinit_after_fork_replaces_sync_mode_queue_and_locks(self):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
         lane = client._analytics_lane
         old_queue = lane.queue
         old_lock = lane._start_lock
         old_condition = lane._sync_sends_done
+        old_lifecycle_lock = client._lifecycle_lock
         lane._active_sync_sends = 1
 
         client._reinit_after_fork()
 
-        self.assertIs(lane.queue, old_queue)
+        self.assertIsNot(lane.queue, old_queue)
         self.assertEqual(lane._active_sync_sends, 0)
         self.assertIsNot(lane._start_lock, old_lock)
         self.assertIsNot(lane._sync_sends_done, old_condition)
+        self.assertIsNot(client._lifecycle_lock, old_lifecycle_lock)
+
+    def test_reinit_after_fork_replaces_locks_before_starting_poller(self):
+        client = Client(FAKE_TEST_API_KEY)
+        client.enable_local_evaluation = True
+        old_runner_lock = client._flag_definition_cache_provider_async_runner_lock
+        old_publication_lock = client._flag_definition_publication_lock
+        old_cache_write_lock = client._flag_definition_cache_write_lock
+        old_metrics_lock = client._metrics_lock
+
+        def assert_locks_replaced():
+            self.assertIsNot(
+                client._flag_definition_cache_provider_async_runner_lock,
+                old_runner_lock,
+            )
+            self.assertIsNot(
+                client._flag_definition_publication_lock, old_publication_lock
+            )
+            self.assertIsNot(
+                client._flag_definition_cache_write_lock, old_cache_write_lock
+            )
+            self.assertIsNot(client._metrics_lock, old_metrics_lock)
+
+        with mock.patch("posthog.client.Poller") as mock_poller:
+            mock_poller.return_value.start.side_effect = assert_locks_replaced
+            client._reinit_after_fork()
+
+        mock_poller.return_value.start.assert_called_once()
+
+    def test_reinit_after_fork_preserves_terminal_client_state(self):
+        client = Client(FAKE_TEST_API_KEY)
+        client.join()
+
+        with mock.patch("posthog.client.Poller") as mock_poller:
+            client._reinit_after_fork()
+
+        self.assertTrue(client._workers_joined)
+        self.assertTrue(client._analytics_lane._closed)
+        self.assertEqual(client.consumers, [])
+        self.assertIsNone(client.poller)
+        mock_poller.assert_not_called()
+        self.assertIsNone(client.capture("after join", distinct_id="distinct_id"))
+
+    def test_reinit_after_fork_normalizes_partially_closed_join_state(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        client._join_requested = True
+        client._analytics_lane._closed = True
+        client._ai_lane._closed = False
+
+        with mock.patch("posthog.client.Poller") as mock_poller:
+            client._reinit_after_fork()
+
+        self.assertFalse(client._workers_joined)
+        self.assertTrue(client._analytics_lane._closed)
+        self.assertTrue(client._ai_lane._closed)
+        self.assertEqual(client.consumers, [])
+        self.assertIsNone(client.poller)
+        mock_poller.assert_not_called()
+        self.assertIsNone(client.capture("analytics", distinct_id="distinct_id"))
+        self.assertIsNone(client._capture_ai("ai", distinct_id="distinct_id"))
 
 
 @unittest.skipUnless(

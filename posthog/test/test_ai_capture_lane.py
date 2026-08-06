@@ -314,15 +314,15 @@ class TestLaneForkRebuild(unittest.TestCase):
         )
         client.join()
 
-    def test_fork_rebuild_noop_for_sync_mode(self):
+    def test_fork_rebuild_replaces_sync_mode_queues(self):
         client = Client(TEST_API_KEY, sync_mode=True)
         old_analytics_queue = client._analytics_lane.queue
         old_ai_queue = client._ai_lane.queue
 
         client._reinit_after_fork()
 
-        self.assertIs(client._analytics_lane.queue, old_analytics_queue)
-        self.assertIs(client._ai_lane.queue, old_ai_queue)
+        self.assertIsNot(client._analytics_lane.queue, old_analytics_queue)
+        self.assertIsNot(client._ai_lane.queue, old_ai_queue)
 
 
 class TestCaptureAiEventHelper(unittest.TestCase):
