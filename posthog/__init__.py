@@ -1129,7 +1129,8 @@ def join() -> None:
     Attempt to process queued events and stop the client's background workers. Use `shutdown()` directly in most cases.
 
     Failed or undrainable events may be dropped and reported through logging or
-    ``on_error``; returning does not guarantee server receipt.
+    ``on_error``; returning does not guarantee server receipt. Lifecycle cleanup
+    is attempted once, and cleanup failures are logged without retry.
 
     Examples:
         ```python
@@ -1149,9 +1150,10 @@ def shutdown() -> None:
 
     This normally blocks until queued events have been attempted and cleanup
     finishes. Failed or undrainable events may be dropped and reported through
-    logging or ``on_error``; returning does not guarantee server receipt. Calls
-    made directly from SDK callbacks such as ``on_error`` are deferred to avoid
-    deadlocking the worker. If blocking completion is required, signal an application-owned
+    logging or ``on_error``; returning does not guarantee server receipt.
+    Lifecycle cleanup is attempted once, and cleanup failures are logged without
+    retry. Calls made directly from SDK callbacks such as ``on_error`` are deferred
+    to avoid deadlocking the worker. If blocking completion is required, signal an application-owned
     thread, return from the callback, and call ``shutdown()`` from that thread.
     Do not wait inside a callback for another thread or task calling a lifecycle
     method.

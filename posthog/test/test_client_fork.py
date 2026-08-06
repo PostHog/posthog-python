@@ -222,6 +222,24 @@ class TestClientFork(unittest.TestCase):
         mock_poller.assert_not_called()
         self.assertIsNone(client.capture("after join", distinct_id="distinct_id"))
 
+    def test_reinit_after_fork_normalizes_partially_closed_join_state(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        client._join_requested = True
+        client._analytics_lane._closed = True
+        client._ai_lane._closed = False
+
+        with mock.patch("posthog.client.Poller") as mock_poller:
+            client._reinit_after_fork()
+
+        self.assertFalse(client._workers_joined)
+        self.assertTrue(client._analytics_lane._closed)
+        self.assertTrue(client._ai_lane._closed)
+        self.assertEqual(client.consumers, [])
+        self.assertIsNone(client.poller)
+        mock_poller.assert_not_called()
+        self.assertIsNone(client.capture("analytics", distinct_id="distinct_id"))
+        self.assertIsNone(client._capture_ai("ai", distinct_id="distinct_id"))
+
 
 @unittest.skipUnless(
     hasattr(os, "fork") and hasattr(os, "register_at_fork"),

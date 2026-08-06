@@ -10,7 +10,7 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -483,13 +483,31 @@ class _Lane:
         self._drain_signal.request()
         try:
             for consumer in self.consumers:
-                consumer._pause(drain=True)
+                try:
+                    consumer._pause(drain=True)
+                except Exception:
+                    self.log.exception(
+                        "Failed to pause %s lane consumer during lifecycle cleanup",
+                        self.name,
+                    )
             for consumer in self.consumers:
                 try:
                     consumer.join()
                 except RuntimeError:
                     # consumer thread has not started
                     pass
+                except Exception:
+                    self.log.exception(
+                        "Failed to join %s lane consumer during lifecycle cleanup",
+                        self.name,
+                    )
+            try:
+                self.discard_undrainable_queued_work()
+            except Exception:
+                self.log.exception(
+                    "Failed to discard queued %s lane work during lifecycle cleanup",
+                    self.name,
+                )
         finally:
             self._drain_signal.complete()
 
@@ -499,20 +517,22 @@ class _Lane:
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
 
-    def rebuild_after_fork(self) -> None:
+    def rebuild_after_fork(self, *, closed: bool) -> None:
         """Replace fork-unsafe lane state in a forked child.
 
         Threads do not survive fork() and queue.Queue internal locks may be in
         an inconsistent state, so the queue, lock, and consumer pool are
         replaced. Inherited queue items are not retained as they'll be handled
-        by the parent process's consumers. An eager lane restarts immediately;
-        a lazy lane returns to not-started and restarts on next use.
+        by the parent process's consumers. ``closed`` normalizes every lane to
+        the client's fork-visible lifecycle state. An eager open lane restarts
+        immediately; a lazy lane returns to not-started and restarts on next use.
         """
         self.queue = Queue(self._max_queue_size)
         self.reset_sync_send_state_after_fork()
         self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
         self._started = False
+        self._closed = closed
         if self._eager_start:
             self.start()
 
@@ -718,6 +738,7 @@ class Client(object):
         self._lifecycle_owner: Optional[threading.Thread] = None
         self._workers_joined = False
         self._join_cleanup_complete = False
+        self._join_requested = False
         self._shutdown_requested = False
         self._shutdown_complete = False
         self._deferred_lifecycle_thread_pending = False
@@ -2007,8 +2028,11 @@ class Client(object):
         Python threads do not survive fork(), so each lane's queue and
         consumer pool are rebuilt (see `_Lane.rebuild_after_fork`).
         """
+        terminal_requested = (
+            self._join_requested or self._shutdown_requested or self._workers_joined
+        )
         for lane in self._lanes:
-            lane.rebuild_after_fork()
+            lane.rebuild_after_fork(closed=terminal_requested)
 
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
@@ -2046,7 +2070,7 @@ class Client(object):
         reset_sessions()
 
         # Start child threads only after replacing every lock they can touch.
-        if self._workers_joined:
+        if terminal_requested:
             self.poller = None
         elif self.enable_local_evaluation:
             self.poller = Poller(
@@ -2301,7 +2325,6 @@ class Client(object):
             self._deferred_lifecycle_thread_pending = True
 
         def run() -> None:
-            attempt = 0
             while True:
                 with self._lifecycle_lock:
                     self._deferred_lifecycle_dirty = False
@@ -2310,22 +2333,10 @@ class Client(object):
                 try:
                     self._run_lifecycle(require_shutdown=require_shutdown)
                 except BaseException:
-                    attempt += 1
-                    self.log.exception(
-                        "Deferred %s attempt %d failed", operation, attempt
-                    )
-                    with self._lifecycle_lock:
-                        if self._deferred_lifecycle_dirty:
-                            attempt = 0
-                            continue
-                        if attempt < 2:
-                            continue
-                        self._deferred_lifecycle_thread_pending = False
-                        return
+                    self.log.exception("Deferred %s failed", operation)
 
                 with self._lifecycle_lock:
                     if self._deferred_lifecycle_dirty:
-                        attempt = 0
                         continue
                     self._deferred_lifecycle_thread_pending = False
                     return
@@ -2369,32 +2380,68 @@ class Client(object):
         self._start_lifecycle_thread(run, "flush")
         return True
 
+    def _run_lifecycle_cleanup(
+        self, log_message: str, cleanup: Callable[[], None]
+    ) -> None:
+        """Attempt one cleanup step without preventing later independent steps."""
+        try:
+            cleanup()
+        except Exception:
+            self.log.exception(log_message)
+
     def _flush_or_discard_queues(self) -> None:
         for lane in self._lanes:
-            if any(consumer.is_alive() for consumer in lane.consumers):
-                lane.flush(timeout_seconds=None)
-            else:
-                lane.discard_undrainable_queued_work()
+            try:
+                if any(consumer.is_alive() for consumer in lane.consumers):
+                    lane.flush(timeout_seconds=None)
+                else:
+                    lane.discard_undrainable_queued_work()
+            except Exception:
+                self.log.exception(
+                    "Failed to drain %s lane during lifecycle cleanup", lane.name
+                )
 
-    def _join_once(self, flush_queues: bool = True) -> None:
+    def _join_once(
+        self, flush_queues: bool = True, *, lanes_prepared: bool = False
+    ) -> None:
         if not self._workers_joined:
-            for lane in self._lanes:
-                lane.close()
-            for lane in self._lanes:
-                lane.wait_for_sync_sends()
+            if not lanes_prepared:
+                for lane in self._lanes:
+                    self._run_lifecycle_cleanup(
+                        f"Failed to close {lane.name} lane during lifecycle cleanup",
+                        lane.close,
+                    )
+                for lane in self._lanes:
+                    self._run_lifecycle_cleanup(
+                        f"Failed waiting for {lane.name} synchronous sends during lifecycle cleanup",
+                        lane.wait_for_sync_sends,
+                    )
             if flush_queues:
                 self._flush_or_discard_queues()
             for lane in self._lanes:
-                lane.join()
+                self._run_lifecycle_cleanup(
+                    f"Failed to stop {lane.name} lane during lifecycle cleanup",
+                    lane.join,
+                )
+            # Ordinary cleanup failures are logged by each step. Reaching here
+            # means every worker cleanup step was attempted once.
             self._workers_joined = True
 
         if not self._join_cleanup_complete:
             if self.poller:
-                self.poller.stop()
+                self._run_lifecycle_cleanup(
+                    "Failed to stop feature flag poller during lifecycle cleanup",
+                    self.poller.stop,
+                )
 
-            # Shutdown the cache provider (release locks, cleanup)
-            self._shutdown_flag_definition_cache_provider()
-            self._unregister_duplicate_client()
+            self._run_lifecycle_cleanup(
+                "Failed to shut down feature flag cache provider during lifecycle cleanup",
+                self._shutdown_flag_definition_cache_provider,
+            )
+            self._run_lifecycle_cleanup(
+                "Failed to unregister client during lifecycle cleanup",
+                self._unregister_duplicate_client,
+            )
             self._join_cleanup_complete = True
 
     def _shutdown_once(self) -> None:
@@ -2402,22 +2449,36 @@ class Client(object):
             # Close every lane before draining any of them so no producer can be
             # admitted between a completed flush and consumer shutdown.
             for lane in self._lanes:
-                lane.close()
+                self._run_lifecycle_cleanup(
+                    f"Failed to close {lane.name} lane during shutdown", lane.close
+                )
             for lane in self._lanes:
-                lane.wait_for_sync_sends()
+                self._run_lifecycle_cleanup(
+                    f"Failed waiting for {lane.name} synchronous sends during shutdown",
+                    lane.wait_for_sync_sends,
+                )
             self._flush_or_discard_queues()
 
         if self._metrics is not None:
-            try:
-                self._metrics.flush()
-            except Exception:
-                self.log.exception("Failed to flush metrics on shutdown")
-            self._metrics.reset()
-        self._join_once(flush_queues=False)
-        self.distinct_ids_feature_flags_reported.clear()
+            self._run_lifecycle_cleanup(
+                "Failed to flush metrics on shutdown", self._metrics.flush
+            )
+            self._run_lifecycle_cleanup(
+                "Failed to reset metrics on shutdown", self._metrics.reset
+            )
+        self._join_once(flush_queues=False, lanes_prepared=True)
+        self._run_lifecycle_cleanup(
+            "Failed to clear feature flag deduplication state on shutdown",
+            self.distinct_ids_feature_flags_reported.clear,
+        )
 
         if self.exception_capture:
-            self.exception_capture.close()
+            self._run_lifecycle_cleanup(
+                "Failed to close exception capture on shutdown",
+                self.exception_capture.close,
+            )
+        # Ordinary cleanup failures are logged by each step. Reaching here
+        # means every shutdown cleanup step was attempted once.
         self._shutdown_complete = True
 
     def _run_lifecycle(self, require_shutdown: bool = False) -> None:
@@ -2499,13 +2560,16 @@ class Client(object):
         Attempt to process queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
 
         Failed or undrainable events may be dropped and reported through logging
-        or ``on_error``; returning does not guarantee server receipt.
+        or ``on_error``; returning does not guarantee server receipt. Lifecycle
+        cleanup is attempted once, and cleanup failures are logged without retry.
 
         Examples:
             ```python
             posthog.join()
             ```
         """
+        with self._lifecycle_lock:
+            self._join_requested = True
         if self._defer_lifecycle_from_callback():
             return
         self._run_lifecycle()
@@ -2518,7 +2582,8 @@ class Client(object):
         Normally this method blocks until queued events have been attempted and
         cleanup finishes. Failed or undrainable events may be dropped and
         reported through logging or ``on_error``; returning does not guarantee
-        server receipt. When called directly from an SDK callback such as
+        server receipt. Lifecycle cleanup is attempted once, and cleanup failures
+        are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
         invoked the callback. If the callback must coordinate a blocking
         shutdown, have it signal an

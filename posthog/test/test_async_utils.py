@@ -250,7 +250,7 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
         finally:
             asyncio.set_event_loop_policy(original_policy)
 
-    def test_runner_preserves_read_only_policy_loop(self):
+    def test_runner_uses_context_aware_fallback_for_read_only_policy_loop(self):
         runner = _BackgroundEventLoopRunner()
         original_policy = asyncio.get_event_loop_policy()
 
@@ -274,9 +274,11 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
 
         try:
             asyncio.set_event_loop_policy(policy)
-            self.assertIs(runner.run(running_loop()), policy.loop)
-            runner.close()
+            running = runner.run(running_loop())
+            self.assertIsNot(running, policy.loop)
+            self.assertTrue(policy.loop.is_closed())
         finally:
+            runner.close()
             asyncio.set_event_loop_policy(original_policy)
 
     def test_run_from_runner_thread_fails_instead_of_deadlocking(self):

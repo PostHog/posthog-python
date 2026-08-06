@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import asyncio
 import subprocess
@@ -2456,8 +2457,8 @@ class TestClient(unittest.TestCase):
             mock.patch.object(
                 client,
                 "_run_lifecycle",
-                side_effect=[Exception("cleanup failed"), None],
-            ),
+                side_effect=Exception("cleanup failed"),
+            ) as run_lifecycle,
             mock.patch.object(client.log, "exception") as log_exception,
         ):
             client.shutdown()
@@ -2465,9 +2466,8 @@ class TestClient(unittest.TestCase):
                 _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
             )
 
-        log_exception.assert_called_once_with(
-            "Deferred %s attempt %d failed", "shutdown", 1
-        )
+        run_lifecycle.assert_called_once_with(require_shutdown=True)
+        log_exception.assert_called_once_with("Deferred %s failed", "shutdown")
 
     def test_callback_flushes_are_coalesced_with_strongest_followup(self):
         client = Client(FAKE_TEST_API_KEY)
@@ -2544,7 +2544,7 @@ class TestClient(unittest.TestCase):
             max_retries=0,
         )
         exception_capture = mock.Mock()
-        exception_capture.close.side_effect = [Exception("cleanup failed"), None]
+        exception_capture.close.side_effect = Exception("cleanup failed")
         client.exception_capture = exception_capture
         with mock.patch.object(client.consumers[0], "request", side_effect=request):
             client.capture("first", distinct_id="distinct_id")
@@ -2557,7 +2557,7 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(sent_events, ["first", "second"])
         self.assertEqual(client.queue.unfinished_tasks, 0)
-        self.assertEqual(exception_capture.close.call_count, 2)
+        exception_capture.close.assert_called_once_with()
         self.assertTrue(all(not consumer.is_alive() for consumer in client.consumers))
 
     def test_concurrent_join_waits_for_lifecycle_owner(self):
@@ -2671,6 +2671,21 @@ class TestClient(unittest.TestCase):
         self.assertEqual(sent_events, ["first", "second"])
         self.assertEqual(client.queue.unfinished_tasks, 0)
 
+    def test_join_publishes_terminal_intent_before_closing_lanes(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        original_close = client._analytics_lane.close
+
+        def close_analytics_lane():
+            self.assertTrue(client._join_requested)
+            original_close()
+
+        with mock.patch.object(
+            client._analytics_lane, "close", side_effect=close_analytics_lane
+        ):
+            client.join()
+
+        self.assertTrue(client._join_cleanup_complete)
+
     def test_shutdown_after_join_runs_shutdown_only_cleanup(self):
         client = Client(FAKE_TEST_API_KEY)
         metrics = mock.Mock()
@@ -2739,6 +2754,38 @@ class TestClient(unittest.TestCase):
 
         self.assertFalse(join_thread.is_alive())
         self.assertTrue(executor_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_read_only_loop_falls_back_without_deadlocking(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        executor_called = threading.Event()
+
+        class ReadOnlyLoop(asyncio.SelectorEventLoop):
+            def __setattr__(self, name, value):
+                if name == "run_in_executor":
+                    raise AttributeError("run_in_executor is read-only")
+                super().__setattr__(name, value)
+
+        class AsyncProvider:
+            async def shutdown(self):
+                def reenter_join():
+                    executor_called.set()
+                    client.join()
+
+                await asyncio.get_running_loop().run_in_executor(None, reenter_join)
+
+        loop = ReadOnlyLoop()
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        with mock.patch(
+            "posthog._async_utils.asyncio.new_event_loop", return_value=loop
+        ):
+            join_thread = threading.Thread(target=client.join)
+            join_thread.start()
+            join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(executor_called.is_set())
+        self.assertTrue(loop.is_closed())
         self.assertTrue(client._join_cleanup_complete)
 
     def test_async_cache_provider_process_executor_remains_supported(self):
@@ -2858,25 +2905,26 @@ class TestClient(unittest.TestCase):
 
         self.assertTrue(client._shutdown_complete)
 
-    def test_join_retries_auxiliary_cleanup_after_failure(self):
+    def test_join_failure_does_not_retry_or_skip_later_cleanup(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
 
-        with mock.patch.object(
-            client,
-            "_shutdown_flag_definition_cache_provider",
-            side_effect=[Exception("cleanup failed"), None],
-        ) as cleanup:
+        with (
+            mock.patch.object(
+                client,
+                "_shutdown_flag_definition_cache_provider",
+                side_effect=Exception("cleanup failed"),
+            ) as cleanup,
+            mock.patch.object(client, "_unregister_duplicate_client") as unregister,
+        ):
             client.join()
-            self.assertTrue(client._workers_joined)
-            self.assertFalse(client._join_cleanup_complete)
-
             client.join()
 
         self.assertTrue(client._workers_joined)
         self.assertTrue(client._join_cleanup_complete)
-        self.assertEqual(cleanup.call_count, 2)
+        cleanup.assert_called_once_with()
+        unregister.assert_called_once_with()
 
-    def test_pending_shutdown_is_retried_when_join_cleanup_fails(self):
+    def test_pending_shutdown_continues_when_join_cleanup_fails(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         cleanup_started = threading.Event()
         release_cleanup = threading.Event()
@@ -2918,22 +2966,97 @@ class TestClient(unittest.TestCase):
         self.assertFalse(join_thread.is_alive())
         self.assertFalse(shutdown_thread.is_alive())
         self.assertEqual(join_errors, [])
-        self.assertEqual(cleanup_calls, 2)
+        self.assertEqual(cleanup_calls, 1)
         self.assertTrue(client._shutdown_complete)
 
-    def test_shutdown_retries_cleanup_before_publishing_completion(self):
+    def test_join_interruption_does_not_publish_completion(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+
+        with (
+            mock.patch.object(
+                client, "_flush_or_discard_queues", side_effect=KeyboardInterrupt
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            client.join()
+
+        self.assertFalse(client._workers_joined)
+        self.assertFalse(client._join_cleanup_complete)
+        self.assertIsNone(client._lifecycle_owner)
+
+    def test_shutdown_interruption_does_not_publish_completion(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        metrics = mock.Mock()
+        metrics.flush.side_effect = KeyboardInterrupt
+        client._metrics = metrics
+
+        with self.assertRaises(KeyboardInterrupt):
+            client.shutdown()
+
+        self.assertFalse(client._workers_joined)
+        self.assertFalse(client._join_cleanup_complete)
+        self.assertFalse(client._shutdown_complete)
+        self.assertIsNone(client._lifecycle_owner)
+
+    def test_shutdown_failure_is_terminal_and_not_retried(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         exception_capture = mock.Mock()
-        exception_capture.close.side_effect = [Exception("cleanup failed"), None]
+        exception_capture.close.side_effect = Exception("cleanup failed")
         client.exception_capture = exception_capture
 
         client.shutdown()
-        self.assertFalse(client._shutdown_complete)
-
         client.shutdown()
 
         self.assertTrue(client._shutdown_complete)
-        self.assertEqual(exception_capture.close.call_count, 2)
+        exception_capture.close.assert_called_once_with()
+
+    def test_shutdown_failure_does_not_skip_later_cleanup(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01, debug=True)
+        metrics = mock.Mock()
+        metrics.reset.side_effect = Exception("reset failed")
+        dedupe_cache = mock.Mock()
+        dedupe_cache.clear.side_effect = Exception("clear failed")
+        exception_capture = mock.Mock()
+        client._metrics = metrics
+        client.distinct_ids_feature_flags_reported = dedupe_cache
+        client.exception_capture = exception_capture
+
+        client.shutdown()
+
+        metrics.flush.assert_called_once_with()
+        metrics.reset.assert_called_once_with()
+        dedupe_cache.clear.assert_called_once_with()
+        exception_capture.close.assert_called_once_with()
+        self.assertTrue(client._workers_joined)
+        self.assertTrue(client._join_cleanup_complete)
+        self.assertTrue(client._shutdown_complete)
+
+    def test_shutdown_prepares_each_lane_once(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        close_methods = []
+        wait_methods = []
+
+        with contextlib.ExitStack() as stack:
+            for lane in client._lanes:
+                close_methods.append(
+                    stack.enter_context(
+                        mock.patch.object(lane, "close", wraps=lane.close)
+                    )
+                )
+                wait_methods.append(
+                    stack.enter_context(
+                        mock.patch.object(
+                            lane,
+                            "wait_for_sync_sends",
+                            wraps=lane.wait_for_sync_sends,
+                        )
+                    )
+                )
+            client.shutdown()
+
+        for close, wait in zip(close_methods, wait_methods):
+            close.assert_called_once_with()
+            wait.assert_called_once_with()
 
     def test_shutdown_does_not_wait_for_idle_consumers_flush_interval(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=5)
