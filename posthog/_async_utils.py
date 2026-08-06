@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import sys
 import threading
 from collections.abc import Awaitable
@@ -46,6 +47,13 @@ class _ContextEventLoop(_PlatformEventLoop):
         return super().run_in_executor(executor, call)
 
 
+class _LoopStartup:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.error: BaseException | None = None
+
+
 class _BackgroundEventLoopRunner:
     """Run awaitables to completion on a reusable background event loop."""
 
@@ -53,24 +61,35 @@ class _BackgroundEventLoopRunner:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._closing_threads: set[threading.Thread] = set()
-        self._started = threading.Event()
-        self._startup_error: BaseException | None = None
+        self._startup: _LoopStartup | None = None
         self._close_requested = False
         self._lock = threading.Lock()
 
     def run(self, awaitable: Awaitable[Any]) -> Any:
         if threading.current_thread() is self._thread:
+            self._close_awaitable(awaitable)
             raise RuntimeError("cannot synchronously run from the runner thread")
 
-        while True:
-            loop = self._ensure_loop()
-            with self._lock:
-                if loop is self._loop and not self._close_requested:
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._await_result(awaitable), loop
-                    )
-                    break
-        return future.result()
+        try:
+            while True:
+                loop = self._ensure_loop()
+                with self._lock:
+                    if loop is self._loop and not self._close_requested:
+                        wrapped = self._await_result(awaitable)
+                        try:
+                            future = asyncio.run_coroutine_threadsafe(wrapped, loop)
+                        except BaseException:
+                            wrapped.close()
+                            raise
+                        break
+        except BaseException:
+            self._close_awaitable(awaitable)
+            raise
+        try:
+            return future.result()
+        finally:
+            if future.cancelled():
+                self._close_awaitable(awaitable)
 
     def close(self) -> None:
         current = threading.current_thread()
@@ -81,7 +100,8 @@ class _BackgroundEventLoopRunner:
                 return
             self._close_requested = True
             if loop is None:
-                self._startup_error = RuntimeError("runner closed during startup")
+                if self._startup is not None:
+                    self._startup.error = RuntimeError("runner closed during startup")
             else:
                 self._loop = None
                 self._thread = None
@@ -109,6 +129,11 @@ class _BackgroundEventLoopRunner:
             return thread is self._thread or thread in self._closing_threads
 
     @staticmethod
+    def _close_awaitable(awaitable: Awaitable[Any]) -> None:
+        if inspect.iscoroutine(awaitable):
+            awaitable.close()
+
+    @staticmethod
     async def _await_result(awaitable: Awaitable[Any]) -> Any:
         return await awaitable
 
@@ -122,25 +147,32 @@ class _BackgroundEventLoopRunner:
             ):
                 return self._loop
 
+            startup: _LoopStartup
             if self._thread is None or not self._thread.is_alive():
-                self._started.clear()
-                self._startup_error = None
+                startup = _LoopStartup()
+                self._startup = startup
                 self._close_requested = False
                 self._thread = threading.Thread(
                     target=self._run_loop,
+                    args=(startup,),
                     name="PostHogBackgroundEventLoopRunner",
                     daemon=True,
                 )
                 self._thread.start()
+            else:
+                existing_startup = self._startup
+                if existing_startup is None:
+                    raise RuntimeError("event loop startup state is unavailable")
+                startup = existing_startup
 
-        self._started.wait()
-        with self._lock:
-            if self._startup_error is not None:
-                raise self._startup_error
-            assert self._loop is not None
-            return self._loop
+        startup.done.wait()
+        if startup.error is not None:
+            raise startup.error
+        if startup.loop is None:
+            raise RuntimeError("event loop startup completed without a loop")
+        return startup.loop
 
-    def _run_loop(self) -> None:
+    def _run_loop(self, startup: _LoopStartup) -> None:
         loop = None
         try:
             loop = asyncio.new_event_loop()
@@ -163,17 +195,20 @@ class _BackgroundEventLoopRunner:
             if loop is not None and not loop.is_closed():
                 loop.close()
             with self._lock:
-                self._startup_error = error
-                self._thread = None
-                self._started.set()
+                if startup.error is None:
+                    startup.error = error
+                if self._thread is threading.current_thread():
+                    self._thread = None
+                startup.done.set()
             return
 
         with self._lock:
             self._loop = loop
+            startup.loop = loop
             close_requested = self._close_requested
-            if close_requested and self._startup_error is None:
-                self._startup_error = RuntimeError("runner closed during startup")
-            self._started.set()
+            if close_requested and startup.error is None:
+                startup.error = RuntimeError("runner closed during startup")
+            startup.done.set()
 
         if close_requested:
             loop.call_soon(loop.stop)
@@ -198,4 +233,6 @@ class _BackgroundEventLoopRunner:
                     self._thread = None
                 if self._loop is loop:
                     self._loop = None
+                if self._startup is startup:
+                    self._startup = None
                 self._closing_threads.discard(current)

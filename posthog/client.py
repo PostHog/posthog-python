@@ -2279,10 +2279,10 @@ class Client(object):
             target=target,
             args=args,
             name=f"posthog-{name}",
-            daemon=False,
+            daemon=True,
         ).start()
 
-    def _defer_lifecycle_from_callback(self, name: str) -> bool:
+    def _defer_lifecycle_from_callback(self) -> bool:
         if not self._is_lifecycle_callback_thread():
             return False
         with self._lifecycle_lock:
@@ -2297,11 +2297,14 @@ class Client(object):
                 with self._lifecycle_lock:
                     self._deferred_lifecycle_dirty = False
                     require_shutdown = self._shutdown_requested
+                operation = "shutdown" if require_shutdown else "join"
                 try:
                     self._run_lifecycle(require_shutdown=require_shutdown)
                 except BaseException:
                     attempt += 1
-                    self.log.exception("Deferred %s attempt %d failed", name, attempt)
+                    self.log.exception(
+                        "Deferred %s attempt %d failed", operation, attempt
+                    )
                     with self._lifecycle_lock:
                         if self._deferred_lifecycle_dirty:
                             attempt = 0
@@ -2318,7 +2321,7 @@ class Client(object):
                     self._deferred_lifecycle_thread_pending = False
                     return
 
-        self._start_lifecycle_thread(run, name)
+        self._start_lifecycle_thread(run, "lifecycle")
         return True
 
     def _defer_flush_from_callback(self, timeout_seconds: Optional[float]) -> bool:
@@ -2455,14 +2458,17 @@ class Client(object):
     @no_throw()
     def join(self) -> None:
         """
-        Flush queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
+        Attempt to process queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
+
+        Failed or undrainable events may be dropped and reported through logging
+        or ``on_error``; returning does not guarantee server receipt.
 
         Examples:
             ```python
             posthog.join()
             ```
         """
-        if self._defer_lifecycle_from_callback("join"):
+        if self._defer_lifecycle_from_callback():
             return
         self._run_lifecycle()
 
@@ -2471,10 +2477,13 @@ class Client(object):
         """
         Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
 
-        Normally this method blocks until delivery and cleanup finish. When
-        called directly from an SDK callback such as ``on_error``, shutdown is
-        deferred to avoid blocking the worker that invoked the callback. If the
-        callback must coordinate a blocking shutdown, have it signal an
+        Normally this method blocks until queued events have been attempted and
+        cleanup finishes. Failed or undrainable events may be dropped and
+        reported through logging or ``on_error``; returning does not guarantee
+        server receipt. When called directly from an SDK callback such as
+        ``on_error``, shutdown is deferred to avoid blocking the worker that
+        invoked the callback. If the callback must coordinate a blocking
+        shutdown, have it signal an
         application-owned thread and return before that thread calls shutdown.
         Do not wait inside the callback for another thread or task that calls a
         lifecycle method.
@@ -2488,7 +2497,7 @@ class Client(object):
             if self._shutdown_complete:
                 return
             self._shutdown_requested = True
-        if self._defer_lifecycle_from_callback("shutdown"):
+        if self._defer_lifecycle_from_callback():
             return
         self._run_lifecycle(require_shutdown=True)
 

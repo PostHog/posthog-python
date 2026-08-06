@@ -2298,6 +2298,7 @@ class TestClient(unittest.TestCase):
             self.assertTrue(shutdown_run_complete.wait(1))
 
         start_thread.assert_called_once()
+        self.assertEqual(start_thread.call_args.args[1], "lifecycle")
         self.assertEqual(require_shutdown_calls, [False, True])
         self.assertTrue(
             _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
@@ -2342,6 +2343,44 @@ class TestClient(unittest.TestCase):
             _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
         )
         self.assertFalse(client._deferred_lifecycle_dirty)
+
+    def test_deferred_lifecycle_worker_is_daemon(self):
+        client = Client(FAKE_TEST_API_KEY)
+        target = mock.Mock()
+
+        with mock.patch("posthog.client.threading.Thread") as thread:
+            client._start_lifecycle_thread(target, "lifecycle")
+
+        thread.assert_called_once_with(
+            target=target,
+            args=(),
+            name="posthog-lifecycle",
+            daemon=True,
+        )
+        thread.return_value.start.assert_called_once_with()
+
+    def test_deferred_lifecycle_logs_selected_operation(self):
+        client = Client(FAKE_TEST_API_KEY)
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(
+                client,
+                "_run_lifecycle",
+                side_effect=[Exception("cleanup failed"), None],
+            ),
+            mock.patch.object(client.log, "exception") as log_exception,
+        ):
+            client.shutdown()
+            self.assertTrue(
+                _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
+            )
+
+        log_exception.assert_called_once_with(
+            "Deferred %s attempt %d failed", "shutdown", 1
+        )
 
     def test_callback_flushes_are_coalesced_with_strongest_followup(self):
         client = Client(FAKE_TEST_API_KEY)
