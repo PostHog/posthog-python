@@ -26,6 +26,15 @@ from posthog.contexts import tag
 
 # Legacy single-flag behavior remains covered here; warning emission itself is
 # asserted in test_evaluate_flags.py.
+def _wait_until(predicate, timeout=3):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
 pytestmark = [
     pytest.mark.filterwarnings(
         r"ignore:`(feature_enabled|get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
@@ -2375,7 +2384,7 @@ class TestClient(unittest.TestCase):
             release_first_send.set()
 
             self.assertTrue(callback_returned.wait(1))
-            self.assertTrue(client._shutdown_complete_event.wait(3))
+            self.assertTrue(_wait_until(lambda: client._shutdown_complete))
 
         self.assertEqual(sent_events, ["first", "second"])
         self.assertEqual(client.queue.unfinished_tasks, 0)
@@ -2679,7 +2688,6 @@ class TestClient(unittest.TestCase):
         client.join()
 
         self.assertTrue(client._shutdown_complete)
-        self.assertTrue(client._shutdown_complete_event.is_set())
 
     def test_join_retries_auxiliary_cleanup_after_failure(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
@@ -2689,8 +2697,7 @@ class TestClient(unittest.TestCase):
             "_shutdown_flag_definition_cache_provider",
             side_effect=[Exception("cleanup failed"), None],
         ) as cleanup:
-            with self.assertRaisesRegex(Exception, "cleanup failed"):
-                client.join()
+            client.join()
             self.assertTrue(client._workers_joined)
             self.assertFalse(client._join_cleanup_complete)
 
@@ -2738,11 +2745,10 @@ class TestClient(unittest.TestCase):
             release_cleanup.set()
             join_thread.join(2)
             shutdown_thread.join(3)
-            self.assertTrue(client._shutdown_complete_event.is_set())
 
         self.assertFalse(join_thread.is_alive())
         self.assertFalse(shutdown_thread.is_alive())
-        self.assertEqual(str(join_errors[0]), "cleanup failed")
+        self.assertEqual(join_errors, [])
         self.assertEqual(cleanup_calls, 2)
         self.assertTrue(client._shutdown_complete)
 
@@ -2752,15 +2758,12 @@ class TestClient(unittest.TestCase):
         exception_capture.close.side_effect = [Exception("cleanup failed"), None]
         client.exception_capture = exception_capture
 
-        with self.assertRaisesRegex(Exception, "cleanup failed"):
-            client.shutdown()
+        client.shutdown()
         self.assertFalse(client._shutdown_complete)
-        self.assertFalse(client._shutdown_complete_event.is_set())
 
         client.shutdown()
 
         self.assertTrue(client._shutdown_complete)
-        self.assertTrue(client._shutdown_complete_event.is_set())
         self.assertEqual(exception_capture.close.call_count, 2)
 
     def test_shutdown_does_not_wait_for_idle_consumers_flush_interval(self):

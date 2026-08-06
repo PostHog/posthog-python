@@ -705,14 +705,11 @@ class Client(object):
         self.sync_mode = sync_mode
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
-        self._lifecycle_in_progress = False
         self._lifecycle_owner: Optional[threading.Thread] = None
         self._workers_joined = False
         self._join_cleanup_complete = False
         self._shutdown_requested = False
         self._shutdown_complete = False
-        self._deferred_lifecycle_error: Optional[BaseException] = None
-        self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
         self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
@@ -722,7 +719,6 @@ class Client(object):
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
         self._deferred_flush_followup_timeout: Optional[float] = None
-        self._shutdown_complete_event = threading.Event()
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
@@ -2005,13 +2001,9 @@ class Client(object):
         for lane in self._lanes:
             lane.rebuild_after_fork()
 
-        shutdown_complete = self._shutdown_complete
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
-        self._lifecycle_in_progress = False
         self._lifecycle_owner = None
-        self._deferred_lifecycle_error = None
-        self._deferred_lifecycle_failure = threading.Event()
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_generation = 0
         self._lifecycle_callback_context = ContextVar(
@@ -2021,9 +2013,6 @@ class Client(object):
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
         self._deferred_flush_followup_timeout = None
-        self._shutdown_complete_event = threading.Event()
-        if shutdown_complete:
-            self._shutdown_complete_event.set()
 
         # Async runner threads do not survive fork(); recreate lazily on next async cache call.
         self._flag_definition_cache_provider_async_runner = None
@@ -2310,7 +2299,7 @@ class Client(object):
                     require_shutdown = self._shutdown_requested
                 try:
                     self._run_lifecycle(require_shutdown=require_shutdown)
-                except BaseException as error:
+                except BaseException:
                     attempt += 1
                     self.log.exception("Deferred %s attempt %d failed", name, attempt)
                     with self._lifecycle_lock:
@@ -2319,8 +2308,6 @@ class Client(object):
                             continue
                         if attempt < 2:
                             continue
-                        self._deferred_lifecycle_error = error
-                        self._deferred_lifecycle_failure.set()
                         self._deferred_lifecycle_thread_pending = False
                         return
 
@@ -2420,9 +2407,6 @@ class Client(object):
         if self.exception_capture:
             self.exception_capture.close()
         self._shutdown_complete = True
-        self._deferred_lifecycle_error = None
-        self._deferred_lifecycle_failure.clear()
-        self._shutdown_complete_event.set()
 
     def _run_lifecycle(self, require_shutdown: bool = False) -> None:
         while True:
@@ -2433,14 +2417,13 @@ class Client(object):
                     self._join_cleanup_complete or self._shutdown_complete
                 ):
                     return
-                if self._lifecycle_in_progress:
+                if self._lifecycle_owner is not None:
                     if self._is_lifecycle_callback_thread() or (
                         threading.current_thread() is self._lifecycle_owner
                     ):
                         return
                     self._lifecycle_condition.wait()
                     continue
-                self._lifecycle_in_progress = True
                 self._lifecycle_owner = threading.current_thread()
 
             try:
@@ -2460,17 +2443,16 @@ class Client(object):
                             and not run_shutdown
                         ):
                             continue
-                        self._lifecycle_in_progress = False
                         self._lifecycle_owner = None
                         self._lifecycle_condition.notify_all()
                         return
             except BaseException:
                 with self._lifecycle_condition:
-                    self._lifecycle_in_progress = False
                     self._lifecycle_owner = None
                     self._lifecycle_condition.notify_all()
                 raise
 
+    @no_throw()
     def join(self) -> None:
         """
         Flush queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
@@ -2484,6 +2466,7 @@ class Client(object):
             return
         self._run_lifecycle()
 
+    @no_throw()
     def shutdown(self) -> None:
         """
         Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
@@ -2505,9 +2488,6 @@ class Client(object):
             if self._shutdown_complete:
                 return
             self._shutdown_requested = True
-            if not self._lifecycle_in_progress:
-                self._deferred_lifecycle_error = None
-                self._deferred_lifecycle_failure.clear()
         if self._defer_lifecycle_from_callback("shutdown"):
             return
         self._run_lifecycle(require_shutdown=True)
