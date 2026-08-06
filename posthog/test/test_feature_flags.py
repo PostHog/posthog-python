@@ -6436,8 +6436,56 @@ class TestCaptureCalls(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    len(client.distinct_ids_feature_flags_reported), i % 100 + 1
+                    len(client.distinct_ids_feature_flags_reported), min(i + 1, 100)
                 )
+
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_flag_called_dedupe_survives_tracker_capacity_pressure(
+        self, patch_flags, patch_capture
+    ):
+        """Hitting the tracker's capacity must not re-open dedupe for every user.
+
+        Evicting only the oldest entry keeps the still-tracked users deduped; clearing
+        the whole tracker would make each of them emit a duplicate
+        `$feature_flag_called` on their next read.
+        """
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        client.distinct_ids_feature_flags_reported.max_size = 3
+        client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Beta Feature",
+                "key": "complex-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            }
+        ]
+
+        def flag_called_count_for(distinct_id):
+            return sum(
+                1
+                for call in patch_capture.call_args_list
+                if call.args
+                and call.args[0] == "$feature_flag_called"
+                and call.kwargs.get("distinct_id") == distinct_id
+            )
+
+        # Fill the tracker, then push one more user through to force an eviction.
+        for i in range(4):
+            client.get_feature_flag_result("complex-flag", f"user-{i}")
+
+        self.assertEqual(len(client.distinct_ids_feature_flags_reported), 3)
+        self.assertNotIn("user-0", client.distinct_ids_feature_flags_reported)
+
+        # Users still in the tracker stay deduped across the eviction.
+        for i in range(1, 4):
+            client.get_feature_flag_result("complex-flag", f"user-{i}")
+            self.assertEqual(flag_called_count_for(f"user-{i}"), 1)
+
+        # The evicted user is treated as unseen again, which is the expected cost.
+        client.get_feature_flag_result("complex-flag", "user-0")
+        self.assertEqual(flag_called_count_for("user-0"), 2)
 
 
 class TestConsistency(unittest.TestCase):
