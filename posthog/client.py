@@ -120,6 +120,17 @@ from queue import Empty, Full, Queue
 _configure_posthog_logging()
 
 MAX_DICT_SIZE = 50_000
+_ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
+_atexit_deadline: Optional[float] = None
+_atexit_deadline_lock = threading.Lock()
+
+
+def _get_atexit_deadline() -> float:
+    global _atexit_deadline
+    with _atexit_deadline_lock:
+        if _atexit_deadline is None:
+            _atexit_deadline = time.monotonic() + _ATEXIT_FLUSH_TIMEOUT_SECONDS
+        return _atexit_deadline
 
 
 def get_identity_state(passed) -> tuple[str, bool]:
@@ -468,12 +479,11 @@ class _Lane:
 
     def join(self) -> None:
         """Pause this lane's consumers and wait for them to exit."""
-        # Teardown bypasses the batching wait too, so a consumer holding a
-        # partial batch delivers it instead of exiting `flush_interval` later.
+        # Normal teardown bypasses the batching wait so a partial batch is sent.
         self._drain_signal.request()
         try:
             for consumer in self.consumers:
-                consumer.pause()
+                consumer._pause(drain=True)
             for consumer in self.consumers:
                 try:
                     consumer.join()
@@ -874,10 +884,9 @@ class Client(object):
             # On program exit, allow the consumer threads to exit cleanly.
             # This prevents exceptions and a messy shutdown when the
             # interpreter is destroyed before the daemon threads finish
-            # execution. However, it is *not* the same as flushing the queue!
-            # To guarantee all messages have been delivered, you'll still need
-            # to call flush().
-            atexit.register(self.join)
+            # execution. Exit performs only a short best-effort flush; call
+            # flush() or shutdown() explicitly when blocking completion matters.
+            atexit.register(self._atexit)
 
         lane_defaults = dict(
             api_key=self.api_key,
@@ -2454,6 +2463,35 @@ class Client(object):
                     self._lifecycle_owner = None
                     self._lifecycle_condition.notify_all()
                 raise
+
+    @no_throw()
+    def _atexit(self) -> None:
+        """Make a bounded delivery attempt, then stop daemon workers."""
+        with self._lifecycle_condition:
+            # A daemon lifecycle worker already owns cleanup. Do not wait for it
+            # at interpreter exit; the process must remain free to terminate.
+            if self._lifecycle_owner is not None:
+                return
+            self._lifecycle_owner = threading.current_thread()
+
+        try:
+            try:
+                for lane in self._lanes:
+                    lane.close()
+
+                deadline = _get_atexit_deadline()
+                for lane in self._lanes:
+                    lane.flush(max(0.0, deadline - time.monotonic()))
+            finally:
+                # Consumers are daemon threads. Publish a non-draining stop to
+                # every consumer, but do not join in-flight requests at exit.
+                for lane in self._lanes:
+                    for consumer in lane.consumers:
+                        consumer.pause()
+        finally:
+            with self._lifecycle_condition:
+                self._lifecycle_owner = None
+                self._lifecycle_condition.notify_all()
 
     @no_throw()
     def join(self) -> None:

@@ -34,6 +34,141 @@ class TestConsumer(unittest.TestCase):
         next = consumer.next()
         self.assertEqual(next, [1])
 
+    def test_next_does_not_take_queued_items_after_non_draining_pause(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=100)
+        drain_signal = _DrainSignal(q)
+        consumer._set_drain_signal(drain_signal)
+        for item in range(10):
+            q.put(item)
+
+        consumer.pause()
+
+        self.assertEqual(consumer.next(), [])
+        self.assertEqual(q.qsize(), 10)
+        self.assertEqual(q.unfinished_tasks, 10)
+
+    def test_non_draining_pause_overrides_active_flush_signal(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=100)
+        drain_signal = _DrainSignal(q)
+        consumer._set_drain_signal(drain_signal)
+        q.put(_track_event())
+
+        drain_signal.request()
+        consumer.pause()
+        try:
+            self.assertEqual(consumer.next(), [])
+            self.assertEqual(q.qsize(), 1)
+            self.assertEqual(q.unfinished_tasks, 1)
+        finally:
+            drain_signal.complete()
+
+    def test_non_draining_pause_between_drain_snapshot_and_dequeue(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=100)
+        drain_signal = _DrainSignal(q)
+        consumer._set_drain_signal(drain_signal)
+        q.put(_track_event())
+        drain_signal.request()
+        original_get = drain_signal.get
+
+        def pause_then_get(*args, **kwargs):
+            consumer.pause()
+            return original_get(*args, **kwargs)
+
+        with mock.patch.object(drain_signal, "get", side_effect=pause_then_get):
+            self.assertEqual(consumer.next(), [])
+
+        drain_signal.complete()
+        self.assertEqual(q.qsize(), 1)
+        self.assertEqual(q.unfinished_tasks, 1)
+
+    def test_pause_publishes_stop_under_queue_dequeue_lock(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "")
+        drain_signal = _DrainSignal(q)
+        stop_started = threading.Event()
+        original_stop = drain_signal.stop
+
+        def observed_stop(target, drain):
+            stop_started.set()
+            original_stop(target, drain)
+
+        drain_signal.stop = observed_stop  # type: ignore[method-assign]
+        consumer._set_drain_signal(drain_signal)
+
+        with q.mutex:
+            pause_thread = threading.Thread(target=consumer.pause)
+            pause_thread.start()
+            self.assertTrue(stop_started.wait(1))
+            self.assertTrue(consumer.running)
+
+        pause_thread.join(1)
+        self.assertFalse(pause_thread.is_alive())
+        self.assertFalse(consumer.running)
+
+    def test_non_draining_pause_discards_buffered_partial_batch(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=100, flush_interval=60)
+        consumer._set_drain_signal(_DrainSignal(q))
+        request_called = threading.Event()
+        consumer.request = lambda batch: request_called.set()  # type: ignore[method-assign]
+        consumer.start()
+        q.put(_track_event())
+
+        deadline = time.monotonic() + 1
+        while not q.empty():
+            if time.monotonic() >= deadline:
+                self.fail("consumer did not buffer the queued event")
+            time.sleep(0.001)
+
+        consumer.pause()
+        consumer.join(1)
+
+        self.assertFalse(consumer.is_alive())
+        self.assertFalse(request_called.is_set())
+        self.assertEqual(q.unfinished_tasks, 0)
+
+    def test_pause_does_not_wait_for_active_request(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=1)
+        consumer._set_drain_signal(_DrainSignal(q))
+        request_started = threading.Event()
+        release_request = threading.Event()
+
+        def request(batch):
+            request_started.set()
+            self.assertTrue(release_request.wait(2))
+
+        consumer.request = request  # type: ignore[method-assign]
+        consumer.start()
+        q.put(_track_event())
+        self.assertTrue(request_started.wait(1))
+
+        consumer.pause()
+
+        self.assertFalse(consumer.running)
+        self.assertTrue(consumer.is_alive())
+        release_request.set()
+        consumer.join(1)
+        self.assertFalse(consumer.is_alive())
+
+    def test_next_still_takes_queued_items_when_paused_for_drain(self) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=100)
+        drain_signal = _DrainSignal(q)
+        consumer._set_drain_signal(drain_signal)
+        for item in range(10):
+            q.put(item)
+
+        drain_signal.request()
+        consumer._pause(drain=True)
+        try:
+            self.assertEqual(consumer.next(), list(range(10)))
+        finally:
+            drain_signal.complete()
+
     def test_next_limit(self) -> None:
         q = Queue()
         flush_at = 50

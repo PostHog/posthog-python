@@ -1,5 +1,8 @@
 import logging
 import asyncio
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 import unittest
@@ -2248,6 +2251,90 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client.queue.empty())
         for consumer in client.consumers:
             self.assertFalse(consumer.is_alive())
+
+    def test_atexit_registers_bounded_worker_cleanup(self):
+        with mock.patch("posthog.client.atexit.register") as register:
+            client = Client(FAKE_TEST_API_KEY)
+
+        register.assert_called_once_with(client._atexit)
+        self.addCleanup(client.shutdown)
+
+    def test_atexit_bounds_flush_and_stops_consumers_without_joining(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        lanes = [mock.Mock(), mock.Mock()]
+        for lane in lanes:
+            lane.consumers = [mock.Mock(), mock.Mock()]
+        client._lanes = lanes
+
+        client._atexit()
+
+        for lane in lanes:
+            lane.close.assert_called_once_with()
+            lane.flush.assert_called_once()
+            timeout = lane.flush.call_args.args[0]
+            self.assertGreaterEqual(timeout, 0)
+            self.assertLessEqual(timeout, 1)
+            lane.wait_for_sync_sends.assert_not_called()
+            lane.join.assert_not_called()
+            for consumer in lane.consumers:
+                consumer.pause.assert_called_once_with()
+
+    def test_atexit_subprocess_does_not_drain_queued_backlog(self):
+        script = textwrap.dedent(
+            """
+            import threading
+            import time
+            from unittest import mock
+
+            from posthog.client import Client
+            from posthog.consumer import Consumer
+
+            with mock.patch.object(Consumer, "start"):
+                clients = [
+                    Client(f"test-key-{index}", flush_at=100, flush_interval=60)
+                    for index in range(3)
+                ]
+
+            for client in clients:
+                consumer = client.consumers[0]
+                consumer.request = lambda batch: time.sleep(10)
+                consumer.start()
+            time.sleep(0.1)
+
+            queues = [client.queue for client in clients]
+            for queue in queues:
+                for index in range(10):
+                    queue.put({"event": str(index), "distinct_id": "test"})
+
+            deadline = time.monotonic() + 1
+            while any(not queue.empty() for queue in queues):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("consumer did not buffer the queued backlog")
+                time.sleep(0.001)
+            """
+        )
+
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+
+    def test_atexit_does_not_wait_for_active_lifecycle_owner(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        owner = mock.Mock()
+        client._lifecycle_owner = owner
+
+        lane = mock.Mock()
+        client._lanes = [lane]
+
+        client._atexit()
+
+        lane.close.assert_not_called()
+        lane.flush.assert_not_called()
+        self.assertIs(client._lifecycle_owner, owner)
 
     def test_shutdown_clears_feature_flag_called_dedupe_cache(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
