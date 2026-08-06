@@ -480,36 +480,58 @@ class _Lane:
     def join(self) -> None:
         """Pause this lane's consumers and wait for them to exit."""
         # Normal teardown bypasses the batching wait so a partial batch is sent.
-        self._drain_signal.request()
+        errors: list[Exception] = []
+        drain_requested = False
         try:
-            for consumer in self.consumers:
-                try:
-                    consumer._pause(drain=True)
-                except Exception:
-                    self.log.exception(
-                        "Failed to pause %s lane consumer during lifecycle cleanup",
-                        self.name,
-                    )
-            for consumer in self.consumers:
-                try:
-                    consumer.join()
-                except RuntimeError:
-                    # consumer thread has not started
-                    pass
-                except Exception:
-                    self.log.exception(
-                        "Failed to join %s lane consumer during lifecycle cleanup",
-                        self.name,
-                    )
+            self._drain_signal.request()
+            drain_requested = True
+        except Exception as error:
+            self.log.exception(
+                "Failed to request %s lane drain during lifecycle cleanup", self.name
+            )
+            errors.append(error)
+
+        for consumer in self.consumers:
             try:
-                self.discard_undrainable_queued_work()
-            except Exception:
+                consumer._pause(drain=True)
+            except Exception as error:
                 self.log.exception(
-                    "Failed to discard queued %s lane work during lifecycle cleanup",
+                    "Failed to pause %s lane consumer during lifecycle cleanup",
                     self.name,
                 )
-        finally:
-            self._drain_signal.complete()
+                errors.append(error)
+        for consumer in self.consumers:
+            try:
+                consumer.join()
+            except RuntimeError:
+                # consumer thread has not started
+                pass
+            except Exception as error:
+                self.log.exception(
+                    "Failed to join %s lane consumer during lifecycle cleanup",
+                    self.name,
+                )
+                errors.append(error)
+        try:
+            self.discard_undrainable_queued_work()
+        except Exception as error:
+            self.log.exception(
+                "Failed to discard queued %s lane work during lifecycle cleanup",
+                self.name,
+            )
+            errors.append(error)
+        if drain_requested:
+            try:
+                self._drain_signal.complete()
+            except Exception as error:
+                self.log.exception(
+                    "Failed to complete %s lane drain during lifecycle cleanup",
+                    self.name,
+                )
+                errors.append(error)
+
+        if errors:
+            raise errors[0]
 
     def reset_sync_send_state_after_fork(self) -> None:
         """Replace sync-send state inherited from threads that did not survive fork."""
@@ -741,6 +763,7 @@ class Client(object):
         self._join_requested = False
         self._shutdown_requested = False
         self._shutdown_complete = False
+        self._lifecycle_cleanup_failed = False
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_dirty = False
         self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
@@ -2381,28 +2404,37 @@ class Client(object):
         return True
 
     def _run_lifecycle_cleanup(
-        self, log_message: str, cleanup: Callable[[], None]
+        self,
+        log_message: str,
+        cleanup: Callable[[], None],
+        errors: list[Exception],
     ) -> None:
         """Attempt one cleanup step without preventing later independent steps."""
         try:
             cleanup()
-        except Exception:
+        except Exception as error:
             self.log.exception(log_message)
+            errors.append(error)
 
-    def _flush_or_discard_queues(self) -> None:
+    def _flush_or_discard_queues(self, errors: list[Exception]) -> None:
         for lane in self._lanes:
             try:
                 if any(consumer.is_alive() for consumer in lane.consumers):
                     lane.flush(timeout_seconds=None)
                 else:
                     lane.discard_undrainable_queued_work()
-            except Exception:
+            except Exception as error:
                 self.log.exception(
                     "Failed to drain %s lane during lifecycle cleanup", lane.name
                 )
+                errors.append(error)
 
     def _join_once(
-        self, flush_queues: bool = True, *, lanes_prepared: bool = False
+        self,
+        errors: list[Exception],
+        flush_queues: bool = True,
+        *,
+        lanes_prepared: bool = False,
     ) -> None:
         if not self._workers_joined:
             if not lanes_prepared:
@@ -2410,18 +2442,21 @@ class Client(object):
                     self._run_lifecycle_cleanup(
                         f"Failed to close {lane.name} lane during lifecycle cleanup",
                         lane.close,
+                        errors,
                     )
                 for lane in self._lanes:
                     self._run_lifecycle_cleanup(
                         f"Failed waiting for {lane.name} synchronous sends during lifecycle cleanup",
                         lane.wait_for_sync_sends,
+                        errors,
                     )
             if flush_queues:
-                self._flush_or_discard_queues()
+                self._flush_or_discard_queues(errors)
             for lane in self._lanes:
                 self._run_lifecycle_cleanup(
                     f"Failed to stop {lane.name} lane during lifecycle cleanup",
                     lane.join,
+                    errors,
                 )
             # Ordinary cleanup failures are logged by each step. Reaching here
             # means every worker cleanup step was attempted once.
@@ -2432,50 +2467,58 @@ class Client(object):
                 self._run_lifecycle_cleanup(
                     "Failed to stop feature flag poller during lifecycle cleanup",
                     self.poller.stop,
+                    errors,
                 )
 
             self._run_lifecycle_cleanup(
                 "Failed to shut down feature flag cache provider during lifecycle cleanup",
                 self._shutdown_flag_definition_cache_provider,
+                errors,
             )
             self._run_lifecycle_cleanup(
                 "Failed to unregister client during lifecycle cleanup",
                 self._unregister_duplicate_client,
+                errors,
             )
             self._join_cleanup_complete = True
 
-    def _shutdown_once(self) -> None:
+    def _shutdown_once(self, errors: list[Exception]) -> None:
         if not self._workers_joined:
             # Close every lane before draining any of them so no producer can be
             # admitted between a completed flush and consumer shutdown.
             for lane in self._lanes:
                 self._run_lifecycle_cleanup(
-                    f"Failed to close {lane.name} lane during shutdown", lane.close
+                    f"Failed to close {lane.name} lane during shutdown",
+                    lane.close,
+                    errors,
                 )
             for lane in self._lanes:
                 self._run_lifecycle_cleanup(
                     f"Failed waiting for {lane.name} synchronous sends during shutdown",
                     lane.wait_for_sync_sends,
+                    errors,
                 )
-            self._flush_or_discard_queues()
+            self._flush_or_discard_queues(errors)
 
         if self._metrics is not None:
             self._run_lifecycle_cleanup(
-                "Failed to flush metrics on shutdown", self._metrics.flush
+                "Failed to flush metrics on shutdown", self._metrics.flush, errors
             )
             self._run_lifecycle_cleanup(
-                "Failed to reset metrics on shutdown", self._metrics.reset
+                "Failed to reset metrics on shutdown", self._metrics.reset, errors
             )
-        self._join_once(flush_queues=False, lanes_prepared=True)
+        self._join_once(errors, flush_queues=False, lanes_prepared=True)
         self._run_lifecycle_cleanup(
             "Failed to clear feature flag deduplication state on shutdown",
             self.distinct_ids_feature_flags_reported.clear,
+            errors,
         )
 
         if self.exception_capture:
             self._run_lifecycle_cleanup(
                 "Failed to close exception capture on shutdown",
                 self.exception_capture.close,
+                errors,
             )
         # Ordinary cleanup failures are logged by each step. Reaching here
         # means every shutdown cleanup step was attempted once.
@@ -2485,10 +2528,14 @@ class Client(object):
         while True:
             with self._lifecycle_condition:
                 if require_shutdown and self._shutdown_complete:
+                    if self.debug and self._lifecycle_cleanup_failed:
+                        raise RuntimeError("client lifecycle cleanup failed")
                     return
                 if not require_shutdown and (
                     self._join_cleanup_complete or self._shutdown_complete
                 ):
+                    if self.debug and self._lifecycle_cleanup_failed:
+                        raise RuntimeError("client lifecycle cleanup failed")
                     return
                 if self._lifecycle_owner is not None:
                     if self._is_lifecycle_callback_thread() or (
@@ -2500,14 +2547,15 @@ class Client(object):
                 self._lifecycle_owner = threading.current_thread()
 
             try:
+                errors: list[Exception] = []
                 while True:
                     with self._lifecycle_lock:
                         run_shutdown = self._shutdown_requested
 
                     if run_shutdown:
-                        self._shutdown_once()
+                        self._shutdown_once(errors)
                     else:
-                        self._join_once()
+                        self._join_once(errors)
 
                     with self._lifecycle_condition:
                         if (
@@ -2516,6 +2564,9 @@ class Client(object):
                             and not run_shutdown
                         ):
                             continue
+                        if errors:
+                            self._lifecycle_cleanup_failed = True
+                            raise errors[0]
                         self._lifecycle_owner = None
                         self._lifecycle_condition.notify_all()
                         return
@@ -2598,6 +2649,8 @@ class Client(object):
         """
         with self._lifecycle_lock:
             if self._shutdown_complete:
+                if self.debug and self._lifecycle_cleanup_failed:
+                    raise RuntimeError("client lifecycle cleanup failed")
                 return
             self._shutdown_requested = True
         if self._defer_lifecycle_from_callback():

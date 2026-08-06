@@ -2924,6 +2924,49 @@ class TestClient(unittest.TestCase):
         cleanup.assert_called_once_with()
         unregister.assert_called_once_with()
 
+    def test_concurrent_debug_join_callers_observe_cleanup_failure(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01, debug=True)
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+        owner_errors = []
+        waiter_errors = []
+
+        def cleanup():
+            cleanup_started.set()
+            self.assertTrue(release_cleanup.wait(2))
+            raise ValueError("cleanup failed")
+
+        def run_join(errors):
+            try:
+                client.join()
+            except Exception as error:
+                errors.append(error)
+
+        with mock.patch.object(
+            client,
+            "_shutdown_flag_definition_cache_provider",
+            side_effect=cleanup,
+        ):
+            owner = threading.Thread(target=run_join, args=(owner_errors,))
+            waiter = threading.Thread(target=run_join, args=(waiter_errors,))
+            owner.start()
+            self.assertTrue(cleanup_started.wait(1))
+            waiter.start()
+            time.sleep(0.05)
+            self.assertTrue(waiter.is_alive())
+
+            release_cleanup.set()
+            owner.join(2)
+            waiter.join(2)
+
+        self.assertFalse(owner.is_alive())
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(len(owner_errors), 1)
+        self.assertRegex(str(owner_errors[0]), "cleanup failed")
+        self.assertEqual(len(waiter_errors), 1)
+        self.assertRegex(str(waiter_errors[0]), "client lifecycle cleanup failed")
+        self.assertTrue(client._join_cleanup_complete)
+
     def test_pending_shutdown_continues_when_join_cleanup_fails(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
         cleanup_started = threading.Event()
@@ -3010,7 +3053,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client._shutdown_complete)
         exception_capture.close.assert_called_once_with()
 
-    def test_shutdown_failure_does_not_skip_later_cleanup(self):
+    def test_shutdown_failure_is_raised_after_later_cleanup_in_debug_mode(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01, debug=True)
         metrics = mock.Mock()
         metrics.reset.side_effect = Exception("reset failed")
@@ -3021,7 +3064,10 @@ class TestClient(unittest.TestCase):
         client.distinct_ids_feature_flags_reported = dedupe_cache
         client.exception_capture = exception_capture
 
-        client.shutdown()
+        with self.assertRaisesRegex(Exception, "reset failed"):
+            client.shutdown()
+        with self.assertRaisesRegex(RuntimeError, "client lifecycle cleanup failed"):
+            client.shutdown()
 
         metrics.flush.assert_called_once_with()
         metrics.reset.assert_called_once_with()
@@ -3030,6 +3076,30 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client._workers_joined)
         self.assertTrue(client._join_cleanup_complete)
         self.assertTrue(client._shutdown_complete)
+
+    def test_lane_join_raises_first_failure_after_attempting_later_cleanup(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        lane = client._analytics_lane
+        consumer = mock.Mock()
+        first_error = ValueError("pause failed")
+        consumer._pause.side_effect = first_error
+        lane.consumers = [consumer]
+
+        with (
+            mock.patch.object(lane, "discard_undrainable_queued_work") as discard,
+            mock.patch.object(
+                lane._drain_signal,
+                "complete",
+                side_effect=RuntimeError("complete failed"),
+            ) as complete,
+            self.assertRaises(ValueError) as raised,
+        ):
+            lane.join()
+
+        self.assertIs(raised.exception, first_error)
+        consumer.join.assert_called_once_with()
+        discard.assert_called_once_with()
+        complete.assert_called_once_with()
 
     def test_shutdown_prepares_each_lane_once(self):
         client = Client(FAKE_TEST_API_KEY, send=False)
