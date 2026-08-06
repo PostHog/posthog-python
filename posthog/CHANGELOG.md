@@ -1,5 +1,11 @@
 # posthog
 
+## 7.38.1 — 2026-08-06
+
+### Patch changes
+
+- [55370ee](https://github.com/posthog/posthog-python/commit/55370ee0b0160513baf79b56d3475449d33f6c66) fix: prevent client lifecycle deadlocks when error callbacks, concurrent `join()`/`shutdown()` calls, or forked sync-mode clients interact with queue and worker teardown. — Thanks @marandaneto!
+
 ## 7.38.0 — 2026-08-05
 
 ### Minor changes
