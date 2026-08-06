@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-import sys
 import threading
 from collections.abc import Awaitable
 from contextvars import Context, copy_context
@@ -33,18 +32,6 @@ class _ContextExecutorCall:
         # Context objects are not picklable and are process-local. Executors
         # that serialize work reconstruct a plain call instead.
         return (_PlainExecutorCall, (self._func, self._args, self._kwargs))
-
-
-if sys.platform == "win32":
-    from asyncio.windows_events import ProactorEventLoop as _PlatformEventLoop
-else:
-    _PlatformEventLoop = asyncio.SelectorEventLoop
-
-
-class _ContextEventLoop(_PlatformEventLoop):
-    def run_in_executor(self, executor, func, *args):  # type: ignore[override]
-        call = _ContextExecutorCall(copy_context(), func, args)
-        return super().run_in_executor(executor, call)
 
 
 class _LoopStartup:
@@ -185,11 +172,10 @@ class _BackgroundEventLoopRunner:
             try:
                 setattr(loop, "run_in_executor", run_in_executor)
             except (AttributeError, TypeError):
-                # Preserve custom policy loops when they are extensible. For a
-                # read-only implementation, use the platform-equivalent loop
-                # so explicit executors retain callback context safely.
-                loop.close()
-                loop = _ContextEventLoop()
+                # Some policy-provided loops expose a read-only implementation.
+                # Preserve that loop rather than silently replacing its policy
+                # semantics; executor context propagation is best-effort there.
+                pass
             asyncio.set_event_loop(loop)
         except BaseException as error:
             if loop is not None and not loop.is_closed():

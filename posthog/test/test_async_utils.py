@@ -250,6 +250,35 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
         finally:
             asyncio.set_event_loop_policy(original_policy)
 
+    def test_runner_preserves_read_only_policy_loop(self):
+        runner = _BackgroundEventLoopRunner()
+        original_policy = asyncio.get_event_loop_policy()
+
+        class ReadOnlyLoop(asyncio.SelectorEventLoop):
+            def __setattr__(self, name, value):
+                if name == "run_in_executor":
+                    raise AttributeError("run_in_executor is read-only")
+                super().__setattr__(name, value)
+
+        class Policy(asyncio.DefaultEventLoopPolicy):
+            loop = None
+
+            def new_event_loop(self):
+                self.loop = ReadOnlyLoop()
+                return self.loop
+
+        policy = Policy()
+
+        async def running_loop():
+            return asyncio.get_running_loop()
+
+        try:
+            asyncio.set_event_loop_policy(policy)
+            self.assertIs(runner.run(running_loop()), policy.loop)
+            runner.close()
+        finally:
+            asyncio.set_event_loop_policy(original_policy)
+
     def test_run_from_runner_thread_fails_instead_of_deadlocking(self):
         runner = _BackgroundEventLoopRunner()
 
