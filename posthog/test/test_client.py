@@ -2299,6 +2299,49 @@ class TestClient(unittest.TestCase):
 
         start_thread.assert_called_once()
         self.assertEqual(require_shutdown_calls, [False, True])
+        self.assertTrue(
+            _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
+        )
+        self.assertFalse(client._deferred_lifecycle_dirty)
+
+    def test_callback_shutdown_escalates_failed_deferred_join(self):
+        client = Client(FAKE_TEST_API_KEY)
+        first_run_started = threading.Event()
+        release_first_run = threading.Event()
+        shutdown_run_complete = threading.Event()
+        require_shutdown_calls = []
+
+        def run_lifecycle(require_shutdown=False):
+            require_shutdown_calls.append(require_shutdown)
+            if len(require_shutdown_calls) == 1:
+                first_run_started.set()
+                self.assertTrue(release_first_run.wait(2))
+                raise Exception("join cleanup failed")
+            shutdown_run_complete.set()
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(client, "_run_lifecycle", side_effect=run_lifecycle),
+            mock.patch.object(
+                client,
+                "_start_lifecycle_thread",
+                wraps=client._start_lifecycle_thread,
+            ) as start_thread,
+        ):
+            client.join()
+            self.assertTrue(first_run_started.wait(1))
+            client.shutdown()
+            release_first_run.set()
+            self.assertTrue(shutdown_run_complete.wait(1))
+
+        start_thread.assert_called_once()
+        self.assertEqual(require_shutdown_calls, [False, True])
+        self.assertTrue(
+            _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
+        )
+        self.assertFalse(client._deferred_lifecycle_dirty)
 
     def test_callback_flushes_are_coalesced_with_strongest_followup(self):
         client = Client(FAKE_TEST_API_KEY)

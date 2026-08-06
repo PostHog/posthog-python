@@ -711,7 +711,7 @@ class Client(object):
         self._shutdown_requested = False
         self._shutdown_complete = False
         self._deferred_lifecycle_thread_pending = False
-        self._deferred_lifecycle_generation = 0
+        self._deferred_lifecycle_dirty = False
         self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
             "posthog_lifecycle_callback", default=False
         )
@@ -2005,7 +2005,7 @@ class Client(object):
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
         self._lifecycle_owner = None
         self._deferred_lifecycle_thread_pending = False
-        self._deferred_lifecycle_generation = 0
+        self._deferred_lifecycle_dirty = False
         self._lifecycle_callback_context = ContextVar(
             "posthog_lifecycle_callback", default=False
         )
@@ -2286,7 +2286,7 @@ class Client(object):
         if not self._is_lifecycle_callback_thread():
             return False
         with self._lifecycle_lock:
-            self._deferred_lifecycle_generation += 1
+            self._deferred_lifecycle_dirty = True
             if self._deferred_lifecycle_thread_pending:
                 return True
             self._deferred_lifecycle_thread_pending = True
@@ -2295,7 +2295,7 @@ class Client(object):
             attempt = 0
             while True:
                 with self._lifecycle_lock:
-                    generation = self._deferred_lifecycle_generation
+                    self._deferred_lifecycle_dirty = False
                     require_shutdown = self._shutdown_requested
                 try:
                     self._run_lifecycle(require_shutdown=require_shutdown)
@@ -2303,7 +2303,7 @@ class Client(object):
                     attempt += 1
                     self.log.exception("Deferred %s attempt %d failed", name, attempt)
                     with self._lifecycle_lock:
-                        if generation != self._deferred_lifecycle_generation:
+                        if self._deferred_lifecycle_dirty:
                             attempt = 0
                             continue
                         if attempt < 2:
@@ -2312,7 +2312,7 @@ class Client(object):
                         return
 
                 with self._lifecycle_lock:
-                    if generation != self._deferred_lifecycle_generation:
+                    if self._deferred_lifecycle_dirty:
                         attempt = 0
                         continue
                     self._deferred_lifecycle_thread_pending = False
