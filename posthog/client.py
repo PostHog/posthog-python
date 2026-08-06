@@ -1652,8 +1652,10 @@ class Client(object):
         Identify a group and set its properties.
 
         Args:
-            group_type: The type of group (e.g., 'company', 'team').
-            group_key: The unique identifier for the group.
+            group_type: The type of group (e.g., 'company', 'team'). Required -
+                the call is dropped with a warning if it is missing or empty.
+            group_key: The unique identifier for the group. Required - the call
+                is dropped with a warning if it is missing or empty.
             properties: A dictionary of properties to set on the group.
             timestamp: The timestamp of the event.
             uuid: A unique identifier for the event. If provided, it must be a
@@ -1675,6 +1677,18 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
+        if not stringify_id(group_type):
+            self.log.warning(
+                "group_identify() called without a group_type, dropping the $groupidentify event"
+            )
+            return None
+
+        if not stringify_id(group_key):
+            self.log.warning(
+                "group_identify() called without a group_key, dropping the $groupidentify event"
+            )
+            return None
+
         properties = properties or {}
 
         # group_identify is purposefully always personful

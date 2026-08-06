@@ -578,8 +578,10 @@ def group_identify(
     Set properties on a group.
 
     Args:
-        group_type: Type of your group
-        group_key: Unique identifier of the group
+        group_type: Type of your group. Required - the call is dropped with a
+            warning if it is missing or empty.
+        group_key: Unique identifier of the group. Required - the call is
+            dropped with a warning if it is missing or empty.
         properties: Properties to set on the group
         timestamp: Optional timestamp for the event
         uuid: Optional UUID for the event

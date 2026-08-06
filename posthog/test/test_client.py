@@ -1893,6 +1893,49 @@ class TestClient(unittest.TestCase):
             )
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
 
+    @parameterized.expand(
+        [
+            ("none", None),
+            ("empty_string", ""),
+        ]
+    )
+    def test_group_identify_without_group_type_is_dropped(self, _name, group_type):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.group_identify(group_type, "id:5")
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("group_type", logs.output[0])
+
+    @parameterized.expand(
+        [
+            ("none", None),
+            ("empty_string", ""),
+        ]
+    )
+    def test_group_identify_without_group_key_is_dropped(self, _name, group_key):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.group_identify("organization", group_key)
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("group_key", logs.output[0])
+
+    def test_group_identify_accepts_falsy_non_string_group_key(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.group_identify("organization", 0)
+            self.assertIsNotNone(msg_uuid)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            # The group key is validated, not normalized - it goes out as passed.
+            self.assertEqual(msg["properties"]["$group_key"], 0)
+
     def test_basic_alias(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
