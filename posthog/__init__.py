@@ -310,7 +310,9 @@ Attributes:
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
     on_error: Optional callback invoked by background consumers when event upload
-        fails.
+        fails. Keep it short and non-blocking. Lifecycle methods can be called
+        directly and will be deferred, but the callback must not wait for another
+        thread or task that calls ``flush()``, ``join()``, or ``shutdown()``.
     debug: Enable verbose SDK logging and re-raise errors from public APIs.
     send: If False, queueing succeeds but events are not sent to PostHog.
     sync_mode: If True, send events synchronously instead of using background
@@ -612,7 +614,7 @@ def group_identify(
 
 
 def alias(
-    previous_id: str,
+    previous_id: ID_TYPES,
     distinct_id: str,
     timestamp: Optional[datetime.datetime] = None,
     uuid: Optional[str] = None,
@@ -1124,7 +1126,11 @@ def flush(timeout_seconds: Optional[float] = 10) -> None:
 
 def join() -> None:
     """
-    Block program until the client clears the queue. Used during program shutdown. You should use `shutdown()` directly in most cases.
+    Attempt to process queued events and stop the client's background workers. Use `shutdown()` directly in most cases.
+
+    Failed or undrainable events may be dropped and reported through logging or
+    ``on_error``; returning does not guarantee server receipt. Lifecycle cleanup
+    is attempted once, and cleanup failures are logged without retry.
 
     Examples:
         ```python
@@ -1141,6 +1147,16 @@ def join() -> None:
 def shutdown() -> None:
     """
     Flush all messages and cleanly shutdown the client.
+
+    This normally blocks until queued events have been attempted and cleanup
+    finishes. Failed or undrainable events may be dropped and reported through
+    logging or ``on_error``; returning does not guarantee server receipt.
+    Lifecycle cleanup is attempted once, and cleanup failures are logged without
+    retry. Calls made directly from SDK callbacks such as ``on_error`` are deferred
+    to avoid deadlocking the worker. If blocking completion is required, signal an application-owned
+    thread, return from the callback, and call ``shutdown()`` from that thread.
+    Do not wait inside a callback for another thread or task calling a lifecycle
+    method.
 
     Examples:
         ```python

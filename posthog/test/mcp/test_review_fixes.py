@@ -200,8 +200,9 @@ def test_drain_pending_sync_waits_for_background_futures():
         await asyncio.sleep(0.05)
         done.append(1)
 
-    instr.fire_and_forget(slow_capture())
-    instr.drain_pending_sync(timeout=2)
+    owner = object()
+    instr.fire_and_forget(slow_capture(), owner)
+    instr.drain_pending_sync(owner, timeout=2)
 
     assert done == [1]
 
@@ -311,7 +312,7 @@ def test_posthogmcp_can_disable_exception_fanout():
     client.capture = lambda event, **kw: captured.append({"event": event, **kw})
 
     client.capture_tool_call("boom", is_error=True, error="kaboom")
-    instr.drain_pending_sync(timeout=2)
+    instr.drain_pending_sync(client, timeout=2)
 
     names = [c["event"] for c in captured]
     assert "$mcp_tool_call" in names

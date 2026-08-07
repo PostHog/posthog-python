@@ -1,5 +1,52 @@
 # posthog
 
+## 7.38.1 — 2026-08-06
+
+### Patch changes
+
+- [55370ee](https://github.com/posthog/posthog-python/commit/55370ee0b0160513baf79b56d3475449d33f6c66) fix: prevent client lifecycle deadlocks when error callbacks, concurrent `join()`/`shutdown()` calls, or forked sync-mode clients interact with queue and worker teardown. — Thanks @marandaneto!
+
+## 7.38.0 — 2026-08-05
+
+### Minor changes
+
+- [77821ce](https://github.com/posthog/posthog-python/commit/77821ce5c106f489bac5afedccebb40ecd033e0b) feat: `FeatureFlagEvaluations.is_enabled()` accepts a `default_value` returned when the flag has no value in the evaluation — the key was not part of the evaluated set, or the evaluation came back empty (failed `/flags` request, quota limit, no resolvable `distinct_id`). A flag that has a value still wins, so a disabled flag returns `False` even with `default_value=True`. The default is `False`, so existing calls behave exactly as before. — Thanks @posthog[bot]!
+
+### Patch changes
+
+- [7b6a8d8](https://github.com/posthog/posthog-python/commit/7b6a8d8e73db82b08c3e4e4a21ee99b488801037) `evaluate_flags()` now JSON-decodes payloads for locally-evaluated flags, the same way it already did for flags resolved remotely. Previously `get_flag_payload()` returned a parsed value (`{"copy": "new"}`) when the flag came back from `/flags` but the raw JSON string (`'{"copy": "new"}'`) when the poller evaluated it locally, so the payload's type depended on where the flag happened to resolve. The `$feature_flag_payload` property on `$feature_flag_called` events is decoded for locally-evaluated flags too. Payload strings that aren't valid JSON are still passed through unchanged. — Thanks @posthog[bot]!
+- [92625cf](https://github.com/posthog/posthog-python/commit/92625cfb766e31f24e70ec93d4b63d922bb6ebf3) The `$feature_flag_called` dedupe tracker now evicts its oldest entry when it reaches capacity instead of clearing every entry. Previously, each time a client accumulated 50,000 distinct IDs the whole tracker was wiped, so the next flag read for every previously seen distinct ID re-emitted a `$feature_flag_called` event it had already deduped. — Thanks @posthog[bot]!
+
+## 7.37.6 — 2026-08-05
+
+### Patch changes
+
+- [c5f4e8f](https://github.com/posthog/posthog-python/commit/c5f4e8f034a5648f663bffa6cbde2a5d0786309b) Normalize Gemini tool calls and tool responses in captured input so they render in traces and reach evaluations — Thanks @marco-g-pm!
+
+## 7.37.5 — 2026-08-05
+
+### Patch changes
+
+- [ae26014](https://github.com/posthog/posthog-python/commit/ae260147a1300ad806152df9b48015d07f96d09f) fix: `flush()` no longer waits out `flush_interval` before delivering a partial batch. A consumer holding fewer than `flush_at` events now sends them as soon as `flush()` (or `shutdown()`) asks it to, instead of blocking the caller for the rest of the batching window — which previously made `flush()` deliver nothing at all when `flush_interval` was longer than the flush timeout. Timer-based batching without an explicit flush is unchanged. — Thanks @posthog[bot]!
+
+## 7.37.4 — 2026-08-05
+
+### Patch changes
+
+- [6397d78](https://github.com/posthog/posthog-python/commit/6397d7805588bc17856f8612d6f2076deb93d64c) `alias()` now validates both identities before enqueuing. Previously `alias(None, "user-123")` (or an empty-string `previous_id`) sent a `$create_alias` event with a null/empty `distinct_id`, which cannot link anything and just adds an unusable event to the project. Missing identities are now dropped with a warning instead, matching the sdk-specs `alias` contract. The drop that already happened when no alias target could be resolved now logs a warning too, and a non-string `previous_id` such as `0` is stringified consistently in both `distinct_id` and `properties.distinct_id`. — Thanks @posthog[bot]!
+
+## 7.37.3 — 2026-08-04
+
+### Patch changes
+
+- [5ed7d0d](https://github.com/posthog/posthog-python/commit/5ed7d0d12fb2b18eb341c407e109f51ff31b75e4) Prevent stale feature flag definition publication — Thanks @marandaneto!
+
+## 7.37.2 — 2026-08-04
+
+### Patch changes
+
+- [b16ec74](https://github.com/posthog/posthog-python/commit/b16ec7450d9c5edcce576ab0c73ce318ac0afeec) Isolate MCP pending capture tasks by owner and loop — Thanks @marandaneto!
+
 ## 7.37.1 — 2026-08-04
 
 ### Patch changes

@@ -8,8 +8,9 @@ import threading
 import time
 import warnings
 import weakref
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -23,7 +24,7 @@ from posthog.capture_compression import (
 )
 from posthog.capture_mode import CaptureMode, _resolve_capture_mode
 from posthog.capture_v1 import _send_v1_batch
-from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer
+from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.contexts import (
     _get_current_context,
     get_capture_exception_code_variables_context,
@@ -113,12 +114,23 @@ from posthog.utils import (
 from posthog.version import VERSION
 
 
-from queue import Queue, Full
+from queue import Empty, Full, Queue
 
 
 _configure_posthog_logging()
 
 MAX_DICT_SIZE = 50_000
+_ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
+_atexit_deadline: Optional[float] = None
+_atexit_deadline_lock = threading.Lock()
+
+
+def _get_atexit_deadline() -> float:
+    global _atexit_deadline
+    with _atexit_deadline_lock:
+        if _atexit_deadline is None:
+            _atexit_deadline = time.monotonic() + _ATEXIT_FLUSH_TIMEOUT_SECONDS
+        return _atexit_deadline
 
 
 def get_identity_state(passed) -> tuple[str, bool]:
@@ -244,6 +256,20 @@ def _parse_has_experiment(value: Any) -> Optional[bool]:
     return value if isinstance(value, bool) else None
 
 
+def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
+    """Flag payloads are stored as JSON strings, both in the ``/flags`` response
+    metadata and in the local-evaluation flag definitions, so decode them before
+    handing them to callers. A string that isn't valid JSON is passed through as-is."""
+    if isinstance(raw_payload, str):
+        if not raw_payload:
+            return None
+        try:
+            return json.loads(raw_payload)
+        except (json.JSONDecodeError, TypeError):
+            return raw_payload
+    return raw_payload
+
+
 def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
     """Server-reported experiment linkage from flag metadata; ``None`` when absent
     (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
@@ -308,6 +334,7 @@ class _Lane:
         self._active_sync_sends = 0
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
+        self._drain_signal = _DrainSignal(self.queue)
         if eager_start:
             self.start()
 
@@ -331,6 +358,7 @@ class _Lane:
                 capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
             )
+            consumer._set_drain_signal(self._drain_signal)
             self.consumers.append(consumer)
 
             if self.send:
@@ -386,38 +414,124 @@ class _Lane:
                 self._sync_sends_done.wait()
 
     def flush(self, timeout_seconds: Optional[float]) -> None:
-        """Block until this lane's queue drains, or until `timeout_seconds` elapse."""
-        queue = self.queue
-        size = queue.qsize()
-        if timeout_seconds is None:
-            queue.join()
-        else:
-            deadline = time.monotonic() + timeout_seconds
-            with queue.all_tasks_done:
-                while queue.unfinished_tasks:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        self.log.warning(
-                            "%s lane flush ran out of budget (%.1fs granted) with %s items pending.",
-                            self.name,
-                            timeout_seconds,
-                            queue.unfinished_tasks,
-                        )
-                        return
-                    queue.all_tasks_done.wait(remaining)
+        """Block until this lane's queue drains, or until `timeout_seconds` elapse.
 
-        # Note that this message may not be precise, because of threading.
-        self.log.debug("successfully flushed about %s items.", size)
+        Signals the consumers first so a partial batch is delivered now instead
+        of waiting out `flush_at` / `flush_interval`.
+        """
+        queue = self.queue
+        # Keep the request active only while this flush is waiting. This avoids
+        # an empty flush changing how events captured after it are batched.
+        self._drain_signal.request()
+        try:
+            size = queue.qsize()
+            deadline = (
+                None if timeout_seconds is None else time.monotonic() + timeout_seconds
+            )
+            while queue.unfinished_tasks:
+                if deadline is None and not any(
+                    consumer.is_alive() for consumer in self.consumers
+                ):
+                    self.discard_undrainable_queued_work()
+                    break
+                with queue.all_tasks_done:
+                    if not queue.unfinished_tasks:
+                        break
+                    if deadline is None:
+                        wait_seconds = 0.05
+                    else:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            self.log.warning(
+                                "%s lane flush ran out of budget (%.1fs granted) with %s items pending.",
+                                self.name,
+                                timeout_seconds,
+                                queue.unfinished_tasks,
+                            )
+                            return
+                        wait_seconds = min(0.05, remaining)
+                    queue.all_tasks_done.wait(wait_seconds)
+
+            # Note that this message may not be precise, because of threading.
+            self.log.debug("successfully flushed about %s items.", size)
+        finally:
+            self._drain_signal.complete()
+
+    def discard_undrainable_queued_work(self) -> None:
+        """Balance queued work when this lane has no running sender."""
+        if any(consumer.is_alive() for consumer in self.consumers):
+            return
+
+        dropped = 0
+        while True:
+            try:
+                self.queue.get_nowait()
+            except Empty:
+                break
+            self.queue.task_done()
+            dropped += 1
+        if dropped:
+            self.log.warning(
+                "%s lane discarded %d queued events because no consumer is running",
+                self.name,
+                dropped,
+            )
 
     def join(self) -> None:
-        """Pause this lane's consumers and wait for them to exit; a never-started lane is a no-op."""
+        """Pause this lane's consumers and wait for them to exit."""
+        # Normal teardown bypasses the batching wait so a partial batch is sent.
+        errors: list[Exception] = []
+        drain_requested = False
+        try:
+            self._drain_signal.request()
+            drain_requested = True
+        except Exception as error:
+            self.log.exception(
+                "Failed to request %s lane drain during lifecycle cleanup", self.name
+            )
+            errors.append(error)
+
         for consumer in self.consumers:
-            consumer.pause()
+            try:
+                consumer._pause(drain=True)
+            except Exception as error:
+                self.log.exception(
+                    "Failed to pause %s lane consumer during lifecycle cleanup",
+                    self.name,
+                )
+                errors.append(error)
+        for consumer in self.consumers:
             try:
                 consumer.join()
             except RuntimeError:
                 # consumer thread has not started
                 pass
+            except Exception as error:
+                self.log.exception(
+                    "Failed to join %s lane consumer during lifecycle cleanup",
+                    self.name,
+                )
+                errors.append(error)
+        try:
+            self.discard_undrainable_queued_work()
+        except Exception as error:
+            self.log.exception(
+                "Failed to discard queued %s lane work during lifecycle cleanup",
+                self.name,
+            )
+            errors.append(error)
+        if drain_requested:
+            try:
+                self._drain_signal.complete()
+            except Exception as error:
+                self.log.exception(
+                    "Failed to complete %s lane drain during lifecycle cleanup",
+                    self.name,
+                )
+                errors.append(error)
+
+        if errors:
+            raise errors[0]
 
     def reset_sync_send_state_after_fork(self) -> None:
         """Replace sync-send state inherited from threads that did not survive fork."""
@@ -425,19 +539,22 @@ class _Lane:
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
 
-    def rebuild_after_fork(self) -> None:
+    def rebuild_after_fork(self, *, closed: bool) -> None:
         """Replace fork-unsafe lane state in a forked child.
 
         Threads do not survive fork() and queue.Queue internal locks may be in
         an inconsistent state, so the queue, lock, and consumer pool are
         replaced. Inherited queue items are not retained as they'll be handled
-        by the parent process's consumers. An eager lane restarts immediately;
-        a lazy lane returns to not-started and restarts on next use.
+        by the parent process's consumers. ``closed`` normalizes every lane to
+        the client's fork-visible lifecycle state. An eager open lane restarts
+        immediately; a lazy lane returns to not-started and restarts on next use.
         """
         self.queue = Queue(self._max_queue_size)
         self.reset_sync_send_state_after_fork()
+        self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
         self._started = False
+        self._closed = closed
         if self._eager_start:
             self.start()
 
@@ -532,7 +649,10 @@ class Client(object):
             max_queue_size: Maximum number of events buffered before upload.
             send: If False, queueing succeeds but events are not sent.
             on_error: Optional callback invoked by background consumers when an
-                upload fails.
+                upload fails. Keep it short and non-blocking. Calling lifecycle
+                methods directly is safe and deferred, but do not start another
+                thread or task that calls ``flush()``, ``join()``, or
+                ``shutdown()`` and then wait for it from the callback.
             flush_at: Number of queued events that triggers a batch upload.
             flush_interval: Maximum seconds a background consumer waits before
                 flushing a partial batch.
@@ -635,6 +755,24 @@ class Client(object):
         self.debug = debug
         self.send = send
         self.sync_mode = sync_mode
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
+        self._lifecycle_owner: Optional[threading.Thread] = None
+        self._workers_joined = False
+        self._join_cleanup_complete = False
+        self._join_requested = False
+        self._shutdown_requested = False
+        self._shutdown_complete = False
+        self._lifecycle_cleanup_failed = False
+        self._deferred_lifecycle_thread_pending = False
+        self._deferred_lifecycle_dirty = False
+        self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
+            "posthog_lifecycle_callback", default=False
+        )
+        self._deferred_flush_lock = threading.Lock()
+        self._deferred_flush_pending = False
+        self._deferred_flush_followup = False
+        self._deferred_flush_followup_timeout: Optional[float] = None
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
@@ -661,6 +799,11 @@ class Client(object):
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
         self._flags_etag: Optional[str] = None
+        self._flag_definition_fetch_generation = 0
+        self._flag_definition_published_generation = 0
+        self._flag_definition_cache_generation = 0
+        self._flag_definition_publication_lock = threading.Lock()
+        self._flag_definition_cache_write_lock = threading.RLock()
         self._flag_definition_cache_provider = flag_definition_cache_provider
         self._flag_definition_cache_provider_async_runner: Optional[
             _BackgroundEventLoopRunner
@@ -785,10 +928,9 @@ class Client(object):
             # On program exit, allow the consumer threads to exit cleanly.
             # This prevents exceptions and a messy shutdown when the
             # interpreter is destroyed before the daemon threads finish
-            # execution. However, it is *not* the same as flushing the queue!
-            # To guarantee all messages have been delivered, you'll still need
-            # to call flush().
-            atexit.register(self.join)
+            # execution. Exit performs only a short best-effort flush; call
+            # flush() or shutdown() explicitly when blocking completion matters.
+            atexit.register(self._atexit)
 
         lane_defaults = dict(
             api_key=self.api_key,
@@ -1663,7 +1805,7 @@ class Client(object):
     @no_throw()
     def alias(
         self,
-        previous_id: str,
+        previous_id: ID_TYPES,
         distinct_id: Optional[str],
         timestamp: Optional[Union[datetime, str]] = None,
         uuid: Optional[str] = None,
@@ -1673,8 +1815,11 @@ class Client(object):
         Create an alias between two distinct IDs.
 
         Args:
-            previous_id: The previous distinct ID.
-            distinct_id: The new distinct ID to alias to.
+            previous_id: The previous distinct ID. Required - the call is dropped
+                with a warning if it is missing or empty.
+            distinct_id: The new distinct ID to alias to. Falls back to the
+                context distinct ID; the call is dropped with a warning if
+                neither is available.
             timestamp: The timestamp of the event.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
@@ -1691,10 +1836,21 @@ class Client(object):
 
         Note: This method will not raise exceptions. Errors are logged.
         """
+        previous_id = stringify_id(previous_id)
+        if not previous_id:
+            self.log.warning(
+                "alias() called without a previous_id, dropping the $create_alias event"
+            )
+            return None
+
         (distinct_id, personless) = get_identity_state(distinct_id)
 
         if personless:
-            return None  # Personless alias() does nothing - should this throw?
+            # No alias target was passed and none is available from context.
+            self.log.warning(
+                "alias() called without a distinct_id, dropping the $create_alias event"
+            )
+            return None
 
         msg: Dict[str, Any] = {
             "properties": {
@@ -1895,24 +2051,33 @@ class Client(object):
         Python threads do not survive fork(), so each lane's queue and
         consumer pool are rebuilt (see `_Lane.rebuild_after_fork`).
         """
+        terminal_requested = (
+            self._join_requested or self._shutdown_requested or self._workers_joined
+        )
         for lane in self._lanes:
-            if self.sync_mode:
-                lane.reset_sync_send_state_after_fork()
-            else:
-                lane.rebuild_after_fork()
+            lane.rebuild_after_fork(closed=terminal_requested)
 
-        if self.enable_local_evaluation:
-            self.poller = Poller(
-                interval=timedelta(seconds=self.poll_interval),
-                execute=self._load_feature_flags,
-            )
-            self.poller.start()
-        else:
-            self.poller = None
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
+        self._lifecycle_owner = None
+        self._deferred_lifecycle_thread_pending = False
+        self._deferred_lifecycle_dirty = False
+        self._lifecycle_callback_context = ContextVar(
+            "posthog_lifecycle_callback", default=False
+        )
+        self._deferred_flush_lock = threading.Lock()
+        self._deferred_flush_pending = False
+        self._deferred_flush_followup = False
+        self._deferred_flush_followup_timeout = None
 
         # Async runner threads do not survive fork(); recreate lazily on next async cache call.
         self._flag_definition_cache_provider_async_runner = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
+
+        # A parent thread may have been publishing or caching flag definitions at
+        # fork time.
+        self._flag_definition_publication_lock = threading.Lock()
+        self._flag_definition_cache_write_lock = threading.RLock()
 
         # Metrics locks may have been held by a parent thread at fork time; replace
         # them (never acquire them) so the child can't deadlock on a vanished holder.
@@ -1926,6 +2091,18 @@ class Client(object):
             self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
 
         reset_sessions()
+
+        # Start child threads only after replacing every lock they can touch.
+        if terminal_requested:
+            self.poller = None
+        elif self.enable_local_evaluation:
+            self.poller = Poller(
+                interval=timedelta(seconds=self.poll_interval),
+                execute=self._load_feature_flags,
+            )
+            self.poller.start()
+        else:
+            self.poller = None
 
     def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
         # type: (...) -> Optional[str]
@@ -2123,6 +2300,8 @@ class Client(object):
             posthog.flush()  # Ensures the event is sent immediately
             ```
         """
+        if self._defer_flush_from_callback(timeout_seconds):
+            return
         try:
             if timeout_seconds is None:
                 for lane in self._lanes:
@@ -2138,53 +2317,345 @@ class Client(object):
             self.log.exception("error flushing queue: %s", e)
             return
 
+    def _is_consumer_thread(self) -> bool:
+        current = threading.current_thread()
+        return any(current in lane.consumers for lane in self._lanes)
+
+    def _is_lifecycle_callback_thread(self) -> bool:
+        if self._lifecycle_callback_context.get():
+            return True
+        current = threading.current_thread()
+        if self._is_consumer_thread() or current is self.poller:
+            return True
+        runner = self._flag_definition_cache_provider_async_runner
+        return runner is not None and runner.owns_thread(current)
+
+    def _start_lifecycle_thread(self, target, name: str, *args) -> None:
+        threading.Thread(
+            target=target,
+            args=args,
+            name=f"posthog-{name}",
+            daemon=True,
+        ).start()
+
+    def _defer_lifecycle_from_callback(self) -> bool:
+        if not self._is_lifecycle_callback_thread():
+            return False
+        with self._lifecycle_lock:
+            self._deferred_lifecycle_dirty = True
+            if self._deferred_lifecycle_thread_pending:
+                return True
+            self._deferred_lifecycle_thread_pending = True
+
+        def run() -> None:
+            while True:
+                with self._lifecycle_lock:
+                    self._deferred_lifecycle_dirty = False
+                    require_shutdown = self._shutdown_requested
+                operation = "shutdown" if require_shutdown else "join"
+                try:
+                    self._run_lifecycle(require_shutdown=require_shutdown)
+                except BaseException:
+                    self.log.exception("Deferred %s failed", operation)
+
+                with self._lifecycle_lock:
+                    if self._deferred_lifecycle_dirty:
+                        continue
+                    self._deferred_lifecycle_thread_pending = False
+                    return
+
+        self._start_lifecycle_thread(run, "lifecycle")
+        return True
+
+    def _defer_flush_from_callback(self, timeout_seconds: Optional[float]) -> bool:
+        if not self._is_lifecycle_callback_thread():
+            return False
+        with self._deferred_flush_lock:
+            if self._deferred_flush_pending:
+                if not self._deferred_flush_followup:
+                    self._deferred_flush_followup = True
+                    self._deferred_flush_followup_timeout = timeout_seconds
+                elif (
+                    self._deferred_flush_followup_timeout is not None
+                    and timeout_seconds is not None
+                ):
+                    self._deferred_flush_followup_timeout = max(
+                        self._deferred_flush_followup_timeout, timeout_seconds
+                    )
+                else:
+                    self._deferred_flush_followup_timeout = None
+                return True
+            self._deferred_flush_pending = True
+
+        def run() -> None:
+            next_timeout = timeout_seconds
+            while True:
+                self.flush(next_timeout)
+                with self._deferred_flush_lock:
+                    if self._deferred_flush_followup:
+                        next_timeout = self._deferred_flush_followup_timeout
+                        self._deferred_flush_followup = False
+                        self._deferred_flush_followup_timeout = None
+                        continue
+                    self._deferred_flush_pending = False
+                    return
+
+        self._start_lifecycle_thread(run, "flush")
+        return True
+
+    def _run_lifecycle_cleanup(
+        self,
+        log_message: str,
+        cleanup: Callable[[], None],
+        errors: list[Exception],
+    ) -> None:
+        """Attempt one cleanup step without preventing later independent steps."""
+        try:
+            cleanup()
+        except Exception as error:
+            self.log.exception(log_message)
+            errors.append(error)
+
+    def _flush_or_discard_queues(self, errors: list[Exception]) -> None:
+        for lane in self._lanes:
+            try:
+                if any(consumer.is_alive() for consumer in lane.consumers):
+                    lane.flush(timeout_seconds=None)
+                else:
+                    lane.discard_undrainable_queued_work()
+            except Exception as error:
+                self.log.exception(
+                    "Failed to drain %s lane during lifecycle cleanup", lane.name
+                )
+                errors.append(error)
+
+    def _join_once(
+        self,
+        errors: list[Exception],
+        flush_queues: bool = True,
+        *,
+        lanes_prepared: bool = False,
+    ) -> None:
+        if not self._workers_joined:
+            if not lanes_prepared:
+                for lane in self._lanes:
+                    self._run_lifecycle_cleanup(
+                        f"Failed to close {lane.name} lane during lifecycle cleanup",
+                        lane.close,
+                        errors,
+                    )
+                for lane in self._lanes:
+                    self._run_lifecycle_cleanup(
+                        f"Failed waiting for {lane.name} synchronous sends during lifecycle cleanup",
+                        lane.wait_for_sync_sends,
+                        errors,
+                    )
+            if flush_queues:
+                self._flush_or_discard_queues(errors)
+            for lane in self._lanes:
+                self._run_lifecycle_cleanup(
+                    f"Failed to stop {lane.name} lane during lifecycle cleanup",
+                    lane.join,
+                    errors,
+                )
+            # Ordinary cleanup failures are logged by each step. Reaching here
+            # means every worker cleanup step was attempted once.
+            self._workers_joined = True
+
+        if not self._join_cleanup_complete:
+            if self.poller:
+                self._run_lifecycle_cleanup(
+                    "Failed to stop feature flag poller during lifecycle cleanup",
+                    self.poller.stop,
+                    errors,
+                )
+
+            self._run_lifecycle_cleanup(
+                "Failed to shut down feature flag cache provider during lifecycle cleanup",
+                self._shutdown_flag_definition_cache_provider,
+                errors,
+            )
+            self._run_lifecycle_cleanup(
+                "Failed to unregister client during lifecycle cleanup",
+                self._unregister_duplicate_client,
+                errors,
+            )
+            self._join_cleanup_complete = True
+
+    def _shutdown_once(self, errors: list[Exception]) -> None:
+        if not self._workers_joined:
+            # Close every lane before draining any of them so no producer can be
+            # admitted between a completed flush and consumer shutdown.
+            for lane in self._lanes:
+                self._run_lifecycle_cleanup(
+                    f"Failed to close {lane.name} lane during shutdown",
+                    lane.close,
+                    errors,
+                )
+            for lane in self._lanes:
+                self._run_lifecycle_cleanup(
+                    f"Failed waiting for {lane.name} synchronous sends during shutdown",
+                    lane.wait_for_sync_sends,
+                    errors,
+                )
+            self._flush_or_discard_queues(errors)
+
+        if self._metrics is not None:
+            self._run_lifecycle_cleanup(
+                "Failed to flush metrics on shutdown", self._metrics.flush, errors
+            )
+            self._run_lifecycle_cleanup(
+                "Failed to reset metrics on shutdown", self._metrics.reset, errors
+            )
+        self._join_once(errors, flush_queues=False, lanes_prepared=True)
+        self._run_lifecycle_cleanup(
+            "Failed to clear feature flag deduplication state on shutdown",
+            self.distinct_ids_feature_flags_reported.clear,
+            errors,
+        )
+
+        if self.exception_capture:
+            self._run_lifecycle_cleanup(
+                "Failed to close exception capture on shutdown",
+                self.exception_capture.close,
+                errors,
+            )
+        # Ordinary cleanup failures are logged by each step. Reaching here
+        # means every shutdown cleanup step was attempted once.
+        self._shutdown_complete = True
+
+    def _run_lifecycle(self, require_shutdown: bool = False) -> None:
+        while True:
+            with self._lifecycle_condition:
+                if require_shutdown and self._shutdown_complete:
+                    if self.debug and self._lifecycle_cleanup_failed:
+                        raise RuntimeError("client lifecycle cleanup failed")
+                    return
+                if not require_shutdown and (
+                    self._join_cleanup_complete or self._shutdown_complete
+                ):
+                    if self.debug and self._lifecycle_cleanup_failed:
+                        raise RuntimeError("client lifecycle cleanup failed")
+                    return
+                if self._lifecycle_owner is not None:
+                    if self._is_lifecycle_callback_thread() or (
+                        threading.current_thread() is self._lifecycle_owner
+                    ):
+                        return
+                    self._lifecycle_condition.wait()
+                    continue
+                self._lifecycle_owner = threading.current_thread()
+
+            try:
+                errors: list[Exception] = []
+                while True:
+                    with self._lifecycle_lock:
+                        run_shutdown = self._shutdown_requested
+
+                    if run_shutdown:
+                        self._shutdown_once(errors)
+                    else:
+                        self._join_once(errors)
+
+                    with self._lifecycle_condition:
+                        if (
+                            self._shutdown_requested
+                            and not self._shutdown_complete
+                            and not run_shutdown
+                        ):
+                            continue
+                        if errors:
+                            self._lifecycle_cleanup_failed = True
+                            raise errors[0]
+                        self._lifecycle_owner = None
+                        self._lifecycle_condition.notify_all()
+                        return
+            except BaseException:
+                with self._lifecycle_condition:
+                    self._lifecycle_owner = None
+                    self._lifecycle_condition.notify_all()
+                raise
+
+    @no_throw()
+    def _atexit(self) -> None:
+        """Make a bounded delivery attempt, then stop daemon workers."""
+        with self._lifecycle_condition:
+            # A daemon lifecycle worker already owns cleanup. Do not wait for it
+            # at interpreter exit; the process must remain free to terminate.
+            if self._lifecycle_owner is not None:
+                return
+            self._lifecycle_owner = threading.current_thread()
+
+        try:
+            try:
+                for lane in self._lanes:
+                    lane.close()
+
+                deadline = _get_atexit_deadline()
+                for lane in self._lanes:
+                    lane.flush(max(0.0, deadline - time.monotonic()))
+            finally:
+                # Consumers are daemon threads. Publish a non-draining stop to
+                # every consumer, but do not join in-flight requests at exit.
+                for lane in self._lanes:
+                    for consumer in lane.consumers:
+                        consumer.pause()
+        finally:
+            with self._lifecycle_condition:
+                self._lifecycle_owner = None
+                self._lifecycle_condition.notify_all()
+
+    @no_throw()
     def join(self) -> None:
         """
-        End the consumer thread once the queue is empty. Do not use directly, call `shutdown()` instead.
+        Attempt to process queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
+
+        Failed or undrainable events may be dropped and reported through logging
+        or ``on_error``; returning does not guarantee server receipt. Lifecycle
+        cleanup is attempted once, and cleanup failures are logged without retry.
 
         Examples:
             ```python
             posthog.join()
             ```
         """
-        for lane in self._lanes:
-            lane.join()
+        with self._lifecycle_lock:
+            self._join_requested = True
+        if self._defer_lifecycle_from_callback():
+            return
+        self._run_lifecycle()
 
-        if self.poller:
-            self.poller.stop()
-
-        # Shutdown the cache provider (release locks, cleanup)
-        self._shutdown_flag_definition_cache_provider()
-        self._unregister_duplicate_client()
-
+    @no_throw()
     def shutdown(self) -> None:
         """
         Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
+
+        Normally this method blocks until queued events have been attempted and
+        cleanup finishes. Failed or undrainable events may be dropped and
+        reported through logging or ``on_error``; returning does not guarantee
+        server receipt. Lifecycle cleanup is attempted once, and cleanup failures
+        are logged without retry. When called directly from an SDK callback such as
+        ``on_error``, shutdown is deferred to avoid blocking the worker that
+        invoked the callback. If the callback must coordinate a blocking
+        shutdown, have it signal an
+        application-owned thread and return before that thread calls shutdown.
+        Do not wait inside the callback for another thread or task that calls a
+        lifecycle method.
 
         Examples:
             ```python
             posthog.shutdown()
             ```
         """
-        # Close every lane before draining any of them so no producer can be
-        # admitted between a completed flush and consumer shutdown.
-        for lane in self._lanes:
-            lane.close()
-        for lane in self._lanes:
-            lane.wait_for_sync_sends()
-
-        self.flush(timeout_seconds=None)
-        if self._metrics is not None:
-            try:
-                self._metrics.flush()
-            except Exception:
-                self.log.exception("Failed to flush metrics on shutdown")
-            self._metrics.reset()
-        self.join()
-        self.distinct_ids_feature_flags_reported.clear()
-
-        if self.exception_capture:
-            self.exception_capture.close()
+        with self._lifecycle_lock:
+            if self._shutdown_complete:
+                if self.debug and self._lifecycle_cleanup_failed:
+                    raise RuntimeError("client lifecycle cleanup failed")
+                return
+            self._shutdown_requested = True
+        if self._defer_lifecycle_from_callback():
+            return
+        self._run_lifecycle(require_shutdown=True)
 
     def _resolve_flag_definition_cache_provider_result(self, result):
         if not inspect.isawaitable(result):
@@ -2195,7 +2666,11 @@ class Client(object):
                 self._flag_definition_cache_provider_async_runner = (
                     _BackgroundEventLoopRunner()
                 )
-            return self._flag_definition_cache_provider_async_runner.run(result)
+            token = self._lifecycle_callback_context.set(True)
+            try:
+                return self._flag_definition_cache_provider_async_runner.run(result)
+            finally:
+                self._lifecycle_callback_context.reset(token)
 
     def _shutdown_flag_definition_cache_provider(self):
         if not self._flag_definition_cache_provider:
@@ -2290,91 +2765,140 @@ class Client(object):
             )
             return
 
-        try:
-            # Store old flags to detect changes
-            old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+        with self._flag_definition_publication_lock:
+            self._flag_definition_fetch_generation += 1
+            fetch_generation = self._flag_definition_fetch_generation
+            request_etag = self._flags_etag
 
+        cache_data_to_store: Optional[FlagDefinitionCacheData] = None
+        try:
             response = get(
                 personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
-                etag=self._flags_etag,
+                etag=request_etag,
             )
 
-            # Update stored ETag (clear if server stops sending one)
-            self._flags_etag = response.etag
-
-            # If 304 Not Modified, flags haven't changed - skip processing
-            if response.not_modified:
-                self.log.debug(
-                    "[FEATURE FLAGS] Flags not modified (304), using cached data"
-                )
-                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
-                return
-
-            if response.data is None:
-                self.log.error(
-                    "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
-                )
-                return
-
-            self._update_flag_state(response.data, old_flags_by_key=old_flags_by_key)
-
-            # Store in external cache if provider is configured
-            if self._flag_definition_cache_provider:
-                try:
-                    self._resolve_flag_definition_cache_provider_result(
-                        self._flag_definition_cache_provider.on_flag_definitions_received(
-                            {
-                                "flags": self.feature_flags or [],
-                                "group_type_mapping": self.group_type_mapping or {},
-                                "cohorts": self.cohorts or {},
-                                "minimal_flag_called_events": self._minimal_flag_called_events,
-                            }
-                        )
+            with self._flag_definition_publication_lock:
+                if fetch_generation <= self._flag_definition_published_generation:
+                    self.log.debug(
+                        "[FEATURE FLAGS] Ignoring stale flag definition response"
                     )
-                except Exception as e:
-                    self.log.error(f"[FEATURE FLAGS] Cache provider store error: {e}")
-                    # Flags are already in memory, so continue normally
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                    return
+
+                # A 304 is valid only for the ETag used by this request. Another
+                # overlapping response may already have installed newer definitions.
+                if response.not_modified:
+                    if self._flags_etag != request_etag:
+                        self.log.debug(
+                            "[FEATURE FLAGS] Ignoring stale 304 flag definition response"
+                        )
+                        self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                        return
+
+                    self._flags_etag = response.etag
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
+                    self.log.debug(
+                        "[FEATURE FLAGS] Flags not modified (304), using cached data"
+                    )
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                    return
+
+                if response.data is None:
+                    self.log.error(
+                        "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
+                    )
+                    return
+
+                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
+                self._update_flag_state(
+                    response.data, old_flags_by_key=old_flags_by_key
+                )
+
+                if self._flag_definition_cache_provider:
+                    cache_data_to_store = {
+                        "flags": self.feature_flags or [],
+                        "group_type_mapping": self.group_type_mapping or {},
+                        "cohorts": self.cohorts or {},
+                        "minimal_flag_called_events": self._minimal_flag_called_events,
+                    }
+
+                # Publish the ETag only after its matching flag state is installed.
+                self._flags_etag = response.etag
+                self._flag_definition_published_generation = fetch_generation
+                self._flag_definition_cache_generation = fetch_generation
+
+            if cache_data_to_store and self._flag_definition_cache_provider:
+                # Keep provider I/O out of the publication lock. The separate lock
+                # preserves cache write order without delaying newer API fetches or
+                # in-memory publication.
+                with self._flag_definition_cache_write_lock:
+                    with self._flag_definition_publication_lock:
+                        should_store = (
+                            fetch_generation == self._flag_definition_cache_generation
+                        )
+                    if should_store:
+                        try:
+                            self._resolve_flag_definition_cache_provider_result(
+                                self._flag_definition_cache_provider.on_flag_definitions_received(
+                                    cache_data_to_store
+                                )
+                            )
+                        except Exception as e:
+                            self.log.error(
+                                f"[FEATURE FLAGS] Cache provider store error: {e}"
+                            )
+                            # Flags are already in memory, so continue normally
 
         except APIError as e:
-            if e.status == 401:
-                detail = (
-                    f"Error loading feature flags: {e.message}. "
-                    "Please verify both your project_api_key and secret_key. "
-                    "More information: https://posthog.com/docs/api/overview"
-                )
-                self.log.error("[FEATURE FLAGS] %s", detail)
-                self.feature_flags = []
-                self.group_type_mapping = {}
-                self.cohorts = {}
-
-                if self.flag_cache:
-                    self.flag_cache.clear()
-
-                if self.debug:
-                    raise APIError(status=401, message=detail)
-            elif e.status == 402:
-                self.log.warning(
-                    "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
-                )
-                # Reset all feature flag data when quota limited
-                self.feature_flags = []
-                self.group_type_mapping = {}
-                self.cohorts = {}
-
-                # Clear flag cache when quota limited
-                if self.flag_cache:
-                    self.flag_cache.clear()
-
-                if self.debug:
-                    raise APIError(
-                        status=402,
-                        message="PostHog feature flags quota limited",
+            with self._flag_definition_publication_lock:
+                if fetch_generation <= self._flag_definition_published_generation:
+                    self.log.debug("[FEATURE FLAGS] Ignoring stale API error response")
+                elif e.status == 401:
+                    detail = (
+                        f"Error loading feature flags: {e.message}. "
+                        "Please verify both your project_api_key and secret_key. "
+                        "More information: https://posthog.com/docs/api/overview"
                     )
-            else:
-                self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
+                    self.log.error("[FEATURE FLAGS] %s", detail)
+                    self.feature_flags = []
+                    self.group_type_mapping = {}
+                    self.cohorts = {}
+                    self._flags_etag = None
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
+
+                    if self.flag_cache:
+                        self.flag_cache.clear()
+
+                    if self.debug:
+                        raise APIError(status=401, message=detail)
+                elif e.status == 402:
+                    self.log.warning(
+                        "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
+                    )
+                    # Reset all feature flag data when quota limited
+                    self.feature_flags = []
+                    self.group_type_mapping = {}
+                    self.cohorts = {}
+                    self._flags_etag = None
+                    self._flag_definition_published_generation = fetch_generation
+                    self._flag_definition_cache_generation = fetch_generation
+
+                    # Clear flag cache when quota limited
+                    if self.flag_cache:
+                        self.flag_cache.clear()
+
+                    if self.debug:
+                        raise APIError(
+                            status=402,
+                            message="PostHog feature flags quota limited",
+                        )
+                else:
+                    self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
             self.log.warning(
                 "[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds."
@@ -3466,7 +3990,7 @@ class Client(object):
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
-                payload=local_payloads.get(key),
+                payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
                 # The local-evaluation flag definition does not carry a version field;
                 # only the remote ``/flags`` response does via ``metadata.version``.
@@ -3505,19 +4029,11 @@ class Client(object):
                 for key, detail in response.get("flags", {}).items():
                     if key in locally_evaluated_keys:
                         continue
-                    payload: Optional[Any] = None
-                    raw_payload = (
+                    payload = _parse_flag_payload(
                         detail.metadata.payload
                         if isinstance(detail.metadata, FlagMetadata)
                         else getattr(detail.metadata, "payload", None)
                     )
-                    if isinstance(raw_payload, str) and raw_payload:
-                        try:
-                            payload = json.loads(raw_payload)
-                        except (json.JSONDecodeError, TypeError):
-                            payload = raw_payload
-                    elif raw_payload is not None:
-                        payload = raw_payload
                     records[key] = _EvaluatedFlagRecord(
                         key=key,
                         enabled=detail.enabled,
