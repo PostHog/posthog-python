@@ -16,7 +16,10 @@ from posthog.feature_flags import (
     PROPERTY_OPERATORS,
     _UNHANDLED_OPERATOR_MESSAGE,
     InconclusiveMatchError,
+    RequiresServerEvaluation,
+    match_cohort,
     match_property,
+    match_property_group,
     parse_datetime,
     relative_date_parse_for_feature_flag_matching,
 )
@@ -35,6 +38,73 @@ pytestmark = [
         r"ignore:send_feature_flag_events is deprecated in get_feature_flag_payload:DeprecationWarning"
     ),
 ]
+
+
+class TestCohortMatching(unittest.TestCase):
+    def setUp(self):
+        self.cohorts = {
+            "1": {
+                "type": "AND",
+                "values": [
+                    {
+                        "key": "country",
+                        "value": "US",
+                        "operator": "exact",
+                        "type": "person",
+                    }
+                ],
+            }
+        }
+
+    def test_cohort_membership_operators(self):
+        for operator in (None, "exact", "in"):
+            with self.subTest(operator=operator):
+                prop = {"value": 1, "operator": operator, "type": "cohort"}
+                self.assertTrue(match_cohort(prop, {"country": "US"}, self.cohorts))
+                self.assertFalse(match_cohort(prop, {"country": "UK"}, self.cohorts))
+
+        not_in = {"value": 1, "operator": "not_in", "type": "cohort"}
+        self.assertFalse(match_cohort(not_in, {"country": "US"}, self.cohorts))
+        self.assertTrue(match_cohort(not_in, {"country": "UK"}, self.cohorts))
+
+    def test_only_canonical_empty_groups_match(self):
+        self.assertTrue(match_property_group({}, {}, {}))
+        self.assertTrue(match_property_group({"type": "AND", "values": []}, {}, {}))
+
+        malformed_groups = [
+            None,
+            "invalid",
+            {"type": "AND"},
+            {"type": "AND", "values": {}},
+        ]
+        for group in malformed_groups:
+            with self.subTest(group=group):
+                with self.assertRaises(RequiresServerEvaluation):
+                    match_property_group(group, {}, {})
+
+    def test_missing_nested_cohort_always_requires_server_evaluation(self):
+        matching_leaf = {
+            "key": "country",
+            "value": "US",
+            "operator": "exact",
+            "type": "person",
+        }
+        missing_cohort = {"key": "id", "value": 999, "type": "cohort"}
+
+        cases = [
+            ("OR", "US", [matching_leaf, missing_cohort]),
+            ("OR", "US", [missing_cohort, matching_leaf]),
+            ("AND", "UK", [matching_leaf, missing_cohort]),
+            ("AND", "UK", [missing_cohort, matching_leaf]),
+        ]
+        for group_type, country, values in cases:
+            with self.subTest(group_type=group_type, values=values):
+                with self.assertRaises(RequiresServerEvaluation):
+                    match_property_group(
+                        {"type": group_type, "values": values},
+                        {"country": country},
+                        {},
+                    )
 
 
 class TestLocalEvaluation(unittest.TestCase):
