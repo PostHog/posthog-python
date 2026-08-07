@@ -110,6 +110,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             request=request,
             extra=extra,
             token=token,
+            http_request=_has_http_request(context),
         )
 
         missing_name = resolve_missing_capability_tool_name(data.options)
@@ -242,6 +243,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             request=request,
             extra=extra,
             token=token,
+            http_request=_low_level_has_http_request(server),
         )
 
         start = time.monotonic()
@@ -445,3 +447,20 @@ def _mcp_session_id(context: Any) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _has_http_request(context: Any) -> bool:
+    """True when this call arrived over an HTTP transport (a request object is on the
+    request context). stdio has none, so this distinguishes a legitimate per-process
+    session from an HTTP server whose stateless mint middleware never attached."""
+    try:
+        return getattr(context.request_context, "request", None) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _low_level_has_http_request(server: Any) -> bool:
+    """HTTP-transport check for the ``tools/list`` seam, which runs on the underlying
+    low-level server rather than a FastMCP ``Context`` (see ``_low_level_session_id``)."""
+    ctx = _low_level_request_context(server)
+    return getattr(ctx, "request", None) is not None

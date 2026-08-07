@@ -12,6 +12,8 @@ from posthog.mcp.asgi import (
     PostHogMcpStatelessSessionMiddleware,
     get_mcp_session,
 )
+from posthog.mcp._instrumentation import prepare_request
+from posthog.mcp.logger import set_logger
 from posthog.mcp.session import new_session_id, resolve_session_id
 from posthog.mcp.session_token import (
     MCP_SESSION_HEADER,
@@ -540,3 +542,115 @@ def test_instrument_autowires_stateless_mint_no_manual_middleware():
         assert payload is not None, "instrument() did not auto-wire the mint"
         assert payload.client_name == "Cursor"
         assert payload.client_version == "0.42"
+
+
+# --- loud diagnostics for the silent "middleware never attached" failure -----
+
+
+def _capture_logs():
+    """Route the SDK logger into a list, restoring the previous sink after."""
+    logs: list[str] = []
+    set_logger(logs.append)
+    return logs
+
+
+async def test_prepare_request_warns_once_on_sessionless_http_request():
+    """An HTTP request that resolves to a per-process `generated` session (no token,
+    no Mcp-Session-Id) is the fingerprint of a stateless server whose mint middleware
+    never attached. That used to be silent; it must now warn -- but only once, so the
+    log isn't flooded on every subsequent request."""
+    logs = _capture_logs()
+    try:
+        data = _data()
+        for _ in range(3):
+            await prepare_request(
+                data,
+                mcp_session_id=None,
+                client_name=None,
+                client_version=None,
+                request={"method": "tools/call", "params": {}},
+                extra={},
+                token=None,
+                http_request=True,
+            )
+    finally:
+        set_logger(None)
+
+    warnings = [m for m in logs if "no session id" in m]
+    assert len(warnings) == 1
+    assert "add_middleware(PostHogMcpStatelessSessionMiddleware)" in warnings[0]
+    assert data.warned_no_stateless_session is True
+
+
+async def test_prepare_request_does_not_warn_for_stdio():
+    """stdio has no HTTP request, so a generated per-process session is correct --
+    never warn there (that would be noise on the common local-dev path)."""
+    logs = _capture_logs()
+    try:
+        data = _data()
+        await prepare_request(
+            data,
+            mcp_session_id=None,
+            client_name=None,
+            client_version=None,
+            request={"method": "tools/call", "params": {}},
+            extra={},
+            token=None,
+            http_request=False,
+        )
+    finally:
+        set_logger(None)
+
+    assert not [m for m in logs if "no session id" in m]
+    assert data.warned_no_stateless_session is False
+
+
+async def test_prepare_request_does_not_warn_when_token_present():
+    """A correctly-wired stateless server replays our token, so the session resolves
+    from it -- no warning even though the request came over HTTP."""
+    logs = _capture_logs()
+    try:
+        data = _data()
+        token = decode_session_id(
+            encode_session_id(SessionTokenPayload(session_id="ses_ok"))
+        )
+        await prepare_request(
+            data,
+            mcp_session_id=None,
+            client_name=None,
+            client_version=None,
+            request={"method": "tools/call", "params": {}},
+            extra={},
+            token=token,
+            http_request=True,
+        )
+    finally:
+        set_logger(None)
+
+    assert not [m for m in logs if "no session id" in m]
+
+
+def test_autowire_warns_when_app_built_before_instrument():
+    """The ordering trap: building streamable_http_app() before instrument() leaves the
+    live app without our middleware, and wrapping the factory afterward can't retrofit
+    it. instrument() must warn instead of failing silently."""
+    pytest.importorskip("starlette.testclient")
+    from mcp.server.fastmcp import FastMCP
+
+    from posthog.mcp import instrument
+
+    class _Sink:
+        def capture(self, *_: object, **__: object) -> None:
+            pass
+
+    srv = FastMCP("posthog-ordering-trap", stateless_http=True, json_response=True)
+
+    # Build the app BEFORE instrument() -- the customer's failure mode.
+    srv.streamable_http_app()
+
+    logs: list[str] = []
+    instrument(srv, _Sink(), MCPAnalyticsOptions(logger=logs.append))
+
+    assert any(
+        "streamable_http_app() was called before instrument()" in m for m in logs
+    )
