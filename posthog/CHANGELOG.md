@@ -1,5 +1,11 @@
 # posthog
 
+## 7.38.3 — 2026-08-07
+
+### Patch changes
+
+- [bd5cff4](https://github.com/posthog/posthog-python/commit/bd5cff4b557cfa9be092158c7c020744834ac3e3) fix: declare Gemini's cache accounting model on generations with cache reads, so ingestion prices cached tokens from `$ai_cache_reporting_exclusive` instead of inferring it from the token counts. — Thanks @fivestarspicy!
+
 ## 7.38.2 — 2026-08-07
 
 ### Patch changes
