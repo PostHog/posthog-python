@@ -245,6 +245,7 @@ def autowire_stateless_mint(server: Any) -> None:
     On fastmcp 2.x, ``streamable_http_app`` / ``sse_app`` can be thin wrappers over
     ``http_app``; wrapping all three could add the middleware twice to one app, so
     the factory guards against a double-add (see ``_app_already_wrapped``)."""
+    _warn_if_app_built_before_instrument(server)
     for attr in ("streamable_http_app", "sse_app", "http_app"):
         original = getattr(server, attr, None)
         if not callable(original) or getattr(original, _AUTOWIRED, False):
@@ -253,6 +254,30 @@ def autowire_stateless_mint(server: Any) -> None:
             setattr(server, attr, _wrap_app_factory(original))
         except Exception as error:  # noqa: BLE001 - never let wiring break instrument()
             log(f"PostHog MCP: could not auto-wire stateless mint on {attr} - {error}")
+
+
+def _warn_if_app_built_before_instrument(server: Any) -> None:
+    """Catch the ordering trap that silently disables stateless capture: the
+    streamable-HTTP app was built (and likely already mounted) *before* ``instrument()``
+    ran, so wrapping the factories now can't retrofit that already-built app.
+
+    FastMCP lazily creates ``_session_manager`` the first time ``streamable_http_app()``
+    is called, so a non-``None`` value here means the app already exists without our
+    middleware. Best-effort and guarded — an SDK that doesn't expose this attribute
+    just yields no warning."""
+    try:
+        if getattr(server, "_session_manager", None) is None:
+            return
+    except Exception:  # noqa: BLE001 - never let a probe break instrument()
+        return
+    log(
+        "Warning: streamable_http_app() was called before instrument(), so the ASGI app "
+        "already in use has no PostHog MCP middleware and stateless sessions will not be "
+        "captured (autowiring only affects apps built after instrument() runs). Call "
+        "instrument(server) before building or mounting the app, or add the middleware "
+        "manually: app.add_middleware(PostHogMcpStatelessSessionMiddleware). "
+        "See posthog/mcp/README.md (stateless / multi-pod servers)."
+    )
 
 
 def _app_already_wrapped(app: Any) -> bool:

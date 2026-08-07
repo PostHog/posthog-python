@@ -240,6 +240,29 @@ def resolve_session_and_client(
     return token, client_name, client_version, protocol_version
 
 
+def _warn_stateless_session_not_wired(data: MCPAnalyticsData) -> None:
+    """Warn once per server when a tool call/listing arrives over HTTP with no
+    session id at all, so PostHog fell back to a per-process ``generated`` session.
+
+    That is the fingerprint of a stateless/multi-pod server whose mint middleware
+    never attached — most often because the ASGI app was built (or mounted from
+    another module) *before* ``instrument()`` ran, so wrapping the app factories
+    couldn't retrofit the already-built app. The result is a silently fragmented
+    ``$session_id``; this makes that failure loud instead of dark-in-prod."""
+    if data.warned_no_stateless_session:
+        return
+    data.warned_no_stateless_session = True
+    log(
+        "Warning: an MCP tool request arrived over HTTP with no session id, so PostHog "
+        "generated a per-process $session_id that will fragment across requests and pods. "
+        "This usually means PostHogMcpStatelessSessionMiddleware never attached — e.g. the "
+        "ASGI app was built or mounted before instrument() ran. Fix it by adding the "
+        "middleware to your app explicitly: "
+        "app.add_middleware(PostHogMcpStatelessSessionMiddleware). "
+        "See posthog/mcp/README.md (stateless / multi-pod servers)."
+    )
+
+
 async def prepare_request(
     data: MCPAnalyticsData,
     *,
@@ -250,6 +273,7 @@ async def prepare_request(
     extra: Optional[Dict[str, Any]],
     token: Optional[SessionTokenPayload] = None,
     protocol_version: Optional[str] = None,
+    http_request: bool = False,
 ) -> str:
     """Resolve the session id, run identify, then lazily emit initialize. Returns
     the session id to stamp on the event for this request.
@@ -262,8 +286,20 @@ async def prepare_request(
     when ``capture_event`` builds the initialize event — otherwise the first
     ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
     (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
-    the Python SDK handles initialize in the session layer, not ``request_handlers``.)"""
+    the Python SDK handles initialize in the session layer, not ``request_handlers``.)
+
+    ``http_request`` marks requests that arrived over an HTTP transport (vs stdio).
+    When such a request carries no token and no ``mcp_session_id`` and resolves to a
+    per-process ``generated`` session, the stateless mint middleware isn't attached —
+    we warn once so the otherwise-silent misconfiguration surfaces."""
     session_id = await resolve_session_id(data, mcp_session_id, token=token)
+    if (
+        http_request
+        and token is None
+        and not mcp_session_id
+        and data.session_source == "generated"
+    ):
+        _warn_stateless_session_not_wired(data)
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event), data)

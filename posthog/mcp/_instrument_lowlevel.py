@@ -113,6 +113,7 @@ def _wrap_call_tool(
             request=request,
             extra=extra,
             token=token,
+            http_request=_has_http_request(server),
         )
 
         missing_name = resolve_missing_capability_tool_name(data.options)
@@ -254,6 +255,7 @@ def _wrap_list_tools(
             request=request,
             extra=extra,
             token=token,
+            http_request=_has_http_request(server),
         )
 
         start = time.monotonic()
@@ -402,3 +404,11 @@ def _mcp_session_id(server: Any) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _has_http_request(server: Any) -> bool:
+    """True when the current request arrived over an HTTP transport (a request object
+    is on the request context). stdio has none — this tells a legitimate per-process
+    session apart from an HTTP server whose stateless mint middleware never attached."""
+    ctx = _request_context(server)
+    return getattr(ctx, "request", None) is not None
