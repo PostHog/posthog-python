@@ -1,9 +1,14 @@
+import contextlib
 import logging
 import asyncio
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 import unittest
 import warnings
+from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import datetime
 from unittest import mock
 from uuid import UUID, uuid4
@@ -18,13 +23,22 @@ from posthog.contexts import get_context_session_id, new_context, set_context_se
 from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
-from posthog.types import FeatureFlag, LegacyFlagMetadata
+from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
 from posthog.version import VERSION
 from posthog.contexts import tag
 
 
 # Legacy single-flag behavior remains covered here; warning emission itself is
 # asserted in test_evaluate_flags.py.
+def _wait_until(predicate, timeout=3):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
 pytestmark = [
     pytest.mark.filterwarnings(
         r"ignore:`(feature_enabled|get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
@@ -198,7 +212,9 @@ class TestClient(unittest.TestCase):
 
     def test_message_only_info_logs_include_posthog_prefix(self):
         self.client.flag_cache = mock.Mock()
-        self.client.flag_cache.get_stale_cached_flag.return_value = mock.Mock()
+        self.client.flag_cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+            key="flag-key", enabled=True, variant=None, payload=None, reason=None
+        )
 
         with capture_message_only_logs(level=logging.INFO) as logs:
             self.client._get_stale_flag_fallback("distinct_id", "flag-key")
@@ -275,6 +291,18 @@ class TestClient(unittest.TestCase):
     def test_empty_flush(self):
         self.client.flush()
 
+    def test_empty_flush_does_not_drain_a_later_event(self):
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_at=100, flush_interval=0.5)
+
+            client.flush()
+            client.capture("after empty flush", distinct_id="distinct_id")
+            time.sleep(0.05)
+
+            mock_post.assert_not_called()
+            client.flush()
+            mock_post.assert_called_once()
+
     def test_flush_timeout_returns_when_queue_does_not_drain(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
         client.queue.put({"event": "stuck"})
@@ -289,6 +317,48 @@ class TestClient(unittest.TestCase):
 
         client.queue.get_nowait()
         client.queue.task_done()
+
+    def test_flush_does_not_wait_for_flush_interval(self):
+        # flush() must attempt delivery now rather than letting the consumer sit
+        # on a below-flush_at batch until flush_interval elapses.
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_interval=30)
+            client.capture("event", distinct_id="distinct_id")
+
+            start = time.monotonic()
+            client.flush()
+
+            self.assertLess(time.monotonic() - start, 5)
+            self.assertTrue(client.queue.empty())
+            mock_post.assert_called_once()
+
+    def test_flush_delivers_when_flush_interval_exceeds_the_flush_timeout(self):
+        # Waiting out flush_interval meant a flush_interval longer than the
+        # flush timeout delivered nothing at all.
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_interval=30)
+            client.capture("event", distinct_id="distinct_id")
+
+            client.flush(timeout_seconds=5)
+
+            mock_post.assert_called_once()
+            self.assertEqual(client.queue.unfinished_tasks, 0)
+
+    def test_flush_keeps_batches_whole(self):
+        # Draining early must not turn a full queue into one request per event.
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, flush_at=10, flush_interval=30)
+            for _ in range(30):
+                client.capture("event", distinct_id="distinct_id")
+
+            client.flush()
+
+            self.assertTrue(client.queue.empty())
+            batch_sizes = [
+                len(call.kwargs["batch"]) for call in mock_post.call_args_list
+            ]
+            self.assertEqual(sum(batch_sizes), 30)
+            self.assertLessEqual(len(batch_sizes), 5)
 
     def test_flush_logs_and_returns_on_unexpected_error(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
@@ -1837,6 +1907,49 @@ class TestClient(unittest.TestCase):
             )
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
 
+    @parameterized.expand(
+        [
+            ("none", None),
+            ("empty_string", ""),
+        ]
+    )
+    def test_group_identify_without_group_type_is_dropped(self, _name, group_type):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.group_identify(group_type, "id:5")
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("group_type", logs.output[0])
+
+    @parameterized.expand(
+        [
+            ("none", None),
+            ("empty_string", ""),
+        ]
+    )
+    def test_group_identify_without_group_key_is_dropped(self, _name, group_key):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.group_identify("organization", group_key)
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("group_key", logs.output[0])
+
+    def test_group_identify_accepts_falsy_non_string_group_key(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.group_identify("organization", 0)
+            self.assertIsNotNone(msg_uuid)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            # The group key is validated, not normalized - it goes out as passed.
+            self.assertEqual(msg["properties"]["$group_key"], 0)
+
     def test_basic_alias(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
@@ -1850,6 +1963,43 @@ class TestClient(unittest.TestCase):
             msg = batch_data[0]
             self.assertEqual(msg["properties"]["distinct_id"], "previousId")
             self.assertEqual(msg["properties"]["alias"], "distinct_id")
+
+    @parameterized.expand(
+        [
+            ("none", None),
+            ("empty_string", ""),
+        ]
+    )
+    def test_alias_without_previous_id_is_dropped(self, _name, previous_id):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.alias(previous_id, "distinct_id")
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("previous_id", logs.output[0])
+
+    def test_alias_accepts_non_string_previous_id(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.alias(0, "distinct_id")
+            self.assertIsNotNone(msg_uuid)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["distinct_id"], "0")
+            self.assertEqual(msg["properties"]["distinct_id"], "0")
+
+    def test_alias_without_distinct_id_is_dropped(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertLogs("posthog", level="WARNING") as logs:
+                msg_uuid = client.alias("previousId", None)
+
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            self.assertIn("distinct_id", logs.output[0])
 
     @parameterized.expand(
         [
@@ -2146,6 +2296,90 @@ class TestClient(unittest.TestCase):
         for consumer in client.consumers:
             self.assertFalse(consumer.is_alive())
 
+    def test_atexit_registers_bounded_worker_cleanup(self):
+        with mock.patch("posthog.client.atexit.register") as register:
+            client = Client(FAKE_TEST_API_KEY)
+
+        register.assert_called_once_with(client._atexit)
+        self.addCleanup(client.shutdown)
+
+    def test_atexit_bounds_flush_and_stops_consumers_without_joining(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        lanes = [mock.Mock(), mock.Mock()]
+        for lane in lanes:
+            lane.consumers = [mock.Mock(), mock.Mock()]
+        client._lanes = lanes
+
+        client._atexit()
+
+        for lane in lanes:
+            lane.close.assert_called_once_with()
+            lane.flush.assert_called_once()
+            timeout = lane.flush.call_args.args[0]
+            self.assertGreaterEqual(timeout, 0)
+            self.assertLessEqual(timeout, 1)
+            lane.wait_for_sync_sends.assert_not_called()
+            lane.join.assert_not_called()
+            for consumer in lane.consumers:
+                consumer.pause.assert_called_once_with()
+
+    def test_atexit_subprocess_does_not_drain_queued_backlog(self):
+        script = textwrap.dedent(
+            """
+            import threading
+            import time
+            from unittest import mock
+
+            from posthog.client import Client
+            from posthog.consumer import Consumer
+
+            with mock.patch.object(Consumer, "start"):
+                clients = [
+                    Client(f"test-key-{index}", flush_at=100, flush_interval=60)
+                    for index in range(3)
+                ]
+
+            for client in clients:
+                consumer = client.consumers[0]
+                consumer.request = lambda batch: time.sleep(10)
+                consumer.start()
+            time.sleep(0.1)
+
+            queues = [client.queue for client in clients]
+            for queue in queues:
+                for index in range(10):
+                    queue.put({"event": str(index), "distinct_id": "test"})
+
+            deadline = time.monotonic() + 1
+            while any(not queue.empty() for queue in queues):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("consumer did not buffer the queued backlog")
+                time.sleep(0.001)
+            """
+        )
+
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+
+    def test_atexit_does_not_wait_for_active_lifecycle_owner(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        owner = mock.Mock()
+        client._lifecycle_owner = owner
+
+        lane = mock.Mock()
+        client._lanes = [lane]
+
+        client._atexit()
+
+        lane.close.assert_not_called()
+        lane.flush.assert_not_called()
+        self.assertIs(client._lifecycle_owner, owner)
+
     def test_shutdown_clears_feature_flag_called_dedupe_cache(self):
         client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
         client.distinct_ids_feature_flags_reported["user"] = {("flag", True, ())}
@@ -2155,12 +2389,795 @@ class TestClient(unittest.TestCase):
         self.assertEqual(len(client.distinct_ids_feature_flags_reported), 0)
 
     def test_shutdown_flushes_without_timeout(self):
-        client = Client(FAKE_TEST_API_KEY, send=False, thread=0)
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
 
-        with mock.patch.object(client, "flush") as mock_flush:
+        with mock.patch.object(client._analytics_lane, "flush") as mock_flush:
             client.shutdown()
 
         mock_flush.assert_called_once_with(timeout_seconds=None)
+
+    def test_callback_shutdown_escalates_pending_deferred_join(self):
+        client = Client(FAKE_TEST_API_KEY)
+        first_run_started = threading.Event()
+        release_first_run = threading.Event()
+        shutdown_run_complete = threading.Event()
+        require_shutdown_calls = []
+
+        def run_lifecycle(require_shutdown=False):
+            require_shutdown_calls.append(require_shutdown)
+            if len(require_shutdown_calls) == 1:
+                first_run_started.set()
+                self.assertTrue(release_first_run.wait(2))
+            else:
+                shutdown_run_complete.set()
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(client, "_run_lifecycle", side_effect=run_lifecycle),
+            mock.patch.object(
+                client,
+                "_start_lifecycle_thread",
+                wraps=client._start_lifecycle_thread,
+            ) as start_thread,
+        ):
+            client.join()
+            self.assertTrue(first_run_started.wait(1))
+            client.shutdown()
+            release_first_run.set()
+            self.assertTrue(shutdown_run_complete.wait(1))
+
+        start_thread.assert_called_once()
+        self.assertEqual(start_thread.call_args.args[1], "lifecycle")
+        self.assertEqual(require_shutdown_calls, [False, True])
+        self.assertTrue(
+            _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
+        )
+        self.assertFalse(client._deferred_lifecycle_dirty)
+
+    def test_callback_shutdown_escalates_failed_deferred_join(self):
+        client = Client(FAKE_TEST_API_KEY)
+        first_run_started = threading.Event()
+        release_first_run = threading.Event()
+        shutdown_run_complete = threading.Event()
+        require_shutdown_calls = []
+
+        def run_lifecycle(require_shutdown=False):
+            require_shutdown_calls.append(require_shutdown)
+            if len(require_shutdown_calls) == 1:
+                first_run_started.set()
+                self.assertTrue(release_first_run.wait(2))
+                raise Exception("join cleanup failed")
+            shutdown_run_complete.set()
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(client, "_run_lifecycle", side_effect=run_lifecycle),
+            mock.patch.object(
+                client,
+                "_start_lifecycle_thread",
+                wraps=client._start_lifecycle_thread,
+            ) as start_thread,
+        ):
+            client.join()
+            self.assertTrue(first_run_started.wait(1))
+            client.shutdown()
+            release_first_run.set()
+            self.assertTrue(shutdown_run_complete.wait(1))
+
+        start_thread.assert_called_once()
+        self.assertEqual(require_shutdown_calls, [False, True])
+        self.assertTrue(
+            _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
+        )
+        self.assertFalse(client._deferred_lifecycle_dirty)
+
+    def test_deferred_lifecycle_worker_is_daemon(self):
+        client = Client(FAKE_TEST_API_KEY)
+        target = mock.Mock()
+
+        with mock.patch("posthog.client.threading.Thread") as thread:
+            client._start_lifecycle_thread(target, "lifecycle")
+
+        thread.assert_called_once_with(
+            target=target,
+            args=(),
+            name="posthog-lifecycle",
+            daemon=True,
+        )
+        thread.return_value.start.assert_called_once_with()
+
+    def test_deferred_lifecycle_logs_selected_operation(self):
+        client = Client(FAKE_TEST_API_KEY)
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(
+                client,
+                "_run_lifecycle",
+                side_effect=Exception("cleanup failed"),
+            ) as run_lifecycle,
+            mock.patch.object(client.log, "exception") as log_exception,
+        ):
+            client.shutdown()
+            self.assertTrue(
+                _wait_until(lambda: not client._deferred_lifecycle_thread_pending)
+            )
+
+        run_lifecycle.assert_called_once_with(require_shutdown=True)
+        log_exception.assert_called_once_with("Deferred %s failed", "shutdown")
+
+    def test_callback_flushes_are_coalesced_with_strongest_followup(self):
+        client = Client(FAKE_TEST_API_KEY)
+        first_flush_started = threading.Event()
+        release_first_flush = threading.Event()
+        followup_complete = threading.Event()
+        timeouts = []
+
+        def flush(timeout_seconds):
+            timeouts.append(timeout_seconds)
+            if len(timeouts) == 1:
+                first_flush_started.set()
+                self.assertTrue(release_first_flush.wait(2))
+            else:
+                followup_complete.set()
+
+        with (
+            mock.patch.object(
+                client, "_is_lifecycle_callback_thread", return_value=True
+            ),
+            mock.patch.object(client, "flush", side_effect=flush),
+        ):
+            self.assertTrue(client._defer_flush_from_callback(0))
+            self.assertTrue(first_flush_started.wait(1))
+            self.assertTrue(client._defer_flush_from_callback(1))
+            self.assertTrue(client._defer_flush_from_callback(None))
+            release_first_flush.set()
+            self.assertTrue(followup_complete.wait(1))
+
+        self.assertEqual(timeouts, [0, None])
+
+    def test_sync_send_failure_does_not_invoke_async_on_error(self):
+        on_error = mock.Mock()
+        client = Client(
+            FAKE_TEST_API_KEY,
+            sync_mode=True,
+            on_error=on_error,
+        )
+
+        with mock.patch(
+            "posthog.client.batch_post", side_effect=Exception("upload failed")
+        ):
+            result = client.capture("event", distinct_id="distinct_id")
+
+        self.assertIsNone(result)
+        on_error.assert_not_called()
+        self.assertEqual(client._analytics_lane._active_sync_sends, 0)
+
+    def test_on_error_can_request_shutdown_with_pending_work(self):
+        first_send_started = threading.Event()
+        release_first_send = threading.Event()
+        callback_returned = threading.Event()
+        sent_events = []
+        client: Client
+
+        def request(batch):
+            event = batch[0]["event"]
+            sent_events.append(event)
+            if event == "first":
+                first_send_started.set()
+                self.assertTrue(release_first_send.wait(2))
+                raise Exception("upload failed")
+
+        def on_error(error, batch):
+            client.shutdown()
+            client.join()
+            callback_returned.set()
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=on_error,
+            flush_at=1,
+            flush_interval=0.01,
+            max_retries=0,
+        )
+        exception_capture = mock.Mock()
+        exception_capture.close.side_effect = Exception("cleanup failed")
+        client.exception_capture = exception_capture
+        with mock.patch.object(client.consumers[0], "request", side_effect=request):
+            client.capture("first", distinct_id="distinct_id")
+            self.assertTrue(first_send_started.wait(1))
+            client.capture("second", distinct_id="distinct_id")
+            release_first_send.set()
+
+            self.assertTrue(callback_returned.wait(1))
+            self.assertTrue(_wait_until(lambda: client._shutdown_complete))
+
+        self.assertEqual(sent_events, ["first", "second"])
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+        exception_capture.close.assert_called_once_with()
+        self.assertTrue(all(not consumer.is_alive() for consumer in client.consumers))
+
+    def test_concurrent_join_waits_for_lifecycle_owner(self):
+        send_started = threading.Event()
+        release_send = threading.Event()
+
+        def request(batch):
+            send_started.set()
+            self.assertTrue(release_send.wait(2))
+
+        client = Client(FAKE_TEST_API_KEY, flush_at=1)
+        with mock.patch.object(client.consumers[0], "request", side_effect=request):
+            client.capture("event", distinct_id="distinct_id")
+            self.assertTrue(send_started.wait(1))
+
+            first_join = threading.Thread(target=client.join)
+            second_join = threading.Thread(target=client.join)
+            first_join.start()
+            time.sleep(0.05)
+            second_join.start()
+            time.sleep(0.05)
+            self.assertTrue(second_join.is_alive())
+
+            release_send.set()
+            first_join.join(3)
+            second_join.join(3)
+
+        self.assertFalse(first_join.is_alive())
+        self.assertFalse(second_join.is_alive())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_join_winning_shutdown_race_drains_pending_work_without_deadlock(self):
+        first_send_started = threading.Event()
+        release_first_send = threading.Event()
+        join_started = threading.Event()
+        sent_events = []
+
+        def request(batch):
+            sent_events.extend(event["event"] for event in batch)
+            first_send_started.set()
+            self.assertTrue(release_first_send.wait(2))
+
+        client = Client(FAKE_TEST_API_KEY, flush_at=1)
+        with mock.patch.object(client.consumers[0], "request", side_effect=request):
+            client.capture("first", distinct_id="distinct_id")
+            self.assertTrue(first_send_started.wait(1))
+            client.capture("second", distinct_id="distinct_id")
+
+            original_close = client._analytics_lane.close
+
+            def observed_close():
+                original_close()
+                join_started.set()
+
+            with mock.patch.object(
+                client._analytics_lane, "close", side_effect=observed_close
+            ):
+                join_thread = threading.Thread(target=client.join)
+                shutdown_thread = threading.Thread(target=client.shutdown)
+                join_thread.start()
+                self.assertTrue(join_started.wait(1))
+                shutdown_thread.start()
+                release_first_send.set()
+                join_thread.join(3)
+                shutdown_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertEqual(sent_events, ["first", "second"])
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+        self.assertTrue(client._shutdown_complete)
+
+    def test_shutdown_winning_join_race_drains_pending_work(self):
+        first_send_started = threading.Event()
+        release_first_send = threading.Event()
+        shutdown_started = threading.Event()
+        sent_events = []
+
+        def request(batch):
+            sent_events.extend(event["event"] for event in batch)
+            if len(sent_events) == 1:
+                first_send_started.set()
+                self.assertTrue(release_first_send.wait(2))
+
+        client = Client(FAKE_TEST_API_KEY, flush_at=1, flush_interval=0.01)
+        with mock.patch.object(client.consumers[0], "request", side_effect=request):
+            client.capture("first", distinct_id="distinct_id")
+            self.assertTrue(first_send_started.wait(1))
+            client.capture("second", distinct_id="distinct_id")
+
+            original_close = client._analytics_lane.close
+
+            def observed_close():
+                original_close()
+                shutdown_started.set()
+
+            with mock.patch.object(
+                client._analytics_lane, "close", side_effect=observed_close
+            ):
+                shutdown_thread = threading.Thread(target=client.shutdown)
+                join_thread = threading.Thread(target=client.join)
+                shutdown_thread.start()
+                self.assertTrue(shutdown_started.wait(1))
+                join_thread.start()
+                release_first_send.set()
+                shutdown_thread.join(3)
+                join_thread.join(3)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertFalse(join_thread.is_alive())
+        self.assertEqual(sent_events, ["first", "second"])
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+
+    def test_join_publishes_terminal_intent_before_closing_lanes(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        original_close = client._analytics_lane.close
+
+        def close_analytics_lane():
+            self.assertTrue(client._join_requested)
+            original_close()
+
+        with mock.patch.object(
+            client._analytics_lane, "close", side_effect=close_analytics_lane
+        ):
+            client.join()
+
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_shutdown_after_join_runs_shutdown_only_cleanup(self):
+        client = Client(FAKE_TEST_API_KEY)
+        metrics = mock.Mock()
+        exception_capture = mock.Mock()
+        client._metrics = metrics
+        client.exception_capture = exception_capture
+
+        client.join()
+        client.shutdown()
+
+        metrics.flush.assert_called_once()
+        metrics.reset.assert_called_once()
+        exception_capture.close.assert_called_once()
+        self.assertTrue(client._shutdown_complete)
+
+    def test_async_cache_provider_default_executor_can_reenter_join(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        executor_called = threading.Event()
+
+        class AsyncProvider:
+            async def shutdown(self):
+                def reenter_join():
+                    client.join()
+                    executor_called.set()
+
+                await asyncio.get_running_loop().run_in_executor(None, reenter_join)
+
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        join_thread = threading.Thread(target=client.join)
+        join_thread.start()
+        join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(executor_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_custom_executor_can_reenter_join(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        executor_called = threading.Event()
+
+        class DelegatingExecutor(Executor):
+            def __init__(self):
+                self.executor = ThreadPoolExecutor(max_workers=1)
+
+            def submit(self, fn, /, *args, **kwargs):
+                return self.executor.submit(fn, *args, **kwargs)
+
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                self.executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+        class AsyncProvider:
+            async def shutdown(self):
+                def reenter_join():
+                    client.join()
+                    executor_called.set()
+
+                with DelegatingExecutor() as executor:
+                    await asyncio.get_running_loop().run_in_executor(
+                        executor, reenter_join
+                    )
+
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        join_thread = threading.Thread(target=client.join)
+        join_thread.start()
+        join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(executor_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_read_only_loop_falls_back_without_deadlocking(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        executor_called = threading.Event()
+
+        class ReadOnlyLoop(asyncio.SelectorEventLoop):
+            def __setattr__(self, name, value):
+                if name == "run_in_executor":
+                    raise AttributeError("run_in_executor is read-only")
+                super().__setattr__(name, value)
+
+        class AsyncProvider:
+            async def shutdown(self):
+                def reenter_join():
+                    executor_called.set()
+                    client.join()
+
+                await asyncio.get_running_loop().run_in_executor(None, reenter_join)
+
+        loop = ReadOnlyLoop()
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        with mock.patch(
+            "posthog._async_utils.asyncio.new_event_loop", return_value=loop
+        ):
+            join_thread = threading.Thread(target=client.join)
+            join_thread.start()
+            join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(executor_called.is_set())
+        self.assertTrue(loop.is_closed())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_process_executor_remains_supported(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+
+        class AsyncProvider:
+            result = None
+
+            async def shutdown(self):
+                with ProcessPoolExecutor(max_workers=1) as executor:
+                    self.result = await asyncio.get_running_loop().run_in_executor(
+                        executor, abs, -6
+                    )
+
+        provider = AsyncProvider()
+        client._flag_definition_cache_provider = provider  # type: ignore[assignment]
+        client.join()
+
+        self.assertEqual(provider.result, 6)
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_async_cache_provider_executor_can_reenter_join_during_runner_close(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        finalizer_called = threading.Event()
+
+        class AsyncProvider:
+            async def shutdown(self):
+                async def pending_task():
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        await asyncio.to_thread(client.join)
+                        finalizer_called.set()
+
+                asyncio.create_task(pending_task())
+                await asyncio.sleep(0)
+
+        client._flag_definition_cache_provider = AsyncProvider()  # type: ignore[assignment]
+        join_thread = threading.Thread(target=client.join)
+        join_thread.start()
+        join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(finalizer_called.is_set())
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_cache_provider_shutdown_can_reenter_join(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+
+        with mock.patch.object(
+            client,
+            "_shutdown_flag_definition_cache_provider",
+            side_effect=client.join,
+        ):
+            join_thread = threading.Thread(target=client.join)
+            join_thread.start()
+            join_thread.join(2)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertTrue(client._workers_joined)
+
+    def test_cache_provider_shutdown_can_reenter_join_from_another_thread(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+
+        class Runner:
+            _thread = None
+
+            def owns_thread(self, thread):
+                return thread is self._thread
+
+        runner = Runner()
+        client._flag_definition_cache_provider_async_runner = runner  # type: ignore[assignment]
+
+        def reenter_join():
+            reentrant_thread = threading.Thread(target=client.join)
+            runner._thread = reentrant_thread
+            reentrant_thread.start()
+            reentrant_thread.join(1)
+            self.assertFalse(reentrant_thread.is_alive())
+
+        with mock.patch.object(
+            client,
+            "_shutdown_flag_definition_cache_provider",
+            side_effect=reenter_join,
+        ):
+            client.join()
+
+        self.assertTrue(client._workers_joined)
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_poller_shutdown_request_is_completed_by_join_owner(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+
+        class ReentrantPoller(threading.Thread):
+            def __init__(self):
+                super().__init__(daemon=True)
+                self.stop_requested = threading.Event()
+
+            def run(self):
+                self.stop_requested.wait(2)
+                client.shutdown()
+
+            def stop(self):
+                self.stop_requested.set()
+                self.join(1)
+                self.assert_stopped()
+
+            def assert_stopped(self):
+                if self.is_alive():
+                    raise AssertionError("poller did not stop")
+
+        poller = ReentrantPoller()
+        client.poller = poller  # type: ignore[assignment]
+        poller.start()
+
+        client.join()
+
+        self.assertTrue(client._shutdown_complete)
+
+    def test_join_failure_does_not_retry_or_skip_later_cleanup(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+
+        with (
+            mock.patch.object(
+                client,
+                "_shutdown_flag_definition_cache_provider",
+                side_effect=Exception("cleanup failed"),
+            ) as cleanup,
+            mock.patch.object(client, "_unregister_duplicate_client") as unregister,
+        ):
+            client.join()
+            client.join()
+
+        self.assertTrue(client._workers_joined)
+        self.assertTrue(client._join_cleanup_complete)
+        cleanup.assert_called_once_with()
+        unregister.assert_called_once_with()
+
+    def test_concurrent_debug_join_callers_observe_cleanup_failure(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01, debug=True)
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+        owner_errors = []
+        waiter_errors = []
+
+        def cleanup():
+            cleanup_started.set()
+            self.assertTrue(release_cleanup.wait(2))
+            raise ValueError("cleanup failed")
+
+        def run_join(errors):
+            try:
+                client.join()
+            except Exception as error:
+                errors.append(error)
+
+        with mock.patch.object(
+            client,
+            "_shutdown_flag_definition_cache_provider",
+            side_effect=cleanup,
+        ):
+            owner = threading.Thread(target=run_join, args=(owner_errors,))
+            waiter = threading.Thread(target=run_join, args=(waiter_errors,))
+            owner.start()
+            self.assertTrue(cleanup_started.wait(1))
+            waiter.start()
+            time.sleep(0.05)
+            self.assertTrue(waiter.is_alive())
+
+            release_cleanup.set()
+            owner.join(2)
+            waiter.join(2)
+
+        self.assertFalse(owner.is_alive())
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(len(owner_errors), 1)
+        self.assertRegex(str(owner_errors[0]), "cleanup failed")
+        self.assertEqual(len(waiter_errors), 1)
+        self.assertRegex(str(waiter_errors[0]), "client lifecycle cleanup failed")
+        self.assertTrue(client._join_cleanup_complete)
+
+    def test_pending_shutdown_continues_when_join_cleanup_fails(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+        cleanup_calls = 0
+        join_errors = []
+
+        def cleanup():
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            if cleanup_calls == 1:
+                cleanup_started.set()
+                self.assertTrue(release_cleanup.wait(2))
+                raise Exception("cleanup failed")
+
+        def run_join():
+            try:
+                client.join()
+            except Exception as error:
+                join_errors.append(error)
+
+        with mock.patch.object(
+            client,
+            "_shutdown_flag_definition_cache_provider",
+            side_effect=cleanup,
+        ):
+            join_thread = threading.Thread(target=run_join)
+            join_thread.start()
+            self.assertTrue(cleanup_started.wait(1))
+
+            shutdown_thread = threading.Thread(target=client.shutdown)
+            shutdown_thread.start()
+            time.sleep(0.05)
+            self.assertTrue(shutdown_thread.is_alive())
+
+            release_cleanup.set()
+            join_thread.join(2)
+            shutdown_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertEqual(join_errors, [])
+        self.assertEqual(cleanup_calls, 1)
+        self.assertTrue(client._shutdown_complete)
+
+    def test_join_interruption_does_not_publish_completion(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+
+        with (
+            mock.patch.object(
+                client, "_flush_or_discard_queues", side_effect=KeyboardInterrupt
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            client.join()
+
+        self.assertFalse(client._workers_joined)
+        self.assertFalse(client._join_cleanup_complete)
+        self.assertIsNone(client._lifecycle_owner)
+
+    def test_shutdown_interruption_does_not_publish_completion(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        metrics = mock.Mock()
+        metrics.flush.side_effect = KeyboardInterrupt
+        client._metrics = metrics
+
+        with self.assertRaises(KeyboardInterrupt):
+            client.shutdown()
+
+        self.assertFalse(client._workers_joined)
+        self.assertFalse(client._join_cleanup_complete)
+        self.assertFalse(client._shutdown_complete)
+        self.assertIsNone(client._lifecycle_owner)
+
+    def test_shutdown_failure_is_terminal_and_not_retried(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        exception_capture = mock.Mock()
+        exception_capture.close.side_effect = Exception("cleanup failed")
+        client.exception_capture = exception_capture
+
+        client.shutdown()
+        client.shutdown()
+
+        self.assertTrue(client._shutdown_complete)
+        exception_capture.close.assert_called_once_with()
+
+    def test_shutdown_failure_is_raised_after_later_cleanup_in_debug_mode(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=0.01, debug=True)
+        metrics = mock.Mock()
+        metrics.reset.side_effect = Exception("reset failed")
+        dedupe_cache = mock.Mock()
+        dedupe_cache.clear.side_effect = Exception("clear failed")
+        exception_capture = mock.Mock()
+        client._metrics = metrics
+        client.distinct_ids_feature_flags_reported = dedupe_cache
+        client.exception_capture = exception_capture
+
+        with self.assertRaisesRegex(Exception, "reset failed"):
+            client.shutdown()
+        with self.assertRaisesRegex(RuntimeError, "client lifecycle cleanup failed"):
+            client.shutdown()
+
+        metrics.flush.assert_called_once_with()
+        metrics.reset.assert_called_once_with()
+        dedupe_cache.clear.assert_called_once_with()
+        exception_capture.close.assert_called_once_with()
+        self.assertTrue(client._workers_joined)
+        self.assertTrue(client._join_cleanup_complete)
+        self.assertTrue(client._shutdown_complete)
+
+    def test_lane_join_raises_first_failure_after_attempting_later_cleanup(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        lane = client._analytics_lane
+        consumer = mock.Mock()
+        first_error = ValueError("pause failed")
+        consumer._pause.side_effect = first_error
+        lane.consumers = [consumer]
+
+        with (
+            mock.patch.object(lane, "discard_undrainable_queued_work") as discard,
+            mock.patch.object(
+                lane._drain_signal,
+                "complete",
+                side_effect=RuntimeError("complete failed"),
+            ) as complete,
+            self.assertRaises(ValueError) as raised,
+        ):
+            lane.join()
+
+        self.assertIs(raised.exception, first_error)
+        consumer.join.assert_called_once_with()
+        discard.assert_called_once_with()
+        complete.assert_called_once_with()
+
+    def test_shutdown_prepares_each_lane_once(self):
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        close_methods = []
+        wait_methods = []
+
+        with contextlib.ExitStack() as stack:
+            for lane in client._lanes:
+                close_methods.append(
+                    stack.enter_context(
+                        mock.patch.object(lane, "close", wraps=lane.close)
+                    )
+                )
+                wait_methods.append(
+                    stack.enter_context(
+                        mock.patch.object(
+                            lane,
+                            "wait_for_sync_sends",
+                            wraps=lane.wait_for_sync_sends,
+                        )
+                    )
+                )
+            client.shutdown()
+
+        for close, wait in zip(close_methods, wait_methods):
+            close.assert_called_once_with()
+            wait.assert_called_once_with()
+
+    def test_shutdown_does_not_wait_for_idle_consumers_flush_interval(self):
+        client = Client(FAKE_TEST_API_KEY, flush_interval=5)
+
+        start = time.monotonic()
+        client.shutdown()
+
+        self.assertLess(time.monotonic() - start, 1)
 
     def test_shutdown_waits_for_racing_enqueue_before_draining(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
@@ -2257,18 +3274,60 @@ class TestClient(unittest.TestCase):
             mock_post.assert_called_once()
 
     def test_overflow(self):
-        client = Client(FAKE_TEST_API_KEY, max_queue_size=1)
-        # Ensure consumer thread is no longer uploading
-        client.join()
-
-        for i in range(10):
-            client.capture("test event", distinct_id="distinct_id")
+        client = Client(FAKE_TEST_API_KEY, max_queue_size=1, thread=0)
+        client.capture("test event", distinct_id="distinct_id")
 
         with self.assertLogs("posthog", level="WARNING") as logs:
             msg_uuid = client.capture("test event", distinct_id="distinct_id")
         # Make sure we are informed that the queue is at capacity
         self.assertIsNone(msg_uuid)
         self.assertIn("dropping event", logs.output[0])
+
+    def test_join_discards_queued_work_when_no_consumer_can_drain_it(self):
+        client = Client(FAKE_TEST_API_KEY, thread=0)
+        client.capture("test event", distinct_id="distinct_id")
+
+        start = time.monotonic()
+        client.join()
+
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+
+    def test_join_discards_remaining_work_if_consumer_stops_during_drain(self):
+        send_started = threading.Event()
+        release_send = threading.Event()
+
+        def request(batch):
+            send_started.set()
+            self.assertTrue(release_send.wait(2))
+
+        client = Client(FAKE_TEST_API_KEY, flush_at=1)
+        consumer = client.consumers[0]
+        with mock.patch.object(consumer, "request", side_effect=request):
+            client.capture("first", distinct_id="distinct_id")
+            self.assertTrue(send_started.wait(1))
+            client.capture("second", distinct_id="distinct_id")
+
+            join_thread = threading.Thread(target=client.join)
+            join_thread.start()
+            time.sleep(0.05)
+            consumer.pause()
+            release_send.set()
+            join_thread.join(3)
+
+        self.assertFalse(join_thread.is_alive())
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+
+    def test_shutdown_discards_queued_work_when_no_consumer_can_drain_it(self):
+        client = Client(FAKE_TEST_API_KEY, thread=0)
+        client.capture("test event", distinct_id="distinct_id")
+
+        start = time.monotonic()
+        client.shutdown()
+
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(client.queue.unfinished_tasks, 0)
+        self.assertTrue(client._shutdown_complete)
 
     def test_unicode(self):
         Client("unicode_key")

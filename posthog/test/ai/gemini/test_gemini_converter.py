@@ -83,9 +83,14 @@ class TestGeminiInputParts:
             ),
         ]
         out = format_gemini_input(contents)
-        assert out[0]["content"][0]["type"] == "function_call"
-        assert out[0]["content"][0]["function_call"]["name"] == "get_weather"
-        assert out[1]["content"][0]["type"] == "function_response"
+        call = out[0]["content"][0]
+        assert call["type"] == "function"
+        assert call["function"] == {"name": "get_weather", "arguments": {"city": "SF"}}
+        result = out[1]["content"][0]
+        assert result["type"] == "function"
+        assert result["tool_name"] == "get_weather"
+        assert result["content"] == {"temp": "18C"}
+        assert "function" not in result
 
     def test_camel_case_dict_part_preserved(self):
         out = format_gemini_input(

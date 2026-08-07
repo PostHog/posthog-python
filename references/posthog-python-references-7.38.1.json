@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.38.2",
+    "version": "7.38.1",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -1648,13 +1648,13 @@
           "params": [
             {
               "name": "group_type",
-              "description": "The type of group (e.g., 'company', 'team'). Required -         the call is dropped with a warning if it is missing or empty.",
+              "description": "The type of group (e.g., 'company', 'team').",
               "isOptional": true,
               "type": "str"
             },
             {
               "name": "group_key",
-              "description": "The unique identifier for the group. Required - the call         is dropped with a warning if it is missing or empty.",
+              "description": "The unique identifier for the group.",
               "isOptional": true,
               "type": "str"
             },
@@ -2697,13 +2697,13 @@
           "params": [
             {
               "name": "group_type",
-              "description": "Type of your group. Required - the call is dropped with a         warning if it is missing or empty.",
+              "description": "Type of your group",
               "isOptional": true,
               "type": "str"
             },
             {
               "name": "group_key",
-              "description": "Unique identifier of the group. Required - the call is         dropped with a warning if it is missing or empty.",
+              "description": "Unique identifier of the group",
               "isOptional": true,
               "type": "str"
             },

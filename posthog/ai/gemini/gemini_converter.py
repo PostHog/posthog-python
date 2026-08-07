@@ -59,15 +59,24 @@ def _format_part(part: Any) -> Optional[FormattedContentItem]:
     if "file_data" in plain:
         media = _format_media_payload(plain["file_data"])
         return {"type": _kind_from_mime(media.get("mime_type")), "file_data": media}
+    # Gemini-native function_call/function_response parts are normalized to the
+    # provider-agnostic tool-call/tool-result blocks. Emitting the raw Gemini
+    # shape leaves them unrenderable and invisible to evals.
     if "function_call" in plain:
+        call = to_plain(plain["function_call"]) or {}
         return {
-            "type": "function_call",
-            "function_call": to_plain(plain["function_call"]),
+            "type": "function",
+            "function": {
+                "name": call.get("name"),
+                "arguments": call.get("args"),
+            },
         }
     if "function_response" in plain:
+        response = to_plain(plain["function_response"]) or {}
         return {
-            "type": "function_response",
-            "function_response": to_plain(plain["function_response"]),
+            "type": "function",
+            "tool_name": response.get("name") or "",
+            "content": response.get("response"),
         }
     if not plain:
         return None

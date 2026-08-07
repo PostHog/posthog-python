@@ -13,6 +13,8 @@ import sys
 import platform
 import distro  # For Linux OS detection
 
+from .types import FeatureFlagResult as _FeatureFlagResult
+
 log = logging.getLogger("posthog")
 
 
@@ -150,13 +152,24 @@ def is_valid_regex(value) -> bool:
 
 
 class SizeLimitedDict(defaultdict):
+    """A ``defaultdict`` that evicts its oldest entries once it reaches ``max_size``.
+
+    Eviction is incremental: inserting a new key past capacity removes only the
+    least-recently-inserted key, never the whole mapping. This matters for the
+    ``$feature_flag_called`` dedupe tracker, whose only bound this is — wiping every
+    entry under capacity pressure would let the next flag read for every previously
+    seen ``distinct_id`` re-emit an event it had already deduped.
+    """
+
     def __init__(self, max_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
     def __setitem__(self, key, value):
-        if len(self) >= self.max_size:
-            self.clear()
+        if key not in self:
+            # dicts iterate in insertion order, so the first key is the oldest one.
+            while self and len(self) >= self.max_size:
+                del self[next(iter(self))]
 
         super().__setitem__(key, value)
 
@@ -165,6 +178,8 @@ CACHE_MAX_SIZE = 10000
 CACHE_TTL = 300
 CACHE_STALE_TTL = 3600
 CACHE_KEY_PREFIX = "posthog:flags:"
+_FEATURE_FLAG_RESULT_TYPE = "FeatureFlagResult"
+_FEATURE_FLAG_RESULT_SCHEMA_VERSION = 1
 
 
 class FlagCacheEntry:
@@ -320,18 +335,29 @@ class RedisFlagCache:
             "flag_version": flag_definition_version,
             "timestamp": timestamp,
         }
+        if isinstance(flag_result, _FeatureFlagResult):
+            # Additive metadata keeps the existing entry shape readable by older SDKs.
+            entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
+            entry["flag_result_schema_version"] = _FEATURE_FLAG_RESULT_SCHEMA_VERSION
         return json.dumps(entry)
 
     def _deserialize_entry(self, data):
         try:
             entry = json.loads(data)
             flag_result = entry["flag_result"]
+            if entry.get("flag_result_type") == _FEATURE_FLAG_RESULT_TYPE:
+                if (
+                    entry.get("flag_result_schema_version")
+                    != _FEATURE_FLAG_RESULT_SCHEMA_VERSION
+                ):
+                    return None
+                flag_result = _FeatureFlagResult(**flag_result)
             return FlagCacheEntry(
                 flag_result=flag_result,
                 flag_definition_version=entry["flag_version"],
                 timestamp=entry["timestamp"],
             )
-        except (json.JSONDecodeError, KeyError, ValueError):
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # If deserialization fails, treat as cache miss
             return None
 

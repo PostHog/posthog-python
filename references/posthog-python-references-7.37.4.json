@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.38.2",
+    "version": "7.37.4",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -399,7 +399,7 @@
             },
             {
               "name": "on_error",
-              "description": "Optional callback invoked by background consumers when an         upload fails. Keep it short and non-blocking. Calling lifecycle         methods directly is safe and deferred, but do not start another         thread or task that calls ``flush()``, ``join()``, or         ``shutdown()`` and then wait for it from the callback.",
+              "description": "Optional callback invoked by background consumers when an         upload fails.",
               "isOptional": false,
               "type": "any"
             },
@@ -1648,13 +1648,13 @@
           "params": [
             {
               "name": "group_type",
-              "description": "The type of group (e.g., 'company', 'team'). Required -         the call is dropped with a warning if it is missing or empty.",
+              "description": "The type of group (e.g., 'company', 'team').",
               "isOptional": true,
               "type": "str"
             },
             {
               "name": "group_key",
-              "description": "The unique identifier for the group. Required - the call         is dropped with a warning if it is missing or empty.",
+              "description": "The unique identifier for the group.",
               "isOptional": true,
               "type": "str"
             },
@@ -1727,7 +1727,7 @@
         {
           "id": "join",
           "title": "join",
-          "description": "Attempt to process queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.  Failed or undrainable events may be dropped and reported through logging or ``on_error``; returning does not guarantee server receipt. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry.",
+          "description": "End the consumer thread once the queue is empty. Do not use directly, call `shutdown()` instead.",
           "details": "",
           "category": null,
           "params": [],
@@ -1928,7 +1928,7 @@
         {
           "id": "shutdown",
           "title": "shutdown",
-          "description": "Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.  Normally this method blocks until queued events have been attempted and cleanup finishes. Failed or undrainable events may be dropped and reported through logging or ``on_error``; returning does not guarantee server receipt. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry. When called directly from an SDK callback such as ``on_error``, shutdown is deferred to avoid blocking the worker that invoked the callback. If the callback must coordinate a blocking shutdown, have it signal an application-owned thread and return before that thread calls shutdown. Do not wait inside the callback for another thread or task that calls a lifecycle method.",
+          "description": "Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.",
           "details": "",
           "category": null,
           "params": [],
@@ -2697,13 +2697,13 @@
           "params": [
             {
               "name": "group_type",
-              "description": "Type of your group. Required - the call is dropped with a         warning if it is missing or empty.",
+              "description": "Type of your group",
               "isOptional": true,
               "type": "str"
             },
             {
               "name": "group_key",
-              "description": "Unique identifier of the group. Required - the call is         dropped with a warning if it is missing or empty.",
+              "description": "Unique identifier of the group",
               "isOptional": true,
               "type": "str"
             },
@@ -2783,7 +2783,7 @@
         {
           "id": "join",
           "title": "join",
-          "description": "Attempt to process queued events and stop the client's background workers. Use `shutdown()` directly in most cases.  Failed or undrainable events may be dropped and reported through logging or ``on_error``; returning does not guarantee server receipt. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry.",
+          "description": "Block program until the client clears the queue. Used during program shutdown. You should use `shutdown()` directly in most cases.",
           "details": "",
           "category": "Client management",
           "params": [],
@@ -3130,7 +3130,7 @@
         {
           "id": "shutdown",
           "title": "shutdown",
-          "description": "Flush all messages and cleanly shutdown the client.  This normally blocks until queued events have been attempted and cleanup finishes. Failed or undrainable events may be dropped and reported through logging or ``on_error``; returning does not guarantee server receipt. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry. Calls made directly from SDK callbacks such as ``on_error`` are deferred to avoid deadlocking the worker. If blocking completion is required, signal an application-owned thread, return from the callback, and call ``shutdown()`` from that thread. Do not wait inside a callback for another thread or task calling a lifecycle method.",
+          "description": "Flush all messages and cleanly shutdown the client.",
           "details": "",
           "category": "Client management",
           "params": [],
