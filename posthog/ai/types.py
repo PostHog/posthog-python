@@ -73,6 +73,11 @@ class TokenUsage(TypedDict, total=False):
     cache_creation_input_tokens: Optional[int]
     reasoning_tokens: Optional[int]
     web_search_count: Optional[int]
+    # Whether cache tokens are counted separately from input_tokens. Providers that
+    # report them as a subset of input_tokens set this False. Left unset when the
+    # provider's accounting model is not known, in which case ingestion infers it
+    # from the token counts.
+    cache_reporting_exclusive: Optional[bool]
     raw_usage: Optional[Any]  # Raw provider usage metadata for backend processing
 
 

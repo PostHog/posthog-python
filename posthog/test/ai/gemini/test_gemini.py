@@ -836,6 +836,7 @@ def test_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
     assert props["$ai_output_tokens"] == 50
     assert props["$ai_cache_read_input_tokens"] == 30
     assert props["$ai_reasoning_tokens"] == 10
+    assert props["$ai_cache_reporting_exclusive"] is False
 
 
 def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
@@ -899,6 +900,7 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_cache_read_input_tokens"] == 30
     assert props["$ai_reasoning_tokens"] == 5
+    assert props["$ai_cache_reporting_exclusive"] is False
 
     # Verify raw usage is captured in streaming mode (merged from chunks)
     assert "$ai_usage" in props

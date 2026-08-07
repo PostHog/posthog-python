@@ -172,6 +172,12 @@ def merge_usage_stats(
             current = target.get("web_search_count") or 0
             target["web_search_count"] = max(current, source_web_search)
 
+        # Carried across, never accumulated: this describes the provider's accounting
+        # model, so it is the same on every chunk.
+        source_exclusive = source.get("cache_reporting_exclusive")
+        if source_exclusive is not None:
+            target["cache_reporting_exclusive"] = source_exclusive
+
         # Merge raw_usage to avoid losing data from earlier events
         # For Anthropic streaming: message_start has input tokens, message_delta has output
         # Note: raw_usage is already serialized by converters, so it's a dict
@@ -199,6 +205,8 @@ def merge_usage_stats(
             target["reasoning_tokens"] = source["reasoning_tokens"]
         if source.get("web_search_count") is not None:
             target["web_search_count"] = source["web_search_count"]
+        if source.get("cache_reporting_exclusive") is not None:
+            target["cache_reporting_exclusive"] = source["cache_reporting_exclusive"]
         # Note: raw_usage is already serialized by converters, so it's a dict
         if source.get("raw_usage") is not None:
             target["raw_usage"] = source["raw_usage"]
@@ -482,6 +490,10 @@ def call_llm_and_track_usage(
             if cache_creation is not None and cache_creation > 0:
                 tag("$ai_cache_creation_input_tokens", cache_creation)
 
+            cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
+            if cache_reporting_exclusive is not None:
+                tag("$ai_cache_reporting_exclusive", cache_reporting_exclusive)
+
             reasoning = usage.get("reasoning_tokens")
             if reasoning is not None and reasoning > 0:
                 tag("$ai_reasoning_tokens", reasoning)
@@ -634,6 +646,10 @@ async def call_llm_and_track_usage_async(
             cache_creation = usage.get("cache_creation_input_tokens")
             if cache_creation is not None and cache_creation > 0:
                 tag("$ai_cache_creation_input_tokens", cache_creation)
+
+            cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
+            if cache_reporting_exclusive is not None:
+                tag("$ai_cache_reporting_exclusive", cache_reporting_exclusive)
 
             reasoning = usage.get("reasoning_tokens")
             if reasoning is not None and reasoning > 0:
@@ -793,6 +809,12 @@ def capture_streaming_event(
             value = event_data["usage_stats"].get(field)
             if value is not None and isinstance(value, int) and value > 0:
                 event_properties[f"$ai_{field}"] = value
+
+    cache_reporting_exclusive = event_data["usage_stats"].get(
+        "cache_reporting_exclusive"
+    )
+    if cache_reporting_exclusive is not None:
+        event_properties["$ai_cache_reporting_exclusive"] = cache_reporting_exclusive
 
     # Add web search count if present (all providers)
     web_search_count = event_data["usage_stats"].get("web_search_count")
