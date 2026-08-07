@@ -788,7 +788,7 @@ def match_property_group(
                     "Cohort property group entry must be an object"
                 )
 
-            if "values" in prop or prop.get("type") in ("AND", "OR"):
+            if prop == {} or "values" in prop or prop.get("type") in ("AND", "OR"):
                 matches = match_property_group(
                     prop,
                     property_values,

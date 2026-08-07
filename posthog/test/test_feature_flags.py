@@ -70,6 +70,13 @@ class TestCohortMatching(unittest.TestCase):
     def test_only_canonical_empty_groups_match(self):
         self.assertTrue(match_property_group({}, {}, {}))
         self.assertTrue(match_property_group({"type": "AND", "values": []}, {}, {}))
+        self.assertTrue(
+            match_property_group(
+                {"type": "AND", "values": [{"type": "AND", "values": []}, {}]},
+                {},
+                {},
+            )
+        )
 
         malformed_groups = [
             None,
