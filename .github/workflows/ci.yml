@@ -151,6 +151,44 @@ jobs:
               run: |
                   pytest --verbose --timeout=30
 
+    tests-mcp-v2:
+        name: MCP SDK 2.x compatibility
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Python 3.12
+              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version: '3.12'
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+              with:
+                  version: "0.11.32"
+                  enable-cache: true
+
+            - name: Install test dependencies
+              shell: bash
+              run: |
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra test
+
+            # The `test` extra pins mcp<2; install the 2.x SDK over it so the same
+            # posthog/test/mcp suite runs against the 2026-07-28 SDK. jlowin's
+            # `fastmcp` (needs mcp 1.x) is uninstalled by this resolution, so its
+            # tests skip via `importorskip("fastmcp")`.
+            - name: Upgrade to MCP SDK 2.x
+              shell: bash
+              run: |
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv pip install "mcp>=2,<3"
+
+            - name: Run MCP tests against SDK 2.x
+              run: |
+                  pytest posthog/test/mcp --verbose --timeout=30
+
     mutation-tests:
         name: Targeted mutation tests
         runs-on: ubuntu-latest

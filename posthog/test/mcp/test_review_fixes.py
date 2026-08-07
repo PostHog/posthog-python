@@ -15,17 +15,23 @@ import asyncio
 
 import pytest
 
-import mcp.types as mcp_types
-from mcp.server.fastmcp import FastMCP
-from mcp.server.lowlevel import Server
+# `mcp.server.fastmcp` was removed in mcp 2.x; skip the module there before import.
+pytest.importorskip("mcp.server.fastmcp")
 
-from posthog.mcp import PostHogMCP, instrument
-from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
-from posthog.test.mcp._helpers import (
+import mcp.types as mcp_types  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.lowlevel import Server  # noqa: E402
+
+from posthog.mcp import PostHogMCP, instrument  # noqa: E402
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity  # noqa: E402
+from posthog.test.mcp._helpers import (  # noqa: E402
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    requires_mcp_v1,
 )
+
+pytestmark = requires_mcp_v1
 
 
 def _call_request(name, arguments):
@@ -334,4 +340,4 @@ def test_version_warning_uses_supplied_logger(monkeypatch):
         server, FakeClient(), MCPAnalyticsOptions(logger=lambda m: logs.append(m))
     )
 
-    assert any("tested against mcp>=1.26" in m for m in logs)
+    assert any("supports mcp>=1.26,<2 and mcp>=2,<3" in m for m in logs)

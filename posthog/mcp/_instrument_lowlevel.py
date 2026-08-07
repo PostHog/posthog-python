@@ -104,7 +104,7 @@ def _wrap_call_tool(
         request = build_tool_call_request(name, arguments)
         extra = {"session_id": mcp_session_id}
 
-        session_id = await prepare_request(
+        session_id, session_id_source = await prepare_request(
             data,
             mcp_session_id=mcp_session_id,
             client_name=client_name,
@@ -126,6 +126,7 @@ def _wrap_call_tool(
                 client_name=client_name,
                 client_version=client_version,
                 protocol_version=protocol_version,
+                session_id_source=session_id_source,
                 extra=extra,
             )
             return mcp_types.ServerResult(
@@ -176,6 +177,7 @@ def _wrap_call_tool(
                 client_version=client_version,
                 protocol_version=protocol_version,
                 conversation_id=None if minted else conversation_id,
+                session_id_source=session_id_source,
                 extra=extra,
             )
             raise
@@ -211,6 +213,7 @@ def _wrap_call_tool(
             client_version=client_version,
             protocol_version=protocol_version,
             conversation_id=delivered_conversation_id,
+            session_id_source=session_id_source,
             extra=extra,
         )
         return result
@@ -245,7 +248,7 @@ def _wrap_list_tools(
         extra = {"session_id": mcp_session_id}
         # Resolve session, emit $mcp_initialize (once per session) and identify here
         # too — a client may list tools without ever calling one.
-        session_id = await prepare_request(
+        session_id, session_id_source = await prepare_request(
             data,
             mcp_session_id=mcp_session_id,
             client_name=client_name,
@@ -271,6 +274,7 @@ def _wrap_list_tools(
                 client_name=client_name,
                 client_version=client_version,
                 protocol_version=protocol_version,
+                session_id_source=session_id_source,
                 extra=extra,
             )
             raise
@@ -330,6 +334,7 @@ def _wrap_list_tools(
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
+            session_id_source=session_id_source,
             extra=extra,
         )
 

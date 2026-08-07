@@ -67,9 +67,19 @@ class PostHogMCPAnalyticsProperty:
     PARAMETERS = "$mcp_parameters"
     RESOURCE_NAME = "$mcp_resource_name"
     RESPONSE = "$mcp_response"
+    # The 2026-07-28 `resultType` of a tool result (e.g. "input_required" for an
+    # MRTR interim result). Present only on mcp 2.x traffic that returns a
+    # non-"complete" result, so downstream can segment MRTR calls without full
+    # request stitching (which is out of scope here).
+    RESULT_TYPE = "$mcp_result_type"
     SERVER_NAME = "$mcp_server_name"
     SERVER_VERSION = "$mcp_server_version"
     SESSION_ID = "$session_id"
+    # How the $session_id was resolved: "token" (self-encoded session token),
+    # "mcp" (transport Mcp-Session-Id), "derived" (from the identified principal +
+    # client, for stateless 2026-07-28 traffic), or "generated" (fresh). Lets
+    # downstream tell a correlated session from a per-request generated one.
+    SESSION_ID_SOURCE = "$mcp_session_id_source"
     SOURCE = "$mcp_source"
     TOOL_CATEGORY = "$mcp_tool_category"
     TOOL_DESCRIPTION = "$mcp_tool_description"

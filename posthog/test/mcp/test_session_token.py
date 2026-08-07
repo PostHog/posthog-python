@@ -21,6 +21,7 @@ from posthog.mcp.session_token import (
     read_mcp_session_header,
 )
 from posthog.mcp.types import MCPAnalyticsOptions
+from posthog.test.mcp._helpers import requires_mcp_v1
 
 
 # --- codec -------------------------------------------------------------------
@@ -414,6 +415,7 @@ async def test_middleware_replays_body_split_across_chunks_and_over_sniff_cap():
 # --- end-to-end against a real stateless FastMCP transport -------------------
 
 
+@requires_mcp_v1
 def test_middleware_end_to_end_with_stateless_fastmcp():
     """Cross-version sanity: mount a real stateless FastMCP streamable-HTTP app,
     add the middleware, and confirm (1) the `initialize` response carries a
@@ -483,6 +485,7 @@ def test_middleware_end_to_end_with_stateless_fastmcp():
         assert resp2.status_code == 200, resp2.text
 
 
+@requires_mcp_v1
 def test_instrument_autowires_stateless_mint_no_manual_middleware():
     """instrument() alone (no app.add_middleware) makes the FastMCP streamable-HTTP
     app mint the session token -- the zero-config path. mcp.run() uses the same

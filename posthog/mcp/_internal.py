@@ -132,33 +132,59 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-async def handle_identify(
+async def resolve_identity(
     data: MCPAnalyticsData,
-    session_id: str,
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Resolve the optional ``identify`` callback, dedupe against the identity
-    cache, and return an ``$identify`` event to emit only when the identity has
-    materially changed (otherwise ``None``)."""
+) -> Optional[UserIdentity]:
+    """Invoke the customer's ``identify`` callback (or read the static identity)
+    and return the resolved :class:`UserIdentity`, or ``None`` when no identify is
+    configured / it returns nothing / it raises.
+
+    Runs *before* session resolution so the resolved ``distinct_id`` is available
+    to derive a session key (see :func:`.session.resolve_session_id`). It performs
+    no caching or ``$identify`` decision — that stays in :func:`handle_identify`,
+    which is keyed by the resolved session id. Kept side-effect-free so it can be
+    called at most once per request and its result threaded to both consumers."""
     if not data.options.identify:
         return None
-
     try:
         identify = data.options.identify
         if isinstance(identify, UserIdentity):
-            identity_result: Optional[UserIdentity] = identify
-        else:
-            identity_result = await _maybe_await(identify(request, extra))
+            return identify
+        result = await _maybe_await(identify(request, extra))
+        return result or None
+    except Exception as error:  # noqa: BLE001
+        log(f"Error: identify function threw while resolving identity - {error}")
+        return None
 
-        if not identity_result:
+
+async def handle_identify(
+    data: MCPAnalyticsData,
+    session_id: str,
+    identity: Optional[UserIdentity],
+    request: Dict[str, Any],
+    extra: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Given the already-resolved ``identity`` (from :func:`resolve_identity`),
+    dedupe against the per-session identity cache and return an ``$identify`` event
+    to emit only when the identity has materially changed (otherwise ``None``).
+
+    Split from identity resolution so the callback is invoked at most once per
+    request while the dedupe cache stays keyed by ``session_id`` (which is resolved
+    before this runs)."""
+    if not data.options.identify:
+        return None
+    if not identity:
+        if data.options.identify:
             log(
                 f"Warning: Supplied identify function returned null for session {session_id}"
             )
-            return None
+        return None
 
+    try:
         previous = data.identified_sessions.get(session_id)
-        merged = merge_identities(previous, identity_result)
+        merged = merge_identities(previous, identity)
         has_changed = not (previous and are_identities_equal(previous, merged))
         data.identified_sessions.set(session_id, merged)
 

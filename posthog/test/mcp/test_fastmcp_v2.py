@@ -3,10 +3,24 @@ from the official SDK's mcp.server.fastmcp.FastMCP."""
 
 import pytest
 
-pytest.importorskip("fastmcp")
+# jlowin's `fastmcp` top-level package still imports under mcp 2.x, but its server
+# layer (where `FastMCP` lives) needs mcp 1.x internals and raises a *rewritten*
+# ImportError there -- which `importorskip` treats as a real error, not a skip. So
+# guard the import by hand and skip the whole module cleanly when the server layer
+# is unavailable. These tests also drive the v1 low-level handler shape
+# (`_mcp_server.request_handlers` keyed by request type), so they're v1-only.
+try:
+    from fastmcp import FastMCP
+except ImportError:
+    pytest.skip(
+        "fastmcp server support unavailable (needs mcp 1.x)", allow_module_level=True
+    )
+
+from posthog.test.mcp._helpers import requires_mcp_v1  # noqa: E402
+
+pytestmark = requires_mcp_v1
 
 import mcp.types as mcp_types  # noqa: E402
-from fastmcp import FastMCP  # noqa: E402
 
 from posthog.mcp import instrument  # noqa: E402
 from posthog.mcp.types import MCPAnalyticsOptions  # noqa: E402

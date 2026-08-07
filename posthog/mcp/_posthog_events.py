@@ -81,6 +81,9 @@ def _add_session_id(event: Event, properties: Dict[str, Any]) -> None:
     session_id = event.get("session_id")
     if isinstance(session_id, str) and len(session_id) > 0:
         properties[_P.SESSION_ID] = session_id
+    source = event.get("session_id_source")
+    if isinstance(source, str) and source:
+        properties[_P.SESSION_ID_SOURCE] = source
 
 
 def _add_conversation_id(event: Event, properties: Dict[str, Any]) -> None:
@@ -139,6 +142,8 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.INTENT_SOURCE] = event["user_intent_source"]
     if event.get("is_error") is not None:
         properties[_P.IS_ERROR] = event["is_error"]
+    if event.get("result_type") and _is_tool_call(event):
+        properties[_P.RESULT_TYPE] = event["result_type"]
     if event.get("parameters") is not None:
         properties[_P.PARAMETERS] = event["parameters"]
     if event.get("response") is not None:

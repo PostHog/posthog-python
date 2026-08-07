@@ -39,6 +39,7 @@ def capture_event(
     full_event: Dict[str, Any] = {
         "id": event_input.get("id") or "",
         "session_id": session_id,
+        "session_id_source": event_input.get("session_id_source"),
         "event_type": event_input.get("event_type") or MCPAnalyticsEventType.CUSTOM,
         "event_name": event_input.get("event_name"),
         "timestamp": timestamp,
@@ -64,6 +65,7 @@ def capture_event(
         "is_error": event_input.get("is_error"),
         "error": event_input.get("error"),
         "conversation_id": event_input.get("conversation_id"),
+        "result_type": event_input.get("result_type"),
         "properties": event_input.get("properties"),
     }
 
