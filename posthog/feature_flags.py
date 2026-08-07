@@ -769,7 +769,9 @@ def match_property_group(
         raise RequiresServerEvaluation("Cohort property group must be an object")
 
     property_group_type = property_group.get("type")
-    is_and = property_group_type != "OR"
+    if property_group_type not in ("AND", "OR"):
+        raise RequiresServerEvaluation("Cohort property group type must be AND or OR")
+    is_and = property_group_type == "AND"
     properties = property_group.get("values")
     if not isinstance(properties, list):
         raise RequiresServerEvaluation("Cohort property group values must be a list")

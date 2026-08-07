@@ -76,6 +76,8 @@ class TestCohortMatching(unittest.TestCase):
             "invalid",
             {"type": "AND"},
             {"type": "AND", "values": {}},
+            {"values": []},
+            {"type": "INVALID", "values": []},
         ]
         for group in malformed_groups:
             with self.subTest(group=group):
