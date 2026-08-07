@@ -3050,6 +3050,7 @@ class Client(object):
         key: str,
         distinct_id: ID_TYPES,
         *,
+        default_value: Optional[bool] = None,
         groups: Optional[Mapping[str, Union[str, int]]] = None,
         person_properties: Optional[Dict[str, Any]] = None,
         group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -3064,6 +3065,10 @@ class Client(object):
         Args:
             key: The feature flag key.
             distinct_id: The distinct ID of the user.
+            default_value: Returned when the flag has no value — not loaded, a failed
+                flags request, or no flag with that key. A flag that has a value,
+                including `False` and variant strings, always wins over this default.
+                Defaults to `None`, preserving the pre-existing three-state return.
             groups: A dictionary of group information.
             person_properties: A dictionary of person properties.
             group_properties: A dictionary of group properties.
@@ -3108,7 +3113,7 @@ class Client(object):
         response = flag_result.get_value() if flag_result else None
 
         if response is None:
-            return None
+            return default_value
         return bool(response)
 
     def _get_stale_flag_fallback(

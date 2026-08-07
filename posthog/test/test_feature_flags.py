@@ -3705,6 +3705,40 @@ class TestLocalEvaluation(unittest.TestCase):
 
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.flags")
+    def test_feature_enabled_doesnt_exist_returns_caller_default(
+        self, patch_flags, patch_poll
+    ):
+        client = Client(FAKE_TEST_API_KEY)
+        client.feature_flags = []
+
+        patch_flags.return_value = {"featureFlags": {}}
+        self.assertTrue(
+            client.feature_enabled("doesnt-exist", "distinct_id", default_value=True)
+        )
+        self.assertFalse(
+            client.feature_enabled("doesnt-exist", "distinct_id", default_value=False)
+        )
+
+        patch_flags.side_effect = APIError(401, "flags error")
+        self.assertTrue(
+            client.feature_enabled("doesnt-exist", "distinct_id", default_value=True)
+        )
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.flags")
+    def test_feature_enabled_present_value_wins_over_default(
+        self, patch_flags, patch_poll
+    ):
+        client = Client(FAKE_TEST_API_KEY)
+        client.feature_flags = []
+
+        patch_flags.return_value = {"featureFlags": {"beta-feature": False}}
+        self.assertFalse(
+            client.feature_enabled("beta-feature", "distinct_id", default_value=True)
+        )
+
+    @mock.patch("posthog.client.Poller")
+    @mock.patch("posthog.client.flags")
     def test_personal_api_key_doesnt_exist(self, patch_flags, patch_poll):
         client = Client(FAKE_TEST_API_KEY, secret_key="test")
         client.feature_flags = []
