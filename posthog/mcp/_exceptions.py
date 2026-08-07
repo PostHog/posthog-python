@@ -53,12 +53,13 @@ def _from_message(message: str) -> ErrorProperties:
 
 def _is_call_tool_result(value: Any) -> bool:
     """Detect a CallToolResult error (``{isError, content: [...]}``), whether a
-    dict or a pydantic model from the ``mcp`` SDK."""
+    dict or a pydantic model from the ``mcp`` SDK. ``isError`` is spelled
+    ``is_error`` on mcp>=2."""
     if isinstance(value, dict):
-        return "isError" in value and isinstance(value.get("content"), list)
-    return hasattr(value, "isError") and isinstance(
-        getattr(value, "content", None), list
-    )
+        has_flag = "isError" in value or "is_error" in value
+        return has_flag and isinstance(value.get("content"), list)
+    has_flag = hasattr(value, "isError") or hasattr(value, "is_error")
+    return has_flag and isinstance(getattr(value, "content", None), list)
 
 
 def _extract_call_tool_result_message(result: Any) -> str:

@@ -95,7 +95,11 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         mcp_session_id = _mcp_session_id(context)
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
-                mcp_session_id, client_name, client_version, protocol_version
+                mcp_session_id,
+                client_name,
+                client_version,
+                protocol_version,
+                meta_source=_context_request_context(context),
             )
         )
         request = build_tool_call_request(name, arguments)
@@ -226,7 +230,11 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         mcp_session_id = _low_level_session_id(server)
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
-                mcp_session_id, client_name, client_version, protocol_version
+                mcp_session_id,
+                client_name,
+                client_version,
+                protocol_version,
+                meta_source=req,
             )
         )
         request = request_to_dict(req)
@@ -413,11 +421,25 @@ def _low_level_protocol_version(server: Any) -> Optional[str]:
     return None
 
 
+def _context_request_context(context: Any) -> Any:
+    """``Context.request_context`` raises off-request rather than returning
+    ``None``, so a bare ``getattr`` default isn't enough."""
+    try:
+        return context.request_context
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
     try:
         client_params = context.request_context.session.client_params
-        if client_params and client_params.clientInfo:
-            return client_params.clientInfo.name, client_params.clientInfo.version
+        # `clientInfo` on mcp 1.x; renamed `client_info` in mcp>=2, where the SDK
+        # synthesizes it from each request's `_meta` for us.
+        info = getattr(client_params, "clientInfo", None) or getattr(
+            client_params, "client_info", None
+        )
+        if info:
+            return info.name, info.version
     except Exception:  # noqa: BLE001
         pass
     return None, None
@@ -425,9 +447,15 @@ def _client_info(context: Any) -> Tuple[Optional[str], Optional[str]]:
 
 def _protocol_version(context: Any) -> Optional[str]:
     try:
-        client_params = context.request_context.session.client_params
-        if client_params:
-            return client_params.protocolVersion
+        # mcp>=2 puts the negotiated version straight on the request context.
+        ctx = context.request_context
+        version = getattr(ctx, "protocol_version", None)
+        if version:
+            return version
+        client_params = ctx.session.client_params
+        return getattr(client_params, "protocolVersion", None) or getattr(
+            client_params, "protocol_version", None
+        )
     except Exception:  # noqa: BLE001
         pass
     return None
