@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from posthog.ai.openai import OpenAI, AsyncOpenAI
+from posthog.ai.openai import AsyncOpenAI, OpenAI
 
 # fixtures mock_client and streaming_tool_call_chunks come from test_openai.py in this dir
 from posthog.test.ai.openai.test_openai import (  # noqa: F401
@@ -37,7 +37,7 @@ TOOLS = [
 MESSAGES = [{"role": "user", "content": "What's the weather in San Francisco?"}]
 
 
-def _sync_props(mock_client, chunks):
+def _sync_props(mock_client, chunks):  # noqa: F811
     with patch("openai.resources.chat.completions.Completions.create") as create:
         create.return_value = chunks
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
@@ -53,7 +53,7 @@ def _sync_props(mock_client, chunks):
     return mock_client.capture.call_args[1]["properties"]
 
 
-async def _async_props(mock_client, chunks):
+async def _async_props(mock_client, chunks):  # noqa: F811
     async def create(self, **kwargs):
         async def it():
             for chunk in chunks:
@@ -77,7 +77,8 @@ async def _async_props(mock_client, chunks):
 
 @pytest.mark.asyncio
 async def test_async_streaming_emits_the_same_properties_as_sync(
-    mock_client, streaming_tool_call_chunks
+    mock_client,  # noqa: F811
+    streaming_tool_call_chunks,  # noqa: F811
 ):
     sync_props = _sync_props(mock_client, streaming_tool_call_chunks)
     mock_client.capture.reset_mock()

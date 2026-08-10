@@ -174,7 +174,6 @@ alias posthog.ai.openai.openai_async.extract_openai_usage_from_chunk -> posthog.
 alias posthog.ai.openai.openai_async.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.openai.openai_async.format_openai_streaming_input -> posthog.ai.openai.openai_converter.format_openai_streaming_input
 alias posthog.ai.openai.openai_async.format_openai_streaming_output -> posthog.ai.openai.openai_converter.format_openai_streaming_output
-alias posthog.ai.openai.openai_async.get_model_params -> posthog.ai.utils.get_model_params
 alias posthog.ai.openai.openai_async.merge_provider_override -> posthog.ai.openai.wrapper_utils.merge_provider_override
 alias posthog.ai.openai.openai_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.openai.openai_async.setup -> posthog.setup
