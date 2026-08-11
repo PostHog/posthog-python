@@ -67,8 +67,8 @@ class TestLaneQueue(unittest.TestCase):
             queue.get(timeout=0.01)
 
 
-class TestLaneQueueIsSdkOwned(unittest.TestCase):
-    def test_capture_and_flush_use_the_sdk_queue(self):
+class TestClientUsesLaneQueue(unittest.TestCase):
+    def test_capture_and_flush_use_the_lane_queue(self):
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, flush_at=1, flush_interval=60)
             self.assertIsInstance(client.queue, LaneQueue)
