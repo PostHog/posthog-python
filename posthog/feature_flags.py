@@ -735,7 +735,7 @@ def match_cohort(
         )
 
     property_group = cohort_properties[cohort_id]
-    return match_property_group(
+    matches = match_property_group(
         property_group,
         property_values,
         cohort_properties,
@@ -744,6 +744,13 @@ def match_cohort(
         distinct_id,
         device_id=device_id,
     )
+
+    operator = property.get("operator") or "exact"
+    if operator in ("exact", "in"):
+        return matches
+    if operator == "not_in":
+        return not matches
+    raise InconclusiveMatchError(f"Unsupported cohort operator: {operator}")
 
 
 def match_property_group(
@@ -755,22 +762,33 @@ def match_property_group(
     distinct_id=None,
     device_id=None,
 ) -> bool:
-    if not property_group:
+    # The backend serializes its canonical empty PropertyGroup as {}.
+    if property_group == {}:
         return True
+    if not isinstance(property_group, dict):
+        raise RequiresServerEvaluation("Cohort property group must be an object")
 
     property_group_type = property_group.get("type")
+    if property_group_type not in ("AND", "OR"):
+        raise RequiresServerEvaluation("Cohort property group type must be AND or OR")
+    is_and = property_group_type == "AND"
     properties = property_group.get("values")
-
-    if not properties or len(properties) == 0:
-        # empty groups are no-ops, always match
+    if not isinstance(properties, list):
+        raise RequiresServerEvaluation("Cohort property group values must be a list")
+    if not properties:
         return True
 
+    decisive_result = None
     error_matching_locally = False
 
-    if "values" in properties[0]:
-        # a nested property group
-        for prop in properties:
-            try:
+    for prop in properties:
+        try:
+            if not isinstance(prop, dict):
+                raise RequiresServerEvaluation(
+                    "Cohort property group entry must be an object"
+                )
+
+            if prop == {} or "values" in prop or prop.get("type") in ("AND", "OR"):
                 matches = match_property_group(
                     prop,
                     property_values,
@@ -780,81 +798,55 @@ def match_property_group(
                     distinct_id,
                     device_id=device_id,
                 )
-                if property_group_type == "AND":
-                    if not matches:
-                        return False
-                else:
-                    # OR group
-                    if matches:
-                        return True
-            except RequiresServerEvaluation:
-                # Immediately propagate - this condition requires server-side data
-                raise
-            except InconclusiveMatchError as e:
-                log.debug(f"Failed to compute property {prop} locally: {e}")
-                error_matching_locally = True
-
-        if error_matching_locally:
-            raise InconclusiveMatchError(
-                "Can't match cohort without a given cohort property value"
-            )
-        # if we get here, all matched in AND case, or none matched in OR case
-        return property_group_type == "AND"
-
-    else:
-        for prop in properties:
-            try:
-                if prop.get("type") == "cohort":
-                    matches = match_cohort(
-                        prop,
-                        property_values,
-                        cohort_properties,
-                        flags_by_key,
-                        evaluation_cache,
-                        distinct_id,
-                        device_id=device_id,
-                    )
-                elif prop.get("type") == "flag":
-                    matches = evaluate_flag_dependency(
-                        prop,
-                        flags_by_key,
-                        evaluation_cache,
-                        distinct_id,
-                        property_values,
-                        cohort_properties,
-                        device_id=device_id,
-                    )
-                else:
-                    matches = match_property(prop, property_values)
-
+                negation = False
+            elif prop.get("type") == "cohort":
+                matches = match_cohort(
+                    prop,
+                    property_values,
+                    cohort_properties,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
+                    device_id=device_id,
+                )
+                negation = prop.get("negation", False)
+            elif prop.get("type") == "flag":
+                matches = evaluate_flag_dependency(
+                    prop,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
+                    property_values,
+                    cohort_properties,
+                    device_id=device_id,
+                )
+                negation = prop.get("negation", False)
+            else:
+                matches = match_property(prop, property_values)
                 negation = prop.get("negation", False)
 
-                if property_group_type == "AND":
-                    # if negated property, do the inverse
-                    if not matches and not negation:
-                        return False
-                    if matches and negation:
-                        return False
-                else:
-                    # OR group
-                    if matches and not negation:
-                        return True
-                    if not matches and negation:
-                        return True
-            except RequiresServerEvaluation:
-                # Immediately propagate - this condition requires server-side data
-                raise
-            except InconclusiveMatchError as e:
-                log.debug(f"Failed to compute property {prop} locally: {e}")
-                error_matching_locally = True
+            effective_match = matches != bool(negation)
+            if is_and and not effective_match:
+                decisive_result = False
+            elif not is_and and effective_match:
+                decisive_result = True
+        except RequiresServerEvaluation:
+            # Static/missing cohorts and malformed definitions always require server evaluation,
+            # even when another branch would otherwise resolve the group locally.
+            raise
+        except InconclusiveMatchError as e:
+            log.debug(f"Failed to compute property {prop} locally: {e}")
+            error_matching_locally = True
 
-        if error_matching_locally:
-            raise InconclusiveMatchError(
-                "can't match cohort without a given cohort property value"
-            )
+    if decisive_result is not None:
+        return decisive_result
+    if error_matching_locally:
+        raise InconclusiveMatchError(
+            "Can't match cohort without a given cohort property value"
+        )
 
-        # if we get here, all matched in AND case, or none matched in OR case
-        return property_group_type == "AND"
+    # AND: every entry matched. OR: none matched.
+    return is_and
 
 
 def parse_datetime(value: str) -> datetime.datetime:

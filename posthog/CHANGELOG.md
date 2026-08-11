@@ -1,5 +1,11 @@
 # posthog
 
+## 7.38.4 — 2026-08-10
+
+### Patch changes
+
+- [f38790c](https://github.com/posthog/posthog-python/commit/f38790c867f7a504babaa22711d80f92cf9e212b) Fix local evaluation for negated, missing, and malformed cohort definitions — Thanks @marandaneto!
+
 ## 7.38.3 — 2026-08-07
 
 ### Patch changes
