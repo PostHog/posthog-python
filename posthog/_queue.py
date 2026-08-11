@@ -10,7 +10,7 @@ thread dies with ``AttributeError: 'Queue' object has no attribute
 'not_empty'`` and ``flush()`` raises on ``all_tasks_done``, so a gevent
 gunicorn worker buffers every event forever and delivers none (#865).
 
-``SdkQueue`` is that pure-Python implementation carried by the SDK itself,
+``LaneQueue`` is that pure-Python implementation carried by the SDK itself,
 adapted from CPython's ``Lib/queue.py`` (PSF license). It builds only on
 ``threading`` primitives, which gevent patches compatibly, so it behaves
 identically on stock CPython and under monkey-patching — and its private
@@ -23,7 +23,7 @@ from queue import Empty, Full
 from time import monotonic
 
 
-class SdkQueue:
+class LaneQueue:
     """A FIFO queue with the full CPython ``queue.Queue`` interface.
 
     ``maxsize`` bounds the queue; a ``maxsize`` of zero or less means the

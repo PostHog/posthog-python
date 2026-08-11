@@ -7,7 +7,7 @@ that lacks CPython's private synchronization attributes (``mutex``,
 attributes, so a client whose lane queue is a gevent queue delivers nothing:
 the consumer thread dies on ``queue.not_empty`` and ``flush()`` raises on
 ``queue.all_tasks_done``. The fix gives lanes an SDK-owned queue
-(``posthog._queue.SdkQueue``) that no runtime can swap out.
+(``posthog._queue.LaneQueue``) that no runtime can swap out.
 """
 
 import importlib.util
@@ -18,16 +18,16 @@ import unittest
 from queue import Empty, Full
 from unittest import mock
 
-from posthog._queue import SdkQueue
+from posthog._queue import LaneQueue
 from posthog.client import Client
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 
-class TestSdkQueue(unittest.TestCase):
+class TestLaneQueue(unittest.TestCase):
     def test_exposes_the_private_synchronization_interface(self):
         # Every private attribute the consumer and flush paths touch. A missing
         # one is exactly the gevent failure mode, so this list is the contract.
-        queue = SdkQueue(10)
+        queue = LaneQueue(10)
         for attribute in (
             "mutex",
             "not_empty",
@@ -40,7 +40,7 @@ class TestSdkQueue(unittest.TestCase):
             self.assertTrue(hasattr(queue, attribute), attribute)
 
     def test_round_trip_and_task_accounting(self):
-        queue = SdkQueue(2)
+        queue = LaneQueue(2)
         queue.put("a")
         queue.put("b")
         self.assertEqual(queue.qsize(), 2)
@@ -62,7 +62,7 @@ class TestSdkQueue(unittest.TestCase):
             queue.task_done()
 
     def test_get_timeout_raises_empty(self):
-        queue = SdkQueue(1)
+        queue = LaneQueue(1)
         with self.assertRaises(Empty):
             queue.get(timeout=0.01)
 
@@ -71,7 +71,7 @@ class TestLaneQueueIsSdkOwned(unittest.TestCase):
     def test_capture_and_flush_use_the_sdk_queue(self):
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             client = Client(FAKE_TEST_API_KEY, flush_at=1, flush_interval=60)
-            self.assertIsInstance(client.queue, SdkQueue)
+            self.assertIsInstance(client.queue, LaneQueue)
             client.capture("gevent-regression", distinct_id="distinct_id")
             client.flush(timeout_seconds=10)
         self.assertTrue(mock_post.called)
