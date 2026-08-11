@@ -32,7 +32,7 @@ class SdkQueue:
 
     def __init__(self, maxsize: int = 0):
         self.maxsize = maxsize
-        self._queue: deque = deque()
+        self.queue: deque = deque()  # named `queue` to match CPython's attribute
         self.mutex = threading.Lock()
         self.not_empty = threading.Condition(self.mutex)
         self.not_full = threading.Condition(self.mutex)
@@ -115,10 +115,10 @@ class SdkQueue:
         return self.get(block=False)
 
     def _qsize(self) -> int:
-        return len(self._queue)
+        return len(self.queue)
 
     def _put(self, item) -> None:
-        self._queue.append(item)
+        self.queue.append(item)
 
     def _get(self):
-        return self._queue.popleft()
+        return self.queue.popleft()
