@@ -16,8 +16,9 @@ from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     _capture_ai_event,
-    extract_available_tool_calls,
+    extract_available_tool_calls as extract_available_tool_calls,
     finalize_ai_content,
+    get_model_params as get_model_params,
     merge_usage_stats,
     with_privacy_mode,
 )
@@ -231,7 +232,6 @@ class WrappedResponses(_OpenAIWrapperResource):
                     usage_stats,
                     latency,
                     output,
-                    extract_available_tool_calls("openai", kwargs),
                     model_from_response,
                     stop_reason=stop_reason,
                 )
@@ -249,7 +249,6 @@ class WrappedResponses(_OpenAIWrapperResource):
         usage_stats: TokenUsage,
         latency: float,
         output: Any,
-        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
         model_from_response: Optional[str] = None,
         stop_reason: Optional[str] = None,
     ):
@@ -272,7 +271,13 @@ class WrappedResponses(_OpenAIWrapperResource):
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
-            properties=posthog_properties,
+            properties={
+                "$ai_cache_read_input_tokens": usage_stats.get(
+                    "cache_read_input_tokens", 0
+                ),
+                "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
+                **(posthog_properties or {}),
+            },
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             stop_reason=stop_reason,
@@ -518,7 +523,6 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     latency,
                     accumulated_content,
                     tool_calls_list,
-                    extract_available_tool_calls("openai", kwargs),
                     model_from_response,
                     stop_reason=stop_reason,
                 )
@@ -537,7 +541,6 @@ class WrappedCompletions(_OpenAIWrapperResource):
         latency: float,
         output: Any,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
-        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
         model_from_response: Optional[str] = None,
         stop_reason: Optional[str] = None,
     ):
@@ -560,7 +563,13 @@ class WrappedCompletions(_OpenAIWrapperResource):
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
-            properties=posthog_properties,
+            properties={
+                "$ai_cache_read_input_tokens": usage_stats.get(
+                    "cache_read_input_tokens", 0
+                ),
+                "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
+                **(posthog_properties or {}),
+            },
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             stop_reason=stop_reason,
