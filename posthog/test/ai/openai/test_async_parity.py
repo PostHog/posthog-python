@@ -79,7 +79,8 @@ async def test_async_streaming_emits_the_same_properties_as_sync(
 
     # Guard: if the sync side stopped emitting these, the comparison below is vacuous.
     assert "$ai_usage" in sync_props
-    assert "$ai_tokens_source" in sync_props
+    assert sync_props["$ai_tokens_source"] == "sdk"
+    assert async_props["$ai_tokens_source"] == sync_props["$ai_tokens_source"]
     assert async_props["$ai_cache_read_input_tokens"] == 0
     assert async_props["$ai_reasoning_tokens"] == 0
 

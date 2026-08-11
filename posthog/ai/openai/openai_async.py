@@ -271,13 +271,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
-            properties={
-                "$ai_cache_read_input_tokens": usage_stats.get(
-                    "cache_read_input_tokens", 0
-                ),
-                "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
-                **(posthog_properties or {}),
-            },
+            properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             stop_reason=stop_reason,
@@ -563,13 +557,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
-            properties={
-                "$ai_cache_read_input_tokens": usage_stats.get(
-                    "cache_read_input_tokens", 0
-                ),
-                "$ai_reasoning_tokens": usage_stats.get("reasoning_tokens", 0),
-                **(posthog_properties or {}),
-            },
+            properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             stop_reason=stop_reason,

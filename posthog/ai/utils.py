@@ -790,7 +790,6 @@ def capture_streaming_event(
 
     # Add optional token fields
     # For Anthropic, always include cache fields even if 0 (backward compatibility)
-    # For others, only include if present and non-zero
     if event_data["provider"] == "anthropic":
         # Anthropic always includes cache fields
         cache_read = event_data["usage_stats"].get("cache_read_input_tokens", 0)
@@ -798,7 +797,6 @@ def capture_streaming_event(
         event_properties["$ai_cache_read_input_tokens"] = cache_read
         event_properties["$ai_cache_creation_input_tokens"] = cache_creation
     else:
-        # Other providers only include if non-zero
         optional_token_fields = [
             "cache_read_input_tokens",
             "cache_creation_input_tokens",
@@ -807,8 +805,20 @@ def capture_streaming_event(
 
         for field in optional_token_fields:
             value = event_data["usage_stats"].get(field)
-            if value is not None and isinstance(value, int) and value > 0:
-                event_properties[f"$ai_{field}"] = value
+            property_name = f"$ai_{field}"
+
+            # OpenAI async streams historically included these fields even when 0.
+            # Keep those defaults in the shared path so they are not mistaken for
+            # caller-supplied token passthrough properties.
+            if event_data["provider"] == "openai" and field in {
+                "cache_read_input_tokens",
+                "reasoning_tokens",
+            }:
+                event_properties.setdefault(
+                    property_name, event_data["usage_stats"].get(field, 0)
+                )
+            elif value is not None and isinstance(value, int) and value > 0:
+                event_properties[property_name] = value
 
     cache_reporting_exclusive = event_data["usage_stats"].get(
         "cache_reporting_exclusive"
