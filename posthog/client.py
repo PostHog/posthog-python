@@ -9,6 +9,7 @@ import time
 import warnings
 import weakref
 from contextvars import ContextVar
+from queue import Empty, Full
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 from uuid import UUID, uuid4
@@ -16,6 +17,7 @@ from uuid import UUID, uuid4
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
+from posthog._queue import SdkQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
 from posthog.capture_compression import (
@@ -112,9 +114,6 @@ from posthog.utils import (
     system_context,
 )
 from posthog.version import VERSION
-
-
-from queue import Empty, Full, Queue
 
 
 _configure_posthog_logging()
@@ -327,7 +326,7 @@ class _Lane:
         self._max_queue_size = max_queue_size
         self._thread_count = thread_count
         self._eager_start = eager_start
-        self.queue: Queue = Queue(max_queue_size)
+        self.queue: SdkQueue = SdkQueue(max_queue_size)
         self.consumers: List[Consumer] = []
         self._started = False
         self._closed = False
@@ -549,7 +548,7 @@ class _Lane:
         the client's fork-visible lifecycle state. An eager open lane restarts
         immediately; a lazy lane returns to not-started and restarts on next use.
         """
-        self.queue = Queue(self._max_queue_size)
+        self.queue = SdkQueue(self._max_queue_size)
         self.reset_sync_send_state_after_fork()
         self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
@@ -981,7 +980,7 @@ class Client(object):
         self._warn_if_duplicate_async_client()
 
     @property
-    def queue(self) -> Queue:
+    def queue(self) -> SdkQueue:
         """The analytics lane's queue (kept for backwards compatibility)."""
         return self._analytics_lane.queue
 
