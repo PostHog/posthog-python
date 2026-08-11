@@ -95,8 +95,10 @@ test = [
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
     # Exercises the gevent monkey-patching regression test (test_gevent_compat);
-    # the test skips itself where gevent is unavailable.
-    "gevent>=24.2.1; implementation_name == 'cpython'",
+    # the test skips itself where gevent is unavailable. 25.4.1 is the first
+    # gevent whose monkey.patch_all() replaces queue.Queue (not just
+    # SimpleQueue) — older versions make the regression test vacuous.
+    "gevent>=25.4.1; implementation_name == 'cpython'",
 ]
 
 [tool.setuptools]

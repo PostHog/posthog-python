@@ -9,10 +9,9 @@ from typing import Any
 from unittest import mock
 from parameterized import parameterized
 
-try:
-    from queue import Queue
-except ImportError:
-    from Queue import Queue
+# The consumer suite must exercise the queue class production delivery rides
+# on (posthog._queue.LaneQueue), not stdlib queue.Queue — see #865.
+from posthog._queue import LaneQueue as Queue
 
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode

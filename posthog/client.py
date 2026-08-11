@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
-from posthog._queue import LaneQueue
+from ._queue import LaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
 from posthog.capture_compression import (

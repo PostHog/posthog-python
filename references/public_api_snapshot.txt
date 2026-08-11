@@ -573,7 +573,7 @@ attribute posthog.client.Client.poll_interval = poll_interval
 attribute posthog.client.Client.poller: Optional[Poller] = None
 attribute posthog.client.Client.privacy_mode = privacy_mode
 attribute posthog.client.Client.project_root = project_root
-attribute posthog.client.Client.queue: Queue
+attribute posthog.client.Client.queue: LaneQueue
 attribute posthog.client.Client.raw_host = normalize_host(host)
 attribute posthog.client.Client.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
 attribute posthog.client.Client.send = send

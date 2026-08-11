@@ -18,7 +18,7 @@ import unittest
 from queue import Empty, Full
 from unittest import mock
 
-from posthog._queue import LaneQueue
+from posthog._queue import LaneQueue, ShutDown
 from posthog.client import Client
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 
@@ -66,6 +66,24 @@ class TestLaneQueue(unittest.TestCase):
         with self.assertRaises(Empty):
             queue.get(timeout=0.01)
 
+    def test_shutdown_matches_python_313_semantics(self):
+        queue = LaneQueue(2)
+        queue.put("a")
+        queue.shutdown()
+        with self.assertRaises(ShutDown):
+            queue.put("b")
+        self.assertEqual(queue.get(), "a")  # drains remaining items
+        with self.assertRaises(ShutDown):
+            queue.get(block=False)
+
+        drained = LaneQueue(2)
+        drained.put("a")
+        drained.shutdown(immediate=True)
+        self.assertEqual(drained.unfinished_tasks, 0)
+        drained.join()  # released immediately
+        with self.assertRaises(ShutDown):
+            drained.get(block=False)
+
 
 class TestClientUsesLaneQueue(unittest.TestCase):
     def test_capture_and_flush_use_the_lane_queue(self):
@@ -74,6 +92,7 @@ class TestClientUsesLaneQueue(unittest.TestCase):
             self.assertIsInstance(client.queue, LaneQueue)
             client.capture("gevent-regression", distinct_id="distinct_id")
             client.flush(timeout_seconds=10)
+            client.join()
         self.assertTrue(mock_post.called)
         self.assertTrue(client.queue.empty())
 
@@ -90,6 +109,15 @@ class TestUnderGeventMonkeyPatching(unittest.TestCase):
 
             gevent.monkey.patch_all()
 
+            # Premise check: this test only means something on gevent versions
+            # whose patch_all() actually replaces queue.Queue (>= 25.4.1).
+            import queue
+
+            assert "gevent" in type(queue.Queue()).__module__, (
+                "gevent did not monkey-patch queue.Queue; the regression "
+                "scenario is not being exercised"
+            )
+
             from unittest import mock
 
             with mock.patch("posthog.consumer.batch_post") as mock_post:
@@ -98,6 +126,7 @@ class TestUnderGeventMonkeyPatching(unittest.TestCase):
                 client = Client("fake_key", flush_at=1, flush_interval=60)
                 client.capture("gevent-regression", distinct_id="distinct_id")
                 client.flush(timeout_seconds=10)
+                client.join()
 
             assert mock_post.called, "batch_post was never called under gevent"
             assert client.queue.empty(), "flush() did not drain the queue"
