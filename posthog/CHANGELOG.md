@@ -1,5 +1,11 @@
 # posthog
 
+## 7.38.6 — 2026-08-12
+
+### Patch changes
+
+- [9beed86](https://github.com/posthog/posthog-python/commit/9beed863426e50a4da1e95b4df645849b96960d5) fix: preserve event delivery when gevent monkey-patches `queue.Queue`, including in preloaded gunicorn workers — Thanks @marandaneto!
+
 ## 7.38.5 — 2026-08-12
 
 ### Patch changes
