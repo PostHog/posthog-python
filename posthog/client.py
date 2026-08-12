@@ -10,12 +10,13 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union, cast
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
+from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
 from posthog.capture_compression import (
@@ -123,6 +124,71 @@ MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
+
+
+def _supports_lane_synchronization(queue) -> bool:
+    return all(
+        hasattr(queue, attribute)
+        for attribute in (
+            "mutex",
+            "not_empty",
+            "not_full",
+            "all_tasks_done",
+            "unfinished_tasks",
+            "_qsize",
+            "_get",
+        )
+    )
+
+
+def _new_lane_queue(maxsize: int) -> Queue:
+    """Return a safe queue, disabling the lane instead of raising on failure."""
+    log = logging.getLogger("posthog")
+    try:
+        queue: Queue = Queue(maxsize)
+    except Exception:
+        log.exception(
+            "Failed to initialize queue.Queue; disabling asynchronous capture for the lane"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    if _supports_lane_synchronization(queue):
+        return queue
+
+    monkey = sys.modules.get("gevent.monkey")
+    if monkey is None:
+        log.error(
+            "queue.Queue lacks the synchronization interface required by PostHog "
+            "and gevent.monkey is not loaded; disabling asynchronous capture for the lane"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    try:
+        if not monkey.is_object_patched("queue", "Queue"):
+            log.error(
+                "queue.Queue lacks the synchronization interface required by PostHog "
+                "but gevent does not report it as patched; disabling asynchronous "
+                "capture for the lane"
+            )
+            return cast(Queue, _DisabledLaneQueue(maxsize))
+
+        original_queue = monkey.get_original("queue", "Queue")
+        queue = cast(Queue, original_queue(maxsize))
+    except Exception:
+        log.exception(
+            "Failed to restore the original queue.Queue after gevent monkey-patching; "
+            "disabling asynchronous capture for the lane"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    if _supports_lane_synchronization(queue):
+        return queue
+
+    log.error(
+        "The queue.Queue restored after gevent monkey-patching lacks the synchronization "
+        "interface required by PostHog; disabling asynchronous capture for the lane"
+    )
+    return cast(Queue, _DisabledLaneQueue(maxsize))
 
 
 def _get_atexit_deadline() -> float:
@@ -327,7 +393,8 @@ class _Lane:
         self._max_queue_size = max_queue_size
         self._thread_count = thread_count
         self._eager_start = eager_start
-        self.queue: Queue = Queue(max_queue_size)
+        self.queue: Queue = _new_lane_queue(max_queue_size)
+        self.available = not isinstance(self.queue, _DisabledLaneQueue)
         self.consumers: List[Consumer] = []
         self._started = False
         self._closed = False
@@ -335,11 +402,11 @@ class _Lane:
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
         self._drain_signal = _DrainSignal(self.queue)
-        if eager_start:
+        if eager_start and self.available:
             self.start()
 
     def _start_locked(self) -> None:
-        if self._started or self._closed:
+        if self._started or self._closed or not self.available:
             return
         for _ in range(self._thread_count):
             consumer = Consumer(
@@ -377,7 +444,7 @@ class _Lane:
     def enqueue(self, msg) -> bool:
         """Atomically admit and queue `msg`, starting the lane on its first event."""
         with self._start_lock:
-            if self._closed:
+            if self._closed or not self.available:
                 return False
             self._start_locked()
             try:
@@ -549,13 +616,14 @@ class _Lane:
         the client's fork-visible lifecycle state. An eager open lane restarts
         immediately; a lazy lane returns to not-started and restarts on next use.
         """
-        self.queue = Queue(self._max_queue_size)
+        self.queue = _new_lane_queue(self._max_queue_size)
+        self.available = not isinstance(self.queue, _DisabledLaneQueue)
         self.reset_sync_send_state_after_fork()
         self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
         self._started = False
         self._closed = closed
-        if self._eager_start:
+        if self._eager_start and self.available:
             self.start()
 
 
@@ -2250,7 +2318,14 @@ class Client(object):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
 
-        if lane._closed:
+        if not lane.available:
+            self.log.warning(
+                "%s lane is unavailable because a compatible queue could not be "
+                "initialized, dropping event %s",
+                lane.name,
+                msg["event"],
+            )
+        elif lane._closed:
             self.log.warning(
                 "%s lane received event %s after shutdown, dropping it",
                 lane.name,
