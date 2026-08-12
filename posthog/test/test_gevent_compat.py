@@ -33,6 +33,7 @@ class TestLaneQueueFallback(unittest.TestCase):
             queue.put("event", block=False)
         self.assertTrue(queue.empty())
         self.assertEqual(queue.unfinished_tasks, 0)
+        self.assertIsNone(queue.task_done())
         self.assertIn("disabling the PostHog client", logs.output[0])
 
     def test_disables_client_if_no_compatible_queue_is_available(self):
@@ -48,6 +49,8 @@ class TestLaneQueueFallback(unittest.TestCase):
         self.assertTrue(client.disabled)
         self.assertEqual(client.consumers, [])
         self.assertIsNone(client.capture("disabled-queue", distinct_id="distinct_id"))
+        client.flush()
+        client.shutdown()
 
 
 @unittest.skipUnless(importlib.util.find_spec("gevent"), "gevent is not installed")

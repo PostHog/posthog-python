@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
+from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
 from posthog.capture_compression import (
@@ -123,39 +124,6 @@ MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
-
-
-class _DisabledLaneQueue:
-    """Queue-compatible sink used when no safe queue implementation is available."""
-
-    def __init__(self, maxsize: int) -> None:
-        self.maxsize = maxsize
-        self.mutex = threading.Lock()
-        self.not_empty = threading.Condition(self.mutex)
-        self.not_full = threading.Condition(self.mutex)
-        self.all_tasks_done = threading.Condition(self.mutex)
-        self.unfinished_tasks = 0
-
-    def put(self, item, block: bool = True, timeout=None) -> None:
-        raise Full
-
-    def get_nowait(self):
-        raise Empty
-
-    def qsize(self) -> int:
-        return 0
-
-    def empty(self) -> bool:
-        return True
-
-    def task_done(self) -> None:
-        raise ValueError("task_done() called too many times")
-
-    def _qsize(self) -> int:
-        return 0
-
-    def _get(self):
-        raise Empty
 
 
 def _supports_lane_synchronization(queue) -> bool:
