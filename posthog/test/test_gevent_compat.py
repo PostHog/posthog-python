@@ -5,6 +5,49 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from queue import Full, Queue
+from unittest import mock
+
+from posthog.client import Client, _new_lane_queue
+from posthog.test.test_utils import FAKE_TEST_API_KEY
+
+
+class TestLaneQueueFallback(unittest.TestCase):
+    def test_uses_working_queue_without_importing_gevent(self):
+        with mock.patch("builtins.__import__", side_effect=AssertionError):
+            queue = _new_lane_queue(10)
+
+        self.assertIsInstance(queue, Queue)
+
+    def test_disables_capture_if_no_compatible_queue_is_available(self):
+        incompatible_queue = mock.Mock(spec=[])
+
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            with (
+                mock.patch("posthog.client.Queue", return_value=incompatible_queue),
+                mock.patch("builtins.__import__", side_effect=ImportError),
+            ):
+                queue = _new_lane_queue(10)
+
+        with self.assertRaises(Full):
+            queue.put("event", block=False)
+        self.assertTrue(queue.empty())
+        self.assertEqual(queue.unfinished_tasks, 0)
+        self.assertIn("disabling the PostHog client", logs.output[0])
+
+    def test_disables_client_if_no_compatible_queue_is_available(self):
+        incompatible_queue = mock.Mock(spec=[])
+
+        with self.assertLogs("posthog", level="ERROR"):
+            with (
+                mock.patch("posthog.client.Queue", return_value=incompatible_queue),
+                mock.patch("builtins.__import__", side_effect=ImportError),
+            ):
+                client = Client(FAKE_TEST_API_KEY)
+
+        self.assertTrue(client.disabled)
+        self.assertEqual(client.consumers, [])
+        self.assertIsNone(client.capture("disabled-queue", distinct_id="distinct_id"))
 
 
 @unittest.skipUnless(importlib.util.find_spec("gevent"), "gevent is not installed")

@@ -125,20 +125,75 @@ _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
 
 
-def _new_lane_queue(maxsize: int) -> Queue:
-    """Return a stdlib queue even when gevent has replaced ``queue.Queue``.
+class _DisabledLaneQueue:
+    """Queue-compatible sink used when no safe queue implementation is available."""
 
-    The consumer coordinates through synchronization attributes provided by
-    the stdlib implementation. gevent 25.4.1+ replaces ``queue.Queue`` with a
-    compatible public API that intentionally does not expose those attributes.
-    """
-    if "gevent.monkey" in sys.modules:
+    def __init__(self, maxsize: int) -> None:
+        self.maxsize = maxsize
+        self.mutex = threading.Lock()
+        self.not_empty = threading.Condition(self.mutex)
+        self.not_full = threading.Condition(self.mutex)
+        self.all_tasks_done = threading.Condition(self.mutex)
+        self.unfinished_tasks = 0
+
+    def put(self, item, block: bool = True, timeout=None) -> None:
+        raise Full
+
+    def get_nowait(self):
+        raise Empty
+
+    def qsize(self) -> int:
+        return 0
+
+    def empty(self) -> bool:
+        return True
+
+    def task_done(self) -> None:
+        raise ValueError("task_done() called too many times")
+
+    def _qsize(self) -> int:
+        return 0
+
+    def _get(self):
+        raise Empty
+
+
+def _supports_lane_synchronization(queue) -> bool:
+    return all(
+        hasattr(queue, attribute)
+        for attribute in (
+            "mutex",
+            "not_empty",
+            "not_full",
+            "all_tasks_done",
+            "unfinished_tasks",
+            "_qsize",
+            "_get",
+        )
+    )
+
+
+def _new_lane_queue(maxsize: int) -> Queue:
+    """Return a safe queue, disabling async capture instead of raising on failure."""
+    try:
+        queue: Queue = Queue(maxsize)
+        if _supports_lane_synchronization(queue):
+            return queue
+
         from gevent import monkey
 
         if monkey.is_object_patched("queue", "Queue"):
             original_queue = monkey.get_original("queue", "Queue")
-            return cast(Queue, original_queue(maxsize))
-    return Queue(maxsize)
+            queue = cast(Queue, original_queue(maxsize))
+            if _supports_lane_synchronization(queue):
+                return queue
+    except Exception:
+        pass
+
+    logging.getLogger("posthog").error(
+        "No compatible queue implementation is available; disabling the PostHog client"
+    )
+    return cast(Queue, _DisabledLaneQueue(maxsize))
 
 
 def _get_atexit_deadline() -> float:
@@ -344,6 +399,7 @@ class _Lane:
         self._thread_count = thread_count
         self._eager_start = eager_start
         self.queue: Queue = _new_lane_queue(max_queue_size)
+        self.available = not isinstance(self.queue, _DisabledLaneQueue)
         self.consumers: List[Consumer] = []
         self._started = False
         self._closed = False
@@ -351,7 +407,7 @@ class _Lane:
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
         self._drain_signal = _DrainSignal(self.queue)
-        if eager_start:
+        if eager_start and self.available:
             self.start()
 
     def _start_locked(self) -> None:
@@ -566,12 +622,13 @@ class _Lane:
         immediately; a lazy lane returns to not-started and restarts on next use.
         """
         self.queue = _new_lane_queue(self._max_queue_size)
+        self.available = not isinstance(self.queue, _DisabledLaneQueue)
         self.reset_sync_send_state_after_fork()
         self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
         self._started = False
         self._closed = closed
-        if self._eager_start:
+        if self._eager_start and self.available:
             self.start()
 
 
@@ -987,6 +1044,8 @@ class Client(object):
             eager_start=False,
         )
         self._lanes = [self._analytics_lane, self._ai_lane]
+        if not all(lane.available for lane in self._lanes):
+            self.disabled = True
 
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
@@ -2086,6 +2145,8 @@ class Client(object):
         )
         for lane in self._lanes:
             lane.rebuild_after_fork(closed=terminal_requested)
+        if not all(lane.available for lane in self._lanes):
+            self.disabled = True
 
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
