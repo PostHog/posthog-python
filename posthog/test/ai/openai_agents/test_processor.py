@@ -455,7 +455,7 @@ class TestPostHogTracingProcessor:
         self, processor, mock_client, mock_span
     ):
         """Test that raw bytes content becomes a base64 string under multimodal passthrough."""
-        mock_client._enable_multimodal_capture = True
+        mock_client.enable_full_ai_capture = True
         raw = b"\x00\x01\x02\x03"
         span_data = GenerationSpanData(
             input=[{"role": "user", "content": raw}],
@@ -467,7 +467,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client._capture_ai.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         captured_input = call_kwargs["properties"]["$ai_input"]
         assert captured_input[0]["content"] == base64.b64encode(raw).decode()
 
@@ -773,7 +773,7 @@ class TestPostHogTracingProcessor:
         self, processor, mock_client, mock_span
     ):
         """Under multimodal passthrough the raw audio is kept intact."""
-        mock_client._enable_multimodal_capture = True
+        mock_client.enable_full_ai_capture = True
         b64 = base64.b64encode(b"\x00" * 1000).decode()
         span_data = TranscriptionSpanData(
             input=b64,
@@ -786,7 +786,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client._capture_ai.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_input"] == b64
 
     def test_latency_calculation(self, processor, mock_client, mock_span):
@@ -1001,11 +1001,11 @@ class TestInstrumentHelper:
 
 
 def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_trace):
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     processor = PostHogTracingProcessor(client=mock_client, distinct_id="test-user")
     processor.on_trace_start(mock_trace)
     processor.on_trace_end(mock_trace)
 
     mock_client.capture.assert_not_called()
-    mock_client._capture_ai.assert_called_once()
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_trace"
+    mock_client.capture_ai.assert_called_once()
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_trace"

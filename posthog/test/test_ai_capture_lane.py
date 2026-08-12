@@ -1,10 +1,11 @@
 import threading
 import unittest
+import uuid
 from unittest import mock
 
 import posthog
 
-from posthog.ai.utils import _capture_ai_event
+from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
 from posthog.capture_mode import CaptureMode
 from posthog.client import Client
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
@@ -29,7 +30,7 @@ class TestLaneRouting(unittest.TestCase):
         client = self._client()
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             client.capture("button_clicked", distinct_id="d")
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
         by_path = _events_by_path(mock_post)
@@ -51,7 +52,7 @@ class TestLaneRouting(unittest.TestCase):
 
     def test_capture_does_not_reroute_ai_named_events(self):
         # The two-lane rule: `capture()` never special-cases AI events, no
-        # matter their name. Only `_capture_ai()` reaches the AI lane.
+        # matter their name. Only `capture_ai()` reaches the AI lane.
         client = self._client()
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             client.capture("$ai_generation", distinct_id="d")
@@ -64,13 +65,13 @@ class TestLaneRouting(unittest.TestCase):
 
     def test_capture_ai_returns_event_uuid_like_capture(self):
         client = self._client(send=False)
-        uuid = client._capture_ai("$ai_generation", distinct_id="d")
+        uuid = client.capture_ai("$ai_generation", distinct_id="d")
         self.assertIsNotNone(uuid)
 
     def test_sync_mode_capture_ai_posts_single_event_batch_to_ai_endpoint(self):
         client = Client(TEST_API_KEY, sync_mode=True)
         with mock.patch("posthog.client.batch_post") as mock_post:
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
 
         mock_post.assert_called_once()
         self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
@@ -78,7 +79,7 @@ class TestLaneRouting(unittest.TestCase):
         self.assertEqual([e["event"] for e in batch], ["$ai_generation"])
 
     def test_multimodal_client_routes_wrapper_captures_to_ai_lane(self):
-        client = self._client(_enable_multimodal_capture=True)
+        client = self._client(enable_full_ai_capture=True)
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")
             client.flush()
@@ -87,7 +88,7 @@ class TestLaneRouting(unittest.TestCase):
 
     def test_disabled_client_never_starts_ai_lane(self):
         client = Client(TEST_API_KEY, disabled=True)
-        client._capture_ai("$ai_generation", distinct_id="d")
+        client.capture_ai("$ai_generation", distinct_id="d")
         self.assertEqual(client._ai_lane.consumers, [])
 
     def test_posthog_alias_accepts_private_kwargs(self):
@@ -209,7 +210,7 @@ class TestAiLaneV0Pinned(unittest.TestCase):
             mock.patch("posthog.consumer.batch_post") as mock_post,
             mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
         ):
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
             client.flush()
 
@@ -226,7 +227,7 @@ class TestAiLaneV0Pinned(unittest.TestCase):
             mock.patch("posthog.client.batch_post") as mock_post,
             mock.patch("posthog.client._send_v1_batch") as mock_v1,
         ):
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
 
         mock_post.assert_called_once()
@@ -245,7 +246,7 @@ class TestAiLaneLazyStart(unittest.TestCase):
         self.assertEqual(client._ai_lane.consumers, [])
 
         with mock.patch("posthog.consumer.batch_post"):
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
             self.assertEqual(len(client._ai_lane.consumers), 1)
             self.assertTrue(client._ai_lane.consumers[0].is_alive())
             client.flush()
@@ -257,7 +258,7 @@ class TestAiLaneLazyStart(unittest.TestCase):
 
         def fire():
             barrier.wait()
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
 
         threads = [threading.Thread(target=fire) for _ in range(8)]
         with mock.patch("posthog.consumer.batch_post"):
@@ -284,7 +285,7 @@ class TestLaneForkRebuild(unittest.TestCase):
             TEST_API_KEY, flush_interval=0.05, enable_local_evaluation=False
         )
         with mock.patch("posthog.consumer.batch_post"):
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
         self.assertEqual(len(client._ai_lane.consumers), 1)
 
@@ -305,7 +306,7 @@ class TestLaneForkRebuild(unittest.TestCase):
 
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             client.capture("button_clicked", distinct_id="d")
-            client._capture_ai("$ai_generation", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
         self.assertEqual(len(client._ai_lane.consumers), 1)
@@ -329,7 +330,7 @@ class TestCaptureAiEventHelper(unittest.TestCase):
     """`_capture_ai_event` rides the AI lane only when the client opted in."""
 
     def test_opted_in_routes_through_ai_lane(self):
-        client = Client(TEST_API_KEY, flush_interval=0.05, _use_ai_lane=True)
+        client = Client(TEST_API_KEY, flush_interval=0.05, enable_full_ai_capture=True)
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             _capture_ai_event(
                 client,
@@ -364,39 +365,35 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         client = mock.Mock()
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
         client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
-        client._capture_ai.assert_not_called()
+        client.capture_ai.assert_not_called()
 
     def test_opted_in_prefers_capture_ai(self):
-        client = mock.Mock(spec=["capture", "_capture_ai", "_use_ai_lane"])
-        client._use_ai_lane = True
+        client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
+        client.enable_full_ai_capture = True
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client._capture_ai.assert_called_once_with(
+        client.capture_ai.assert_called_once_with(
             event="$ai_generation", distinct_id="d"
         )
         client.capture.assert_not_called()
 
     def test_opted_in_duck_typed_client_without_method_falls_back(self):
-        client = mock.Mock(spec=["capture", "_use_ai_lane"])
-        client._use_ai_lane = True
+        client = mock.Mock(spec=["capture", "enable_full_ai_capture"])
+        client.enable_full_ai_capture = True
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
         client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
 
     def test_client_multimodal_flag_prefers_capture_ai(self):
-        client = mock.Mock(
-            spec=["capture", "_capture_ai", "_enable_multimodal_capture"]
-        )
-        client._enable_multimodal_capture = True
+        client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
+        client.enable_full_ai_capture = True
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client._capture_ai.assert_called_once_with(
+        client.capture_ai.assert_called_once_with(
             event="$ai_generation", distinct_id="d"
         )
         client.capture.assert_not_called()
 
     def test_client_multimodal_flag_off_keeps_capture(self):
-        client = mock.Mock(
-            spec=["capture", "_capture_ai", "_enable_multimodal_capture"]
-        )
-        client._enable_multimodal_capture = False
+        client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
+        client.enable_full_ai_capture = False
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
         client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
 
@@ -406,7 +403,7 @@ class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):
     afterwards, even a lazy AI lane that never started before shutdown."""
 
     def test_late_ai_capture_after_shutdown_starts_nothing_and_sends_nothing(self):
-        client = Client(TEST_API_KEY, _use_ai_lane=True, flush_interval=0.05)
+        client = Client(TEST_API_KEY, enable_full_ai_capture=True, flush_interval=0.05)
         client.shutdown()
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")
@@ -425,9 +422,7 @@ class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):
 
 
 class TestModuleLevelFlagConfig(unittest.TestCase):
-    """The lazily auto-instantiated default client picks the private AI flags
-    up from module attributes, so deployments configuring PostHog via
-    `posthog.<attr> = ...` never need to construct or mutate a client."""
+    """The default client picks up the AI capture flag and its deprecated aliases from module attributes."""
 
     def setUp(self):
         self._saved = {
@@ -440,6 +435,7 @@ class TestModuleLevelFlagConfig(unittest.TestCase):
         posthog.send = False
 
     def tearDown(self):
+        posthog.enable_full_ai_capture = False
         posthog._use_ai_lane = False
         posthog._enable_multimodal_capture = False
         posthog.default_client = self._saved["default_client"]
@@ -450,7 +446,7 @@ class TestModuleLevelFlagConfig(unittest.TestCase):
         posthog._use_ai_lane = True
         client = posthog.setup()
         self.assertTrue(client._use_ai_lane)
-        self.assertFalse(client._enable_multimodal_capture)
+        self.assertTrue(client._enable_multimodal_capture)
 
     def test_setup_resyncs_flags_on_existing_default_client(self):
         client = posthog.setup()
@@ -461,6 +457,126 @@ class TestModuleLevelFlagConfig(unittest.TestCase):
         self.assertIs(posthog.setup(), client)
         self.assertTrue(client._use_ai_lane)
         self.assertTrue(client._enable_multimodal_capture)
+
+
+class TestFullAiCaptureFlag(unittest.TestCase):
+    def _client(self, **kwargs):
+        client = Client(TEST_API_KEY, flush_interval=0.05, **kwargs)
+        self.addCleanup(client.join)
+        return client
+
+    def test_new_flag_routes_wrapper_captures_to_ai_lane(self):
+        client = self._client(enable_full_ai_capture=True)
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            _capture_ai_event(client, "$ai_generation", distinct_id="d")
+            client.flush()
+        self.assertEqual(set(_events_by_path(mock_post)), {AI_EVENTS_ENDPOINT})
+
+    def test_deprecated_kwargs_map_to_new_flag(self):
+        for kwargs in ({"_use_ai_lane": True}, {"_enable_multimodal_capture": True}):
+            client = Client(TEST_API_KEY, send=False, **kwargs)
+            self.addCleanup(client.join)
+            self.assertTrue(client.enable_full_ai_capture)
+
+    def test_alias_properties_read_and_write_the_new_flag(self):
+        client = Client(TEST_API_KEY, send=False)
+        self.addCleanup(client.join)
+        self.assertFalse(client._use_ai_lane)
+        self.assertFalse(client._enable_multimodal_capture)
+        client._enable_multimodal_capture = True
+        self.assertTrue(client.enable_full_ai_capture)
+        self.assertTrue(client._use_ai_lane)
+
+    def test_module_globals_sync_onto_default_client(self):
+        previous = (
+            posthog.default_client,
+            posthog.project_api_key,
+            posthog.enable_full_ai_capture,
+            posthog._use_ai_lane,
+        )
+        try:
+            posthog.default_client = Client(TEST_API_KEY, send=False)
+            posthog.project_api_key = TEST_API_KEY
+            posthog.enable_full_ai_capture = True
+            posthog.setup()
+            self.assertTrue(posthog.default_client.enable_full_ai_capture)
+            posthog.enable_full_ai_capture = False
+            posthog._use_ai_lane = True
+            posthog.setup()
+            self.assertTrue(posthog.default_client.enable_full_ai_capture)
+        finally:
+            (
+                posthog.default_client,
+                posthog.project_api_key,
+                posthog.enable_full_ai_capture,
+                posthog._use_ai_lane,
+            ) = previous
+
+
+class TestPublicCaptureAi(unittest.TestCase):
+    def test_capture_ai_is_public_and_returns_uuid(self):
+        client = Client(TEST_API_KEY, send=False)
+        self.addCleanup(client.join)
+        self.assertIsNotNone(client.capture_ai("$ai_generation", distinct_id="d"))
+        self.assertFalse(hasattr(client, "_capture_ai"))
+
+    def test_module_level_capture_ai_returns_uuid(self):
+        previous = (posthog.default_client, posthog.project_api_key)
+        try:
+            posthog.default_client = Client(TEST_API_KEY, send=False)
+            posthog.project_api_key = TEST_API_KEY
+            self.assertIsNotNone(posthog.capture_ai("$ai_generation", distinct_id="d"))
+        finally:
+            posthog.default_client, posthog.project_api_key = previous
+
+
+class TestCaptureAiUuid(unittest.TestCase):
+    def _client(self, **kwargs):
+        client = Client(TEST_API_KEY, flush_interval=0.05, **kwargs)
+        self.addCleanup(client.join)
+        return client
+
+    def test_returned_uuid_matches_the_wire_event_uuid(self):
+        client = self._client()
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            returned_uuid = client.capture_ai("$ai_generation", distinct_id="d")
+            client.flush()
+
+        batch = mock_post.call_args.kwargs["batch"]
+        self.assertEqual(batch[0]["uuid"], returned_uuid)
+
+    def test_supplied_uuid_is_preserved_end_to_end(self):
+        client = self._client()
+        supplied_uuid = str(uuid.uuid4())
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            returned_uuid = client.capture_ai(
+                "$ai_generation", distinct_id="d", uuid=supplied_uuid
+            )
+            client.flush()
+
+        self.assertEqual(returned_uuid, supplied_uuid)
+        batch = mock_post.call_args.kwargs["batch"]
+        self.assertEqual(batch[0]["uuid"], supplied_uuid)
+
+
+class TestCaptureAiPrivacyMode(unittest.TestCase):
+    """Privacy mode always wins over `enable_full_ai_capture`."""
+
+    def test_privacy_mode_strips_content_despite_full_ai_capture(self):
+        client = Client(
+            TEST_API_KEY,
+            send=False,
+            enable_full_ai_capture=True,
+            privacy_mode=True,
+        )
+        self.addCleanup(client.join)
+        payload = {"role": "user", "content": "sensitive prompt"}
+
+        sanitized = with_privacy_mode(
+            client, False, finalize_ai_content(payload, ph_client=client)
+        )
+
+        self.assertIsNone(sanitized)
 
 
 if __name__ == "__main__":

@@ -1970,7 +1970,7 @@ async def test_async_messages_streaming_early_exit_closes_provider_stream(mock_c
 
 
 def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_anthropic_response):
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     with patch(
         "anthropic.resources.Messages.create", return_value=mock_anthropic_response
     ):
@@ -1982,12 +1982,12 @@ def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_anthropic_re
         )
 
     mock_client.capture.assert_not_called()
-    assert mock_client._capture_ai.call_count == 1
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"
 
 
 def test_multimodal_client_skips_media_redaction(mock_client, mock_anthropic_response):
-    mock_client._enable_multimodal_capture = True
+    mock_client.enable_full_ai_capture = True
     image_data = "A" * 64
 
     with patch(
@@ -2015,6 +2015,6 @@ def test_multimodal_client_skips_media_redaction(mock_client, mock_anthropic_res
         )
 
     mock_client.capture.assert_not_called()
-    assert mock_client._capture_ai.call_count == 1
-    props = mock_client._capture_ai.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input"][0]["content"][0]["source"]["data"] == image_data

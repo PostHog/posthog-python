@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from posthog import get_tags, identify_context, new_context, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
-from posthog.ai.sanitization import _multimodal_capture_enabled, redact_media
+from posthog.ai.sanitization import _full_ai_capture_enabled, redact_media
 from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-exported for back-compat
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
@@ -57,21 +57,14 @@ def _get_tokens_source(
 
 
 def _ai_lane_enabled(ph_client) -> bool:
-    """The client's private, unstable AI-lane opt-in; multimodal implies it."""
-    # `is True` tolerates unspecced Mock clients whose auto-generated attrs are truthy.
-    opted_in = getattr(ph_client, "_use_ai_lane", False) is True
-    return opted_in or _multimodal_capture_enabled(ph_client)
+    """The client's full-AI-capture opt-in routes wrapper events onto the AI lane."""
+    return _full_ai_capture_enabled(ph_client)
 
 
 def _capture_ai_event(ph_client, event: str, **kwargs):
-    """Capture a wrapper-emitted AI event.
-
-    When the client opted into the AI lane, the event rides it via
-    `_capture_ai`. Otherwise — including duck-typed client-likes without the
-    lane — events keep the plain `capture()` path they have today.
-    """
+    """Capture a wrapper-emitted AI event, falling back to `capture()` for duck-typed clients without `capture_ai`."""
     if _ai_lane_enabled(ph_client):
-        capture_ai = getattr(ph_client, "_capture_ai", None)
+        capture_ai = getattr(ph_client, "capture_ai", None)
         if callable(capture_ai):
             return capture_ai(event=event, **kwargs)
     return ph_client.capture(event=event, **kwargs)

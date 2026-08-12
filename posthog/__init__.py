@@ -401,12 +401,10 @@ flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvi
 # Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
 # then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
 capture_mode = None  # type: Optional[CaptureMode]
-# Internal, no stability guarantees. `_use_ai_lane` routes AI SDK wrapper events
-# through the dedicated AI capture lane; `_enable_multimodal_capture` additionally
-# skips media redaction (and implies the lane). Module attributes so the lazily
-# auto-instantiated default client can be configured without constructing it.
-# Like `debug`/`disabled`, these are authoritative for the default client:
-# `setup()` re-syncs them onto it on every call, overwriting direct assignments.
+# Routes AI SDK wrapper events through the dedicated AI capture lane, skips
+# truncation, and passes media unredacted. `privacy_mode` always wins.
+enable_full_ai_capture = False  # type: bool
+# Deprecated aliases for `enable_full_ai_capture`.
 _use_ai_lane = False  # type: bool
 _enable_multimodal_capture = False  # type: bool
 
@@ -501,6 +499,41 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
     """
 
     return _proxy("capture", event, **kwargs)
+
+
+def capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
+    """
+    Capture an AI event on the dedicated AI capture endpoint.
+
+    Beta: the signature is stable; operational limits (per-event size cap,
+    batching, endpoint) may change without notice.
+
+    Takes the same arguments and returns the same value as `capture()`: the
+    event UUID, or None when the event was not admitted (disabled client, or
+    dropped by `before_send`). The event is delivered on an isolated queue
+    with its own consumer pool and a higher per-event size cap, posting to
+    the dedicated AI ingestion endpoint. The payload is sent as given — no
+    redaction or truncation is applied here.
+
+    Args:
+        event: The event name, normally one of the `$ai_*` event names.
+        **kwargs: Same optional arguments as `capture()`.
+
+    Examples:
+        ```python
+        from posthog import capture_ai
+
+        uuid = capture_ai(
+            "$ai_generation",
+            distinct_id="user_123",
+            properties={"$ai_model": "gpt-5"},
+        )
+        ```
+
+    Category:
+        Events
+    """
+    return _proxy("capture_ai", event, **kwargs)
 
 
 def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
@@ -1237,8 +1270,11 @@ def setup() -> Client:
     default_client.debug = debug
     default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)
-    default_client._use_ai_lane = bool(_use_ai_lane)
-    default_client._enable_multimodal_capture = bool(_enable_multimodal_capture)
+    default_client.enable_full_ai_capture = (
+        bool(enable_full_ai_capture)
+        or bool(_use_ai_lane)
+        or bool(_enable_multimodal_capture)
+    )
     # Metrics config is consumed lazily on first `.metrics` access, so late
     # module-attr assignment (e.g. a Django ready() hook running after something
     # already forced setup()) still applies until the metrics API is first used.

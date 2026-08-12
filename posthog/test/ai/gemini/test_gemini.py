@@ -1584,7 +1584,7 @@ def test_ai_lane_client_routes_through_capture_ai(
 ):
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.generate_content(
         model="gemini-2.0-flash",
@@ -1593,5 +1593,5 @@ def test_ai_lane_client_routes_through_capture_ai(
     )
 
     mock_client.capture.assert_not_called()
-    assert mock_client._capture_ai.call_count == 1
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"

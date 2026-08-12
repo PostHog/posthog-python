@@ -633,6 +633,7 @@ class Client(object):
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
         metrics: Optional[dict] = None,
+        enable_full_ai_capture=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
     ):
@@ -693,6 +694,11 @@ class Client(object):
                 captured exceptions. Defaults to the current working directory.
             privacy_mode: For AI observability, capture usage metadata without
                 prompt inputs or outputs.
+            enable_full_ai_capture: Route PostHog AI wrapper events through
+                the dedicated AI capture endpoint and capture full AI content:
+                skips string truncation and passes media (base64/data URIs)
+                through unredacted. ``privacy_mode`` always wins. Defaults to
+                False.
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
@@ -814,12 +820,12 @@ class Client(object):
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
         self._metrics_lock = threading.Lock()
-        # Internal, no stability guarantees. `_use_ai_lane` routes all AI SDK
-        # wrapper events through the dedicated AI lane; `_enable_multimodal_capture`
-        # additionally skips media redaction (and implies the lane). Both are
-        # read per event by wrapper-layer code, never by `capture()` itself.
-        self._use_ai_lane = bool(_use_ai_lane)
-        self._enable_multimodal_capture = bool(_enable_multimodal_capture)
+        # `_use_ai_lane` / `_enable_multimodal_capture` are deprecated aliases.
+        self.enable_full_ai_capture = (
+            enable_full_ai_capture is True
+            or _use_ai_lane is True
+            or _enable_multimodal_capture is True
+        )
         self.is_server = is_server
         self.historical_migration = historical_migration
         # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
@@ -991,6 +997,24 @@ class Client(object):
         if self.sync_mode:
             return None
         return [consumer for lane in self._lanes for consumer in lane.consumers]
+
+    @property
+    def _use_ai_lane(self) -> bool:
+        """Deprecated alias for `enable_full_ai_capture`."""
+        return self.enable_full_ai_capture
+
+    @_use_ai_lane.setter
+    def _use_ai_lane(self, value) -> None:
+        self.enable_full_ai_capture = value is True
+
+    @property
+    def _enable_multimodal_capture(self) -> bool:
+        """Deprecated alias for `enable_full_ai_capture`."""
+        return self.enable_full_ai_capture
+
+    @_enable_multimodal_capture.setter
+    def _enable_multimodal_capture(self, value) -> None:
+        self.enable_full_ai_capture = value is True
 
     def _warn_if_duplicate_async_client(self):
         if self.disabled or not self.send or self.sync_mode or not self.api_key:
@@ -1453,22 +1477,27 @@ class Client(object):
         return self._capture(event, self._analytics_lane, **kwargs)
 
     @no_throw()
-    def _capture_ai(
+    def capture_ai(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Capture an AI event on the dedicated AI lane.
+        """Capture an AI event on the dedicated AI capture endpoint.
 
-        Internal and experimental, with no stability guarantees: the signature
-        and lane behavior may change while the AI capture lane is validated on
-        PostHog's own traffic.
+        Beta: the signature is stable; operational limits (per-event size
+        cap, batching, endpoint) may change without notice.
 
-        Takes the same arguments and returns the same value as `capture()`,
-        but the event is queued on the AI lane, which posts to the dedicated
-        AI endpoint with its own consumer pool and per-event size cap.
+        Takes the same arguments and returns the same value as `capture()`:
+        the event UUID, or None when the event was not admitted (disabled
+        client, or dropped by `before_send`). The event is queued on an
+        isolated AI lane with its own consumer pool and a higher per-event
+        size cap, posting to the dedicated AI ingestion endpoint. The payload
+        is sent as given — no redaction or truncation is applied here.
+
+        Category:
+            Capture
         """
         if not event.startswith("$ai_"):
             self.log.debug(
-                "_capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
+                "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
                 event,
             )
         return self._capture(event, self._ai_lane, **kwargs)
@@ -1476,7 +1505,7 @@ class Client(object):
     def _capture(
         self, event: str, lane: _Lane, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Shared message-building body of `capture()` and `_capture_ai()`; `lane` picks the wire destination."""
+        """Shared message-building body of `capture()` and `capture_ai()`; `lane` picks the wire destination."""
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
