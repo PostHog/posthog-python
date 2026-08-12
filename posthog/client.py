@@ -10,7 +10,7 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union, cast
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -123,6 +123,22 @@ MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
+
+
+def _new_lane_queue(maxsize: int) -> Queue:
+    """Return a stdlib queue even when gevent has replaced ``queue.Queue``.
+
+    The consumer coordinates through synchronization attributes provided by
+    the stdlib implementation. gevent 25.4.1+ replaces ``queue.Queue`` with a
+    compatible public API that intentionally does not expose those attributes.
+    """
+    if "gevent.monkey" in sys.modules:
+        from gevent import monkey
+
+        if monkey.is_object_patched("queue", "Queue"):
+            original_queue = monkey.get_original("queue", "Queue")
+            return cast(Queue, original_queue(maxsize))
+    return Queue(maxsize)
 
 
 def _get_atexit_deadline() -> float:
@@ -327,7 +343,7 @@ class _Lane:
         self._max_queue_size = max_queue_size
         self._thread_count = thread_count
         self._eager_start = eager_start
-        self.queue: Queue = Queue(max_queue_size)
+        self.queue: Queue = _new_lane_queue(max_queue_size)
         self.consumers: List[Consumer] = []
         self._started = False
         self._closed = False
@@ -549,7 +565,7 @@ class _Lane:
         the client's fork-visible lifecycle state. An eager open lane restarts
         immediately; a lazy lane returns to not-started and restarts on next use.
         """
-        self.queue = Queue(self._max_queue_size)
+        self.queue = _new_lane_queue(self._max_queue_size)
         self.reset_sync_send_state_after_fork()
         self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
