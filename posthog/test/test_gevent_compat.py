@@ -34,7 +34,25 @@ class TestLaneQueueFallback(unittest.TestCase):
         self.assertTrue(queue.empty())
         self.assertEqual(queue.unfinished_tasks, 0)
         self.assertIsNone(queue.task_done())
+        self.assertIn("gevent.monkey is not loaded", logs.output[0])
         self.assertIn("disabling the PostHog client", logs.output[0])
+
+    def test_logs_gevent_recovery_failure_before_disabling(self):
+        incompatible_queue = mock.Mock(spec=[])
+        monkey = mock.Mock()
+        monkey.is_object_patched.return_value = True
+        monkey.get_original.side_effect = RuntimeError("broken gevent state")
+
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            with (
+                mock.patch("posthog.client.Queue", return_value=incompatible_queue),
+                mock.patch.dict(sys.modules, {"gevent.monkey": monkey}),
+            ):
+                queue = _new_lane_queue(10)
+
+        self.assertTrue(queue.empty())
+        self.assertIn("Failed to restore the original queue.Queue", logs.output[0])
+        self.assertIn("broken gevent state", logs.output[0])
 
     def test_disables_client_if_no_compatible_queue_is_available(self):
         incompatible_queue = mock.Mock(spec=[])

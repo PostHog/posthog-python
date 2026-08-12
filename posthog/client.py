@@ -143,22 +143,47 @@ def _supports_lane_synchronization(queue) -> bool:
 
 def _new_lane_queue(maxsize: int) -> Queue:
     """Return a safe queue, disabling async capture instead of raising on failure."""
+    log = logging.getLogger("posthog")
     try:
         queue: Queue = Queue(maxsize)
-        if _supports_lane_synchronization(queue):
-            return queue
-
-        monkey = sys.modules.get("gevent.monkey")
-        if monkey is not None and monkey.is_object_patched("queue", "Queue"):
-            original_queue = monkey.get_original("queue", "Queue")
-            queue = cast(Queue, original_queue(maxsize))
-            if _supports_lane_synchronization(queue):
-                return queue
     except Exception:
-        pass
+        log.exception("Failed to initialize queue.Queue; disabling the PostHog client")
+        return cast(Queue, _DisabledLaneQueue(maxsize))
 
-    logging.getLogger("posthog").error(
-        "No compatible queue implementation is available; disabling the PostHog client"
+    if _supports_lane_synchronization(queue):
+        return queue
+
+    monkey = sys.modules.get("gevent.monkey")
+    if monkey is None:
+        log.error(
+            "queue.Queue lacks the synchronization interface required by PostHog "
+            "and gevent.monkey is not loaded; disabling the PostHog client"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    try:
+        if not monkey.is_object_patched("queue", "Queue"):
+            log.error(
+                "queue.Queue lacks the synchronization interface required by PostHog "
+                "but gevent does not report it as patched; disabling the PostHog client"
+            )
+            return cast(Queue, _DisabledLaneQueue(maxsize))
+
+        original_queue = monkey.get_original("queue", "Queue")
+        queue = cast(Queue, original_queue(maxsize))
+    except Exception:
+        log.exception(
+            "Failed to restore the original queue.Queue after gevent monkey-patching; "
+            "disabling the PostHog client"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    if _supports_lane_synchronization(queue):
+        return queue
+
+    log.error(
+        "The queue.Queue restored after gevent monkey-patching lacks the synchronization "
+        "interface required by PostHog; disabling the PostHog client"
     )
     return cast(Queue, _DisabledLaneQueue(maxsize))
 
