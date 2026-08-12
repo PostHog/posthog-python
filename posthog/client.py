@@ -148,9 +148,8 @@ def _new_lane_queue(maxsize: int) -> Queue:
         if _supports_lane_synchronization(queue):
             return queue
 
-        from gevent import monkey
-
-        if monkey.is_object_patched("queue", "Queue"):
+        monkey = sys.modules.get("gevent.monkey")
+        if monkey is not None and monkey.is_object_patched("queue", "Queue"):
             original_queue = monkey.get_original("queue", "Queue")
             queue = cast(Queue, original_queue(maxsize))
             if _supports_lane_synchronization(queue):

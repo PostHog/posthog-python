@@ -13,8 +13,8 @@ from posthog.test.test_utils import FAKE_TEST_API_KEY
 
 
 class TestLaneQueueFallback(unittest.TestCase):
-    def test_uses_working_queue_without_importing_gevent(self):
-        with mock.patch("builtins.__import__", side_effect=AssertionError):
+    def test_uses_working_queue_without_loading_gevent(self):
+        with mock.patch.dict(sys.modules, {"gevent.monkey": None}):
             queue = _new_lane_queue(10)
 
         self.assertIsInstance(queue, Queue)
@@ -25,7 +25,7 @@ class TestLaneQueueFallback(unittest.TestCase):
         with self.assertLogs("posthog", level="ERROR") as logs:
             with (
                 mock.patch("posthog.client.Queue", return_value=incompatible_queue),
-                mock.patch("builtins.__import__", side_effect=ImportError),
+                mock.patch.dict(sys.modules, {"gevent.monkey": None}),
             ):
                 queue = _new_lane_queue(10)
 
@@ -42,7 +42,7 @@ class TestLaneQueueFallback(unittest.TestCase):
         with self.assertLogs("posthog", level="ERROR"):
             with (
                 mock.patch("posthog.client.Queue", return_value=incompatible_queue),
-                mock.patch("builtins.__import__", side_effect=ImportError),
+                mock.patch.dict(sys.modules, {"gevent.monkey": None}),
             ):
                 client = Client(FAKE_TEST_API_KEY)
 
