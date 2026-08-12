@@ -142,12 +142,14 @@ def _supports_lane_synchronization(queue) -> bool:
 
 
 def _new_lane_queue(maxsize: int) -> Queue:
-    """Return a safe queue, disabling async capture instead of raising on failure."""
+    """Return a safe queue, disabling the lane instead of raising on failure."""
     log = logging.getLogger("posthog")
     try:
         queue: Queue = Queue(maxsize)
     except Exception:
-        log.exception("Failed to initialize queue.Queue; disabling the PostHog client")
+        log.exception(
+            "Failed to initialize queue.Queue; disabling asynchronous capture for the lane"
+        )
         return cast(Queue, _DisabledLaneQueue(maxsize))
 
     if _supports_lane_synchronization(queue):
@@ -157,7 +159,7 @@ def _new_lane_queue(maxsize: int) -> Queue:
     if monkey is None:
         log.error(
             "queue.Queue lacks the synchronization interface required by PostHog "
-            "and gevent.monkey is not loaded; disabling the PostHog client"
+            "and gevent.monkey is not loaded; disabling asynchronous capture for the lane"
         )
         return cast(Queue, _DisabledLaneQueue(maxsize))
 
@@ -165,7 +167,8 @@ def _new_lane_queue(maxsize: int) -> Queue:
         if not monkey.is_object_patched("queue", "Queue"):
             log.error(
                 "queue.Queue lacks the synchronization interface required by PostHog "
-                "but gevent does not report it as patched; disabling the PostHog client"
+                "but gevent does not report it as patched; disabling asynchronous "
+                "capture for the lane"
             )
             return cast(Queue, _DisabledLaneQueue(maxsize))
 
@@ -174,7 +177,7 @@ def _new_lane_queue(maxsize: int) -> Queue:
     except Exception:
         log.exception(
             "Failed to restore the original queue.Queue after gevent monkey-patching; "
-            "disabling the PostHog client"
+            "disabling asynchronous capture for the lane"
         )
         return cast(Queue, _DisabledLaneQueue(maxsize))
 
@@ -183,7 +186,7 @@ def _new_lane_queue(maxsize: int) -> Queue:
 
     log.error(
         "The queue.Queue restored after gevent monkey-patching lacks the synchronization "
-        "interface required by PostHog; disabling the PostHog client"
+        "interface required by PostHog; disabling asynchronous capture for the lane"
     )
     return cast(Queue, _DisabledLaneQueue(maxsize))
 
@@ -403,7 +406,7 @@ class _Lane:
             self.start()
 
     def _start_locked(self) -> None:
-        if self._started or self._closed:
+        if self._started or self._closed or not self.available:
             return
         for _ in range(self._thread_count):
             consumer = Consumer(
@@ -441,7 +444,7 @@ class _Lane:
     def enqueue(self, msg) -> bool:
         """Atomically admit and queue `msg`, starting the lane on its first event."""
         with self._start_lock:
-            if self._closed:
+            if self._closed or not self.available:
                 return False
             self._start_locked()
             try:
@@ -1036,8 +1039,6 @@ class Client(object):
             eager_start=False,
         )
         self._lanes = [self._analytics_lane, self._ai_lane]
-        if not all(lane.available for lane in self._lanes):
-            self.disabled = True
 
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
@@ -2137,8 +2138,6 @@ class Client(object):
         )
         for lane in self._lanes:
             lane.rebuild_after_fork(closed=terminal_requested)
-        if not all(lane.available for lane in self._lanes):
-            self.disabled = True
 
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
@@ -2319,7 +2318,14 @@ class Client(object):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
 
-        if lane._closed:
+        if not lane.available:
+            self.log.warning(
+                "%s lane is unavailable because a compatible queue could not be "
+                "initialized, dropping event %s",
+                lane.name,
+                msg["event"],
+            )
+        elif lane._closed:
             self.log.warning(
                 "%s lane received event %s after shutdown, dropping it",
                 lane.name,

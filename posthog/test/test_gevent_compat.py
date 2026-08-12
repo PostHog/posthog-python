@@ -35,7 +35,7 @@ class TestLaneQueueFallback(unittest.TestCase):
         self.assertEqual(queue.unfinished_tasks, 0)
         self.assertIsNone(queue.task_done())
         self.assertIn("gevent.monkey is not loaded", logs.output[0])
-        self.assertIn("disabling the PostHog client", logs.output[0])
+        self.assertIn("disabling asynchronous capture for the lane", logs.output[0])
 
     def test_logs_gevent_recovery_failure_before_disabling(self):
         incompatible_queue = mock.Mock(spec=[])
@@ -54,7 +54,7 @@ class TestLaneQueueFallback(unittest.TestCase):
         self.assertIn("Failed to restore the original queue.Queue", logs.output[0])
         self.assertIn("broken gevent state", logs.output[0])
 
-    def test_disables_client_if_no_compatible_queue_is_available(self):
+    def test_disables_only_async_capture_if_no_compatible_queue_is_available(self):
         incompatible_queue = mock.Mock(spec=[])
 
         with self.assertLogs("posthog", level="ERROR"):
@@ -64,11 +64,37 @@ class TestLaneQueueFallback(unittest.TestCase):
             ):
                 client = Client(FAKE_TEST_API_KEY)
 
-        self.assertTrue(client.disabled)
+        self.assertFalse(client.disabled)
+        self.assertFalse(client._analytics_lane.available)
+        self.assertFalse(client._ai_lane.available)
         self.assertEqual(client.consumers, [])
         self.assertIsNone(client.capture("disabled-queue", distinct_id="distinct_id"))
+        self.assertEqual(client.consumers, [])
         client.flush()
         client.shutdown()
+
+    def test_incompatible_queue_does_not_disable_queue_independent_capabilities(self):
+        incompatible_queue = mock.Mock(spec=[])
+
+        with self.assertLogs("posthog", level="ERROR"):
+            with (
+                mock.patch("posthog.client.Queue", return_value=incompatible_queue),
+                mock.patch.dict(sys.modules, {"gevent.monkey": None}),
+                mock.patch("posthog.client.batch_post") as mock_post,
+                mock.patch(
+                    "posthog.client.flags",
+                    return_value={"featureFlags": {"beta-feature": True}},
+                ) as mock_flags,
+            ):
+                client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+                event_uuid = client.capture("sync-capture", distinct_id="distinct_id")
+                decision = client.get_flags_decision("distinct_id")
+
+        self.assertFalse(client.disabled)
+        self.assertIsNotNone(event_uuid)
+        mock_post.assert_called_once()
+        self.assertTrue(decision["flags"]["beta-feature"].enabled)
+        mock_flags.assert_called_once()
 
 
 @unittest.skipUnless(importlib.util.find_spec("gevent"), "gevent is not installed")

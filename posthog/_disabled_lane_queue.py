@@ -3,7 +3,7 @@ from queue import Empty, Full
 
 
 class _DisabledLaneQueue:
-    """Minimal empty queue used for lifecycle cleanup on a disabled client."""
+    """Minimal empty queue used for lifecycle cleanup on an unavailable lane."""
 
     def __init__(self, maxsize: int) -> None:
         self.maxsize = maxsize
