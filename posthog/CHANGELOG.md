@@ -1,5 +1,11 @@
 # posthog
 
+## 7.38.5 — 2026-08-12
+
+### Patch changes
+
+- [9c4fd84](https://github.com/posthog/posthog-python/commit/9c4fd8401d054137e646b93c91266e6bafa672f7) Fix async OpenAI streaming captures to include token usage and other generation properties emitted by synchronous streams. — Thanks @ckarnell for your first contribution 🎉!
+
 ## 7.38.4 — 2026-08-10
 
 ### Patch changes
