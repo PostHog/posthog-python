@@ -52,7 +52,8 @@ jobs:
         run: |
           for i in $(seq 1 "$RETRY_TIMES"); do
               # Retry because the PyPI index is eventually consistent.
-              if uv add --no-sync --refresh-package "$PACKAGE_NAME" "$PACKAGE_NAME==$PACKAGE_VERSION"; then
+              if uv add --no-sync --refresh-package "$PACKAGE_NAME" "$PACKAGE_NAME==$PACKAGE_VERSION" && \
+                  (cd services/llm-gateway && uv add --no-sync --refresh-package "$PACKAGE_NAME" "$PACKAGE_NAME>=$PACKAGE_VERSION"); then
                   break
               else
                   if [ "$i" -eq "$RETRY_TIMES" ]; then
@@ -61,10 +62,24 @@ jobs:
                   sleep "$RETRY_WAIT_SECONDS"
               fi
           done
-          if git diff --quiet pyproject.toml uv.lock; then
-              echo "Failed to update $PACKAGE_NAME to $PACKAGE_VERSION" >&2
-              exit 1
-          fi
+
+          sed -i "s/^posthoganalytics==.*/posthoganalytics==$PACKAGE_VERSION/" common/ingestion/acceptance_tests/requirements.txt
+          sed -i "s/^posthog>=.*/posthog>=$PACKAGE_VERSION/" tools/infra-scripts/clitools/requirements.txt
+
+          expected_files=(
+              pyproject.toml
+              uv.lock
+              services/llm-gateway/pyproject.toml
+              services/llm-gateway/uv.lock
+              common/ingestion/acceptance_tests/requirements.txt
+              tools/infra-scripts/clitools/requirements.txt
+          )
+          for file in "${expected_files[@]}"; do
+              if git diff --quiet -- "$file"; then
+                  echo "Failed to update $file to $PACKAGE_VERSION" >&2
+                  exit 1
+              fi
+          done
 
       - name: Generate branch name
         id: generate-branch-name
@@ -91,9 +106,9 @@ jobs:
           body: |
             ## Changes
 
-            ${{ github.event.inputs.package_name }} version ${{ github.event.inputs.package_version }} has been released. This updates PostHog to use it.
+            PostHog Python SDK version ${{ github.event.inputs.package_version }} has been released. This updates the `posthoganalytics` and `posthog` dependency declarations to the same SDK version.
 
-            [GitHub releases](https://github.com/PostHog/posthog-python/releases) • [PyPI releases](https://pypi.org/project/${{ github.event.inputs.package_name }}/#history)
+            [GitHub releases](https://github.com/PostHog/posthog-python/releases) • [`posthoganalytics` on PyPI](https://pypi.org/project/posthoganalytics/#history) • [`posthog` on PyPI](https://pypi.org/project/posthog/#history)
 
       - name: Output pull request result
         shell: bash
