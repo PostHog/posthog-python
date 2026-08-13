@@ -1439,9 +1439,11 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_capture.call_count, 0)
 
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_local_evaluation_None_values(self, patch_get, patch_flags):
+    def test_feature_flags_local_evaluation_None_values(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 id: 1,
@@ -1498,7 +1500,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1514,9 +1516,11 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(feature_flag_match, True)
 
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_local_evaluation_for_cohorts(self, patch_get, patch_flags):
+    def test_feature_flags_local_evaluation_for_cohorts(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 "id": 2,
@@ -1578,7 +1582,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1588,7 +1592,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # even though 'other' property is not present, the cohort should still match since it's an OR condition
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1597,14 +1601,14 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_local_evaluation_for_negated_cohorts(
-        self, patch_get, patch_flags
-    ):
+    def test_feature_flags_local_evaluation_for_negated_cohorts(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 "id": 2,
@@ -1667,7 +1671,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1677,7 +1681,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # even though 'other' property is not present, the cohort should still match since it's an OR condition
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1686,7 +1690,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         # since 'other' is negated, we return False. Since 'nation' is not present, we can't tell whether the flag should be true or false, so fall back to /flags
         self.assertEqual(patch_flags.call_count, 1)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         patch_flags.reset_mock()
 
@@ -1697,17 +1701,17 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
     @mock.patch("posthog.feature_flags.log")
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_with_flag_dependencies(
-        self, patch_get, patch_flags, mock_log
-    ):
+    def test_feature_flags_with_flag_dependencies(self, patch_flags, mock_log):
         # Mock remote flags call to return empty for this flag (fallback returns None)
         patch_flags.return_value = {"featureFlags": {}}
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1750,7 +1754,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertIsNone(feature_flag_match)
         self.assertEqual(patch_flags.call_count, 1)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         # Test with email that doesn't match (should also fall back to remote due to missing dependency)
         feature_flag_match = client.get_feature_flag(
@@ -1760,7 +1764,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertIsNone(feature_flag_match)
         self.assertEqual(patch_flags.call_count, 2)  # Called twice now
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
