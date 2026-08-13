@@ -4610,7 +4610,7 @@ class TestClientSyncCaptureMode(unittest.TestCase):
     def test_v1_sync_ai_named_event_through_capture_uses_v1(self):
         # `capture()` never special-cases AI events: an `$ai_*`-named event
         # follows `capture_mode` and rides the v1 submitter like any analytics
-        # event. Only `_capture_ai()` reaches the AI lane.
+        # event. Only `capture_ai()` reaches the AI lane.
         with (
             mock.patch("posthog.client.batch_post") as mock_post,
             mock.patch("posthog.client._send_v1_batch") as mock_v1,

@@ -238,7 +238,7 @@ class TestClientFork(unittest.TestCase):
         self.assertIsNone(client.poller)
         mock_poller.assert_not_called()
         self.assertIsNone(client.capture("analytics", distinct_id="distinct_id"))
-        self.assertIsNone(client._capture_ai("ai", distinct_id="distinct_id"))
+        self.assertIsNone(client.capture_ai("ai", distinct_id="distinct_id"))
 
 
 @unittest.skipUnless(

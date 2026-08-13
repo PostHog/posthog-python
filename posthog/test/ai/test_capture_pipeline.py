@@ -323,7 +323,7 @@ def test_langchain_callback_output_choices_image_passthrough_when_multimodal_ena
 
     from posthog.ai.langchain.callbacks import CallbackHandler
 
-    fake_ph._enable_multimodal_capture = True
+    fake_ph.enable_full_ai_capture = True
 
     cb = CallbackHandler(client=fake_ph)
     run_id = uuid4()

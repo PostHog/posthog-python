@@ -303,7 +303,9 @@ posthog.capture_v1._post_v1 = patched_post_v1
 def health():
     """Health check endpoint"""
     capabilities = (
-        ["capture_v1", "encoding_gzip"] if is_v1() else ["capture_v0", "encoding_gzip"]
+        ["capture_v1", "capture_ai_v0", "encoding_gzip"]
+        if is_v1()
+        else ["capture_v0", "capture_ai_v0", "encoding_gzip"]
     )
     return jsonify(
         {
@@ -431,6 +433,60 @@ def capture():
         return jsonify({"success": True, "uuid": uuid})
     except Exception as e:
         logger.exception("Error capturing event")
+        state.record_error(str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/capture_ai", methods=["POST"])
+def capture_ai():
+    """Capture a single AI event on the dedicated AI capture endpoint"""
+    try:
+        if not state.client:
+            return jsonify({"error": "SDK not initialized"}), 400
+
+        data = request.json or {}
+
+        distinct_id = data.get("distinct_id")
+        event = data.get("event")
+        properties = data.get("properties")
+        timestamp = data.get("timestamp")
+        options = data.get("options")
+        supplied_uuid = data.get("uuid")
+
+        if not distinct_id:
+            return jsonify({"error": "distinct_id is required"}), 400
+        if not event:
+            return jsonify({"error": "event is required"}), 400
+
+        if options and is_v1():
+            properties = dict(properties or {})
+            option_to_property = {
+                "cookieless_mode": "$cookieless_mode",
+                "disable_skew_correction": "$ignore_sent_at",
+                "process_person_profile": "$process_person_profile",
+                "product_tour_id": "$product_tour_id",
+            }
+            for key, value in options.items():
+                properties[option_to_property.get(key, "$" + key)] = value
+
+        kwargs = {"distinct_id": distinct_id, "properties": properties}
+        if timestamp:
+            from dateutil.parser import parse
+
+            kwargs["timestamp"] = parse(timestamp)
+        # Unlike /capture, forward a supplied uuid so it's echoed back to the caller.
+        if supplied_uuid:
+            kwargs["uuid"] = supplied_uuid
+
+        uuid = state.client.capture_ai(event, **kwargs)
+
+        state.increment_captured()
+
+        logger.info(f"Captured AI event: {event} for {distinct_id}, uuid={uuid}")
+
+        return jsonify({"success": True, "uuid": uuid})
+    except Exception as e:
+        logger.exception("Error capturing AI event")
         state.record_error(str(e))
         return jsonify({"error": str(e)}), 500
 

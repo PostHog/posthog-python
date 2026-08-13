@@ -67,6 +67,53 @@ class TestClient(unittest.TestCase):
             self.assertEqual(len(processed_events), 1)
             self.assertEqual(processed_events[0]["event"], "test_event")
 
+    def test_before_send_callback_replacing_uuid_changes_the_returned_uuid(self):
+        """capture()'s return value must match the uuid on the wire event."""
+        replacement_uuid = "12345678-1234-5678-1234-567812345678"
+
+        def replace_uuid(event):
+            event["uuid"] = replacement_uuid
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=replace_uuid,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("test_event", distinct_id="user1")
+
+            self.assertEqual(msg_uuid, replacement_uuid)
+
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["uuid"], replacement_uuid)
+
+    def test_before_send_callback_removing_uuid_regenerates_it(self):
+        """If before_send drops the uuid, a fresh one is generated and returned."""
+
+        def remove_uuid(event):
+            del event["uuid"]
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=remove_uuid,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("test_event", distinct_id="user1")
+
+            self.assertIsNotNone(msg_uuid)
+
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["uuid"], msg_uuid)
+
     def test_before_send_callback_drops_event(self):
         """Test that before_send callback can drop events by returning None."""
 

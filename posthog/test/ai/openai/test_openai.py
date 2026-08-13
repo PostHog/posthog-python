@@ -2325,7 +2325,7 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
 
 
 def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_openai_response):
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     with patch(
         "openai.resources.chat.completions.Completions.create",
         return_value=mock_openai_response,
@@ -2338,12 +2338,12 @@ def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_openai_respo
         )
 
     mock_client.capture.assert_not_called()
-    assert mock_client._capture_ai.call_count == 1
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"
 
 
 def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_response):
-    mock_client._enable_multimodal_capture = True
+    mock_client.enable_full_ai_capture = True
     image = "data:image/jpeg;base64," + "A" * 64
 
     with patch(
@@ -2365,9 +2365,9 @@ def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_respon
         )
 
         mock_client.capture.assert_not_called()
-        assert mock_client._capture_ai.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client._capture_ai.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert props["$ai_input"][0]["content"][0]["image_url"]["url"] == image
