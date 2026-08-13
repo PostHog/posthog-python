@@ -1,5 +1,11 @@
 # posthog
 
+## 7.39.0 — 2026-08-13
+
+### Minor changes
+
+- [178ef43](https://github.com/posthog/posthog-python/commit/178ef43f8311aee8fd068e1f64d6d1cdd5832281) Public beta `capture_ai`: AI events on the dedicated AI endpoint with the event UUID returned; new `enable_full_ai_capture` flag (old private flags kept as deprecated aliases). — Thanks @carlos-marchal-ph!
+
 ## 7.38.6 — 2026-08-12
 
 ### Patch changes
