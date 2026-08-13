@@ -1,0 +1,142 @@
+name: "PostHog Upgrade"
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        type: choice
+        description: "Package name to upgrade"
+        required: true
+        options:
+          - posthoganalytics
+      package_version:
+        description: "Package version to upgrade to"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  posthog-upgrade:
+    name: Upgrade PostHog package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Get upgrader token
+        id: upgrader
+        uses: getsentry/action-github-app-token@5c1e90706fe007857338ac1bfbd7a4177db2f789 # v4.0.0
+        with:
+          app_id: ${{ secrets.GH_APP_POSTHOG_JS_UPGRADER_APP_ID }}
+          private_key: ${{ secrets.GH_APP_POSTHOG_JS_UPGRADER_PRIVATE_KEY }}
+
+      - name: Check out main repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: "PostHog/posthog"
+          token: ${{ steps.upgrader.outputs.token }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.11.28"
+
+      - name: Install new package version in main repo
+        shell: bash
+        env:
+          RETRY_TIMES: 20
+          RETRY_WAIT_SECONDS: 5
+          PACKAGE_NAME: ${{ github.event.inputs.package_name }}
+          PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+        run: |
+          for i in $(seq 1 "$RETRY_TIMES"); do
+              # Retry because the PyPI index is eventually consistent.
+              if uv add --no-sync --refresh-package "$PACKAGE_NAME" "$PACKAGE_NAME==$PACKAGE_VERSION"; then
+                  break
+              else
+                  if [ "$i" -eq "$RETRY_TIMES" ]; then
+                      exit 1
+                  fi
+                  sleep "$RETRY_WAIT_SECONDS"
+              fi
+          done
+          if git diff --quiet pyproject.toml uv.lock; then
+              echo "Failed to update $PACKAGE_NAME to $PACKAGE_VERSION" >&2
+              exit 1
+          fi
+
+      - name: Generate branch name
+        id: generate-branch-name
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ github.event.inputs.package_name }}
+          PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+        run: |
+          echo "branch_name=${PACKAGE_NAME}-${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create main repo pull request
+        id: main-repo-pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        env:
+          HUSKY: "0"
+        with:
+          token: ${{ steps.upgrader.outputs.token }}
+          # PostHog/posthog requires signed commits, so commit through the GitHub API.
+          sign-commits: true
+          commit-message: "chore(deps): update ${{ github.event.inputs.package_name }} to ${{ github.event.inputs.package_version }}"
+          branch: ${{ steps.generate-branch-name.outputs.branch_name }}
+          delete-branch: true
+          title: "chore(deps): update ${{ github.event.inputs.package_name }} to ${{ github.event.inputs.package_version }}"
+          body: |
+            ## Changes
+
+            ${{ github.event.inputs.package_name }} version ${{ github.event.inputs.package_version }} has been released. This updates PostHog to use it.
+
+            [GitHub releases](https://github.com/PostHog/posthog-python/releases) • [PyPI releases](https://pypi.org/project/${{ github.event.inputs.package_name }}/#history)
+
+      - name: Output pull request result
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ github.event.inputs.package_name }}
+          PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
+          PR_URL: ${{ steps.main-repo-pr.outputs.pull-request-url }}
+        run: |
+          echo "PostHog pull request for $PACKAGE_NAME version $PACKAGE_VERSION ready: $PR_URL"
+
+      - name: Enable automerge
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge "$PR_NUMBER" --repo PostHog/posthog --auto --squash
+
+      - name: Assign reviewers
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo PostHog/posthog --add-reviewer PostHog/client-libraries-approvers --add-reviewer PostHog/team-client-libraries
+
+      # https://us.posthog.com/project/11213/functions/019ae9c0-03ee-0000-2f32-971f64be8ffe
+      - name: Send failure event to PostHog
+        if: ${{ failure() }}
+        continue-on-error: true
+        uses: PostHog/posthog-github-action@9a6a19d360820ab4d95ecc4a5a7564062c895f84 # v1.3.0
+        with:
+          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
+          event: "posthog-sdk-github-release-workflow-failure"
+          properties: >-
+            {
+              "commitSha": "${{ github.sha }}",
+              "jobStatus": "${{ job.status }}",
+              "ref": "${{ github.ref }}",
+              "repository": "PostHog/posthog",
+              "sdk": "posthog-python",
+              "jobName": "posthog-upgrade",
+              "packageName": "${{ github.event.inputs.package_name }}",
+              "packageVersion": "${{ github.event.inputs.package_version }}",
+              "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "alertText": ":rotating_light: Failed to open the PostHog upgrade PR for posthoganalytics@${{ github.event.inputs.package_version }} :rotating_light:",
+              "alertContext": "The posthog-upgrade workflow failed before completion."
+            }

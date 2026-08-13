@@ -254,6 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     if: always() && needs.version-bump.outputs.commit-hash != ''
     permissions:
+      actions: write
       contents: write
       id-token: write
     strategy:
@@ -394,6 +395,23 @@ jobs:
             --target "${{ needs.version-bump.outputs.commit-hash }}" \
             --title "$TAG" \
             --notes-file release-notes.md
+
+      - name: Dispatch PostHog upgrade
+        if: steps.detect.outputs.has-new-version == 'true' && matrix.package.name == 'posthoganalytics'
+        env:
+          PACKAGE_VERSION: ${{ steps.detect.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          curl -f -sS -X POST \
+               -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GITHUB_TOKEN" \
+               https://api.github.com/repos/posthog/posthog-python/actions/workflows/posthog-upgrade.yml/dispatches \
+               -d "$(jq -n \
+                 --arg ref "main" \
+                 --arg package_name "posthoganalytics" \
+                 --arg package_version "$PACKAGE_VERSION" \
+                 '{ref: $ref, inputs: {package_name: $package_name, package_version: $package_version}}' \
+               )"
 
       # Notify in case of a failure
       - name: Send failure event to PostHog
