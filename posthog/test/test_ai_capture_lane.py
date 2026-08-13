@@ -558,6 +558,36 @@ class TestCaptureAiUuid(unittest.TestCase):
         batch = mock_post.call_args.kwargs["batch"]
         self.assertEqual(batch[0]["uuid"], supplied_uuid)
 
+    def test_returned_uuid_reflects_before_send_replacement(self):
+        replacement_uuid = str(uuid.uuid4())
+
+        def replace_uuid(event):
+            event["uuid"] = replacement_uuid
+            return event
+
+        client = self._client(before_send=replace_uuid)
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            returned_uuid = client.capture_ai("$ai_generation", distinct_id="d")
+            client.flush()
+
+        self.assertEqual(returned_uuid, replacement_uuid)
+        batch = mock_post.call_args.kwargs["batch"]
+        self.assertEqual(batch[0]["uuid"], replacement_uuid)
+
+    def test_returned_uuid_is_regenerated_when_before_send_removes_it(self):
+        def drop_uuid(event):
+            del event["uuid"]
+            return event
+
+        client = self._client(before_send=drop_uuid)
+        with mock.patch("posthog.consumer.batch_post") as mock_post:
+            returned_uuid = client.capture_ai("$ai_generation", distinct_id="d")
+            client.flush()
+
+        self.assertIsNotNone(returned_uuid)
+        batch = mock_post.call_args.kwargs["batch"]
+        self.assertEqual(batch[0]["uuid"], returned_uuid)
+
 
 class TestCaptureAiPrivacyMode(unittest.TestCase):
     """Privacy mode always wins over `enable_full_ai_capture`."""

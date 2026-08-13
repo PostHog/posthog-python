@@ -2147,6 +2147,21 @@ class Client(object):
         else:
             self.poller = None
 
+    def _normalize_event_uuid(self, msg):
+        # type: (...) -> None
+        """Ensure `msg["uuid"]` is a valid uuid string, generating one if missing or invalid."""
+        if "uuid" in msg:
+            uuid = msg.pop("uuid")
+            if uuid is not None:
+                try:
+                    msg["uuid"] = _stringify_event_uuid(uuid)
+                except ValueError as e:
+                    self.log.error("%s Falling back to a generated UUID.", e)
+
+        if "uuid" not in msg:
+            # Always send a uuid, so we can always return one
+            msg["uuid"] = stringify_id(uuid4())
+
     def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
@@ -2165,19 +2180,7 @@ class Client(object):
         timestamp = guess_timezone(timestamp)
         msg["timestamp"] = timestamp.isoformat()
 
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
-
-        if "uuid" not in msg:
-            # Always send a uuid, so we can always return one
-            msg["uuid"] = stringify_id(uuid4())
-
-        sent_uuid = msg["uuid"]
+        self._normalize_event_uuid(msg)
 
         if not msg.get("properties"):
             msg["properties"] = {}
@@ -2222,6 +2225,11 @@ class Client(object):
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
                 # Continue with the original message if callback fails
+
+        # Re-normalized after before_send, which may have replaced or removed
+        # msg["uuid"], so the returned uuid always matches the wire event.
+        self._normalize_event_uuid(msg)
+        sent_uuid = msg["uuid"]
 
         self.log.debug("queueing: %s", msg)
 
