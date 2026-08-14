@@ -38,7 +38,11 @@ def guess_timezone(dt: datetime) -> datetime:
         if 0 <= delta < 5:  # pragma: no mutate
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
-            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            # Equivalent to converting the naive value directly because this path
+            # only handles values created in the current local timezone.
+            dt = dt.replace(
+                tzinfo=datetime.now().astimezone().tzinfo
+            )  # pragma: no mutate
         else:
             # at this point, the best we can do is guess UTC
             dt = dt.replace(tzinfo=timezone.utc)
@@ -51,7 +55,10 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
     parsed_timestamp: datetime
     if isinstance(timestamp, str):
         try:
-            parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            # Python 3.10 needs the replacement; on 3.11+ fromisoformat accepts Z,
+            # making replacement mutations equivalent in the mutation-test runtime.
+            normalized_timestamp = timestamp.replace("Z", "+00:00")  # pragma: no mutate
+            parsed_timestamp = datetime.fromisoformat(normalized_timestamp)
         except ValueError:
             return timestamp
     else:

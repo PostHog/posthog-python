@@ -146,9 +146,19 @@ class TestUtils(unittest.TestCase):
                 os.environ["TZ"] = original_tz
             time.tzset()
 
+    def test_normalize_timestamp_converts_datetime_to_utc(self):
+        timestamp = datetime(
+            2026, 1, 15, 7, 30, 45, 123456, tzinfo=timezone(timedelta(hours=-5))
+        )
+
+        assert (
+            utils._normalize_timestamp(timestamp) == "2026-01-15T12:30:45.123456+00:00"
+        )
+
     def test_normalize_timestamp_preserves_unparseable_string(self):
         assert (
-            utils._normalize_timestamp("not-an-iso-timestamp") == "not-an-iso-timestamp"
+            utils._normalize_timestamp("not-Z-an-iso-timestamp")
+            == "not-Z-an-iso-timestamp"
         )
 
     def test_total_seconds(self):
