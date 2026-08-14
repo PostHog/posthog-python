@@ -51,13 +51,18 @@ def guess_timezone(dt: datetime) -> datetime:
 
 
 def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
-    """Normalize a canonical datetime or parseable ISO string to UTC."""
+    """Normalize a datetime or parseable ISO datetime string to UTC."""
     parsed_timestamp: datetime
     if isinstance(timestamp, str):
+        if re.fullmatch(r"\d{4}-?\d{2}-?\d{2}", timestamp):
+            return timestamp
         try:
-            # Python 3.10 needs the replacement; on 3.11+ fromisoformat accepts Z,
-            # making replacement mutations equivalent in the mutation-test runtime.
+            # Python 3.10 needs the replacements; on 3.11+ fromisoformat accepts Z
+            # and compact UTC offsets such as +0530.
             normalized_timestamp = timestamp.replace("Z", "+00:00")  # pragma: no mutate
+            normalized_timestamp = re.sub(
+                r"([+-]\d{2})(\d{2})$", r"\1:\2", normalized_timestamp
+            )
             parsed_timestamp = datetime.fromisoformat(normalized_timestamp)
         except ValueError:
             return timestamp

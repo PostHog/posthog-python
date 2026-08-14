@@ -155,6 +155,16 @@ class TestUtils(unittest.TestCase):
             utils._normalize_timestamp(timestamp) == "2026-01-15T12:30:45.123456+00:00"
         )
 
+    def test_normalize_timestamp_converts_compact_offset_to_utc(self):
+        assert (
+            utils._normalize_timestamp("2026-06-27T12:00:00+0530")
+            == "2026-06-27T06:30:00+00:00"
+        )
+
+    @parameterized.expand(["2026-06-27", "20260627"])
+    def test_normalize_timestamp_preserves_date_only_string(self, timestamp):
+        assert utils._normalize_timestamp(timestamp) == timestamp
+
     def test_normalize_timestamp_preserves_unparseable_string(self):
         assert (
             utils._normalize_timestamp("not-Z-an-iso-timestamp")
