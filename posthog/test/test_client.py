@@ -1698,8 +1698,14 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
 
     @parameterized.expand(["2026-06-27", "not-an-iso-timestamp"])
-    def test_capture_drops_invalid_timestamp_before_sending(self, timestamp):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+    def test_capture_replaces_invalid_timestamp_with_current_utc_time(self, timestamp):
+        now = datetime(2026, 6, 27, 12, 30, tzinfo=timezone.utc)
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client.datetime", wraps=datetime) as mock_datetime,
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            mock_datetime.now.return_value = now
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             result = client.capture(
                 "python test event",
@@ -1707,8 +1713,12 @@ class TestClient(unittest.TestCase):
                 timestamp=timestamp,
             )
 
-        self.assertIsNone(result)
-        mock_post.assert_not_called()
+        self.assertIsNotNone(result)
+        msg = mock_post.call_args[1]["batch"][0]
+        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00+00:00")
+        mock_warning.assert_called_once_with(
+            "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+        )
 
     def test_capture_does_not_normalize_datetime_properties(self):
         property_value = datetime(

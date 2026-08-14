@@ -2251,7 +2251,13 @@ class Client(object):
             timestamp = datetime.now(tz=timezone.utc)
 
         # add common
-        msg["timestamp"] = _normalize_timestamp(timestamp)
+        try:
+            msg["timestamp"] = _normalize_timestamp(timestamp)
+        except ValueError:
+            self.log.warning(
+                "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+            )
+            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
         self._normalize_event_uuid(msg)
 
