@@ -1,5 +1,11 @@
 # posthog
 
+## 7.39.1 — 2026-08-14
+
+### Patch changes
+
+- [6fc55b6](https://github.com/posthog/posthog-python/commit/6fc55b6b75b208ef7910b2dcb8a62fcdeda61b46) Normalize SDK event timestamps to UTC, including datetime values and parseable ISO timestamp strings, and correct UTC serialization for exception frame timestamps — Thanks @marandaneto!
+
 ## 7.39.0 — 2026-08-13
 
 ### Minor changes
