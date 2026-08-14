@@ -173,7 +173,9 @@ class Prompts:
                 failures are reported to PostHog error tracking via capture_exception().
         """
         self._default_cache_ttl_seconds = (
-            default_cache_ttl_seconds or DEFAULT_CACHE_TTL_SECONDS
+            default_cache_ttl_seconds
+            if default_cache_ttl_seconds is not None
+            else DEFAULT_CACHE_TTL_SECONDS
         )
         self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
         self._has_warned_deprecation = False
