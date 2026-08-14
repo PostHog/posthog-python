@@ -1697,6 +1697,19 @@ class TestClient(unittest.TestCase):
             msg = mock_post.call_args[1]["batch"][0]
             self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
 
+    @parameterized.expand(["2026-06-27", "not-an-iso-timestamp"])
+    def test_capture_drops_invalid_timestamp_before_sending(self, timestamp):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            result = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp=timestamp,
+            )
+
+        self.assertIsNone(result)
+        mock_post.assert_not_called()
+
     def test_capture_does_not_normalize_datetime_properties(self):
         property_value = datetime(
             2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))

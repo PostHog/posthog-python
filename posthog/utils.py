@@ -55,7 +55,9 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
     parsed_timestamp: datetime
     if isinstance(timestamp, str):
         if re.fullmatch(r"\d{4}-?\d{2}-?\d{2}", timestamp):
-            return timestamp
+            raise ValueError(
+                f"Invalid timestamp {timestamp!r}. Expected an ISO 8601 datetime string."
+            )
         try:
             # Python 3.10 needs the replacements; on 3.11+ fromisoformat accepts Z
             # and compact UTC offsets such as +0530.
@@ -65,7 +67,9 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
             )
             parsed_timestamp = datetime.fromisoformat(normalized_timestamp)
         except ValueError:
-            return timestamp
+            raise ValueError(
+                f"Invalid timestamp {timestamp!r}. Expected an ISO 8601 datetime string."
+            ) from None
     else:
         parsed_timestamp = timestamp
     return guess_timezone(parsed_timestamp).isoformat()

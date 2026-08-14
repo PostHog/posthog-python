@@ -162,15 +162,10 @@ class TestUtils(unittest.TestCase):
         mock_datetime.fromisoformat.assert_called_once_with("2026-06-27T12:00:00+05:30")
         assert normalized == "2026-06-27T06:30:00+00:00"
 
-    @parameterized.expand(["2026-06-27", "20260627"])
-    def test_normalize_timestamp_preserves_date_only_string(self, timestamp):
-        assert utils._normalize_timestamp(timestamp) == timestamp
-
-    def test_normalize_timestamp_preserves_unparseable_string(self):
-        assert (
-            utils._normalize_timestamp("not-Z-an-iso-timestamp")
-            == "not-Z-an-iso-timestamp"
-        )
+    @parameterized.expand(["2026-06-27", "20260627", "not-Z-an-iso-timestamp"])
+    def test_normalize_timestamp_rejects_invalid_string(self, timestamp):
+        with self.assertRaisesRegex(ValueError, "Expected an ISO 8601 datetime string"):
+            utils._normalize_timestamp(timestamp)
 
     def test_total_seconds(self):
         delta = timedelta(days=2, seconds=3, microseconds=4)
