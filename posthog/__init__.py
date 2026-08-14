@@ -437,7 +437,8 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
         **kwargs: Optional arguments including:
             distinct_id: Unique identifier for the user
             properties: Dict of event properties
-            timestamp: When the event occurred
+            timestamp: When the event occurred. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: Unique identifier for this event. If omitted, one is generated
                 and returned. If provided, it must be a valid UUID string or
                 uuid.UUID instance; invalid values are ignored and replaced with
@@ -545,7 +546,8 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             distinct_id: Unique identifier for the user. Falls back to the
                 context distinct ID; if none exists, this call does nothing.
             properties: Dict of person properties to set.
-            timestamp: When the properties were set.
+            timestamp: When the properties were set. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: Unique identifier for this operation. If omitted, one is
                 generated and returned. If provided, it must be a valid UUID
                 string or uuid.UUID instance; invalid values are ignored and
@@ -577,7 +579,8 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             distinct_id: Unique identifier for the user. Falls back to the
                 context distinct ID; if none exists, this call does nothing.
             properties: Dict of person properties to set only once.
-            timestamp: When the properties were set.
+            timestamp: When the properties were set. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: Unique identifier for this operation. If omitted, one is
                 generated and returned. If provided, it must be a valid UUID
                 string or uuid.UUID instance; invalid values are ignored and
@@ -604,7 +607,7 @@ def group_identify(
     group_type: str,
     group_key: str,
     properties: Optional[Dict[str, Any]] = None,
-    timestamp: Optional[datetime.datetime] = None,
+    timestamp: Optional[Union[datetime.datetime, str]] = None,
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
     distinct_id: Optional[ID_TYPES] = None,
@@ -618,7 +621,8 @@ def group_identify(
         group_key: Unique identifier of the group. Required - the call is
             dropped with a warning if it is missing or empty.
         properties: Properties to set on the group
-        timestamp: Optional timestamp for the event
+        timestamp: Optional timestamp for the event. UTC is preferred; non-UTC
+            datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
         distinct_id: Optional distinct ID of the user performing the action
@@ -651,7 +655,7 @@ def group_identify(
 def alias(
     previous_id: ID_TYPES,
     distinct_id: str,
-    timestamp: Optional[datetime.datetime] = None,
+    timestamp: Optional[Union[datetime.datetime, str]] = None,
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
 ) -> Optional[str]:
@@ -661,7 +665,8 @@ def alias(
     Args:
         previous_id: The unique ID of the user before
         distinct_id: The current unique id
-        timestamp: Optional timestamp for the event
+        timestamp: Optional timestamp for the event. UTC is preferred; non-UTC
+            datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
 

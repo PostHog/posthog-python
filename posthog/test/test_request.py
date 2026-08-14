@@ -1,7 +1,7 @@
 import json
 import unittest
 import zlib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest import mock
 
 import pytest
@@ -85,6 +85,8 @@ def test_post_sends_snake_case_sent_at(key, expected_present):
 
     data = json.loads(mock_session.post.call_args.kwargs["data"])
     assert (key in data) is expected_present
+    if key == "sent_at":
+        assert datetime.fromisoformat(data[key]).utcoffset() == timedelta(0)
 
 
 def test_post_sends_project_api_key_field():

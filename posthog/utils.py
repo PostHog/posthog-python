@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import UUID
 import sys
 import platform
@@ -30,7 +30,7 @@ def total_seconds(delta: timedelta) -> float:
 
 
 def guess_timezone(dt: datetime) -> datetime:
-    """Attempts to convert a naive datetime to an aware datetime."""
+    """Convert a datetime to UTC, guessing the timezone for naive values."""
     if is_naive(dt):
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
@@ -38,12 +38,25 @@ def guess_timezone(dt: datetime) -> datetime:
         if total_seconds(delta) < 5:  # pragma: no mutate
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
-            return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
         else:
             # at this point, the best we can do is guess UTC
-            return dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=timezone.utc)
 
-    return dt
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
+    """Normalize a canonical datetime or parseable ISO string to UTC."""
+    parsed_timestamp: datetime
+    if isinstance(timestamp, str):
+        try:
+            parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return timestamp
+    else:
+        parsed_timestamp = timestamp
+    return guess_timezone(parsed_timestamp).isoformat()
 
 
 def remove_trailing_slash(host: str) -> str:

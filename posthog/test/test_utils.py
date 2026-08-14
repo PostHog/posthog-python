@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 import unittest
@@ -100,6 +101,35 @@ class TestUtils(unittest.TestCase):
         old_naive = datetime(2000, 1, 1)
         fixed_old = utils.guess_timezone(old_naive)
         assert fixed_old == old_naive.replace(tzinfo=timezone.utc)
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
+    def test_guess_timezone_preserves_recent_naive_local_instant_as_utc(self):
+        original_tz = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "EST5EDT"
+            time.tzset()
+            local_now = datetime(2026, 1, 15, 7, 30, 45, 123456)
+            utc_now = datetime(2026, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+
+            with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
+                mock_datetime.now.side_effect = (
+                    lambda tz=None: local_now if tz is None else utc_now.astimezone(tz)
+                )
+                normalized = utils.guess_timezone(local_now)
+
+            assert normalized == utc_now
+            assert normalized.isoformat() == "2026-01-15T12:30:45.123456+00:00"
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+    def test_normalize_timestamp_preserves_unparseable_string(self):
+        assert (
+            utils._normalize_timestamp("not-an-iso-timestamp") == "not-an-iso-timestamp"
+        )
 
     def test_total_seconds(self):
         delta = timedelta(days=2, seconds=3, microseconds=4)
