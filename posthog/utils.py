@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import UUID
 import sys
 import platform
@@ -30,20 +30,49 @@ def total_seconds(delta: timedelta) -> float:
 
 
 def guess_timezone(dt: datetime) -> datetime:
-    """Attempts to convert a naive datetime to an aware datetime."""
+    """Convert a datetime to UTC, guessing the timezone for naive values."""
     if is_naive(dt):
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
-        delta = datetime.now() - dt
-        if total_seconds(delta) < 5:  # pragma: no mutate
+        delta = total_seconds(datetime.now() - dt)
+        if 0 <= delta < 5:  # pragma: no mutate
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
-            return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            # Equivalent to converting the naive value directly because this path
+            # only handles values created in the current local timezone.
+            dt = dt.replace(
+                tzinfo=datetime.now().astimezone().tzinfo
+            )  # pragma: no mutate
         else:
             # at this point, the best we can do is guess UTC
-            return dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=timezone.utc)
 
-    return dt
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
+    """Normalize a datetime or parseable ISO datetime string to UTC."""
+    parsed_timestamp: datetime
+    if isinstance(timestamp, str):
+        if re.fullmatch(r"\d{4}-?\d{2}-?\d{2}", timestamp):
+            raise ValueError(
+                f"Invalid timestamp {timestamp!r}. Expected an ISO 8601 datetime string."
+            )
+        try:
+            # Python 3.10 needs the replacements; on 3.11+ fromisoformat accepts Z
+            # and compact UTC offsets such as +0530.
+            normalized_timestamp = timestamp.replace("Z", "+00:00")  # pragma: no mutate
+            normalized_timestamp = re.sub(
+                r"([+-]\d{2})(\d{2})$", r"\1:\2", normalized_timestamp
+            )
+            parsed_timestamp = datetime.fromisoformat(normalized_timestamp)
+        except ValueError:
+            raise ValueError(
+                f"Invalid timestamp {timestamp!r}. Expected an ISO 8601 datetime string."
+            ) from None
+    else:
+        parsed_timestamp = timestamp
+    return guess_timezone(parsed_timestamp).isoformat()
 
 
 def remove_trailing_slash(host: str) -> str:

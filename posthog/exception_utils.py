@@ -15,7 +15,7 @@ import re
 import sys
 import types
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from types import FrameType, TracebackType  # noqa: F401
 from typing import (  # noqa: F401
     TYPE_CHECKING,
@@ -214,6 +214,8 @@ def to_timestamp(value):
 
 def format_timestamp(value):
     # type: (datetime) -> str
+    if value.tzinfo is not None and value.utcoffset() is not None:
+        value = value.astimezone(timezone.utc)
     return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 

@@ -9,7 +9,7 @@ import time
 import unittest
 import warnings
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 from uuid import UUID, uuid4
 
@@ -1670,6 +1670,70 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertTrue("$groups" not in msg["properties"])
+
+    def test_capture_converts_aware_timestamp_to_utc_without_changing_instant(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp=datetime(
+                    2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))
+                ),
+            )
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+
+    def test_capture_converts_parseable_timestamp_string_to_utc(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp="2014-09-03T05:30:00+05:30",
+            )
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+
+    @parameterized.expand(["2026-06-27", "not-an-iso-timestamp"])
+    def test_capture_replaces_invalid_timestamp_with_current_utc_time(self, timestamp):
+        now = datetime(2026, 6, 27, 12, 30, tzinfo=timezone.utc)
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client.datetime", wraps=datetime) as mock_datetime,
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            mock_datetime.now.return_value = now
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            result = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp=timestamp,
+            )
+
+        self.assertIsNotNone(result)
+        msg = mock_post.call_args[1]["batch"][0]
+        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00+00:00")
+        mock_warning.assert_called_once_with(
+            "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+        )
+
+    def test_capture_does_not_normalize_datetime_properties(self):
+        property_value = datetime(
+            2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))
+        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                properties={"caller_datetime": property_value},
+            )
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertIs(msg["properties"]["caller_datetime"], property_value)
 
     def test_groups_capture(self):
         with mock.patch("posthog.client.batch_post") as mock_post:

@@ -109,7 +109,8 @@ from posthog.utils import (
     RedisFlagCache,
     SizeLimitedDict,
     clean,
-    guess_timezone,
+    _normalize_timestamp,
+    guess_timezone as guess_timezone,
     system_context,
 )
 from posthog.version import VERSION
@@ -1496,7 +1497,8 @@ class Client(object):
             event: The event name to capture.
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to include with the event.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1748,7 +1750,8 @@ class Client(object):
         Args:
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1798,7 +1801,8 @@ class Client(object):
         Args:
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set once.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1858,7 +1862,8 @@ class Client(object):
             group_key: The unique identifier for the group. Required - the call
                 is dropped with a warning if it is missing or empty.
             properties: A dictionary of properties to set on the group.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1931,7 +1936,8 @@ class Client(object):
             distinct_id: The new distinct ID to alias to. Falls back to the
                 context distinct ID; the call is dropped with a warning if
                 neither is available.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -2245,8 +2251,13 @@ class Client(object):
             timestamp = datetime.now(tz=timezone.utc)
 
         # add common
-        timestamp = guess_timezone(timestamp)
-        msg["timestamp"] = timestamp.isoformat()
+        try:
+            msg["timestamp"] = _normalize_timestamp(timestamp)
+        except ValueError:
+            self.log.warning(
+                "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+            )
+            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
         self._normalize_event_uuid(msg)
 

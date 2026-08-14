@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 import unittest
@@ -100,6 +101,71 @@ class TestUtils(unittest.TestCase):
         old_naive = datetime(2000, 1, 1)
         fixed_old = utils.guess_timezone(old_naive)
         assert fixed_old == old_naive.replace(tzinfo=timezone.utc)
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
+    def test_guess_timezone_preserves_recent_naive_local_instant_as_utc(self):
+        original_tz = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "EST5EDT"
+            time.tzset()
+            local_now = datetime(2026, 1, 15, 7, 30, 45, 123456)
+            utc_now = datetime(2026, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+
+            with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
+                mock_datetime.now.side_effect = (
+                    lambda tz=None: local_now if tz is None else utc_now.astimezone(tz)
+                )
+                normalized = utils.guess_timezone(local_now)
+
+            assert normalized == utc_now
+            assert normalized.isoformat() == "2026-01-15T12:30:45.123456+00:00"
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
+    def test_normalize_timestamp_treats_future_naive_string_as_utc(self):
+        original_tz = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "EST5EDT"
+            time.tzset()
+            now = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
+
+            with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
+                mock_datetime.now.return_value = now.replace(tzinfo=None)
+                normalized = utils._normalize_timestamp("2030-01-01T12:00:00")
+
+            assert normalized == "2030-01-01T12:00:00+00:00"
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+    def test_normalize_timestamp_converts_datetime_to_utc(self):
+        timestamp = datetime(
+            2026, 1, 15, 7, 30, 45, 123456, tzinfo=timezone(timedelta(hours=-5))
+        )
+
+        assert (
+            utils._normalize_timestamp(timestamp) == "2026-01-15T12:30:45.123456+00:00"
+        )
+
+    def test_normalize_timestamp_converts_compact_offset_to_utc(self):
+        with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
+            normalized = utils._normalize_timestamp("2026-06-27T12:00:00+0530")
+
+        mock_datetime.fromisoformat.assert_called_once_with("2026-06-27T12:00:00+05:30")
+        assert normalized == "2026-06-27T06:30:00+00:00"
+
+    @parameterized.expand(["2026-06-27", "20260627", "not-Z-an-iso-timestamp"])
+    def test_normalize_timestamp_rejects_invalid_string(self, timestamp):
+        with self.assertRaisesRegex(ValueError, "Expected an ISO 8601 datetime string"):
+            utils._normalize_timestamp(timestamp)
 
     def test_total_seconds(self):
         delta = timedelta(days=2, seconds=3, microseconds=4)

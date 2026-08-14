@@ -1035,7 +1035,7 @@ function posthog.ai.utils.merge_system_prompt(kwargs: Dict[str, Any], provider: 
 function posthog.ai.utils.merge_usage_stats(target: TokenUsage, source: TokenUsage, mode: str = 'incremental') -> None
 function posthog.ai.utils.serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]
 function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any)
-function posthog.alias(previous_id: ID_TYPES, distinct_id: str, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
+function posthog.alias(previous_id: ID_TYPES, distinct_id: str, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
 function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
@@ -1119,7 +1119,7 @@ function posthog.get_feature_flag_payload(key: str, distinct_id: ID_TYPES, match
 function posthog.get_feature_flag_result(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FeatureFlagResult]
 function posthog.get_remote_config_payload(key: str)
 function posthog.get_tags() -> Dict[str, Any]
-function posthog.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime.datetime] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+function posthog.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
 function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.join() -> None

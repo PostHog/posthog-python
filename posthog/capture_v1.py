@@ -53,7 +53,7 @@ from posthog.request import (
     _get_session,
     normalize_host,
 )
-from posthog.utils import guess_timezone as _guess_timezone, remove_trailing_slash
+from posthog.utils import _normalize_timestamp, remove_trailing_slash
 
 if TYPE_CHECKING:
     import requests
@@ -146,19 +146,17 @@ _OPTION_SENTINELS: tuple[tuple[str, str, Callable[[Any], Any]], ...] = (
 
 
 def _v1_timestamp(timestamp: Any) -> str:
-    """Return a timezone-aware RFC3339 timestamp string.
+    """Return a UTC RFC3339 timestamp string.
 
-    Messages off the queue already carry an ISO-8601 string (``_enqueue`` runs
-    ``guess_timezone(...).isoformat()``), so that is passed through. A
-    ``datetime`` is normalized to timezone-aware and serialized; a missing value
-    defaults to now in UTC. The v1 server parses strictly with
-    ``DateTime::parse_from_rfc3339`` and rejects naive timestamps.
+    Messages off the queue already carry a UTC ISO-8601 string (``_enqueue``
+    normalizes canonical datetimes), so that is passed through. A ``datetime``
+    is normalized to UTC and serialized; a missing value defaults to now in UTC.
+    The v1 server parses strictly with ``DateTime::parse_from_rfc3339`` and
+    rejects naive timestamps.
     """
     if timestamp is None:
         return datetime.now(timezone.utc).isoformat()
-    if isinstance(timestamp, datetime):
-        return _guess_timezone(timestamp).isoformat()
-    return timestamp
+    return _normalize_timestamp(timestamp)
 
 
 def _to_v1_event(msg: dict) -> dict:
