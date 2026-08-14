@@ -126,6 +126,26 @@ class TestUtils(unittest.TestCase):
                 os.environ["TZ"] = original_tz
             time.tzset()
 
+    @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
+    def test_normalize_timestamp_treats_future_naive_string_as_utc(self):
+        original_tz = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "EST5EDT"
+            time.tzset()
+            now = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
+
+            with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
+                mock_datetime.now.return_value = now.replace(tzinfo=None)
+                normalized = utils._normalize_timestamp("2030-01-01T12:00:00")
+
+            assert normalized == "2030-01-01T12:00:00+00:00"
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
     def test_normalize_timestamp_preserves_unparseable_string(self):
         assert (
             utils._normalize_timestamp("not-an-iso-timestamp") == "not-an-iso-timestamp"

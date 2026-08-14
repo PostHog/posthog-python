@@ -34,8 +34,8 @@ def guess_timezone(dt: datetime) -> datetime:
     if is_naive(dt):
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
-        delta = datetime.now() - dt
-        if total_seconds(delta) < 5:  # pragma: no mutate
+        delta = total_seconds(datetime.now() - dt)
+        if 0 <= delta < 5:  # pragma: no mutate
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
             dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
