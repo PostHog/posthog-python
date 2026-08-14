@@ -156,10 +156,11 @@ class TestUtils(unittest.TestCase):
         )
 
     def test_normalize_timestamp_converts_compact_offset_to_utc(self):
-        assert (
-            utils._normalize_timestamp("2026-06-27T12:00:00+0530")
-            == "2026-06-27T06:30:00+00:00"
-        )
+        with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
+            normalized = utils._normalize_timestamp("2026-06-27T12:00:00+0530")
+
+        mock_datetime.fromisoformat.assert_called_once_with("2026-06-27T12:00:00+05:30")
+        assert normalized == "2026-06-27T06:30:00+00:00"
 
     @parameterized.expand(["2026-06-27", "20260627"])
     def test_normalize_timestamp_preserves_date_only_string(self, timestamp):
