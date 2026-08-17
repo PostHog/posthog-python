@@ -1,0 +1,139 @@
+{
+  "body": {
+    "api_key": "phc_snapshot_project",
+    "batch": [
+      {
+        "distinct_id": "user-123",
+        "event": "$exception",
+        "properties": {
+          "$exception_list": [
+            {
+              "mechanism": {
+                "handled": true,
+                "type": "generic"
+              },
+              "module": null,
+              "stacktrace": {
+                "frames": [
+                  {
+                    "abs_path": "<PROJECT_ROOT>/posthog/test/test_server_payload_snapshots.py",
+                    "context_line": "                _raise_snapshot_exception()",
+                    "filename": "posthog/test/test_server_payload_snapshots.py",
+                    "function": "_exception_request",
+                    "in_app": true,
+                    "lineno": "<LINE_NUMBER>",
+                    "module": "posthog.test.test_server_payload_snapshots",
+                    "platform": "python",
+                    "post_context": [
+                      "            except RuntimeError as error:",
+                      "                client.capture_exception(",
+                      "                    error,",
+                      "                    distinct_id=\"user-123\",",
+                      "                    properties={\"component\": \"checkout\", \"severity\": \"high\"},"
+                    ],
+                    "pre_context": [
+                      "            project_root=str(Path(__file__).parents[2]),",
+                      "            capture_exception_code_variables=False,",
+                      "        )",
+                      "        try:",
+                      "            try:"
+                    ]
+                  },
+                  {
+                    "abs_path": "<PROJECT_ROOT>/posthog/test/test_server_payload_snapshots.py",
+                    "context_line": "        raise RuntimeError(\"checkout failed\") from cause",
+                    "filename": "posthog/test/test_server_payload_snapshots.py",
+                    "function": "_raise_snapshot_exception",
+                    "in_app": true,
+                    "lineno": "<LINE_NUMBER>",
+                    "module": "posthog.test.test_server_payload_snapshots",
+                    "platform": "python",
+                    "post_context": [
+                      "",
+                      "",
+                      "def _exception_request():",
+                      "    session = mock.MagicMock()",
+                      "    session.post.return_value = _successful_response()"
+                    ],
+                    "pre_context": [
+                      "",
+                      "def _raise_snapshot_exception() -> None:",
+                      "    try:",
+                      "        raise ValueError(\"invalid order total\")",
+                      "    except ValueError as cause:"
+                    ]
+                  }
+                ],
+                "type": "raw"
+              },
+              "type": "RuntimeError",
+              "value": "checkout failed"
+            },
+            {
+              "mechanism": {
+                "handled": true,
+                "type": "generic"
+              },
+              "module": null,
+              "stacktrace": {
+                "frames": [
+                  {
+                    "abs_path": "<PROJECT_ROOT>/posthog/test/test_server_payload_snapshots.py",
+                    "context_line": "        raise ValueError(\"invalid order total\")",
+                    "filename": "posthog/test/test_server_payload_snapshots.py",
+                    "function": "_raise_snapshot_exception",
+                    "in_app": true,
+                    "lineno": "<LINE_NUMBER>",
+                    "module": "posthog.test.test_server_payload_snapshots",
+                    "platform": "python",
+                    "post_context": [
+                      "    except ValueError as cause:",
+                      "        raise RuntimeError(\"checkout failed\") from cause",
+                      "",
+                      "",
+                      "def _exception_request():"
+                    ],
+                    "pre_context": [
+                      "    return _transport_request(session.post.call_args)",
+                      "",
+                      "",
+                      "def _raise_snapshot_exception() -> None:",
+                      "    try:"
+                    ]
+                  }
+                ],
+                "type": "raw"
+              },
+              "type": "ValueError",
+              "value": "invalid order total"
+            }
+          ],
+          "$geoip_disable": true,
+          "$groups": {
+            "company": "company-456"
+          },
+          "$is_server": true,
+          "$lib": "posthog-python",
+          "$lib_version": "<SDK_VERSION>",
+          "$os": "<OS>",
+          "$os_distro": "<OS_DISTRO>",
+          "$os_version": "<OS_VERSION>",
+          "$python_runtime": "<PYTHON_RUNTIME>",
+          "$python_version": "<PYTHON_VERSION>",
+          "component": "checkout",
+          "severity": "high"
+        },
+        "timestamp": "2026-01-02T03:04:05+00:00",
+        "uuid": "00000000-0000-4000-8000-000000000005"
+      }
+    ],
+    "historical_migration": false,
+    "sent_at": "2026-01-02T03:04:05+00:00"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "posthog-python/<SDK_VERSION>"
+  },
+  "timeout": 15,
+  "url": "https://example.posthog.test/batch/"
+}

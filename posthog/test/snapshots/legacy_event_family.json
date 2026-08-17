@@ -1,0 +1,94 @@
+{
+  "body": {
+    "api_key": "phc_snapshot_project",
+    "batch": [
+      {
+        "distinct_id": "user-123",
+        "event": "order completed",
+        "properties": {
+          "$geoip_disable": true,
+          "$groups": {
+            "company": "company-456"
+          },
+          "$is_server": true,
+          "$lib": "posthog-python",
+          "$lib_version": "<SDK_VERSION>",
+          "$os": "<OS>",
+          "$os_distro": "<OS_DISTRO>",
+          "$os_version": "<OS_VERSION>",
+          "$python_runtime": "<PYTHON_RUNTIME>",
+          "$python_version": "<PYTHON_VERSION>",
+          "amount": 29.5,
+          "items": [
+            {
+              "quantity": 1,
+              "sku": "SKU-1"
+            },
+            {
+              "quantity": 2,
+              "sku": "SKU-2"
+            }
+          ]
+        },
+        "timestamp": "2026-01-02T03:04:05+00:00",
+        "uuid": "00000000-0000-4000-8000-000000000001"
+      },
+      {
+        "$set": {
+          "email": "person@example.com",
+          "plan": "pro"
+        },
+        "distinct_id": "user-123",
+        "event": "$set",
+        "properties": {
+          "$geoip_disable": true,
+          "$is_server": true,
+          "$lib": "posthog-python",
+          "$lib_version": "<SDK_VERSION>"
+        },
+        "timestamp": "2026-01-02T03:04:05+00:00",
+        "uuid": "00000000-0000-4000-8000-000000000002"
+      },
+      {
+        "distinct_id": "anonymous-789",
+        "event": "$create_alias",
+        "properties": {
+          "$geoip_disable": true,
+          "$is_server": true,
+          "$lib": "posthog-python",
+          "$lib_version": "<SDK_VERSION>",
+          "alias": "user-123",
+          "distinct_id": "anonymous-789"
+        },
+        "timestamp": "2026-01-02T03:04:05+00:00",
+        "uuid": "00000000-0000-4000-8000-000000000003"
+      },
+      {
+        "distinct_id": "user-123",
+        "event": "$groupidentify",
+        "properties": {
+          "$geoip_disable": true,
+          "$group_key": "company-456",
+          "$group_set": {
+            "employees": 42,
+            "name": "Example Corp"
+          },
+          "$group_type": "company",
+          "$is_server": true,
+          "$lib": "posthog-python",
+          "$lib_version": "<SDK_VERSION>"
+        },
+        "timestamp": "2026-01-02T03:04:05+00:00",
+        "uuid": "00000000-0000-4000-8000-000000000004"
+      }
+    ],
+    "historical_migration": false,
+    "sent_at": "2026-01-02T03:04:05+00:00"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "posthog-python/<SDK_VERSION>"
+  },
+  "timeout": 15,
+  "url": "https://example.posthog.test/batch/"
+}
