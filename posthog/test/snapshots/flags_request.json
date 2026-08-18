@@ -1,0 +1,32 @@
+{
+  "body": {
+    "api_key": "phc_snapshot_project",
+    "device_id": "device-789",
+    "distinct_id": "user-123",
+    "flag_keys_to_evaluate": [
+      "checkout-redesign",
+      "new-billing"
+    ],
+    "geoip_disable": false,
+    "group_properties": {
+      "company": {
+        "employees": 42,
+        "industry": "technology"
+      }
+    },
+    "groups": {
+      "company": "company-456"
+    },
+    "person_properties": {
+      "email": "person@example.com",
+      "plan": "pro"
+    },
+    "sent_at": "2026-01-02T03:04:05+00:00"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "posthog-python/<SDK_VERSION>"
+  },
+  "timeout": 3,
+  "url": "https://example.posthog.test/flags/?v=2"
+}
