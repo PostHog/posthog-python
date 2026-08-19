@@ -4092,6 +4092,7 @@ class Client(object):
             )
         )
         groups = groups or {}
+        requested_keys = set(flag_keys) if flag_keys else None
 
         records: Dict[str, _EvaluatedFlagRecord] = {}
         request_id: Optional[str] = None
@@ -4121,6 +4122,11 @@ class Client(object):
         feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
         local_flags = local_result.get("featureFlags") or {}
         local_payloads = local_result.get("featureFlagPayloads") or {}
+        if requested_keys and not requested_keys.issubset(local_flags):
+            # A requested flag may have been created since the last definitions poll.
+            # Ask /flags for the caller's original scope unless this is a local-only call.
+            fallback_to_server = True
+
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
             records[key] = _EvaluatedFlagRecord(
@@ -4164,6 +4170,8 @@ class Client(object):
                     response.get("minimalFlagCalledEvents") is True
                 )
                 for key, detail in response.get("flags", {}).items():
+                    if requested_keys is not None and key not in requested_keys:
+                        continue
                     if key in locally_evaluated_keys:
                         continue
                     payload = _parse_flag_payload(
