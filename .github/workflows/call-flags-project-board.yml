@@ -7,6 +7,8 @@ on:
     pull_request:
         types: [opened, ready_for_review, review_requested, synchronize, converted_to_draft, reopened]
 
+permissions: {}
+
 jobs:
     call-flags-project:
         uses: PostHog/.github/.github/workflows/flags-project-board.yml@95c20087fda2dc10fbbbcc3f1ef32b7bae779339
