@@ -103,7 +103,14 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             )
         )
         request = build_tool_call_request(name, arguments)
-        extra: Dict[str, Any] = {"session_id": mcp_session_id}
+        # `ctx` is the SDK's own per-request context, handed to host callbacks
+        # unchanged and identically on both SDK majors (read headers off it with
+        # the exported `get_request_headers`). Never captured — the event
+        # pipeline keeps only a scalar projection of `extra`.
+        extra: Dict[str, Any] = {
+            "session_id": mcp_session_id,
+            "ctx": getattr(context, "request_context", None),
+        }
 
         # Resolve the conversation handle before the session: when the agent
         # carries (or is about to receive) one, it anchors $session_id for every
@@ -249,7 +256,10 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             )
         )
         request = request_to_dict(req)
-        extra: Dict[str, Any] = {"session_id": mcp_session_id}
+        extra: Dict[str, Any] = {
+            "session_id": mcp_session_id,
+            "ctx": _low_level_request_context(server),
+        }
         # Resolve session, emit $mcp_initialize (once per session) and identify here
         # too — a client may list tools without ever calling one.
         session_id = await prepare_request(

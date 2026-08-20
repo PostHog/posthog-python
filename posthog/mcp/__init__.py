@@ -51,6 +51,7 @@ from ._internal import (
 )
 from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
+from .request_headers import get_request_headers
 from .session import (
     derive_session_id_from_conversation,
     derive_session_id_from_mcp_session,
@@ -88,6 +89,10 @@ __all__ = [
     "CaptureEventData",
     "PreparedToolCall",
     "get_more_tools_result",
+    # Read HTTP headers inside identify/intent_fallback/event_properties/
+    # before_send callbacks on either SDK major: the raw per-request context
+    # arrives as extra["ctx"] and its shape differs between them.
+    "get_request_headers",
     "derive_session_id_from_mcp_session",
     # Conversation-anchored sessions: the cross-SDK derivation contract with
     # posthog-js (the 2026-07-28 revision has no protocol sessions, so the

@@ -106,7 +106,11 @@ def _wrap_call_tool(
             )
         )
         request = build_tool_call_request(name, arguments)
-        extra = {"session_id": mcp_session_id}
+        # `ctx` is the SDK's own per-request context, handed to host callbacks
+        # unchanged and identically on both SDK majors (read headers off it with
+        # the exported `get_request_headers`). Never captured — the event
+        # pipeline keeps only a scalar projection of `extra`.
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
 
         # Resolve the conversation handle before the session: when present it
         # anchors $session_id for every event of this request (ADR-0004).
@@ -262,7 +266,11 @@ def _wrap_list_tools(
             )
         )
         request = request_to_dict(req)
-        extra = {"session_id": mcp_session_id}
+        # `ctx` is the SDK's own per-request context, handed to host callbacks
+        # unchanged and identically on both SDK majors (read headers off it with
+        # the exported `get_request_headers`). Never captured — the event
+        # pipeline keeps only a scalar projection of `extra`.
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
         # Resolve session, emit $mcp_initialize (once per session) and identify here
         # too — a client may list tools without ever calling one.
         session_id = await prepare_request(

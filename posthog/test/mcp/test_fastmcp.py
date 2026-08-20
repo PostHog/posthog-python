@@ -205,3 +205,35 @@ async def test_unsupported_server_returns_noop_handle():
     # graceful no-op: capture and flush do nothing and do not raise
     await handle.capture("anything")
     await handle.flush()
+
+
+async def test_callbacks_can_read_headers_through_the_helper():
+    """Same callback body as the v2 lane's equivalent test: `extra["ctx"]` is the
+    SDK's own per-request context on both majors, read via `get_request_headers`."""
+    from types import SimpleNamespace
+
+    from posthog.mcp import get_request_headers
+
+    server = make_server()
+    client = FakeClient()
+    seen = {}
+
+    def identify(request, extra):
+        seen["headers"] = get_request_headers(extra)
+        return None
+
+    instrument(server, client, MCPAnalyticsOptions(identify=identify))
+
+    # FastMCP hands the tool a Context whose .request_context carries the request.
+    context = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(headers={"Authorization": "Bearer t0ken"}),
+            session=SimpleNamespace(client_params=None),
+        )
+    )
+    await server._tool_manager.call_tool(
+        "add", {"a": 1, "b": 1, "context": "header read"}, context=context
+    )
+    await _flush()
+
+    assert seen["headers"] == {"authorization": "Bearer t0ken"}

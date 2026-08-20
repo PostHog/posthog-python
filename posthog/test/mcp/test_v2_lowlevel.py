@@ -247,3 +247,25 @@ async def test_report_missing_appends_virtual_tool():
     assert call_result.is_error is False
     missing = _events(client, "$mcp_missing_capability")
     assert missing and missing[0]["properties"]["$mcp_intent"] == "need an email tool"
+
+
+async def test_callbacks_can_read_headers_through_the_helper():
+    """The same `identify` body must work on both SDK majors: `extra["ctx"]` is
+    the SDK's own context and `get_request_headers` normalises the read."""
+    from posthog.mcp import get_request_headers
+
+    server = make_server()
+    client = FakeClient()
+    seen = {}
+
+    def identify(request, extra):
+        seen["headers"] = get_request_headers(extra)
+        return None
+
+    instrument(server, client, MCPAnalyticsOptions(identify=identify))
+
+    ctx = fake_ctx(headers={"Authorization": "Bearer t0ken", "User-Agent": "probe/1"})
+    await _call_tool(server, "add", {"a": 1, "b": 1, "context": "header read"}, ctx=ctx)
+    await _flush()
+
+    assert seen["headers"] == {"authorization": "Bearer t0ken", "user-agent": "probe/1"}
