@@ -4044,8 +4044,9 @@ class Client(object):
             only_evaluate_locally: If True, never fall back to remote evaluation —
                 flags that can't be evaluated locally are simply omitted from the snapshot.
             disable_geoip: Whether to disable GeoIP lookup.
-            flag_keys: Optional list that scopes local evaluation, the underlying ``/flags``
-                request, and the returned snapshot. A requested key absent from loaded local
+            flag_keys: Optional non-empty list that scopes local evaluation, the underlying
+                ``/flags`` request, and the returned snapshot. An empty list is treated like
+                ``None`` and evaluates all flags. A requested key absent from loaded local
                 definitions is included in one remote fallback per ``evaluate_flags`` call unless
                 ``only_evaluate_locally`` is True. If the server also does not know the key, it is
                 omitted from the snapshot.
@@ -4095,6 +4096,7 @@ class Client(object):
             )
         )
         groups = groups or {}
+        # Keep the existing API convention that an empty list means no scope.
         requested_keys = set(flag_keys) if flag_keys else None
 
         records: Dict[str, _EvaluatedFlagRecord] = {}
