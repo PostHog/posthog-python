@@ -1,7 +1,8 @@
 """Split the MCP test suite by installed MCP SDK major.
 
-The suite runs twice in CI: once against ``mcp>=1.26,<2`` (the ``tests`` job)
-and once against ``mcp>=2,<3`` (the ``tests-mcp-v2`` job). Files coupled to one
+The suite runs against both majors in CI — the ``tests-mcp`` matrix has a
+``mcp>=1.26,<2`` leg and a ``mcp>=2,<3`` leg (the main ``tests`` matrix also
+exercises the v1 side incidentally). Files coupled to one
 major's seams import symbols the other major doesn't ship, so they are excluded
 from *collection* (a skip marker can't help — the failure is at import time).
 Version-agnostic files (units, truncation, session tokens, PostHogMCP, ids)

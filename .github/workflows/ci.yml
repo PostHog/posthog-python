@@ -151,16 +151,18 @@ jobs:
               run: |
                   pytest --verbose --timeout=30
 
-    tests-mcp-v2:
-        # The MCP suite again, against MCP Python SDK v2 (spec 2026-07-28). The
-        # `tests` matrix covers mcp 1.x on every Python version; this lane swaps
-        # in mcp>=2 (and drops jlowin fastmcp, which pins mcp<2) and runs only
-        # posthog/test/mcp — conftest.py there splits collection by major.
-        name: MCP SDK v2 tests (Python ${{ matrix.python-version }})
+    tests-mcp:
+        # The MCP suite as a named gate per MCP Python SDK major. The v1 leg uses
+        # the lockfile's mcp 1.x (also exercised incidentally by the `tests`
+        # matrix — this leg exists as an explicit, named signal); the v2 leg
+        # (spec 2026-07-28) swaps in mcp>=2 and drops jlowin fastmcp, which pins
+        # mcp<2. posthog/test/mcp/conftest.py splits collection by major.
+        name: MCP SDK ${{ matrix.mcp-major }} (Python ${{ matrix.python-version }})
         runs-on: ubuntu-latest
         strategy:
             matrix:
                 python-version: ['3.10', '3.14']
+                mcp-major: ['v1', 'v2']
 
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -178,14 +180,19 @@ jobs:
                   version: "0.11.32"
                   enable-cache: true
 
-            - name: Install test dependencies with MCP SDK v2
+            - name: Install test dependencies
               shell: bash
               run: |
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra test
+
+            - name: Swap in MCP SDK v2
+              if: matrix.mcp-major == 'v2'
+              shell: bash
+              run: |
                   uv pip uninstall --python $pythonLocation fastmcp
                   uv pip install --python $pythonLocation 'mcp>=2,<3'
 
-            - name: Run MCP tests against SDK v2
+            - name: Run MCP tests against SDK ${{ matrix.mcp-major }}
               run: |
                   pytest posthog/test/mcp --verbose --timeout=30
 
