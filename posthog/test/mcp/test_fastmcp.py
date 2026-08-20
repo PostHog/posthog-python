@@ -237,3 +237,17 @@ async def test_callbacks_can_read_headers_through_the_helper():
     await _flush()
 
     assert seen["headers"] == {"authorization": "Bearer t0ken"}
+
+
+async def test_public_call_tool_entrypoint_still_works_outside_a_request():
+    """`FastMCP.call_tool()` is public API for in-process invocation, where there
+    is no request context. `Context.request_context` *raises* there, so reading
+    it unguarded would push an analytics error into the customer's tool path."""
+    server = make_server()
+    instrument(server, FakeClient())
+
+    result = await server.call_tool("add", {"a": 2, "b": 3, "context": "no request"})
+    await _flush()
+
+    text_blocks = [c.text for c in result[0] if getattr(c, "type", None) == "text"]
+    assert "5" in text_blocks

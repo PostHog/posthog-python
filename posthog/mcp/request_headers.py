@@ -15,8 +15,14 @@ wants, so they get a helper instead::
 
     def identify(request, extra):
         headers = get_request_headers(extra) or {}
-        token = headers.get("authorization")
-        ...
+        return UserIdentity(distinct_id=user_id_for(headers.get("authorization")))
+
+**Never return a raw header value** (an ``Authorization`` bearer token, a
+cookie, an API key) as a ``UserIdentity`` property or from ``event_properties``.
+Resolve it to an id or a role first. Person properties and custom event
+properties are the one part of the payload the SDK does not redact, and they
+persist on the person profile — a token written there outlives event retention
+and is visible in the PostHog UI.
 
 Returns ``None`` when the request did not arrive over HTTP — stdio and
 in-memory transports carry no headers at all.

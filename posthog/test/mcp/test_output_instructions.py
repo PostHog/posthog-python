@@ -169,3 +169,56 @@ def test_customer_key_wins_over_the_mirror():
 
     assert delivered is False
     assert result.structuredContent[MCP_INSTRUCTIONS_KEY] == "mine"
+
+
+def test_our_own_declaration_is_recognised_on_a_relisting():
+    """Servers that hand back persistent Tool objects re-list the *same* object.
+    Reading our own prior declaration as customer-owned would flip ownership to
+    False and silently switch the mirror off for schema-reading clients."""
+    tool = _tool({"type": "object", "properties": {"total": {"type": "integer"}}})
+
+    assert add_instructions_to_output_schema(tool) is True
+    # second listing of the very same object — still ours, still declared
+    assert add_instructions_to_output_schema(tool) is True
+    assert MCP_INSTRUCTIONS_KEY in tool.outputSchema["properties"]
+
+
+def test_a_customer_key_is_still_not_claimed_as_ours():
+    tool = _tool(
+        {
+            "type": "object",
+            "properties": {MCP_INSTRUCTIONS_KEY: {"type": "string"}},
+        }
+    )
+
+    assert add_instructions_to_output_schema(tool) is False
+
+
+def test_mirror_does_not_mutate_a_shared_model_result():
+    """A tool may return a cached/shared result object. Pinning one
+    conversation's handle onto it would serve that handle to every later caller
+    — and, through the handle, collapse unrelated clients into one session."""
+    import mcp.types as mcp_types
+
+    # `structuredContent` on SDK 1.x, `structured_content` on 2.x (same wire field).
+    def structured(result):
+        for attr in ("structuredContent", "structured_content"):
+            if hasattr(result, attr):
+                return getattr(result, attr)
+        raise AssertionError("no structured content attribute")
+
+    shared = mcp_types.CallToolResult(
+        content=[mcp_types.TextContent(type="text", text="{}")],
+        structuredContent={"total": 7},
+    )
+
+    first, delivered = mirror_instructions_into_structured_content(shared, "conv-A")
+
+    assert delivered is True
+    assert first is not shared  # a copy, not the caller's object
+    assert structured(first)[MCP_INSTRUCTIONS_KEY] == {"conversation_id": "conv-A"}
+    # the shared object the customer owns is untouched, so the next caller is clean
+    assert MCP_INSTRUCTIONS_KEY not in structured(shared)
+
+    second, _ = mirror_instructions_into_structured_content(shared, "conv-B")
+    assert structured(second)[MCP_INSTRUCTIONS_KEY] == {"conversation_id": "conv-B"}

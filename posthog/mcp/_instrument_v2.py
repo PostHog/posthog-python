@@ -354,23 +354,34 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
     tool_manager.call_tool = wrapped
 
 
-def _append_prompt_back(result: Any, conversation_id: str) -> bool:
+def _append_prompt_back(result: Any, conversation_id: str) -> Tuple[Any, bool]:
     """Append the conversation prompt-back to a result's ``content`` list (model
     or dict shape). Errored results included on purpose — a first-call failure
     is exactly when the agent needs the handle. Returns False for shapes with no
-    content list to ride (e.g. MRTR ``input_required`` results)."""
+    content list to ride (e.g. MRTR ``input_required`` results). Returns
+    ``(result, delivered)`` — the result may be a copy, never a mutation."""
     block = mcp_types.TextContent(
         type="text", text=build_prompt_back(conversation_id)["text"]
     )
-    content = (
-        result.get("content")
-        if isinstance(result, dict)
-        else getattr(result, "content", None)
-    )
-    if isinstance(content, list):
-        content.append(block)
-        return True
-    return False
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, list):
+            return {**result, "content": [*content, block]}, True
+        return result, False
+    content = getattr(result, "content", None)
+    if not isinstance(content, list):
+        return result, False
+    # Copy rather than append in place: a shared or cached result object would
+    # otherwise accumulate a block per conversation and hand each caller the
+    # previous callers' handles.
+    copy_model = getattr(result, "model_copy", None)
+    if callable(copy_model):
+        try:
+            return copy_model(update={"content": [*content, block]}), True
+        except Exception:  # noqa: BLE001 - never let delivery break the tool path
+            return result, False
+    content.append(block)
+    return result, True
 
 
 def _deliver_conversation_id(
@@ -386,8 +397,9 @@ def _deliver_conversation_id(
         result, delivered = mirror_instructions_into_structured_content(
             result, conversation_id
         )
-    if minted and _append_prompt_back(result, conversation_id):
-        delivered = True
+    if minted:
+        result, appended = _append_prompt_back(result, conversation_id)
+        delivered = delivered or appended
     return result, delivered
 
 

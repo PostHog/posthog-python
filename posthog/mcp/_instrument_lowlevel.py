@@ -208,21 +208,34 @@ def _wrap_call_tool(
         if conversation_id:
             delivered = False
             if data.tool_output_instructions.get(name):
-                _, delivered = mirror_instructions_into_structured_content(
+                call_result, delivered = mirror_instructions_into_structured_content(
                     call_result, conversation_id
                 )
             if minted:
                 content = getattr(call_result, "content", None)
                 if isinstance(content, list):
-                    content.append(
-                        mcp_types.TextContent(
-                            type="text", text=build_prompt_back(conversation_id)["text"]
-                        )
+                    block = mcp_types.TextContent(
+                        type="text", text=build_prompt_back(conversation_id)["text"]
                     )
+                    # Copy rather than append in place — a shared or cached result
+                    # object would accumulate a block per conversation and leak
+                    # earlier callers' handles to later ones.
+                    copy_model = getattr(call_result, "model_copy", None)
+                    if callable(copy_model):
+                        call_result = copy_model(update={"content": [*content, block]})
+                    else:
+                        content.append(block)
                     delivered = True
                 # Only a minted handle can be lost — one the agent supplied, it has.
                 if not delivered:
                     delivered_conversation_id = None
+            # Hand back whatever copy we made, rewrapped as the SDK expects.
+            if call_result is not getattr(result, "root", result):
+                result = (
+                    mcp_types.ServerResult(call_result)
+                    if hasattr(result, "root")
+                    else call_result
+                )
 
         await record_tool_call(
             data,

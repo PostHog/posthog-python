@@ -338,3 +338,71 @@ def test_version_warning_uses_supplied_logger(monkeypatch):
     )
 
     assert any("tested against mcp>=1.26" in m for m in logs)
+
+
+# --- F: the SDK's tool cache must carry the keys we advertise -----------------
+
+
+async def test_strict_output_schema_survives_a_tool_cache_rebuild():
+    """mcp 1.x validates a call's structuredContent against its *cached* tool
+    definition. That cache is rebuilt from the internal `req=None` listing pass
+    whenever an unlisted tool name is called — including our own advertised
+    `get_more_tools`. If the rebuild dropped our `_mcp_instructions`
+    declaration while the mirror kept writing the key, the SDK would reject the
+    customer's own successful result under `additionalProperties: false`."""
+    from typing import Any
+
+    from pydantic import BaseModel, ConfigDict
+
+    from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
+
+    class Totals(BaseModel):
+        model_config = ConfigDict(extra="forbid")  # -> additionalProperties: false
+        total: int
+
+    server = FastMCP("strict-output")
+
+    @server.tool()
+    def totals(event: str) -> Totals:
+        return Totals(total=7)
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    # FastMCP's lowlevel call path reads the request contextvar; set one so the
+    # handler can run outside a live session.
+    from types import SimpleNamespace
+
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+
+    request_ctx.set(
+        RequestContext(
+            request_id=1,
+            meta=None,
+            session=SimpleNamespace(client_params=None),
+            lifespan_context=None,
+            request=None,
+        )
+    )
+
+    call = server._mcp_server.request_handlers[mcp_types.CallToolRequest]
+    listed = await server._mcp_server.request_handlers[mcp_types.ListToolsRequest](
+        mcp_types.ListToolsRequest(method="tools/list")
+    )
+    tool = next(t for t in listed.root.tools if t.name == "totals")
+    assert MCP_INSTRUCTIONS_KEY in tool.outputSchema["properties"]
+
+    first = await call(_call_request("totals", {"event": "a", "context": "first"}))
+    assert first.root.isError is False
+
+    # Force a cache rebuild the way a real client does: call a name the cache
+    # doesn't know yet.
+    await call(_call_request("not-a-real-tool", {"context": "typo"}))
+
+    # The customer's tool must still work — analytics never breaks the result.
+    after: Any = await call(
+        _call_request("totals", {"event": "b", "context": "second"})
+    )
+    assert after.root.isError is False, after.root.content[0].text
+    assert after.root.structuredContent[MCP_INSTRUCTIONS_KEY]["conversation_id"]

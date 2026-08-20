@@ -49,6 +49,15 @@ def _read_attr(obj: Any, names: Tuple[str, ...]) -> Tuple[Optional[str], Any]:
     return None, None
 
 
+def _is_our_declaration(declaration: Any) -> bool:
+    """Whether an existing :data:`MCP_INSTRUCTIONS_KEY` property is one we wrote
+    on a previous listing, told apart from a customer's by our description."""
+    return (
+        isinstance(declaration, dict)
+        and declaration.get("description") == _INSTRUCTIONS_FIELD_DESCRIPTION
+    )
+
+
 def can_declare_output_instructions(output_schema: Any) -> bool:
     """True when :data:`MCP_INSTRUCTIONS_KEY` can safely be declared on this
     tool's advertised output schema.
@@ -95,6 +104,13 @@ def add_instructions_to_output_schema(tool: Any) -> bool:
     if not can_declare_output_instructions(original):
         properties = original.get("properties") if isinstance(original, dict) else None
         if isinstance(properties, dict) and MCP_INSTRUCTIONS_KEY in properties:
+            # Our own declaration from an earlier listing: servers that hand back
+            # persistent Tool objects (a module-level list, or two servers sharing
+            # tools) hit this on every re-list. Report it as declared — reading it
+            # as customer-owned would silently switch the mirror off for exactly
+            # the clients it exists for, and blame the customer in the log.
+            if _is_our_declaration(properties[MCP_INSTRUCTIONS_KEY]):
+                return True
             log(
                 f"WARN: Tool \"{name}\" already declares '{MCP_INSTRUCTIONS_KEY}' in its "
                 "output schema. Leaving it alone."
@@ -178,8 +194,28 @@ def mirror_instructions_into_structured_content(
         or MCP_INSTRUCTIONS_KEY in structured
     ):
         return result, False
+    updated = {**structured, MCP_INSTRUCTIONS_KEY: payload}
+    # Copy rather than mutate: a tool is free to return a shared or cached
+    # result object, and pinning one conversation's handle onto it would serve
+    # that handle to every later caller (and, through the handle, collapse
+    # unrelated clients into one session).
+    copy_model = getattr(target, "model_copy", None)
+    if callable(copy_model):
+        try:
+            new_target = copy_model(update={attr: updated})
+        except Exception:  # noqa: BLE001 - never let delivery break the tool path
+            return result, False
+        if target is result:
+            return new_target, True
+        rewrap = getattr(result, "model_copy", None)
+        if callable(rewrap):
+            try:
+                return rewrap(update={"root": new_target}), True
+            except Exception:  # noqa: BLE001
+                return result, False
+        return result, False
     try:
-        setattr(target, attr, {**structured, MCP_INSTRUCTIONS_KEY: payload})
+        setattr(target, attr, updated)
     except Exception:  # noqa: BLE001 - never let delivery break the tool path
         return result, False
     return result, True

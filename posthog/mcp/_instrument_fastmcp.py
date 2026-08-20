@@ -109,7 +109,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         # pipeline keeps only a scalar projection of `extra`.
         extra: Dict[str, Any] = {
             "session_id": mcp_session_id,
-            "ctx": getattr(context, "request_context", None),
+            "ctx": _tool_call_request_context(context),
         }
 
         # Resolve the conversation handle before the session: when the agent
@@ -232,6 +232,38 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
 # --- tools/list seam ---------------------------------------------------------
 
 
+def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> None:
+    """Advertise the analytics parameters on a listing's tools, in place.
+
+    Runs on both the client-facing listing and the SDK's internal cache-
+    population pass, so the schema the SDK validates against always matches the
+    one we advertised — see the note in ``list_handler``.
+    """
+    context_enabled = is_context_enabled(data.options.context)
+    description = get_context_description(data.options.context)
+    for tool in tools:
+        if tool.name == _GET_MORE_TOOLS_NAME:
+            continue
+        owns_context = _tool_owns_context(server, tool.name)
+        schema = getattr(tool, "inputSchema", None)
+        if context_enabled and not owns_context:
+            schema = add_context_parameter_to_schema(schema, tool.name, description)
+        if data.options.enable_conversation_id:
+            schema = add_conversation_id_to_schema(schema, tool.name)
+        if schema is not getattr(tool, "inputSchema", None):
+            try:
+                tool.inputSchema = schema
+            except Exception:  # noqa: BLE001 - some schema attrs may be read-only
+                log(f"WARN: could not set inputSchema on tool {tool.name}")
+        # Declare the structuredContent channel and remember the answer:
+        # clients that read structuredContent never see the content text
+        # block, and only a declared key may be written back on a call.
+        if data.options.enable_conversation_id:
+            data.tool_output_instructions[tool.name] = (
+                add_instructions_to_output_schema(tool)
+            )
+
+
 def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
     low_level = getattr(server, "_mcp_server", None)
     if low_level is None:
@@ -243,9 +275,16 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
     async def list_handler(req: Any) -> Any:
         # The low-level server calls the handler with None to populate its tool
-        # cache; don't capture or inject on that internal pass.
+        # cache. Skip analytics on that internal pass — but still inject the
+        # schemas. That cache is the surface the SDK validates calls against
+        # (`jsonschema.validate(arguments, inputSchema)` and
+        # `(structuredContent, outputSchema)`), and it is rebuilt from scratch
+        # whenever an unlisted tool name is called. If it lacks the keys we
+        # advertise and write, the SDK rejects the customer's own tool result.
         if req is None:
-            return await original(req)
+            result = await original(req)
+            _inject_tool_schemas(server, data, extract_tools(result))
+            return result
 
         client_name, client_version = _low_level_client_info(server)
         protocol_version = _low_level_protocol_version(server)
@@ -306,29 +345,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             if category:
                 data.tool_categories[tool.name] = category
 
-        context_enabled = is_context_enabled(data.options.context)
-        description = get_context_description(data.options.context)
-        for tool in tools:
-            if tool.name == _GET_MORE_TOOLS_NAME:
-                continue
-            owns_context = _tool_owns_context(server, tool.name)
-            schema = getattr(tool, "inputSchema", None)
-            if context_enabled and not owns_context:
-                schema = add_context_parameter_to_schema(schema, tool.name, description)
-            if data.options.enable_conversation_id:
-                schema = add_conversation_id_to_schema(schema, tool.name)
-            if schema is not getattr(tool, "inputSchema", None):
-                try:
-                    tool.inputSchema = schema
-                except Exception:  # noqa: BLE001 - some schema attrs may be read-only
-                    log(f"WARN: could not set inputSchema on tool {tool.name}")
-            # Declare the structuredContent channel and remember the answer:
-            # clients that read structuredContent never see the content text
-            # block, and only a declared key may be written back on a call.
-            if data.options.enable_conversation_id:
-                data.tool_output_instructions[tool.name] = (
-                    add_instructions_to_output_schema(tool)
-                )
+        _inject_tool_schemas(server, data, tools)
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
@@ -398,6 +415,20 @@ def _tool_owns_param(server: Any, name: str, param: str) -> bool:
 
 def _tool_owns_context(server: Any, name: str) -> bool:
     return _tool_owns_param(server, name, "context")
+
+
+def _tool_call_request_context(context: Any) -> Any:
+    """The request context behind a FastMCP ``Context``, or ``None``.
+
+    ``Context.request_context`` is a property that *raises* ``ValueError`` when
+    the call happens outside a request — which the public ``FastMCP.call_tool()``
+    entry point does. A bare ``getattr(..., None)`` only swallows
+    ``AttributeError``, so it would let that escape into the customer's tool call.
+    """
+    try:
+        return context.request_context
+    except (LookupError, ValueError, AttributeError):
+        return None
 
 
 def _low_level_request_context(server: Any) -> Any:
