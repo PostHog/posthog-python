@@ -208,6 +208,37 @@ async def test_identify_sets_distinct_id_and_groups():
     assert _events(client, "$identify")
 
 
+async def test_identify_callback_sees_ctx_but_capture_does_not():
+    """The v2 adapters hand the raw request ``ctx`` to callbacks via ``extra`` so
+    hosts can read headers — but the captured $identify parameters must carry
+    only a scalar projection, or the stringified context (headers, transport
+    state) would ship to PostHog without key-based redaction."""
+    server = make_server()
+    client = FakeClient()
+    seen = {}
+
+    def identify(request, extra):
+        seen["extra"] = extra
+        return UserIdentity(distinct_id="user_9")
+
+    instrument(server, client, MCPAnalyticsOptions(identify=identify))
+
+    await _call_tool(
+        server, "add", {"a": 1, "b": 1, "context": "identity capture check"}
+    )
+    await _flush()
+
+    # the callback got the live context object...
+    assert seen["extra"]["ctx"] is not None
+
+    # ...but the captured event only carries JSON-safe scalars
+    identify_events = _events(client, "$identify")
+    assert identify_events
+    captured_extra = identify_events[0]["properties"]["$mcp_parameters"]["extra"]
+    assert "ctx" not in captured_extra
+    assert set(captured_extra) <= {"session_id"}
+
+
 async def test_report_missing_advertises_and_captures():
     server = make_server()
     client = FakeClient()
