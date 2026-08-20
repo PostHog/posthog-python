@@ -453,6 +453,22 @@ class TestEvaluateFlagsMissingLocalDefinition(unittest.TestCase):
         self.assertIsNone(flags.get_flag("remote-only"))
         patch_flags.assert_not_called()
 
+    @mock.patch("posthog.client.flags")
+    def test_server_missing_key_falls_back_once_per_evaluation_call(self, patch_flags):
+        patch_flags.return_value = {"flags": {}}
+        requested_keys = ["local-flag", "typo-flag"]
+
+        first = self.client.evaluate_flags("user-1", flag_keys=requested_keys)
+        second = self.client.evaluate_flags("user-1", flag_keys=requested_keys)
+
+        for flags in (first, second):
+            self.assertEqual(flags.keys, ["local-flag"])
+            self.assertTrue(flags.get_flag("local-flag"))
+            self.assertIsNone(flags.get_flag("typo-flag"))
+        self.assertEqual(patch_flags.call_count, 2)
+        for call in patch_flags.call_args_list:
+            self.assertEqual(call.kwargs["flag_keys_to_evaluate"], requested_keys)
+
 
 class TestEvaluateFlagsLocalDeviceBucketing(unittest.TestCase):
     def setUp(self):
