@@ -104,6 +104,13 @@ def _wrap_call_tool(
         request = build_tool_call_request(name, arguments)
         extra = {"session_id": mcp_session_id}
 
+        # Resolve the conversation handle before the session: when present it
+        # anchors $session_id for every event of this request (ADR-0004).
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
+        )
+
         session_id = await prepare_request(
             data,
             mcp_session_id=mcp_session_id,
@@ -113,9 +120,9 @@ def _wrap_call_tool(
             request=request,
             extra=extra,
             token=token,
+            conversation_id=conversation_id,
         )
 
-        missing_name = resolve_missing_capability_tool_name(data.options)
         if data.options.report_missing and name == missing_name:
             await record_missing_capability(
                 data,
@@ -138,10 +145,6 @@ def _wrap_call_tool(
                     isError=False,
                 )
             )
-
-        conversation_id, minted = resolve_conversation_id(
-            data.options.enable_conversation_id, arguments, name, missing_name
-        )
 
         # On raw low-level servers `context`/`conversation_id` are injected as
         # *optional* schema properties and left in place (a (name, arguments)
@@ -186,12 +189,14 @@ def _wrap_call_tool(
         call_result = getattr(result, "root", result)
 
         # Inject the prompt-back before capture; only stamp a minted conversation_id
-        # when it was actually delivered (not on isError / non-list results), so we
-        # don't record an orphan id the agent never received.
+        # when it was actually delivered (non-list results can't carry it), so we
+        # don't record an orphan id the agent never received. Errored results carry
+        # it on purpose: a first-call failure is exactly when the agent needs the
+        # handle, or the retry starts a fresh conversation.
         delivered_conversation_id = conversation_id
         if minted and conversation_id:
             content = getattr(call_result, "content", None)
-            if not getattr(call_result, "isError", False) and isinstance(content, list):
+            if isinstance(content, list):
                 content.append(
                     mcp_types.TextContent(
                         type="text", text=build_prompt_back(conversation_id)["text"]

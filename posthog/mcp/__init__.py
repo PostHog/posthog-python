@@ -4,15 +4,23 @@
 
 """PostHog MCP analytics SDK — product analytics for Model Context Protocol servers.
 
-Wrap a Python MCP server (``FastMCP`` or low-level ``mcp.server.Server``) so every
-tool call, agent intent, and failure is captured to PostHog as a ``$mcp_*`` event::
+Wrap a Python MCP server so every tool call, agent intent, and failure is
+captured to PostHog as a ``$mcp_*`` event. Works with the MCP Python SDK 1.x
+*and* 2.x (the 2026-07-28 spec revision) — the high-level server class moved
+between majors, but ``instrument()`` is the same::
 
     from posthog import Posthog
     from posthog.mcp import instrument
-    from mcp.server.fastmcp import FastMCP
+
+    # MCP SDK 2.x (spec 2026-07-28)
+    from mcp.server.mcpserver import MCPServer
+    server = MCPServer("my-server")
+
+    # MCP SDK 1.x
+    # from mcp.server.fastmcp import FastMCP
+    # server = FastMCP("my-server")
 
     posthog = Posthog("phc_...", host="https://us.i.posthog.com")
-    server = FastMCP("my-server")
     analytics = instrument(server, posthog)
 
 Install is just ``pip install posthog``. ``instrument()`` needs the MCP SDK at runtime,
@@ -43,7 +51,11 @@ from ._internal import (
 )
 from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
-from .session import derive_session_id_from_mcp_session, new_session_id
+from .session import (
+    derive_session_id_from_conversation,
+    derive_session_id_from_mcp_session,
+    new_session_id,
+)
 from .session_token import (
     MCP_SESSION_HEADER,
     SessionTokenPayload,
@@ -77,6 +89,10 @@ __all__ = [
     "PreparedToolCall",
     "get_more_tools_result",
     "derive_session_id_from_mcp_session",
+    # Conversation-anchored sessions: the cross-SDK derivation contract with
+    # posthog-js (the 2026-07-28 revision has no protocol sessions, so the
+    # agent-echoed conversation_id is the only cross-pod session carrier).
+    "derive_session_id_from_conversation",
     # Self-encoded session tokens for stateless / multi-pod servers. Minted onto
     # the `Mcp-Session-Id` response header by PostHogMcpStatelessSessionMiddleware
     # and decoded on every request; codec is exported for custom HTTP layers.
@@ -157,10 +173,12 @@ def _resolve_client(posthog_client: Optional[Client]) -> Optional[Client]:
 
 
 def _warn_if_unsupported_mcp_version() -> None:
-    """The adapters hook private MCP SDK seams (``_tool_manager``, ``_mcp_server``,
-    ``request_handlers``) tested against ``mcp>=1.26,<2``. Since ``mcp`` is a peer
-    dependency we don't pin, advise at runtime when the installed version is outside
-    that range rather than failing hard (older/newer may still mostly work)."""
+    """The adapters hook private MCP SDK seams (``_tool_manager``, ``_mcp_server``
+    / ``_lowlevel_server``, the request-handler registries) tested against
+    ``mcp>=1.26,<3`` — both the 1.x line and the 2.x line (spec 2026-07-28).
+    Since ``mcp`` is a peer dependency we don't pin, advise at runtime when the
+    installed version is outside that range rather than failing hard (older/newer
+    may still mostly work)."""
     try:
         from importlib.metadata import version
 
@@ -168,19 +186,22 @@ def _warn_if_unsupported_mcp_version() -> None:
         major, minor = (int(p) for p in installed.split(".")[:2])
     except Exception:  # noqa: BLE001 - never let a version probe break instrument()
         return
-    if (major, minor) < (1, 26) or major >= 2:
+    if (major, minor) < (1, 26) or major >= 3:
         log(
-            f"Warning: PostHog MCP analytics is tested against mcp>=1.26,<2; found {installed}. "
+            f"Warning: PostHog MCP analytics is tested against mcp>=1.26,<3; found {installed}. "
             "Instrumentation hooks private SDK internals and may behave unexpectedly."
         )
 
 
 def _canonical_server(server: Any) -> Any:
-    """The underlying low-level server for high-level wrappers (official FastMCP and
-    jlowin's fastmcp 2.0 both expose ``_mcp_server``), else the server itself. Used as
-    the tracking key so instrumenting a wrapper and its underlying server resolve to
-    one state instead of two divergent ones (matching the TS SDK)."""
-    low_level = getattr(server, "_mcp_server", None)
+    """The underlying low-level server for high-level wrappers (SDK 1.x FastMCP and
+    jlowin's fastmcp expose ``_mcp_server``; SDK 2.x MCPServer renamed it
+    ``_lowlevel_server``), else the server itself. Used as the tracking key so
+    instrumenting a wrapper and its underlying server resolve to one state instead
+    of two divergent ones (matching the TS SDK)."""
+    low_level = getattr(server, "_mcp_server", None) or getattr(
+        server, "_lowlevel_server", None
+    )
     return low_level if low_level is not None else server
 
 
@@ -197,8 +218,9 @@ def instrument(
     state instead of double-wrapping. Degrades to a no-op handle on any failure so
     the host application keeps working.
 
-    :param server: A ``FastMCP`` server (official ``mcp.server.fastmcp`` or jlowin's
-        ``fastmcp`` 2.0) or a low-level ``mcp.server.Server``.
+    :param server: A high-level server — SDK 1.x ``mcp.server.fastmcp.FastMCP``,
+        SDK 2.x ``mcp.server.mcpserver.MCPServer``, or jlowin's ``fastmcp.FastMCP``
+        — or a low-level ``mcp.server.lowlevel.Server`` (either SDK major).
     :param posthog_client: A posthog ``Client`` you construct and own (call
         ``shutdown()`` on exit to flush). Falls back to the global client.
     :param options: Optional :class:`MCPAnalyticsOptions`.
@@ -222,13 +244,20 @@ def instrument(
             "(PostHogMCP for custom dispatchers works without it.)"
         )
     _warn_if_unsupported_mcp_version()
-    from ._compatibility import is_fastmcp, is_fastmcp_v2, is_low_level_server
-    from ._instrument_fastmcp import instrument_fastmcp
-    from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
 
     key = _canonical_server(server)
 
     try:
+        # Imported inside the try: the adapters touch major-specific modules, and
+        # an import error must degrade to the no-op handle, not crash the host.
+        from ._compatibility import (
+            is_fastmcp,
+            is_fastmcp_v2,
+            is_low_level_server,
+            is_mcpserver,
+            uses_v2_handler_registry,
+        )
+
         client = _resolve_client(posthog_client)
         if client is None:
             log("Warning: no PostHog client available; MCP events will not be sent.")
@@ -242,15 +271,31 @@ def instrument(
         set_server_tracking_data(key, data)
 
         if is_fastmcp(server):
+            from ._instrument_fastmcp import instrument_fastmcp
+
             instrument_fastmcp(server, data)
+        elif is_mcpserver(server):
+            from ._instrument_v2 import instrument_mcpserver_v2
+
+            instrument_mcpserver_v2(server, data)
         elif is_fastmcp_v2(server):
+            from ._instrument_lowlevel import instrument_fastmcp_v2
+
             instrument_fastmcp_v2(server, data)
         elif is_low_level_server(server):
-            instrument_low_level(server, data)
+            if uses_v2_handler_registry(server):
+                from ._instrument_v2 import instrument_lowlevel_v2
+
+                instrument_lowlevel_v2(server, data)
+            else:
+                from ._instrument_lowlevel import instrument_low_level
+
+                instrument_low_level(server, data)
         else:
             raise TypeError(
-                f"Unsupported server type: {type(server)!r}. Pass a FastMCP (official or jlowin's "
-                "fastmcp 2.0) or a low-level mcp.server.Server."
+                f"Unsupported server type: {type(server)!r}. Pass a high-level server "
+                "(mcp.server.fastmcp.FastMCP on SDK 1.x, mcp.server.mcpserver.MCPServer "
+                "on SDK 2.x, or jlowin's fastmcp.FastMCP) or a low-level mcp.server.Server."
             )
 
         # Zero-config stateless minting: wrap the server's ASGI-app factories so a

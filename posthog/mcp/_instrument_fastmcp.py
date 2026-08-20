@@ -101,6 +101,15 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         request = build_tool_call_request(name, arguments)
         extra: Dict[str, Any] = {"session_id": mcp_session_id}
 
+        # Resolve the conversation handle before the session: when the agent
+        # carries (or is about to receive) one, it anchors $session_id for every
+        # event of this request (ADR-0004) — the only correlation that survives
+        # the 2026-07-28 revision's per-request server instances.
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
+        )
+
         session_id = await prepare_request(
             data,
             mcp_session_id=mcp_session_id,
@@ -110,9 +119,9 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             request=request,
             extra=extra,
             token=token,
+            conversation_id=conversation_id,
         )
 
-        missing_name = resolve_missing_capability_tool_name(data.options)
         if data.options.report_missing and name == missing_name:
             await record_missing_capability(
                 data,
@@ -128,10 +137,6 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
             ]
-
-        conversation_id, minted = resolve_conversation_id(
-            data.options.enable_conversation_id, arguments, name, missing_name
-        )
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
@@ -328,8 +333,10 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     """Append the conversation_id prompt-back to a tool result so the agent echoes
     it on later calls. Handles every shape ToolManager.call_tool can return:
     a ``(content_list, structured)`` tuple (the convert_result=True production path),
-    a bare content list, or a ``{content: [...]}`` dict. Returns the result unchanged
-    (so the caller can detect non-delivery) for shapes we can't append to."""
+    a bare content list, or a ``{content: [...]}`` dict — errored dicts included on
+    purpose (a first-call failure is exactly when the agent needs the handle).
+    Returns the result unchanged (so the caller can detect non-delivery) for
+    shapes we can't append to."""
     block = mcp_types.TextContent(
         type="text", text=build_prompt_back(conversation_id)["text"]
     )
@@ -337,11 +344,7 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
         return ([*result[0], block], result[1])
     if isinstance(result, list):
         return [*result, block]
-    if (
-        isinstance(result, dict)
-        and isinstance(result.get("content"), list)
-        and not result.get("isError")
-    ):
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
         return {**result, "content": [*result["content"], block]}
     return result
 

@@ -1,0 +1,611 @@
+# Portions of this package are derived from MCPCat/mcpcat-typescript-sdk
+# Copyright (c) 2025 MCPcat
+# Licensed under the MIT License: https://github.com/MCPCat/mcpcat-typescript-sdk/blob/main/LICENSE
+
+"""MCP Python SDK 2.x adapters (spec revision 2026-07-28).
+
+Two entry points, mirroring the 1.x pair:
+
+* :func:`instrument_mcpserver_v2` — the high-level ``mcp.server.mcpserver.MCPServer``
+  (the renamed FastMCP). Tool calls are wrapped at ``ToolManager.call_tool``, the
+  one seam every dispatch routes through (late-registered tools covered for
+  free); tools/list at the underlying low-level registry.
+* :func:`instrument_lowlevel_v2` — the low-level ``mcp.server.lowlevel.Server``.
+  v2 replaced the public ``request_handlers`` dict (keyed by request class) with
+  ``add_request_handler``/``get_request_handler`` keyed by method string, and
+  handlers changed shape to ``(ctx, params)``; both existing registrations and
+  later ``add_request_handler`` calls are wrapped (the posthog-js#4449 lesson:
+  adapters that hand over a bare server register handlers *after* instrument()).
+
+Era note: a single v2 server serves both protocol eras request by request — the
+legacy 2025-11-25 handshake and the stateless 2026-07-28 envelope. Nothing here
+branches on era: ``ctx.protocol_version`` is captured as-is, client identity
+comes from ``ctx.session.client_params`` (synthesized from the per-request
+envelope on the modern era), and on 2026-07-28 — which removed protocol
+sessions — cross-pod correlation comes from ``enable_conversation_id``.
+
+v2 models expose snake_case attributes (``is_error``, ``input_schema``,
+``client_info``); the wire JSON keeps the camelCase aliases.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Dict, Optional, Tuple
+
+import mcp.types as mcp_types
+
+from ._context_parameters import (
+    add_context_parameter_to_schema,
+    get_context_description,
+    is_context_enabled,
+)
+from ._conversation_id import (
+    add_conversation_id_to_schema,
+    build_prompt_back,
+    resolve_conversation_id,
+)
+from ._instrumentation import (
+    _to_jsonable,
+    build_tool_call_request,
+    prepare_request,
+    read_tool_category,
+    record_missing_capability,
+    record_tool_call,
+    record_tools_list,
+    resolve_session_and_client,
+)
+from ._internal import MCPAnalyticsData
+from .logger import log
+from .tools import (
+    GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
+    build_report_missing_descriptor,
+    get_more_tools_result_text,
+    resolve_missing_capability_tool_name,
+)
+
+_WRAPPED_FLAG = "__posthog_mcp_wrapped__"
+
+# The two methods we instrument, and how the tools/list wrapper treats the
+# injected `context` parameter per entry point (see _wrap_v2_list_tools).
+_CALL_METHOD = "tools/call"
+_LIST_METHOD = "tools/list"
+
+
+def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
+    """Instrument a v2 ``MCPServer``. Injected ``context``/``conversation_id``
+    are STRIPPED before dispatch (v2 validates tool arguments against the
+    function signature and rejects unexpected keys), unless the tool's own
+    schema declares the parameter — then it's a real argument the agent's value
+    belongs to."""
+    low_level = getattr(server, "_lowlevel_server", None)
+    if low_level is None:
+        log("Warning: MCPServer has no _lowlevel_server; cannot instrument.")
+        return
+    data.server_name = getattr(server, "name", None) or getattr(low_level, "name", None)
+    data.server_version = getattr(server, "version", None) or getattr(
+        low_level, "version", None
+    )
+    _wrap_tool_manager_call_v2(server, data)
+    _wrap_v2_list_tools(low_level, data, context_required=True, high_level=server)
+    _patch_add_request_handler(low_level, data, wrap_call=False, high_level=server)
+
+
+def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
+    """Instrument a raw v2 low-level ``Server``. ``context`` is injected as an
+    *optional* schema property and NOT stripped — the schema doubles as the
+    call's validation surface, and a typical ``(ctx, params)`` handler ignores
+    extra argument keys."""
+    data.server_name = getattr(server, "name", None)
+    data.server_version = getattr(server, "version", None)
+    _wrap_v2_call_tool(server, data)
+    _wrap_v2_list_tools(server, data, context_required=False)
+    _patch_add_request_handler(server, data, wrap_call=True)
+
+
+# --- registry plumbing ---------------------------------------------------------
+
+
+def _replace_handler(server: Any, method: str, wrapped: Any, params_type: Any) -> None:
+    """Re-register through the public API so the SDK keeps owning validation."""
+    server.add_request_handler(method, params_type, wrapped)
+
+
+def _patch_add_request_handler(
+    server: Any, data: MCPAnalyticsData, *, wrap_call: bool, high_level: Any = None
+) -> None:
+    """Wrap ``add_request_handler`` so handlers registered *after* instrument()
+    for the instrumented methods get wrapped too. Registrations for other
+    methods pass through untouched."""
+    original_add = server.add_request_handler
+    if getattr(original_add, _WRAPPED_FLAG, False):
+        return
+
+    def add_request_handler(method: str, params_type: Any, handler: Any) -> None:
+        original_add(method, params_type, handler)
+        if getattr(handler, _WRAPPED_FLAG, False):
+            return
+        if method == _CALL_METHOD and wrap_call:
+            _wrap_v2_call_tool(server, data)
+        elif method == _LIST_METHOD:
+            _wrap_v2_list_tools(
+                server,
+                data,
+                context_required=high_level is not None,
+                high_level=high_level,
+            )
+
+    setattr(add_request_handler, _WRAPPED_FLAG, True)
+    server.add_request_handler = add_request_handler
+
+
+# --- ctx readers -----------------------------------------------------------------
+
+
+def _ctx_client_info(ctx: Any) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        client_params = ctx.session.client_params
+        info = getattr(client_params, "client_info", None)
+        if info is not None:
+            return getattr(info, "name", None), getattr(info, "version", None)
+    except Exception:  # noqa: BLE001
+        pass
+    return None, None
+
+
+def _ctx_protocol_version(ctx: Any) -> Optional[str]:
+    version = getattr(ctx, "protocol_version", None)
+    if isinstance(version, str) and version:
+        return version
+    try:
+        return ctx.session.client_params.protocol_version
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ctx_mcp_session_id(ctx: Any) -> Optional[str]:
+    """Best-effort transport session id (the ``Mcp-Session-Id`` header on the
+    legacy era — 2026-07-28 removed it). ``ctx.request`` carries the transport's
+    HTTP request when there is one; ``None`` on stdio."""
+    try:
+        headers = getattr(getattr(ctx, "request", None), "headers", None)
+        if headers is not None:
+            return headers.get("mcp-session-id")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _resolve_ctx(
+    ctx: Any,
+) -> Tuple[Optional[Any], Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """(token, client_name, client_version, protocol_version, mcp_session_id)
+    for a request, with token-carried identity backfilled for stateless pods."""
+    client_name, client_version = _ctx_client_info(ctx)
+    protocol_version = _ctx_protocol_version(ctx)
+    mcp_session_id = _ctx_mcp_session_id(ctx)
+    token, client_name, client_version, protocol_version = resolve_session_and_client(
+        mcp_session_id, client_name, client_version, protocol_version
+    )
+    return token, client_name, client_version, protocol_version, mcp_session_id
+
+
+def _params_to_request(method: str, params: Any) -> Dict[str, Any]:
+    params_dict: Any = {}
+    if params is not None and hasattr(params, "model_dump"):
+        try:
+            params_dict = params.model_dump(mode="json", by_alias=True)
+        except Exception:  # noqa: BLE001
+            params_dict = {}
+    return {"method": method, "params": params_dict}
+
+
+# --- tool ownership --------------------------------------------------------------
+
+
+def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
+    """Whether the tool's own JSON schema declares ``param`` — then it's a real
+    tool argument we must neither inject over nor strip. Read from the tool's
+    declared parameters rather than the function signature so a tool taking the
+    SDK's ``Context`` object under a ``context`` name isn't mistaken for owning
+    our string parameter."""
+    try:
+        tool = high_level._tool_manager.get_tool(name)
+        properties = (getattr(tool, "parameters", None) or {}).get("properties", {})
+        return param in properties
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# --- high-level: ToolManager.call_tool seam --------------------------------------
+
+
+def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
+    tool_manager = getattr(server, "_tool_manager", None)
+    if tool_manager is None:
+        log("Warning: MCPServer has no _tool_manager; tool calls will not be captured.")
+        return
+
+    original = tool_manager.call_tool
+    if getattr(original, _WRAPPED_FLAG, False):
+        return
+
+    async def wrapped(
+        name: str,
+        arguments: Dict[str, Any],
+        context: Any = None,
+        convert_result: bool = False,
+    ) -> Any:
+        ctx = getattr(context, "_request_context", None)
+        token, client_name, client_version, protocol_version, mcp_session_id = (
+            _resolve_ctx(ctx)
+        )
+        request = build_tool_call_request(name, arguments)
+        extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
+
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
+        )
+
+        session_id = await prepare_request(
+            data,
+            mcp_session_id=mcp_session_id,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            request=request,
+            extra=extra,
+            token=token,
+            conversation_id=conversation_id,
+        )
+
+        if data.options.report_missing and name == missing_name:
+            await record_missing_capability(
+                data,
+                session_id,
+                tool_name=missing_name,
+                context=(arguments or {}).get("context"),
+                arguments=arguments,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            return mcp_types.CallToolResult(
+                content=[
+                    mcp_types.TextContent(
+                        type="text", text=get_more_tools_result_text()
+                    )
+                ]
+            )
+
+        # v2 validates against the function signature and rejects unexpected
+        # keys, so injected parameters are stripped before dispatch — but never
+        # one the tool's own schema declares (that's a real argument).
+        call_arguments = arguments
+        if isinstance(arguments, dict):
+            strip_keys = set()
+            if not _tool_owns_param_v2(server, name, "context"):
+                strip_keys.add("context")
+            if data.options.enable_conversation_id and not _tool_owns_param_v2(
+                server, name, "conversation_id"
+            ):
+                strip_keys.add("conversation_id")
+            if strip_keys:
+                call_arguments = {
+                    k: v for k, v in arguments.items() if k not in strip_keys
+                }
+
+        start = time.monotonic()
+        try:
+            result = await original(
+                name, call_arguments, context=context, convert_result=convert_result
+            )
+        except Exception as error:
+            # The raise is converted to CallToolResult(is_error=True) one layer
+            # up (MCPServer._handle_call_tool), so the prompt-back never rides
+            # it — a minted (undelivered) conversation_id is not stamped.
+            await record_tool_call(
+                data,
+                session_id,
+                name=name,
+                arguments=arguments,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                conversation_id=None if minted else conversation_id,
+                extra=extra,
+            )
+            raise
+        duration_ms = (time.monotonic() - start) * 1000
+
+        delivered_conversation_id = conversation_id
+        if minted and conversation_id:
+            if not _append_prompt_back(result, conversation_id):
+                delivered_conversation_id = None
+
+        await record_tool_call(
+            data,
+            session_id,
+            name=name,
+            arguments=arguments,
+            result=result,
+            duration_ms=duration_ms,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            conversation_id=delivered_conversation_id,
+            extra=extra,
+        )
+        return result
+
+    setattr(wrapped, _WRAPPED_FLAG, True)
+    tool_manager.call_tool = wrapped
+
+
+def _append_prompt_back(result: Any, conversation_id: str) -> bool:
+    """Append the conversation prompt-back to a result's ``content`` list (model
+    or dict shape). Errored results included on purpose — a first-call failure
+    is exactly when the agent needs the handle. Returns False for shapes with no
+    content list to ride (e.g. MRTR ``input_required`` results)."""
+    block = mcp_types.TextContent(
+        type="text", text=build_prompt_back(conversation_id)["text"]
+    )
+    content = (
+        result.get("content")
+        if isinstance(result, dict)
+        else getattr(result, "content", None)
+    )
+    if isinstance(content, list):
+        content.append(block)
+        return True
+    return False
+
+
+# --- low-level: tools/call ------------------------------------------------------
+
+
+def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
+    entry = server.get_request_handler(_CALL_METHOD)
+    if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
+        return
+    original = entry.handler
+
+    async def handler(ctx: Any, params: Any) -> Any:
+        name = params.name
+        arguments = dict(params.arguments or {})
+        token, client_name, client_version, protocol_version, mcp_session_id = (
+            _resolve_ctx(ctx)
+        )
+        request = build_tool_call_request(name, arguments)
+        extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
+
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
+        )
+
+        session_id = await prepare_request(
+            data,
+            mcp_session_id=mcp_session_id,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            request=request,
+            extra=extra,
+            token=token,
+            conversation_id=conversation_id,
+        )
+
+        if data.options.report_missing and name == missing_name:
+            await record_missing_capability(
+                data,
+                session_id,
+                tool_name=missing_name,
+                context=arguments.get("context"),
+                arguments=arguments,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            return mcp_types.CallToolResult(
+                content=[
+                    mcp_types.TextContent(
+                        type="text", text=get_more_tools_result_text()
+                    )
+                ]
+            )
+
+        start = time.monotonic()
+        try:
+            result = await original(ctx, params)
+        except Exception as error:
+            # v2 low-level handlers raise through to JSON-RPC errors (no
+            # auto-conversion) — capture before re-raising. The prompt-back was
+            # never delivered, so a minted conversation_id is not stamped.
+            await record_tool_call(
+                data,
+                session_id,
+                name=name,
+                arguments=arguments,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                conversation_id=None if minted else conversation_id,
+                extra=extra,
+            )
+            raise
+        duration_ms = (time.monotonic() - start) * 1000
+
+        delivered_conversation_id = conversation_id
+        if minted and conversation_id:
+            if not _append_prompt_back(result, conversation_id):
+                delivered_conversation_id = None
+
+        await record_tool_call(
+            data,
+            session_id,
+            name=name,
+            arguments=arguments,
+            result=result,
+            duration_ms=duration_ms,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            conversation_id=delivered_conversation_id,
+            extra=extra,
+        )
+        return result
+
+    setattr(handler, _WRAPPED_FLAG, True)
+    _replace_handler(server, _CALL_METHOD, handler, entry.params_type)
+
+
+# --- tools/list -------------------------------------------------------------------
+
+
+def _wrap_v2_list_tools(
+    server: Any,
+    data: MCPAnalyticsData,
+    *,
+    context_required: bool,
+    high_level: Any = None,
+) -> None:
+    entry = server.get_request_handler(_LIST_METHOD)
+    if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
+        return
+    original = entry.handler
+
+    async def handler(ctx: Any, params: Any) -> Any:
+        token, client_name, client_version, protocol_version, mcp_session_id = (
+            _resolve_ctx(ctx)
+        )
+        request = _params_to_request(_LIST_METHOD, params)
+        extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
+        # Resolve session, emit $mcp_initialize (once per session) and identify
+        # here too — a client may list tools without ever calling one.
+        session_id = await prepare_request(
+            data,
+            mcp_session_id=mcp_session_id,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            request=request,
+            extra=extra,
+            token=token,
+        )
+
+        start = time.monotonic()
+        try:
+            result = await original(ctx, params)
+        except Exception as error:
+            await record_tools_list(
+                data,
+                session_id,
+                names=[],
+                request=request,
+                duration_ms=(time.monotonic() - start) * 1000,
+                is_error=True,
+                error=error,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            raise
+        duration_ms = (time.monotonic() - start) * 1000
+
+        tools = list(getattr(result, "tools", []) or [])
+        # Zero advertised tools is treated as an errored tools/list (parity with
+        # the TS SDK), checked before we append our own virtual tool.
+        empty = len(tools) == 0
+
+        names = []
+        for tool in tools:
+            names.append(tool.name)
+            if getattr(tool, "description", None):
+                data.tool_descriptions[tool.name] = tool.description
+            category = read_tool_category(tool)
+            if category:
+                data.tool_categories[tool.name] = category
+
+        context_enabled = is_context_enabled(data.options.context)
+        description = get_context_description(data.options.context)
+        for tool in tools:
+            if tool.name == _GET_MORE_TOOLS_NAME:
+                continue
+            schema = getattr(tool, "input_schema", None)
+            owns_context = (
+                _tool_owns_param_v2(high_level, tool.name, "context")
+                if high_level is not None
+                else _schema_has_param(schema, "context")
+            )
+            # required follows the entry point: the raw low-level path validates
+            # the call against this same schema (optional); the high-level path
+            # strips before dispatch (required-advisory).
+            if context_enabled and not owns_context:
+                schema = add_context_parameter_to_schema(
+                    schema, tool.name, description, required=context_required
+                )
+            if data.options.enable_conversation_id and not _schema_has_param(
+                schema, "conversation_id"
+            ):
+                schema = add_conversation_id_to_schema(schema, tool.name)
+            if schema is not getattr(tool, "input_schema", None):
+                try:
+                    tool.input_schema = schema
+                except Exception:  # noqa: BLE001 - some schema attrs may be read-only
+                    log(f"WARN: could not set input_schema on tool {tool.name}")
+
+        if data.options.report_missing:
+            missing_name = resolve_missing_capability_tool_name(data.options)
+            if not any(t.name == missing_name for t in tools):
+                _append_get_more_tools_v2(result, missing_name)
+                names.append(missing_name)
+
+        await record_tools_list(
+            data,
+            session_id,
+            names=names,
+            request=request,
+            response=_to_jsonable(result),
+            duration_ms=duration_ms,
+            is_error=empty,
+            error="tools/list returned no tools" if empty else None,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            extra=extra,
+        )
+
+        return result
+
+    setattr(handler, _WRAPPED_FLAG, True)
+    _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
+
+
+def _append_get_more_tools_v2(result: Any, name: str) -> None:
+    descriptor = build_report_missing_descriptor(name)
+    tool = mcp_types.Tool(
+        name=descriptor["name"],
+        description=descriptor["description"],
+        input_schema=descriptor["inputSchema"],
+        annotations=descriptor["annotations"],
+    )
+    tools_list = getattr(result, "tools", None)
+    if isinstance(tools_list, list):
+        tools_list.append(tool)
+
+
+def _schema_has_param(schema: Any, name: str) -> bool:
+    return (
+        isinstance(schema, dict)
+        and isinstance(schema.get("properties"), dict)
+        and name in schema["properties"]
+    )

@@ -141,10 +141,15 @@ def drain_pending_sync(owner: Any, timeout: Optional[float] = None) -> None:
 
 
 def is_tool_result_error(result: Any) -> bool:
-    """MCP tool results signal errors via ``isError: true`` rather than raising."""
+    """MCP tool results signal errors via ``isError: true`` rather than raising.
+    The attribute is ``isError`` on MCP SDK 1.x models and ``is_error`` on 2.x
+    (wire JSON unchanged); check both shapes."""
     if isinstance(result, dict):
-        return result.get("isError") is True
-    return getattr(result, "isError", None) is True
+        return result.get("isError") is True or result.get("is_error") is True
+    return (
+        getattr(result, "isError", None) is True
+        or getattr(result, "is_error", None) is True
+    )
 
 
 def build_tool_call_request(
@@ -158,8 +163,11 @@ def build_tool_call_request(
 
 def _to_jsonable(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
+        # by_alias so captured payloads keep the camelCase wire shape on both MCP
+        # SDK majors (2.x renamed model attributes to snake_case but kept the
+        # aliases); 1.x field names are already the wire names, so this is a no-op.
         try:
-            return obj.model_dump(mode="json")
+            return obj.model_dump(mode="json", by_alias=True)
         except Exception:  # noqa: BLE001
             return str(obj)
     if isinstance(obj, (list, tuple)):
@@ -250,9 +258,15 @@ async def prepare_request(
     extra: Optional[Dict[str, Any]],
     token: Optional[SessionTokenPayload] = None,
     protocol_version: Optional[str] = None,
+    conversation_id: Optional[str] = None,
 ) -> str:
     """Resolve the session id, run identify, then lazily emit initialize. Returns
     the session id to stamp on the event for this request.
+
+    ``conversation_id`` is the agent's handle for this request (echoed or freshly
+    minted); when present it anchors the session (ADR-0004) so every event of the
+    request — identify, initialize, and the call itself — lands in the
+    conversation's session rather than this instance's.
 
     ``token`` is the decoded self-encoded session token (see ``session_token.py``);
     when present it takes precedence over ``mcp_session_id`` and carries the client
@@ -263,7 +277,9 @@ async def prepare_request(
     ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
     (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
     the Python SDK handles initialize in the session layer, not ``request_handlers``.)"""
-    session_id = await resolve_session_id(data, mcp_session_id, token=token)
+    session_id = await resolve_session_id(
+        data, mcp_session_id, token=token, conversation_id=conversation_id
+    )
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event), data)

@@ -1,0 +1,5 @@
+---
+posthog: minor
+---
+
+feat(mcp): support the MCP Python SDK 2.x and the 2026-07-28 spec revision. `instrument()` now wraps `mcp.server.mcpserver.MCPServer` (the renamed FastMCP) and the v2 low-level `Server` (constructor-injected handlers, string-keyed registry, late `add_request_handler` registrations included), capturing tool calls, tools/list, errors, intent, client identity, and `$mcp_protocol_version` on both protocol eras — SDK 1.x paths are unchanged. Conversation-anchored sessions land as the cross-pod correlation for the stateless era (parity with `@posthog/mcp`): with `enable_conversation_id`, `$session_id` is derived deterministically from the agent-echoed `conversation_id` (new export `derive_session_id_from_conversation`), only handles the SDK could have minted (uuidv7) anchor, and the prompt-back now rides errored results too so a first-call failure keeps the conversation together. `instrument()` also no longer crashes on an unsupported or unrecognized MCP SDK — it degrades to a logged no-op.

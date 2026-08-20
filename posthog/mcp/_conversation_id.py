@@ -10,6 +10,7 @@ captures it as ``$mcp_conversation_id`` — stitching calls across reconnects.""
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from .constants import DEFAULT_CONVERSATION_ID_DESCRIPTION
@@ -17,6 +18,16 @@ from ._ids import _uuid7
 from .logger import log
 
 CONVERSATION_ID_PARAM_NAME = "conversation_id"
+
+# The shape of every id we mint: a uuidv7. Used to tell an echo of our own
+# handle from a value the agent made up. The shape check matters because the
+# handle becomes ``$session_id`` — without it, two unrelated users both sending
+# "conv-1" would share a session (byte-parity with posthog-js's
+# MINTED_CONVERSATION_ID).
+_MINTED_CONVERSATION_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def add_conversation_id_to_schema(
@@ -71,19 +82,27 @@ def resolve_conversation_id(
     missing_capability_tool_name: str,
 ) -> Tuple[Optional[str], bool]:
     """Return ``(conversation_id, minted)``. Disabled or get_more_tools → ``(None, False)``;
-    agent supplied → ``(value, False)``; agent omitted → ``(new uuid, True)``."""
+    agent echoed a handle we could have minted → ``(value, False)``; anything
+    else (omitted, or a value the agent made up) → ``(new uuid, True)``.
+
+    Lowercased on the way in: the shape test is case-insensitive but the hash
+    behind ``$session_id`` is not, so an uppercased echo (some hosts normalise
+    uuids) would land in a different session than the call that minted it."""
     if not enabled or tool_name == missing_capability_tool_name:
         return None, False
     supplied = extract_conversation_id(args)
-    if supplied:
-        return supplied, False
+    if supplied and _MINTED_CONVERSATION_ID.match(supplied):
+        return supplied.lower(), False
     return _uuid7(), True
 
 
 def can_inject_prompt_back(result: Any) -> bool:
+    """Whether the prompt-back can ride this result's ``content`` — the only
+    requirement is a list to append to. Errored results included on purpose: a
+    tool that fails on the first call of a conversation is exactly when the
+    agent needs the handle, or the retry starts a fresh conversation and the
+    failure and its fix land in different sessions."""
     if not isinstance(result, dict):
-        return False
-    if result.get("isError") is True:
         return False
     return isinstance(result.get("content"), list)
 

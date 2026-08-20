@@ -350,6 +350,7 @@ alias posthog.mcp.asgi.log -> posthog.mcp.logger.log
 alias posthog.mcp.asgi.new_session_id -> posthog.mcp.session.new_session_id
 alias posthog.mcp.asgi.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
 alias posthog.mcp.decode_session_id -> posthog.mcp.session_token.decode_session_id
+alias posthog.mcp.derive_session_id_from_conversation -> posthog.mcp.session.derive_session_id_from_conversation
 alias posthog.mcp.derive_session_id_from_mcp_session -> posthog.mcp.session.derive_session_id_from_mcp_session
 alias posthog.mcp.encode_session_id -> posthog.mcp.session_token.encode_session_id
 alias posthog.mcp.get_mcp_session -> posthog.mcp.asgi.get_mcp_session
@@ -1128,6 +1129,7 @@ function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
 function posthog.mcp.asgi.get_mcp_session(request_or_scope: Any) -> Optional[SessionTokenPayload]
 function posthog.mcp.instrument(server: Any, posthog_client: Optional[Client] = None, options: Optional[MCPAnalyticsOptions] = None) -> McpAnalytics
 function posthog.mcp.logger.set_logger(logger: Optional[LoggerFn]) -> None
+function posthog.mcp.session.derive_session_id_from_conversation(conversation_id: str) -> str
 function posthog.mcp.session.derive_session_id_from_mcp_session(mcp_session_id: str) -> str
 function posthog.mcp.session_token.decode_session_id(value: Any) -> Optional[SessionTokenPayload]
 function posthog.mcp.session_token.encode_session_id(payload: SessionTokenPayload) -> str
