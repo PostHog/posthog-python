@@ -84,7 +84,12 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
         low_level, "version", None
     )
     _wrap_call_tool(low_level, data, strip_injected=True, high_level=server)
-    _wrap_list_tools(low_level, data, context_required=True)
+    # `context` is advertised but NOT marked required here. This adapter strips
+    # the injected parameters before the SDK's own input validation runs, so a
+    # schema that requires `context` contradicts the arguments the SDK actually
+    # sees: under `FastMCP(strict_input_validation=True)` every call fails with
+    # "'context' is a required property".
+    _wrap_list_tools(low_level, data, context_required=False)
 
 
 def _wrap_call_tool(
