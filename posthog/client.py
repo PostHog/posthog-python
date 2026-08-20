@@ -2303,7 +2303,7 @@ class Client(object):
                 msg = clean(modified_msg)
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
-                # Continue with the original message if callback fails
+                return None
 
         # Re-normalized after before_send, which may have replaced or removed
         # msg["uuid"], so the returned uuid always matches the wire event.
