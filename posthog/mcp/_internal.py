@@ -66,6 +66,12 @@ class MCPAnalyticsData:
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
+    # Which tools got `_mcp_instructions` declared on their advertised output
+    # schema at tools/list. Only those may be mirrored into on a call — writing
+    # an undeclared key fails the customer's whole result under
+    # `additionalProperties: false`. Absent means "never served a listing for
+    # this tool", which fails closed.
+    tool_output_instructions: Dict[str, bool] = field(default_factory=dict)
     # Bounded FIFO of sessions we've emitted $mcp_initialize for, so a long-lived
     # server can't accumulate one entry per session forever.
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)

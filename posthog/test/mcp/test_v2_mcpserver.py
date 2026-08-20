@@ -6,6 +6,8 @@ Mirrors ``test_fastmcp.py``; drives the wrapped seams directly — the low-level
 ``ServerRequestContext``, exactly as the v2 runner would invoke them.
 """
 
+from typing import Any
+
 import mcp.types as mcp_types
 from mcp.server.mcpserver import MCPServer
 
@@ -237,6 +239,101 @@ async def test_identify_callback_sees_ctx_but_capture_does_not():
     captured_extra = identify_events[0]["properties"]["$mcp_parameters"]["extra"]
     assert "ctx" not in captured_extra
     assert set(captured_extra) <= {"session_id"}
+
+
+async def test_structured_output_tool_gets_the_conversation_handle():
+    """A tool that declares an output schema is served to clients that read
+    ``structuredContent`` and never render ``content`` — so the handle has to
+    ride the structured half too, or the agent can never echo it back."""
+    from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
+
+    server = MCPServer("structured-v2")
+
+    @server.tool()
+    def totals(event: str) -> dict[str, Any]:
+        return {"event": event, "total": 7}
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    listed = await _list_tools(server)
+    tool = next(t for t in listed.tools if t.name == "totals")
+    # 1. declared on the advertised output schema, and never required
+    assert MCP_INSTRUCTIONS_KEY in tool.output_schema["properties"]
+    assert MCP_INSTRUCTIONS_KEY not in tool.output_schema.get("required", [])
+
+    result = await _call_tool(
+        server, "totals", {"event": "pageview", "context": "structured"}
+    )
+    await _flush()
+
+    # 2. mirrored into the result the client actually reads
+    handle = result.structured_content[MCP_INSTRUCTIONS_KEY]["conversation_id"]
+    assert handle
+    # the tool's own payload is intact alongside it
+    assert result.structured_content["total"] == 7
+    # and it matches what analytics recorded
+    assert (
+        _events(client, "$mcp_tool_call")[0]["properties"]["$mcp_conversation_id"]
+        == handle
+    )
+
+
+async def test_mirror_rides_every_response_not_just_the_minting_one():
+    """Unlike the text block, the structured mirror repeats — an agent that
+    dropped the handle can read it back on any later response."""
+    from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
+
+    server = MCPServer("structured-v2-repeat")
+
+    @server.tool()
+    def totals(event: str) -> dict[str, Any]:
+        return {"event": event, "total": 7}
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+    await _list_tools(server)
+
+    first = await _call_tool(server, "totals", {"event": "a", "context": "first"})
+    handle = first.structured_content[MCP_INSTRUCTIONS_KEY]["conversation_id"]
+
+    # the agent echoes it; the mirror must still be present on this response
+    second = await _call_tool(
+        server, "totals", {"event": "b", "context": "second", "conversation_id": handle}
+    )
+    await _flush()
+
+    assert second.structured_content[MCP_INSTRUCTIONS_KEY]["conversation_id"] == handle
+    sessions = {
+        c["properties"]["$session_id"] for c in _events(client, "$mcp_tool_call")
+    }
+    assert len(sessions) == 1
+
+
+async def test_mirror_is_skipped_when_no_listing_declared_the_key():
+    """Fail closed: writing an undeclared key fails the customer's whole result
+    under ``additionalProperties: false``, so an instance that never served a
+    tools/list must not mirror."""
+    from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
+
+    server = MCPServer("structured-v2-nolist")
+
+    @server.tool()
+    def totals(event: str) -> dict[str, Any]:
+        return {"event": event, "total": 7}
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    # no _list_tools() call — ownership is unknown
+    result = await _call_tool(server, "totals", {"event": "a", "context": "no listing"})
+    await _flush()
+
+    assert MCP_INSTRUCTIONS_KEY not in (result.structured_content or {})
+    # the text-block channel still carried it, so the handle is still recorded
+    assert _events(client, "$mcp_tool_call")[0]["properties"].get(
+        "$mcp_conversation_id"
+    )
 
 
 async def test_report_missing_advertises_and_captures():

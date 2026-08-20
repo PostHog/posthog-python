@@ -188,6 +188,48 @@ async def test_v1_minted_then_echoed_reuses_one_session():
 
 
 @pytest.mark.skipif(MCP_MAJOR != 1, reason="v1 FastMCP server")
+async def test_v1_structured_output_tool_gets_the_conversation_handle():
+    """Clients that read ``structuredContent`` never render ``content``, so a
+    tool declaring an output schema must get the handle mirrored into the
+    structured half or the agent can never echo it back (ADR-0004)."""
+    from typing import Any
+
+    import mcp.types as mcp_types
+    from mcp.server.fastmcp import FastMCP
+
+    from posthog.mcp import instrument
+    from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
+
+    server = FastMCP("structured-v1")
+
+    @server.tool()
+    def totals(event: str) -> dict[str, Any]:
+        return {"event": event, "total": 7}
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    listed = await handler(mcp_types.ListToolsRequest(method="tools/list"))
+    tool = next(t for t in listed.root.tools if t.name == "totals")
+    assert MCP_INSTRUCTIONS_KEY in tool.outputSchema["properties"]
+
+    result = await server._tool_manager.call_tool(
+        "totals", {"event": "pageview", "context": "structured"}, convert_result=True
+    )
+    await _flush()
+
+    structured = result[1]
+    handle = structured[MCP_INSTRUCTIONS_KEY]["conversation_id"]
+    assert handle
+    assert structured["total"] == 7
+    assert (
+        _events(client, "$mcp_tool_call")[0]["properties"]["$mcp_conversation_id"]
+        == handle
+    )
+
+
+@pytest.mark.skipif(MCP_MAJOR != 1, reason="v1 FastMCP server")
 async def test_v1_feature_off_keeps_transport_sessions():
     from mcp.server.fastmcp import FastMCP
     from posthog.mcp import instrument

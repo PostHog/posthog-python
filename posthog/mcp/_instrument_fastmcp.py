@@ -50,6 +50,10 @@ from ._instrumentation import (
     resolve_session_and_client,
 )
 from ._internal import MCPAnalyticsData
+from ._output_instructions import (
+    add_instructions_to_output_schema,
+    mirror_instructions_into_structured_content,
+)
 from .logger import log
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
@@ -178,16 +182,26 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             )
             raise
 
-        # Inject the prompt-back first, then capture the delivered result. Only stamp
-        # a minted conversation_id when it was actually appended to what the agent got.
+        # Deliver the handle first, then capture the result the agent actually got.
+        # Two channels: mirrored into structuredContent on every response (for
+        # tools whose output schema we declared the key on — clients that read
+        # structuredContent never see the text block), and the prompt-back text
+        # block on the minting response only.
         delivered_conversation_id = conversation_id
-        if minted and conversation_id:
-            injected = _inject_prompt_back(result, conversation_id)
-            if injected is result:
-                delivered_conversation_id = (
-                    None  # not injectable (e.g. tuple/scalar result)
+        if conversation_id:
+            delivered = False
+            if data.tool_output_instructions.get(name):
+                result, delivered = mirror_instructions_into_structured_content(
+                    result, conversation_id
                 )
-            result = injected
+            if minted:
+                injected = _inject_prompt_back(result, conversation_id)
+                if injected is not result:
+                    delivered = True
+                result = injected
+                # Only a minted handle can be lost — one the agent supplied, it has.
+                if not delivered:
+                    delivered_conversation_id = None
 
         await record_tool_call(
             data,
@@ -298,6 +312,13 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
                     tool.inputSchema = schema
                 except Exception:  # noqa: BLE001 - some schema attrs may be read-only
                     log(f"WARN: could not set inputSchema on tool {tool.name}")
+            # Declare the structuredContent channel and remember the answer:
+            # clients that read structuredContent never see the content text
+            # block, and only a declared key may be written back on a call.
+            if data.options.enable_conversation_id:
+                data.tool_output_instructions[tool.name] = (
+                    add_instructions_to_output_schema(tool)
+                )
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)

@@ -56,6 +56,10 @@ from ._instrumentation import (
     resolve_session_and_client,
 )
 from ._internal import MCPAnalyticsData
+from ._output_instructions import (
+    add_instructions_to_output_schema,
+    mirror_instructions_into_structured_content,
+)
 from .logger import log
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
@@ -323,8 +327,12 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         duration_ms = (time.monotonic() - start) * 1000
 
         delivered_conversation_id = conversation_id
-        if minted and conversation_id:
-            if not _append_prompt_back(result, conversation_id):
+        if conversation_id:
+            result, delivered = _deliver_conversation_id(
+                data, result, name, conversation_id, minted
+            )
+            # Only a minted handle can be lost this way — one the agent supplied, it has.
+            if minted and not delivered:
                 delivered_conversation_id = None
 
         await record_tool_call(
@@ -363,6 +371,24 @@ def _append_prompt_back(result: Any, conversation_id: str) -> bool:
         content.append(block)
         return True
     return False
+
+
+def _deliver_conversation_id(
+    data: MCPAnalyticsData, result: Any, name: str, conversation_id: str, minted: bool
+) -> Tuple[Any, bool]:
+    """Hand the conversation handle back over both channels a result has:
+    mirrored into ``structuredContent`` on every response (for tools whose
+    output schema we declared the key on), and as a ``content`` text block on
+    the minting response only. Returns ``(result, delivered)`` — a minted handle
+    the agent never received must not be stamped on the event."""
+    delivered = False
+    if data.tool_output_instructions.get(name):
+        result, delivered = mirror_instructions_into_structured_content(
+            result, conversation_id
+        )
+    if minted and _append_prompt_back(result, conversation_id):
+        delivered = True
+    return result, delivered
 
 
 # --- low-level: tools/call ------------------------------------------------------
@@ -444,8 +470,12 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         duration_ms = (time.monotonic() - start) * 1000
 
         delivered_conversation_id = conversation_id
-        if minted and conversation_id:
-            if not _append_prompt_back(result, conversation_id):
+        if conversation_id:
+            result, delivered = _deliver_conversation_id(
+                data, result, name, conversation_id, minted
+            )
+            # Only a minted handle can be lost this way — one the agent supplied, it has.
+            if minted and not delivered:
                 delivered_conversation_id = None
 
         await record_tool_call(
@@ -562,6 +592,13 @@ def _wrap_v2_list_tools(
                     tool.input_schema = schema
                 except Exception:  # noqa: BLE001 - some schema attrs may be read-only
                     log(f"WARN: could not set input_schema on tool {tool.name}")
+            # Declare the structuredContent channel and remember the answer:
+            # clients that read structuredContent never see the content text
+            # block, and only a declared key may be written back on a call.
+            if data.options.enable_conversation_id:
+                data.tool_output_instructions[tool.name] = (
+                    add_instructions_to_output_schema(tool)
+                )
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)

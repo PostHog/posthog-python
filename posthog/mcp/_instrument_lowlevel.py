@@ -44,6 +44,10 @@ from ._instrumentation import (
     resolve_session_and_client,
 )
 from ._internal import MCPAnalyticsData
+from ._output_instructions import (
+    add_instructions_to_output_schema,
+    mirror_instructions_into_structured_content,
+)
 from .logger import log
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
@@ -188,22 +192,33 @@ def _wrap_call_tool(
         # CallToolResult(isError=True); record_tool_call detects that from the result.
         call_result = getattr(result, "root", result)
 
-        # Inject the prompt-back before capture; only stamp a minted conversation_id
-        # when it was actually delivered (non-list results can't carry it), so we
-        # don't record an orphan id the agent never received. Errored results carry
-        # it on purpose: a first-call failure is exactly when the agent needs the
-        # handle, or the retry starts a fresh conversation.
+        # Deliver the handle before capture, over both channels a result has:
+        # mirrored into structuredContent on every response (for tools whose
+        # output schema we declared the key on — clients that read
+        # structuredContent never see the text block), and the prompt-back text
+        # block on the minting response only. Only stamp a minted conversation_id
+        # when it actually reached the agent, so we don't record an orphan id.
+        # Errored results carry it on purpose: a first-call failure is exactly
+        # when the agent needs the handle, or the retry starts a fresh conversation.
         delivered_conversation_id = conversation_id
-        if minted and conversation_id:
-            content = getattr(call_result, "content", None)
-            if isinstance(content, list):
-                content.append(
-                    mcp_types.TextContent(
-                        type="text", text=build_prompt_back(conversation_id)["text"]
-                    )
+        if conversation_id:
+            delivered = False
+            if data.tool_output_instructions.get(name):
+                _, delivered = mirror_instructions_into_structured_content(
+                    call_result, conversation_id
                 )
-            else:
-                delivered_conversation_id = None
+            if minted:
+                content = getattr(call_result, "content", None)
+                if isinstance(content, list):
+                    content.append(
+                        mcp_types.TextContent(
+                            type="text", text=build_prompt_back(conversation_id)["text"]
+                        )
+                    )
+                    delivered = True
+                # Only a minted handle can be lost — one the agent supplied, it has.
+                if not delivered:
+                    delivered_conversation_id = None
 
         await record_tool_call(
             data,
@@ -316,6 +331,13 @@ def _wrap_list_tools(
                     tool.inputSchema = schema
                 except Exception:  # noqa: BLE001
                     log(f"WARN: could not set inputSchema on tool {tool.name}")
+            # Declare the structuredContent channel and remember the answer:
+            # clients that read structuredContent never see the content text
+            # block, and only a declared key may be written back on a call.
+            if data.options.enable_conversation_id:
+                data.tool_output_instructions[tool.name] = (
+                    add_instructions_to_output_schema(tool)
+                )
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
