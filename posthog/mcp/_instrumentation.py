@@ -382,10 +382,21 @@ def request_to_dict(req: Any) -> Dict[str, Any]:
     """Shape a request object into the JSON-RPC-ish dict the sanitizer expects."""
     method = getattr(req, "method", None) or "tools/list"
     params = getattr(req, "params", None)
+    return params_to_request_dict(method, params)
+
+
+def params_to_request_dict(
+    method: str, params: Any, *, by_alias: bool = False
+) -> Dict[str, Any]:
+    """Shape a bare ``(method, params)`` pair into the same JSON-RPC-ish dict
+    ``request_to_dict`` builds from a request object. v2's request handlers
+    receive ``params`` directly rather than a ``req`` wrapper, so there's no
+    object to hand ``request_to_dict``; ``by_alias`` lets v2 keep the wire's
+    camelCase aliases (its models expose snake_case attributes)."""
     params_dict: Any = {}
     if params is not None and hasattr(params, "model_dump"):
         try:
-            params_dict = params.model_dump(mode="json")
+            params_dict = params.model_dump(mode="json", by_alias=by_alias)
         except Exception:  # noqa: BLE001
             params_dict = {}
     return {"method": method, "params": params_dict}

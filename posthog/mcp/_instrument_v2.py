@@ -39,6 +39,7 @@ from ._context_parameters import (
     add_context_parameter_to_schema,
     get_context_description,
     is_context_enabled,
+    schema_has_param,
 )
 from ._conversation_id import (
     add_conversation_id_to_schema,
@@ -48,6 +49,7 @@ from ._conversation_id import (
 from ._instrumentation import (
     _to_jsonable,
     build_tool_call_request,
+    params_to_request_dict,
     prepare_request,
     read_tool_category,
     record_missing_capability,
@@ -61,6 +63,8 @@ from ._output_instructions import (
     mirror_instructions_into_structured_content,
 )
 from .logger import log
+from .request_headers import get_request_headers
+from .session_token import read_mcp_session_header
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
     build_report_missing_descriptor,
@@ -170,14 +174,12 @@ def _ctx_protocol_version(ctx: Any) -> Optional[str]:
 def _ctx_mcp_session_id(ctx: Any) -> Optional[str]:
     """Best-effort transport session id (the ``Mcp-Session-Id`` header on the
     legacy era — 2026-07-28 removed it). ``ctx.request`` carries the transport's
-    HTTP request when there is one; ``None`` on stdio."""
-    try:
-        headers = getattr(getattr(ctx, "request", None), "headers", None)
-        if headers is not None:
-            return headers.get("mcp-session-id")
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+    HTTP request when there is one; ``None`` on stdio.
+
+    Reuses the same header-bag normalisation and case-insensitive lookup the
+    public ``get_request_headers``/``read_mcp_session_header`` helpers already
+    provide, instead of a second hand-rolled ``ctx.request.headers`` read."""
+    return read_mcp_session_header(get_request_headers(ctx))
 
 
 def _resolve_ctx(
@@ -194,17 +196,18 @@ def _resolve_ctx(
     return token, client_name, client_version, protocol_version, mcp_session_id
 
 
-def _params_to_request(method: str, params: Any) -> Dict[str, Any]:
-    params_dict: Any = {}
-    if params is not None and hasattr(params, "model_dump"):
-        try:
-            params_dict = params.model_dump(mode="json", by_alias=True)
-        except Exception:  # noqa: BLE001
-            params_dict = {}
-    return {"method": method, "params": params_dict}
-
-
 # --- tool ownership --------------------------------------------------------------
+
+
+def _tool_own_properties_v2(high_level: Any, name: str) -> Dict[str, Any]:
+    """The tool's own declared JSON Schema ``properties``, read once per call
+    site so checking ownership of both ``context`` and ``conversation_id``
+    doesn't look the tool up from the manager twice."""
+    try:
+        tool = high_level._tool_manager.get_tool(name)
+        return (getattr(tool, "parameters", None) or {}).get("properties", {})
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
@@ -213,12 +216,7 @@ def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
     declared parameters rather than the function signature so a tool taking the
     SDK's ``Context`` object under a ``context`` name isn't mistaken for owning
     our string parameter."""
-    try:
-        tool = high_level._tool_manager.get_tool(name)
-        properties = (getattr(tool, "parameters", None) or {}).get("properties", {})
-        return param in properties
-    except Exception:  # noqa: BLE001
-        return False
+    return param in _tool_own_properties_v2(high_level, name)
 
 
 # --- high-level: ToolManager.call_tool seam --------------------------------------
@@ -289,11 +287,13 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         # one the tool's own schema declares (that's a real argument).
         call_arguments = arguments
         if isinstance(arguments, dict):
+            own_properties = _tool_own_properties_v2(server, name)
             strip_keys = set()
-            if not _tool_owns_param_v2(server, name, "context"):
+            if "context" not in own_properties:
                 strip_keys.add("context")
-            if data.options.enable_conversation_id and not _tool_owns_param_v2(
-                server, name, "conversation_id"
+            if (
+                data.options.enable_conversation_id
+                and "conversation_id" not in own_properties
             ):
                 strip_keys.add("conversation_id")
             if strip_keys:
@@ -528,7 +528,7 @@ def _wrap_v2_list_tools(
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
-        request = _params_to_request(_LIST_METHOD, params)
+        request = params_to_request_dict(_LIST_METHOD, params, by_alias=True)
         extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
         # Resolve session, emit $mcp_initialize (once per session) and identify
         # here too — a client may list tools without ever calling one.
@@ -586,7 +586,7 @@ def _wrap_v2_list_tools(
             owns_context = (
                 _tool_owns_param_v2(high_level, tool.name, "context")
                 if high_level is not None
-                else _schema_has_param(schema, "context")
+                else schema_has_param(schema, "context")
             )
             # required follows the entry point: the raw low-level path validates
             # the call against this same schema (optional); the high-level path
@@ -595,7 +595,7 @@ def _wrap_v2_list_tools(
                 schema = add_context_parameter_to_schema(
                     schema, tool.name, description, required=context_required
                 )
-            if data.options.enable_conversation_id and not _schema_has_param(
+            if data.options.enable_conversation_id and not schema_has_param(
                 schema, "conversation_id"
             ):
                 schema = add_conversation_id_to_schema(schema, tool.name)
@@ -650,11 +650,3 @@ def _append_get_more_tools_v2(result: Any, name: str) -> None:
     tools_list = getattr(result, "tools", None)
     if isinstance(tools_list, list):
         tools_list.append(tool)
-
-
-def _schema_has_param(schema: Any, name: str) -> bool:
-    return (
-        isinstance(schema, dict)
-        and isinstance(schema.get("properties"), dict)
-        and name in schema["properties"]
-    )
