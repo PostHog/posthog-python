@@ -421,6 +421,7 @@ def test_middleware_end_to_end_with_stateless_fastmcp():
     on a fresh stateless transport that replays the token is accepted (not
     rejected) -- i.e. the same session survives across pods."""
     pytest.importorskip("starlette.testclient")
+    pytest.importorskip("mcp.server.fastmcp")  # v1-only server; skipped under mcp>=2
     from mcp.server.fastmcp import FastMCP
     from mcp.server.transport_security import TransportSecuritySettings
     from starlette.testclient import TestClient
@@ -488,6 +489,7 @@ def test_instrument_autowires_stateless_mint_no_manual_middleware():
     app mint the session token -- the zero-config path. mcp.run() uses the same
     factory internally, so it's covered too."""
     pytest.importorskip("starlette.testclient")
+    pytest.importorskip("mcp.server.fastmcp")  # v1-only server; skipped under mcp>=2
     from mcp.server.fastmcp import FastMCP
     from mcp.server.transport_security import TransportSecuritySettings
     from starlette.testclient import TestClient

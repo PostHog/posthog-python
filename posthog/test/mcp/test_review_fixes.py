@@ -77,9 +77,12 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
 
+    # A handle we could have minted (lowercase uuidv7) — an invented value would
+    # be replaced with a fresh mint, matching posthog-js.
+    handle = "0198d3a7-1111-7222-8333-444455556666"
     result = await server._tool_manager.call_tool(
         "summarize",
-        {"text": "hi", "context": "my own context", "conversation_id": "conv-xyz"},
+        {"text": "hi", "context": "my own context", "conversation_id": handle},
         convert_result=True,
     )
     await _flush()
@@ -90,7 +93,7 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
     assert any("ctx=my own context" in t for t in text_blocks)
 
     calls = _events(client, "$mcp_tool_call")
-    assert calls and calls[0]["properties"]["$mcp_conversation_id"] == "conv-xyz"
+    assert calls and calls[0]["properties"]["$mcp_conversation_id"] == handle
 
 
 # --- E: tools/list response + duration, and failure capture -------------------
