@@ -1,5 +1,11 @@
 # posthog
 
+## 7.39.2 — 2026-08-20
+
+### Patch changes
+
+- [1adf542](https://github.com/posthog/posthog-python/commit/1adf542b84000fd296c2da05fe43e548bd146d1b) Drop events when before_send callbacks raise exceptions — Thanks @marandaneto!
+
 ## 7.39.1 — 2026-08-14
 
 ### Patch changes
