@@ -406,3 +406,46 @@ async def test_strict_output_schema_survives_a_tool_cache_rebuild():
     )
     assert after.root.isError is False, after.root.content[0].text
     assert after.root.structuredContent[MCP_INSTRUCTIONS_KEY]["conversation_id"]
+
+
+async def test_lowlevel_strict_input_schema_survives_a_tool_cache_rebuild():
+    """Same cache-rebuild trap as the FastMCP case, on the *input* side. The raw
+    lowlevel adapter advertises `context`/`conversation_id` without stripping
+    them, relying on the advertised schema doubling as the validation schema —
+    so if the SDK's cache is rebuilt from an un-injected listing, it rejects the
+    very arguments we told the agent to send."""
+    server = Server("strict-input")
+
+    @server.list_tools()
+    async def _lt():
+        return [
+            mcp_types.Tool(
+                name="echo",
+                description="Echo",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"msg": {"type": "string"}},
+                    "required": ["msg"],
+                    "additionalProperties": False,
+                },
+            )
+        ]
+
+    @server.call_tool()
+    async def _ct(name, arguments):
+        return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    call = server.request_handlers[mcp_types.CallToolRequest]
+    await server.request_handlers[mcp_types.ListToolsRequest](_list_request())
+
+    first = await call(_call_request("echo", {"msg": "a", "context": "first"}))
+    assert first.root.isError is False
+
+    # Force a cache rebuild the way a real client does: an unknown tool name.
+    await call(_call_request("not-a-real-tool", {"context": "typo"}))
+
+    after = await call(_call_request("echo", {"msg": "b", "context": "second"}))
+    assert after.root.isError is False, after.root.content[0].text

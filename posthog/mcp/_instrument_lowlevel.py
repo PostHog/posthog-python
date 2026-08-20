@@ -24,6 +24,7 @@ from ._context_parameters import (
     add_context_parameter_to_schema,
     get_context_description,
     is_context_enabled,
+    schema_has_param,
 )
 from ._conversation_id import (
     add_conversation_id_to_schema,
@@ -256,6 +257,45 @@ def _wrap_call_tool(
     handlers[mcp_types.CallToolRequest] = handler
 
 
+def _inject_tool_schemas(
+    data: MCPAnalyticsData, tools: list, *, context_required: bool
+) -> None:
+    """Advertise the analytics parameters on a listing's tools, in place.
+
+    Runs on both the client-facing listing and the SDK's internal cache-
+    population pass, so the schema the SDK validates against always matches the
+    one we advertised — see the note in ``handler``.
+    """
+    context_enabled = is_context_enabled(data.options.context)
+    description = get_context_description(data.options.context)
+    for tool in tools:
+        if tool.name == _GET_MORE_TOOLS_NAME:
+            continue
+        schema = getattr(tool, "inputSchema", None)
+        # required follows the path: raw low-level validates the call against
+        # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
+        if context_enabled and not schema_has_param(schema, "context"):
+            schema = add_context_parameter_to_schema(
+                schema, tool.name, description, required=context_required
+            )
+        if data.options.enable_conversation_id and not schema_has_param(
+            schema, "conversation_id"
+        ):
+            schema = add_conversation_id_to_schema(schema, tool.name)
+        if schema is not getattr(tool, "inputSchema", None):
+            try:
+                tool.inputSchema = schema
+            except Exception:  # noqa: BLE001
+                log(f"WARN: could not set inputSchema on tool {tool.name}")
+        # Declare the structuredContent channel and remember the answer:
+        # clients that read structuredContent never see the content text
+        # block, and only a declared key may be written back on a call.
+        if data.options.enable_conversation_id:
+            data.tool_output_instructions[tool.name] = (
+                add_instructions_to_output_schema(tool)
+            )
+
+
 def _wrap_list_tools(
     server: Any, data: MCPAnalyticsData, *, context_required: bool
 ) -> None:
@@ -265,10 +305,19 @@ def _wrap_list_tools(
         return
 
     async def handler(req: Any) -> Any:
-        # The server calls the handler with None to populate its tool cache;
-        # don't capture or inject on that internal pass.
+        # The server calls the handler with None to populate its tool cache.
+        # Skip analytics there — but still inject, because that cache is the
+        # schema the SDK validates calls against. This adapter advertises
+        # `context`/`conversation_id` without stripping them, so a cache built
+        # from un-injected schemas rejects the very arguments we told the agent
+        # to send ("Additional properties are not allowed") on any tool with
+        # `additionalProperties: false`.
         if req is None:
-            return await original(req)
+            result = await original(req)
+            _inject_tool_schemas(
+                data, extract_tools(result), context_required=context_required
+            )
+            return result
 
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
@@ -331,34 +380,7 @@ def _wrap_list_tools(
         # TS SDK) — captured before we append our own get_more_tools virtual tool.
         empty = len(tools) == 0
 
-        context_enabled = is_context_enabled(data.options.context)
-        description = get_context_description(data.options.context)
-        for tool in tools:
-            if tool.name == _GET_MORE_TOOLS_NAME:
-                continue
-            schema = getattr(tool, "inputSchema", None)
-            # required follows the path: raw low-level validates the call against
-            # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
-            if context_enabled and not _schema_has_param(schema, "context"):
-                schema = add_context_parameter_to_schema(
-                    schema, tool.name, description, required=context_required
-                )
-            if data.options.enable_conversation_id and not _schema_has_param(
-                schema, "conversation_id"
-            ):
-                schema = add_conversation_id_to_schema(schema, tool.name)
-            if schema is not getattr(tool, "inputSchema", None):
-                try:
-                    tool.inputSchema = schema
-                except Exception:  # noqa: BLE001
-                    log(f"WARN: could not set inputSchema on tool {tool.name}")
-            # Declare the structuredContent channel and remember the answer:
-            # clients that read structuredContent never see the content text
-            # block, and only a declared key may be written back on a call.
-            if data.options.enable_conversation_id:
-                data.tool_output_instructions[tool.name] = (
-                    add_instructions_to_output_schema(tool)
-                )
+        _inject_tool_schemas(data, tools, context_required=context_required)
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
@@ -385,14 +407,6 @@ def _wrap_list_tools(
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.ListToolsRequest] = handler
-
-
-def _schema_has_param(schema: Any, name: str) -> bool:
-    return (
-        isinstance(schema, dict)
-        and isinstance(schema.get("properties"), dict)
-        and name in schema["properties"]
-    )
 
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:

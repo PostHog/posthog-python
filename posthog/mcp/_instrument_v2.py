@@ -205,9 +205,13 @@ def _tool_own_properties_v2(high_level: Any, name: str) -> Dict[str, Any]:
     doesn't look the tool up from the manager twice."""
     try:
         tool = high_level._tool_manager.get_tool(name)
-        return (getattr(tool, "parameters", None) or {}).get("properties", {})
+        properties = (getattr(tool, "parameters", None) or {}).get("properties")
     except Exception:  # noqa: BLE001
         return {}
+    # Fail closed on a malformed schema: the caller does `param in <this>` in the
+    # tool-call hot path, where a None or a string would raise or answer by
+    # substring.
+    return properties if isinstance(properties, dict) else {}
 
 
 def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
