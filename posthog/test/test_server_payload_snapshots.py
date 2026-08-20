@@ -1,16 +1,18 @@
 import json
+import re
 from pathlib import Path
 from unittest import mock
 
+import pytest
 import requests
 from freezegun import freeze_time
 
 from posthog.client import Client
 
-
 _SNAPSHOT_DIRECTORY = Path(__file__).with_name("snapshots")
 _TEST_FILE_SUFFIX = "posthog/test/test_server_payload_snapshots.py"
 _FIXED_TIME = "2026-01-02T03:04:05+00:00"
+_USER_AGENT_PATTERN = re.compile(r"posthog-python/[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 _RUNTIME_CONTEXT = {
     "$os": "<OS>",
     "$os_distro": "<OS_DISTRO>",
@@ -41,7 +43,11 @@ def _normalize_snapshot_value(value):
     for key, item in value.items():
         if key == "$lib_version":
             normalized[key] = "<SDK_VERSION>"
-        elif key == "User-Agent" and isinstance(item, str):
+        elif (
+            key == "User-Agent"
+            and isinstance(item, str)
+            and _USER_AGENT_PATTERN.fullmatch(item)
+        ):
             normalized[key] = "posthog-python/<SDK_VERSION>"
         elif (
             key == "abs_path" and isinstance(item, str) and _has_test_file_suffix(item)
@@ -226,6 +232,29 @@ def _flags_request():
 
     session.post.assert_called_once()
     return _transport_request(session.post.call_args)
+
+
+def test_normalizes_release_user_agent_version():
+    assert _normalize_snapshot_value({"User-Agent": "posthog-python/7.39.1"}) == {
+        "User-Agent": "posthog-python/<SDK_VERSION>"
+    }
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "posthog-pythons/7.39.1",
+        "posthog_python/7.39.1",
+        "posthog-python/",
+        "posthog-python/7.39.1;",
+        "posthog-python/(7.39.1)",
+        "Mozilla/5.0",
+    ],
+)
+def test_does_not_normalize_unexpected_user_agent(user_agent):
+    assert _normalize_snapshot_value({"User-Agent": user_agent}) == {
+        "User-Agent": user_agent
+    }
 
 
 def test_legacy_capture_identify_alias_and_group_identify_request_snapshot():
