@@ -79,10 +79,16 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("user_intent") is not None:
         result["user_intent"] = sanitize_captured_value(result["user_intent"])
 
-    # An exception message is free text a server wrote, so it can carry the
-    # credential that caused the failure ("invalid token sk-..."). It reaches
-    # PostHog on the $exception sibling and, since it is also surfaced as
-    # $mcp_error_message, on the primary event too.
+    # An exception message is free text a server wrote, and it reaches PostHog
+    # on the $exception sibling and — since it is also surfaced as
+    # $mcp_error_message — on the primary event, so run it through the same
+    # sanitizer as every other captured value.
+    #
+    # That sanitizer redacts PostHog tokens and sensitive-looking keys; it is
+    # deliberately not a general credential scrubber, because enumerating every
+    # vendor's key format is an arms race that fails quietly in both directions.
+    # A host with strict requirements should gate free text in `before_send`.
+    # Same scope as @posthog/mcp's sanitizeCapturedValue.
     if result.get("error") is not None:
         result["error"] = _sanitize_exception_values(result["error"])
 
