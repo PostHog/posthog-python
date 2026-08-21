@@ -41,6 +41,7 @@ _METADATA_FIELDS = (
     ("server_version", _MAX_METADATA_LENGTH),
     ("client_name", _MAX_METADATA_LENGTH),
     ("client_version", _MAX_METADATA_LENGTH),
+    ("error_type", _MAX_METADATA_LENGTH),
 )
 
 _NORMALIZED_FIELDS = ("parameters", "response", "identify_actor_data", "error")

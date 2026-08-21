@@ -60,6 +60,8 @@ class PostHogMCPAnalyticsProperty:
     PROTOCOL_VERSION = "$mcp_protocol_version"
     CONVERSATION_ID = "$mcp_conversation_id"
     DURATION_MS = "$mcp_duration_ms"
+    ERROR_MESSAGE = "$mcp_error_message"
+    ERROR_TYPE = "$mcp_error_type"
     IS_ERROR = "$mcp_is_error"
     INTENT = "$mcp_intent"
     INTENT_SOURCE = "$mcp_intent_source"

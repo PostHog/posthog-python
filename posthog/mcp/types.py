@@ -40,7 +40,7 @@ MCPAnalyticsIntentSource = str  # "context_parameter" | "inferred"
 # plain dict (constructed and read with ``.get()`` throughout) to mirror the TS
 # plain-object pipeline. Snake_case keys map to the ``$mcp_*`` wire keys in
 # ``posthog_events``. Known keys: client_name, client_version, conversation_id,
-# duration, error, event_name, event_type, groups, id, identify_actor_data,
+# duration, error, error_type, event_name, event_type, groups, id, identify_actor_data,
 # identify_actor_given_id, is_error, listed_tool_names, parameters, properties,
 # resource_name, response, server_name, server_version, session_id, timestamp,
 # tool_category, tool_description, user_intent, user_intent_source.
