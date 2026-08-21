@@ -24,6 +24,7 @@ from ._context_parameters import (
     add_context_parameter_to_schema,
     get_context_description,
     is_context_enabled,
+    schema_has_param,
 )
 from ._conversation_id import (
     add_conversation_id_to_schema,
@@ -36,6 +37,7 @@ from ._instrumentation import (
     build_tool_call_request,
     extract_tools,
     prepare_request,
+    prime_session,
     read_tool_category,
     record_missing_capability,
     record_tool_call,
@@ -44,6 +46,10 @@ from ._instrumentation import (
     resolve_session_and_client,
 )
 from ._internal import MCPAnalyticsData
+from ._output_instructions import (
+    add_instructions_to_output_schema,
+    mirror_instructions_into_structured_content,
+)
 from .logger import log
 from .tools import (
     GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
@@ -79,7 +85,12 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
         low_level, "version", None
     )
     _wrap_call_tool(low_level, data, strip_injected=True, high_level=server)
-    _wrap_list_tools(low_level, data, context_required=True)
+    # `context` is advertised but NOT marked required here. This adapter strips
+    # the injected parameters before the SDK's own input validation runs, so a
+    # schema that requires `context` contradicts the arguments the SDK actually
+    # sees: under `FastMCP(strict_input_validation=True)` every call fails with
+    # "'context' is a required property".
+    _wrap_list_tools(low_level, data, context_required=False)
 
 
 def _wrap_call_tool(
@@ -102,21 +113,37 @@ def _wrap_call_tool(
             )
         )
         request = build_tool_call_request(name, arguments)
-        extra = {"session_id": mcp_session_id}
+        # `ctx` is the SDK's own per-request context, handed to host callbacks
+        # unchanged and identically on both SDK majors (read headers off it with
+        # the exported `get_request_headers`). Never captured — the event
+        # pipeline keeps only a scalar projection of `extra`.
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
 
-        session_id = await prepare_request(
-            data,
-            mcp_session_id=mcp_session_id,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
+        # Resolve the conversation handle before the session: when present it
+        # anchors $session_id for every event of this request (ADR-0004).
+        missing_name = resolve_missing_capability_tool_name(data.options)
+        conversation_id, minted = resolve_conversation_id(
+            data.options.enable_conversation_id, arguments, name, missing_name
         )
 
-        missing_name = resolve_missing_capability_tool_name(data.options)
+        # Resolved once the handle's fate is known — a minted handle only
+        # anchors the session after we have confirmed the agent received it,
+        # so the call that mints it still joins its own conversation.
+        async def _session(anchor: Optional[str]) -> str:
+            return await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+                conversation_id=anchor,
+            )
+
         if data.options.report_missing and name == missing_name:
+            session_id = await _session(None)
             await record_missing_capability(
                 data,
                 session_id,
@@ -139,10 +166,6 @@ def _wrap_call_tool(
                 )
             )
 
-        conversation_id, minted = resolve_conversation_id(
-            data.options.enable_conversation_id, arguments, name, missing_name
-        )
-
         # On raw low-level servers `context`/`conversation_id` are injected as
         # *optional* schema properties and left in place (a (name, arguments)
         # handler ignores extra keys). FastMCP 2.0 validates against the function
@@ -156,6 +179,10 @@ def _wrap_call_tool(
                 if key not in owned:
                     req.params.arguments.pop(key, None)
 
+        # Settle the shared session before the tool body runs, so an in-tool
+        # `analytics.capture()` is attributed to this caller and not the last one.
+        await prime_session(data, mcp_session_id=mcp_session_id, token=token)
+
         start = time.monotonic()
         try:
             result = await original(req)
@@ -165,6 +192,7 @@ def _wrap_call_tool(
             # request_handlers can raise — capture before re-raising so the failed
             # call isn't silently dropped. A minted (undelivered) conversation_id is
             # not stamped, matching the FastMCP path.
+            session_id = await _session(None if minted else conversation_id)
             await record_tool_call(
                 data,
                 session_id,
@@ -185,21 +213,48 @@ def _wrap_call_tool(
         # CallToolResult(isError=True); record_tool_call detects that from the result.
         call_result = getattr(result, "root", result)
 
-        # Inject the prompt-back before capture; only stamp a minted conversation_id
-        # when it was actually delivered (not on isError / non-list results), so we
-        # don't record an orphan id the agent never received.
+        # Deliver the handle before capture, over both channels a result has:
+        # mirrored into structuredContent on every response (for tools whose
+        # output schema we declared the key on — clients that read
+        # structuredContent never see the text block), and the prompt-back text
+        # block on the minting response only. Only stamp a minted conversation_id
+        # when it actually reached the agent, so we don't record an orphan id.
+        # Errored results carry it on purpose: a first-call failure is exactly
+        # when the agent needs the handle, or the retry starts a fresh conversation.
         delivered_conversation_id = conversation_id
-        if minted and conversation_id:
-            content = getattr(call_result, "content", None)
-            if not getattr(call_result, "isError", False) and isinstance(content, list):
-                content.append(
-                    mcp_types.TextContent(
+        if conversation_id:
+            delivered = False
+            if data.tool_output_instructions.get(name):
+                call_result, delivered = mirror_instructions_into_structured_content(
+                    call_result, conversation_id
+                )
+            if minted:
+                content = getattr(call_result, "content", None)
+                if isinstance(content, list):
+                    block = mcp_types.TextContent(
                         type="text", text=build_prompt_back(conversation_id)["text"]
                     )
+                    # Copy rather than append in place — a shared or cached result
+                    # object would accumulate a block per conversation and leak
+                    # earlier callers' handles to later ones.
+                    copy_model = getattr(call_result, "model_copy", None)
+                    if callable(copy_model):
+                        call_result = copy_model(update={"content": [*content, block]})
+                    else:
+                        content.append(block)
+                    delivered = True
+                # Only a minted handle can be lost — one the agent supplied, it has.
+                if not delivered:
+                    delivered_conversation_id = None
+            # Hand back whatever copy we made, rewrapped as the SDK expects.
+            if call_result is not getattr(result, "root", result):
+                result = (
+                    mcp_types.ServerResult(call_result)
+                    if hasattr(result, "root")
+                    else call_result
                 )
-            else:
-                delivered_conversation_id = None
 
+        session_id = await _session(delivered_conversation_id)
         await record_tool_call(
             data,
             session_id,
@@ -219,6 +274,45 @@ def _wrap_call_tool(
     handlers[mcp_types.CallToolRequest] = handler
 
 
+def _inject_tool_schemas(
+    data: MCPAnalyticsData, tools: list, *, context_required: bool
+) -> None:
+    """Advertise the analytics parameters on a listing's tools, in place.
+
+    Runs on both the client-facing listing and the SDK's internal cache-
+    population pass, so the schema the SDK validates against always matches the
+    one we advertised — see the note in ``handler``.
+    """
+    context_enabled = is_context_enabled(data.options.context)
+    description = get_context_description(data.options.context)
+    for tool in tools:
+        if tool.name == _GET_MORE_TOOLS_NAME:
+            continue
+        schema = getattr(tool, "inputSchema", None)
+        # required follows the path: raw low-level validates the call against
+        # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
+        if context_enabled and not schema_has_param(schema, "context"):
+            schema = add_context_parameter_to_schema(
+                schema, tool.name, description, required=context_required
+            )
+        if data.options.enable_conversation_id and not schema_has_param(
+            schema, "conversation_id"
+        ):
+            schema = add_conversation_id_to_schema(schema, tool.name)
+        if schema is not getattr(tool, "inputSchema", None):
+            try:
+                tool.inputSchema = schema
+            except Exception:  # noqa: BLE001
+                log(f"WARN: could not set inputSchema on tool {tool.name}")
+        # Declare the structuredContent channel and remember the answer:
+        # clients that read structuredContent never see the content text
+        # block, and only a declared key may be written back on a call.
+        if data.options.enable_conversation_id:
+            data.tool_output_instructions[tool.name] = (
+                add_instructions_to_output_schema(tool)
+            )
+
+
 def _wrap_list_tools(
     server: Any, data: MCPAnalyticsData, *, context_required: bool
 ) -> None:
@@ -228,10 +322,19 @@ def _wrap_list_tools(
         return
 
     async def handler(req: Any) -> Any:
-        # The server calls the handler with None to populate its tool cache;
-        # don't capture or inject on that internal pass.
+        # The server calls the handler with None to populate its tool cache.
+        # Skip analytics there — but still inject, because that cache is the
+        # schema the SDK validates calls against. This adapter advertises
+        # `context`/`conversation_id` without stripping them, so a cache built
+        # from un-injected schemas rejects the very arguments we told the agent
+        # to send ("Additional properties are not allowed") on any tool with
+        # `additionalProperties: false`.
         if req is None:
-            return await original(req)
+            result = await original(req)
+            _inject_tool_schemas(
+                data, extract_tools(result), context_required=context_required
+            )
+            return result
 
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
@@ -242,7 +345,11 @@ def _wrap_list_tools(
             )
         )
         request = request_to_dict(req)
-        extra = {"session_id": mcp_session_id}
+        # `ctx` is the SDK's own per-request context, handed to host callbacks
+        # unchanged and identically on both SDK majors (read headers off it with
+        # the exported `get_request_headers`). Never captured — the event
+        # pipeline keeps only a scalar projection of `extra`.
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
         # Resolve session, emit $mcp_initialize (once per session) and identify here
         # too — a client may list tools without ever calling one.
         session_id = await prepare_request(
@@ -290,27 +397,7 @@ def _wrap_list_tools(
         # TS SDK) — captured before we append our own get_more_tools virtual tool.
         empty = len(tools) == 0
 
-        context_enabled = is_context_enabled(data.options.context)
-        description = get_context_description(data.options.context)
-        for tool in tools:
-            if tool.name == _GET_MORE_TOOLS_NAME:
-                continue
-            schema = getattr(tool, "inputSchema", None)
-            # required follows the path: raw low-level validates the call against
-            # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
-            if context_enabled and not _schema_has_param(schema, "context"):
-                schema = add_context_parameter_to_schema(
-                    schema, tool.name, description, required=context_required
-                )
-            if data.options.enable_conversation_id and not _schema_has_param(
-                schema, "conversation_id"
-            ):
-                schema = add_conversation_id_to_schema(schema, tool.name)
-            if schema is not getattr(tool, "inputSchema", None):
-                try:
-                    tool.inputSchema = schema
-                except Exception:  # noqa: BLE001
-                    log(f"WARN: could not set inputSchema on tool {tool.name}")
+        _inject_tool_schemas(data, tools, context_required=context_required)
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
@@ -337,14 +424,6 @@ def _wrap_list_tools(
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.ListToolsRequest] = handler
-
-
-def _schema_has_param(schema: Any, name: str) -> bool:
-    return (
-        isinstance(schema, dict)
-        and isinstance(schema.get("properties"), dict)
-        and name in schema["properties"]
-    )
 
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:

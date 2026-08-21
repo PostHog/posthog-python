@@ -19,6 +19,9 @@ import asyncio
 import os
 
 import mcp.types as mcp_types
+
+# MCP SDK 1.x. On mcp>=2 the class moved: `from mcp.server.mcpserver import
+# MCPServer` — instrument() works the same on both.
 from mcp.server.fastmcp import FastMCP
 
 from posthog import Posthog

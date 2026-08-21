@@ -136,10 +136,21 @@ def test_resolve_conversation_id_skips_missing_capability_tool():
     )
 
 
-def test_resolve_conversation_id_uses_supplied():
+def test_resolve_conversation_id_uses_supplied_when_mintable_shape():
+    # Only an echo of a handle we could have minted (a uuidv7) is accepted —
+    # the handle becomes $session_id, so an invented value ("conv-1") must not
+    # anchor two unrelated callers to one session (parity with posthog-js).
+    handle = "0198d3a7-1111-7222-8333-444455556666"
     assert resolve_conversation_id(
+        True, {"conversation_id": handle}, "t", "get_more_tools"
+    ) == (handle, False)
+
+
+def test_resolve_conversation_id_replaces_invented_values():
+    cid, minted = resolve_conversation_id(
         True, {"conversation_id": "conv-1"}, "t", "get_more_tools"
-    ) == ("conv-1", False)
+    )
+    assert minted is True and cid != "conv-1"
 
 
 def test_resolve_conversation_id_mints_when_absent():
@@ -149,7 +160,9 @@ def test_resolve_conversation_id_mints_when_absent():
 
 def test_can_inject_prompt_back():
     assert can_inject_prompt_back({"content": []}) is True
-    assert can_inject_prompt_back({"content": [], "isError": True}) is False
+    # Errored results carry the prompt-back on purpose: a first-call failure is
+    # exactly when the agent needs the handle (parity with posthog-js).
+    assert can_inject_prompt_back({"content": [], "isError": True}) is True
     assert can_inject_prompt_back({"content": "not a list"}) is False
     assert can_inject_prompt_back("not a dict") is False
 
@@ -160,7 +173,7 @@ def test_inject_prompt_back_appends_block():
 
 
 def test_inject_prompt_back_noop_when_not_injectable():
-    result = {"isError": True, "content": []}
+    result = {"content": "not a list"}
     assert inject_prompt_back(result, "conv-9") is result
 
 

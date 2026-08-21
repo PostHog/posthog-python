@@ -6,6 +6,11 @@ flush logic can't drift between the FastMCP, low-level, PostHogMCP, and M4 tests
 
 import asyncio
 import concurrent.futures
+import importlib.metadata
+
+MCP_MAJOR = int(importlib.metadata.version("mcp").split(".")[0])
+"""Installed MCP SDK major. The suite runs under both 1.x and 2.x in CI; use
+this (and ``conftest.collect_ignore``) to scope tests coupled to one major."""
 
 
 class FakeClient:

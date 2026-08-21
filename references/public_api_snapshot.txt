@@ -350,10 +350,12 @@ alias posthog.mcp.asgi.log -> posthog.mcp.logger.log
 alias posthog.mcp.asgi.new_session_id -> posthog.mcp.session.new_session_id
 alias posthog.mcp.asgi.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
 alias posthog.mcp.decode_session_id -> posthog.mcp.session_token.decode_session_id
+alias posthog.mcp.derive_session_id_from_conversation -> posthog.mcp.session.derive_session_id_from_conversation
 alias posthog.mcp.derive_session_id_from_mcp_session -> posthog.mcp.session.derive_session_id_from_mcp_session
 alias posthog.mcp.encode_session_id -> posthog.mcp.session_token.encode_session_id
 alias posthog.mcp.get_mcp_session -> posthog.mcp.asgi.get_mcp_session
 alias posthog.mcp.get_more_tools_result -> posthog.mcp.tools.get_more_tools_result
+alias posthog.mcp.get_request_headers -> posthog.mcp.request_headers.get_request_headers
 alias posthog.mcp.set_logger -> posthog.mcp.logger.set_logger
 alias posthog.metrics_capture.VERSION -> posthog.version.VERSION
 alias posthog.metrics_capture.remove_trailing_slash -> posthog.utils.remove_trailing_slash
@@ -752,7 +754,7 @@ attribute posthog.mcp.types.PreparedToolCall.is_missing_capability: bool = False
 attribute posthog.mcp.types.UserIdentity.distinct_id: str
 attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
 attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
-attribute posthog.mcp.version.__version__ = '0.2.0'
+attribute posthog.mcp.version.__version__ = '0.3.0'
 attribute posthog.metrics = None
 attribute posthog.metrics_capture.DEFAULT_HISTOGRAM_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
 attribute posthog.metrics_capture.MetricAttributeValue = Union[str, int, float, bool]
@@ -1128,6 +1130,8 @@ function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
 function posthog.mcp.asgi.get_mcp_session(request_or_scope: Any) -> Optional[SessionTokenPayload]
 function posthog.mcp.instrument(server: Any, posthog_client: Optional[Client] = None, options: Optional[MCPAnalyticsOptions] = None) -> McpAnalytics
 function posthog.mcp.logger.set_logger(logger: Optional[LoggerFn]) -> None
+function posthog.mcp.request_headers.get_request_headers(extra: Any) -> Optional[RequestHeaderBag]
+function posthog.mcp.session.derive_session_id_from_conversation(conversation_id: str) -> str
 function posthog.mcp.session.derive_session_id_from_mcp_session(mcp_session_id: str) -> str
 function posthog.mcp.session_token.decode_session_id(value: Any) -> Optional[SessionTokenPayload]
 function posthog.mcp.session_token.encode_session_id(payload: SessionTokenPayload) -> str
@@ -1421,6 +1425,7 @@ module posthog.mcp.asgi
 module posthog.mcp.constants
 module posthog.mcp.logger
 module posthog.mcp.posthog_mcp
+module posthog.mcp.request_headers
 module posthog.mcp.session
 module posthog.mcp.session_token
 module posthog.mcp.tools

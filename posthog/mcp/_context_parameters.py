@@ -20,6 +20,17 @@ def is_context_enabled(context: Union[bool, MCPAnalyticsContextOptions, None]) -
     return context is not False
 
 
+def schema_has_param(schema: Any, name: str) -> bool:
+    """Whether a (already-serialized) JSON Schema dict declares a top-level
+    property named ``name``. Shared by the lowlevel and v2 adapters, which both
+    need to tell an injected parameter apart from one the tool already owns."""
+    return (
+        isinstance(schema, dict)
+        and isinstance(schema.get("properties"), dict)
+        and name in schema["properties"]
+    )
+
+
 def get_context_description(
     context: Union[bool, MCPAnalyticsContextOptions, None],
 ) -> Optional[str]:

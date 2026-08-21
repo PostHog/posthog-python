@@ -77,9 +77,12 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
 
+    # A handle we could have minted (lowercase uuidv7) — an invented value would
+    # be replaced with a fresh mint, matching posthog-js.
+    handle = "0198d3a7-1111-7222-8333-444455556666"
     result = await server._tool_manager.call_tool(
         "summarize",
-        {"text": "hi", "context": "my own context", "conversation_id": "conv-xyz"},
+        {"text": "hi", "context": "my own context", "conversation_id": handle},
         convert_result=True,
     )
     await _flush()
@@ -90,7 +93,7 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
     assert any("ctx=my own context" in t for t in text_blocks)
 
     calls = _events(client, "$mcp_tool_call")
-    assert calls and calls[0]["properties"]["$mcp_conversation_id"] == "conv-xyz"
+    assert calls and calls[0]["properties"]["$mcp_conversation_id"] == handle
 
 
 # --- E: tools/list response + duration, and failure capture -------------------
@@ -335,3 +338,114 @@ def test_version_warning_uses_supplied_logger(monkeypatch):
     )
 
     assert any("tested against mcp>=1.26" in m for m in logs)
+
+
+# --- F: the SDK's tool cache must carry the keys we advertise -----------------
+
+
+async def test_strict_output_schema_survives_a_tool_cache_rebuild():
+    """mcp 1.x validates a call's structuredContent against its *cached* tool
+    definition. That cache is rebuilt from the internal `req=None` listing pass
+    whenever an unlisted tool name is called — including our own advertised
+    `get_more_tools`. If the rebuild dropped our `_mcp_instructions`
+    declaration while the mirror kept writing the key, the SDK would reject the
+    customer's own successful result under `additionalProperties: false`."""
+    from typing import Any
+
+    from pydantic import BaseModel, ConfigDict
+
+    from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
+
+    class Totals(BaseModel):
+        model_config = ConfigDict(extra="forbid")  # -> additionalProperties: false
+        total: int
+
+    server = FastMCP("strict-output")
+
+    @server.tool()
+    def totals(event: str) -> Totals:
+        return Totals(total=7)
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    # FastMCP's lowlevel call path reads the request contextvar; set one so the
+    # handler can run outside a live session.
+    from types import SimpleNamespace
+
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+
+    request_ctx.set(
+        RequestContext(
+            request_id=1,
+            meta=None,
+            session=SimpleNamespace(client_params=None),
+            lifespan_context=None,
+            request=None,
+        )
+    )
+
+    call = server._mcp_server.request_handlers[mcp_types.CallToolRequest]
+    listed = await server._mcp_server.request_handlers[mcp_types.ListToolsRequest](
+        mcp_types.ListToolsRequest(method="tools/list")
+    )
+    tool = next(t for t in listed.root.tools if t.name == "totals")
+    assert MCP_INSTRUCTIONS_KEY in tool.outputSchema["properties"]
+
+    first = await call(_call_request("totals", {"event": "a", "context": "first"}))
+    assert first.root.isError is False
+
+    # Force a cache rebuild the way a real client does: call a name the cache
+    # doesn't know yet.
+    await call(_call_request("not-a-real-tool", {"context": "typo"}))
+
+    # The customer's tool must still work — analytics never breaks the result.
+    after: Any = await call(
+        _call_request("totals", {"event": "b", "context": "second"})
+    )
+    assert after.root.isError is False, after.root.content[0].text
+    assert after.root.structuredContent[MCP_INSTRUCTIONS_KEY]["conversation_id"]
+
+
+async def test_lowlevel_strict_input_schema_survives_a_tool_cache_rebuild():
+    """Same cache-rebuild trap as the FastMCP case, on the *input* side. The raw
+    lowlevel adapter advertises `context`/`conversation_id` without stripping
+    them, relying on the advertised schema doubling as the validation schema —
+    so if the SDK's cache is rebuilt from an un-injected listing, it rejects the
+    very arguments we told the agent to send."""
+    server = Server("strict-input")
+
+    @server.list_tools()
+    async def _lt():
+        return [
+            mcp_types.Tool(
+                name="echo",
+                description="Echo",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"msg": {"type": "string"}},
+                    "required": ["msg"],
+                    "additionalProperties": False,
+                },
+            )
+        ]
+
+    @server.call_tool()
+    async def _ct(name, arguments):
+        return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    call = server.request_handlers[mcp_types.CallToolRequest]
+    await server.request_handlers[mcp_types.ListToolsRequest](_list_request())
+
+    first = await call(_call_request("echo", {"msg": "a", "context": "first"}))
+    assert first.root.isError is False
+
+    # Force a cache rebuild the way a real client does: an unknown tool name.
+    await call(_call_request("not-a-real-tool", {"context": "typo"}))
+
+    after = await call(_call_request("echo", {"msg": "b", "context": "second"}))
+    assert after.root.isError is False, after.root.content[0].text

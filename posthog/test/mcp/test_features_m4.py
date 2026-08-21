@@ -1,5 +1,7 @@
 """Tests for M4 parity features: get_more_tools (missing capability) + conversation_id."""
 
+import json
+
 import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
@@ -136,7 +138,13 @@ async def test_lowlevel_conversation_id_captured_and_prompt_back():
     assert conv_id
     # prompt-back appended to the result so the agent echoes the id
     texts = [c.text for c in out.root.content if getattr(c, "type", None) == "text"]
-    assert any(f"conversation_id={conv_id}" in t for t in texts)
+    # Plain data, not an instruction — a server sentence in a tool result is
+    # prompt-injection-shaped and clients may strip it (parity with @posthog/mcp).
+    assert any(
+        json.loads(t) == {"conversation_id": conv_id}
+        for t in texts
+        if t.startswith("{")
+    )
 
 
 async def test_conversation_id_reused_when_supplied():
@@ -144,24 +152,27 @@ async def test_conversation_id_reused_when_supplied():
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
 
+    # A handle we could have minted (lowercase uuidv7) — an invented value would
+    # be replaced with a fresh mint, matching posthog-js.
+    handle = "0198d3a7-1111-7222-8333-444455556666"
     call_handler = server.request_handlers[mcp_types.CallToolRequest]
     await call_handler(
-        _call_request(
-            "echo", {"msg": "hi", "conversation_id": "conv-123", "context": "x"}
-        )
+        _call_request("echo", {"msg": "hi", "conversation_id": handle, "context": "x"})
     )
     await _flush()
 
     calls = _events(client, "$mcp_tool_call")
-    assert calls[0]["properties"]["$mcp_conversation_id"] == "conv-123"
+    assert calls[0]["properties"]["$mcp_conversation_id"] == handle
     # the injected conversation_id is stripped from captured params (surfaces only as $mcp_conversation_id)
     args = calls[0]["properties"]["$mcp_parameters"]["request"]["params"]["arguments"]
     assert "conversation_id" not in args
 
 
-async def test_conversation_id_not_stamped_when_prompt_back_undeliverable():
-    # A tool that errors -> the minted prompt-back can't be delivered, so we must NOT
-    # record an orphan $mcp_conversation_id the agent never received.
+async def test_minted_conversation_id_rides_errored_results():
+    # A tool that errors on the FIRST call of a conversation is exactly when the
+    # agent needs the handle — the low-level decorator converts the raise into an
+    # isError result whose content still carries the prompt-back, so the minted
+    # id IS stamped (parity with posthog-js: errored results included on purpose).
     server = Server("conv-err")
 
     @server.list_tools()
@@ -189,7 +200,16 @@ async def test_conversation_id_not_stamped_when_prompt_back_undeliverable():
     assert out.root.isError is True
     calls = _events(client, "$mcp_tool_call")
     assert calls and calls[0]["properties"]["$mcp_is_error"] is True
-    assert "$mcp_conversation_id" not in calls[0]["properties"]
+    conv_id = calls[0]["properties"].get("$mcp_conversation_id")
+    assert conv_id
+    texts = [c.text for c in out.root.content if getattr(c, "type", None) == "text"]
+    # Plain data, not an instruction — a server sentence in a tool result is
+    # prompt-injection-shaped and clients may strip it (parity with @posthog/mcp).
+    assert any(
+        json.loads(t) == {"conversation_id": conv_id}
+        for t in texts
+        if t.startswith("{")
+    )
 
 
 async def test_event_properties_applied_to_all_event_types():
