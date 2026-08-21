@@ -4,8 +4,9 @@
 
 """Read HTTP request headers inside a host callback, on either MCP SDK major.
 
-``identify``, ``intent_fallback``, ``event_properties`` and ``before_send``
-receive the SDK's own per-request context under ``extra["ctx"]``, unchanged. We
+``identify``, ``intent_fallback`` and ``event_properties`` receive the SDK's
+own per-request context under ``extra["ctx"]``, unchanged. (``before_send``
+does not: it is handed the finished capture payload, not the request.) We
 deliberately do not synthesise a uniform shape for it: the two majors expose
 different objects, and a fabricated one is a convincing partial lie about a
 shape the SDK actually changed. Headers are the one thing nearly every callback

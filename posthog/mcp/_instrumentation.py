@@ -263,10 +263,19 @@ async def prepare_request(
     """Resolve the session id, run identify, then lazily emit initialize. Returns
     the session id to stamp on the event for this request.
 
-    ``conversation_id`` is the agent's handle for this request (echoed or freshly
-    minted); when present it anchors the session (ADR-0004) so every event of the
-    request — identify, initialize, and the call itself — lands in the
-    conversation's session rather than this instance's.
+    ``conversation_id`` is the agent's handle for this request, and when present
+    it anchors the session (ADR-0004) so every event of the request — identify,
+    initialize, and the call itself — lands in the conversation's session rather
+    than this instance's.
+
+    Callers pass it only for a handle the agent **echoed**. A freshly minted one
+    is unproven: this runs before the call, so delivery cannot be known yet, and
+    if the prompt-back turns out to be undeliverable (an exception converted
+    outside our seam, a result with nothing to carry it) the events would strand
+    in a session nobody holds while the next call mints another — one orphan
+    session per call, worse than not anchoring at all. An echo is the only proof
+    of delivery, so the minting call stays in the transport/memory session and
+    everything after it anchors.
 
     ``token`` is the decoded self-encoded session token (see ``session_token.py``);
     when present it takes precedence over ``mcp_session_id`` and carries the client

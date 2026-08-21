@@ -193,8 +193,13 @@ async def test_modern_conversation_anchors_session_across_instances():
     calls = _events(client, "$mcp_tool_call")
     assert len(calls) == 2
     expected = derive_session_id_from_conversation(minted)
-    assert [c["properties"]["$session_id"] for c in calls] == [expected, expected]
-    assert [c["properties"]["$mcp_conversation_id"] for c in calls] == [minted, minted]
+    # Pod A minted the handle but does not anchor on it — it is unproven until
+    # the agent echoes it back. Pod B receives the echo and anchors, deriving
+    # the same session any pod would *without ever having met pod A*: that
+    # agreement is the cross-pod contract.
+    assert calls[0]["properties"]["$session_id"] != expected
+    assert calls[1]["properties"]["$session_id"] == expected
+    assert calls[1]["properties"]["$mcp_conversation_id"] == minted
 
 
 async def test_modern_result_shape_survives_instrumentation():
