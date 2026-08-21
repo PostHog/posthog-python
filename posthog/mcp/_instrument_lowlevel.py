@@ -37,6 +37,7 @@ from ._instrumentation import (
     build_tool_call_request,
     extract_tools,
     prepare_request,
+    prime_session,
     read_tool_category,
     record_missing_capability,
     record_tool_call,
@@ -177,6 +178,10 @@ def _wrap_call_tool(
             for key in ("context", "conversation_id"):
                 if key not in owned:
                     req.params.arguments.pop(key, None)
+
+        # Settle the shared session before the tool body runs, so an in-tool
+        # `analytics.capture()` is attributed to this caller and not the last one.
+        await prime_session(data, mcp_session_id=mcp_session_id, token=token)
 
         start = time.monotonic()
         try:

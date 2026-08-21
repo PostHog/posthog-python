@@ -248,6 +248,24 @@ def resolve_session_and_client(
     return token, client_name, client_version, protocol_version
 
 
+async def prime_session(
+    data: MCPAnalyticsData,
+    *,
+    mcp_session_id: Optional[str],
+    token: Optional[SessionTokenPayload] = None,
+) -> None:
+    """Point the shared per-server session at *this* request before the tool body runs.
+
+    ``McpAnalytics.capture()`` reads ``data.session_id`` for custom in-tool
+    events. The conversation anchor can only be resolved after the call (we
+    don't know until then whether the agent received the handle), so without
+    this the tool body would read whatever the *previous* request left behind
+    and attribute a custom event to the wrong caller. Emits nothing — it only
+    settles the transport/memory session an in-tool event should belong to.
+    """
+    await resolve_session_id(data, mcp_session_id, token=token)
+
+
 async def prepare_request(
     data: MCPAnalyticsData,
     *,
