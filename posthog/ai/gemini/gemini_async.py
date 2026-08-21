@@ -1,36 +1,16 @@
-import os
 import time
-import uuid
 from typing import Any, Dict, Optional
 
-from posthog.ai.stream import AsyncStreamWrapper
-from posthog.ai.types import TokenUsage, StreamingEventData
-from posthog.ai.utils import merge_system_prompt
-
-try:
-    from google import genai
-except ImportError:
-    raise ModuleNotFoundError(
-        "Please install the Google Gemini SDK to use this feature: 'pip install google-genai'"
-    )
-
-from posthog import setup
-from posthog.ai.utils import (
-    call_llm_and_track_usage_async,
-    _capture_ai_event,
-    capture_streaming_event,
-    finalize_ai_content,
-    merge_usage_stats,
-)
-from posthog.ai.gemini.gemini_converter import (
-    extract_gemini_embedding_token_count,
-    extract_gemini_usage_from_chunk,
+from ...client import Client as PostHogClient
+from ..stream import AsyncStreamWrapper
+from ..types import TokenUsage
+from ..utils import call_llm_and_track_usage_async, merge_usage_stats
+from ._shared import _GeminiModelsPolicy, _resolve_posthog_client
+from .gemini_converter import (
     extract_gemini_content_from_chunk,
     extract_gemini_stop_reason_from_chunk,
-    format_gemini_streaming_output,
+    extract_gemini_usage_from_chunk,
 )
-from posthog.ai.utils import with_privacy_mode
-from posthog.client import Client as PostHogClient
 
 
 class AsyncClient:
@@ -86,10 +66,7 @@ class AsyncClient:
             **kwargs: Additional arguments (for future compatibility)
         """
 
-        self._ph_client = posthog_client or setup()
-
-        if self._ph_client is None:
-            raise ValueError("posthog_client is required for PostHog tracking")
+        self._ph_client = _resolve_posthog_client(posthog_client)
 
         self.models = AsyncModels(
             api_key=api_key,
@@ -108,7 +85,7 @@ class AsyncClient:
         )
 
 
-class AsyncModels:
+class AsyncModels(_GeminiModelsPolicy):
     """
     Async Models interface that mimics genai.Client().aio.models with PostHog tracking.
     """
@@ -148,92 +125,20 @@ class AsyncModels:
             **kwargs: Additional arguments (for future compatibility)
         """
 
-        self._ph_client = posthog_client or setup()
-
-        if self._ph_client is None:
-            raise ValueError("posthog_client is required for PostHog tracking")
-
-        # Store default PostHog settings
-        self._default_distinct_id = posthog_distinct_id
-        self._default_properties = posthog_properties or {}
-        self._default_privacy_mode = posthog_privacy_mode
-        self._default_groups = posthog_groups
-
-        # Build genai.Client arguments
-        client_args: Dict[str, Any] = {}
-
-        # Add Vertex AI parameters if provided
-        if vertexai is not None:
-            client_args["vertexai"] = vertexai
-
-        if credentials is not None:
-            client_args["credentials"] = credentials
-
-        if project is not None:
-            client_args["project"] = project
-
-        if location is not None:
-            client_args["location"] = location
-
-        if debug_config is not None:
-            client_args["debug_config"] = debug_config
-
-        if http_options is not None:
-            client_args["http_options"] = http_options
-
-        # Handle API key authentication
-        if vertexai:
-            # For Vertex AI, api_key is optional
-            if api_key is not None:
-                client_args["api_key"] = api_key
-        else:
-            # For non-Vertex AI mode, api_key is required (backwards compatibility)
-            if api_key is None:
-                api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
-
-            if api_key is None:
-                raise ValueError(
-                    "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
-                )
-
-            client_args["api_key"] = api_key
-
-        self._client = genai.Client(**client_args)
-        self._base_url = "https://generativelanguage.googleapis.com"
-
-    def _merge_posthog_params(
-        self,
-        call_distinct_id: Optional[str],
-        call_trace_id: Optional[str],
-        call_properties: Optional[Dict[str, Any]],
-        call_privacy_mode: Optional[bool],
-        call_groups: Optional[Dict[str, Any]],
-    ):
-        """Merge call-level PostHog parameters with client defaults."""
-
-        # Use call-level values if provided, otherwise fall back to defaults
-        distinct_id = (
-            call_distinct_id
-            if call_distinct_id is not None
-            else self._default_distinct_id
+        self._initialize_policy(
+            api_key=api_key,
+            vertexai=vertexai,
+            credentials=credentials,
+            project=project,
+            location=location,
+            debug_config=debug_config,
+            http_options=http_options,
+            posthog_client=posthog_client,
+            posthog_distinct_id=posthog_distinct_id,
+            posthog_properties=posthog_properties,
+            posthog_privacy_mode=posthog_privacy_mode,
+            posthog_groups=posthog_groups,
         )
-        privacy_mode = (
-            call_privacy_mode
-            if call_privacy_mode is not None
-            else self._default_privacy_mode
-        )
-        groups = call_groups if call_groups is not None else self._default_groups
-
-        # Merge properties: default properties + call properties (call properties override)
-        properties = dict(self._default_properties)
-
-        if call_properties:
-            properties.update(call_properties)
-
-        if call_trace_id is None:
-            call_trace_id = str(uuid.uuid4())
-
-        return distinct_id, call_trace_id, properties, privacy_mode, groups
 
     async def generate_content(
         self,
@@ -358,50 +263,6 @@ class AsyncModels:
 
         return AsyncStreamWrapper(async_generator(), stream=response)
 
-    def _capture_streaming_event(
-        self,
-        model: str,
-        contents,
-        distinct_id: Optional[str],
-        trace_id: Optional[str],
-        properties: Optional[Dict[str, Any]],
-        privacy_mode: bool,
-        groups: Optional[Dict[str, Any]],
-        kwargs: Dict[str, Any],
-        usage_stats: TokenUsage,
-        latency: float,
-        output: Any,
-        stop_reason: Optional[str] = None,
-    ):
-        formatted_input = self._format_input(contents, **kwargs)
-
-        event_data = StreamingEventData(
-            provider="gemini",
-            model=model,
-            base_url=self._base_url,
-            kwargs=kwargs,
-            formatted_input=formatted_input,
-            formatted_output=format_gemini_streaming_output(output),
-            usage_stats=usage_stats,
-            latency=latency,
-            distinct_id=distinct_id,
-            trace_id=trace_id,
-            properties=properties,
-            privacy_mode=privacy_mode,
-            groups=groups,
-            stop_reason=stop_reason,
-        )
-
-        # Use the common capture function
-        capture_streaming_event(self._ph_client, event_data)
-
-    def _format_input(self, contents, **kwargs):
-        """Format input contents for PostHog tracking"""
-
-        # Create kwargs dict with contents for merge_system_prompt
-        input_kwargs = {"contents": contents, **kwargs}
-        return merge_system_prompt(input_kwargs, "gemini")
-
     async def generate_content_stream(
         self,
         model: str,
@@ -489,7 +350,6 @@ class AsyncModels:
         start_time = time.time()
         response = None
         error = None
-        http_status = 200
 
         try:
             response = await self._client.aio.models.embed_content(
@@ -497,44 +357,18 @@ class AsyncModels:
             )
         except Exception as exc:
             error = exc
-            http_status = getattr(exc, "status_code", 0)
         finally:
-            end_time = time.time()
-            latency = end_time - start_time
-
-            input_tokens = (
-                extract_gemini_embedding_token_count(response) if response else 0
-            )
-
-            event_properties = {
-                "$ai_provider": "gemini",
-                "$ai_model": model,
-                "$ai_input": with_privacy_mode(
-                    self._ph_client,
-                    privacy_mode,
-                    finalize_ai_content(contents, self._ph_client),
-                ),
-                "$ai_http_status": http_status,
-                "$ai_input_tokens": input_tokens,
-                "$ai_latency": latency,
-                "$ai_trace_id": trace_id,
-                "$ai_base_url": self._base_url,
-                **(properties or {}),
-            }
-
-            if error:
-                event_properties["$ai_is_error"] = True
-                event_properties["$ai_error"] = str(error)
-
-            if distinct_id is None:
-                event_properties["$process_person_profile"] = False
-
-            _capture_ai_event(
-                self._ph_client,
-                "$ai_embedding",
-                distinct_id=distinct_id or trace_id,
-                properties=event_properties,
+            self._capture_embedding_outcome(
+                model=model,
+                contents=contents,
+                distinct_id=distinct_id,
+                trace_id=trace_id,
+                properties=properties,
+                privacy_mode=privacy_mode,
                 groups=groups,
+                response=response,
+                error=error,
+                latency=time.time() - start_time,
             )
 
         if error:
