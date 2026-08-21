@@ -175,3 +175,35 @@ async def test_a_secret_in_the_message_is_redacted_on_both_surfaces():
     assert "phc_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in sibling["value"]
     # the frame's other fields are untouched — this is redaction, not deletion
     assert sibling["type"] == "ValueError"
+
+
+async def test_a_non_posthog_credential_is_redacted_too():
+    """The PostHog-token pattern only knows phc_/phx_. A failure message can
+    carry someone else's key, so credential-looking words go through the SDK's
+    own detector (entropy, known formats, PEM) — per word, so the diagnostic
+    text around them survives."""
+    client, captured = make_client()
+    client.capture_tool_call(
+        "add",
+        is_error=True,
+        error=ValueError("auth failed for sk-proj-abc123XYZ789defGHI456jklMNO012pqr"),
+    )
+    await _flush()
+
+    message = _events(captured, "$mcp_tool_call")[0]["properties"][P.ERROR_MESSAGE]
+    assert "sk-proj-" not in message
+    assert message.startswith("auth failed for")  # the useful part survives
+
+
+async def test_ordinary_error_text_is_left_alone():
+    """The redactor must not eat normal failure messages."""
+    client, captured = make_client()
+    client.capture_tool_call(
+        "add",
+        is_error=True,
+        error=RuntimeError("revenue warehouse unreachable (period=q3)"),
+    )
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props[P.ERROR_MESSAGE] == "revenue warehouse unreachable (period=q3)"

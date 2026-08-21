@@ -39,7 +39,38 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
         return "[binary data redacted - not supported by PostHog MCP analytics]"
-    return _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value)
+    return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+
+
+def _redact_secret_tokens(value: str) -> str:
+    """Redact credential-looking words, leaving the surrounding text intact.
+
+    The PostHog-token pattern above only knows ``phc_``/``phx_``; a failure
+    message like ``auth failed for sk-proj-...`` carries someone else's key.
+    Rather than enumerate every vendor's format — an arms race that fails
+    quietly in both directions — this reuses the SDK's own detector
+    (``exception_utils._looks_like_secret``: entropy, known formats such as AWS
+    key ids, PEM markers), which the code-variables path already ships.
+
+    Applied per whitespace-separated token, not to the whole string: redacting
+    an entire exception message would destroy the diagnostic value that
+    ``$mcp_error_message`` exists to provide, and ordinary prose is left alone
+    because no single word in it looks like a credential.
+    """
+    if " " not in value:
+        return _REDACTED_VALUE if _is_secret(value) else value
+    return " ".join(
+        _REDACTED_VALUE if _is_secret(word) else word for word in value.split(" ")
+    )
+
+
+def _is_secret(word: str) -> bool:
+    try:
+        from posthog.exception_utils import _looks_like_secret
+
+        return bool(word) and _looks_like_secret(word)
+    except Exception:  # noqa: BLE001 - redaction must never break capture
+        return False
 
 
 def sanitize_captured_value(value: Any) -> Any:
