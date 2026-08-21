@@ -344,3 +344,41 @@ async def test_modern_rejects_initialize_but_analytics_stays_out_of_it():
 
     # whatever the SDK answers (error payload), the app must not 500
     assert response.status_code < 500
+
+
+async def test_real_request_headers_reach_the_event():
+    """Surface attribution over a *real* HTTP request, not a synthetic context.
+
+    The unit tests drive a hand-built headers mapping; this drives Starlette's
+    own `Headers` object through the actual transport, which is where the
+    feature has to work — a Python server reporting 100% "Other" in the harness
+    breakdown is the symptom this closes.
+    """
+    from posthog.mcp.constants import PostHogMCPAnalyticsProperty as P
+
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client)
+
+    user_agent = "claude-code/2.1.0 (cli)"
+    async with wire(server) as http:
+        body = rpc(
+            "tools/call",
+            {
+                "name": "add",
+                "arguments": {"a": 1, "b": 2, "context": "real header check"},
+                "_meta": modern_meta(),
+            },
+        )
+        headers = {
+            **modern_headers("tools/call", "add"),
+            "user-agent": user_agent,
+            "x-anthropic-client": "cli",
+        }
+        response = await http.post("/mcp", json=body, headers=headers)
+    await _flush()
+
+    assert response.status_code == 200
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert props[P.CLIENT_USER_AGENT] == user_agent
+    assert props[P.VENDOR_CLIENT] == "cli"

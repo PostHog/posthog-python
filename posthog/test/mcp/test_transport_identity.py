@@ -160,3 +160,65 @@ async def test_a_huge_header_cannot_inflate_the_event():
 
     props = _events(captured, "$mcp_tool_call")[0]["properties"]
     assert len(props[P.CLIENT_USER_AGENT]) < 1000
+
+
+async def test_real_v1_request_headers_reach_the_event():
+    """Surface attribution over a *real* v1 HTTP request.
+
+    The unit tests above drive a hand-built mapping; this drives Starlette's own
+    ``Headers`` object through a real FastMCP streamable-HTTP app — which is
+    where the feature has to work, and where every MCP client today still lives.
+    """
+    import pytest
+
+    pytest.importorskip("starlette.testclient")
+    pytest.importorskip("mcp.server.fastmcp")  # v1-only server; skipped under mcp>=2
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
+    from starlette.testclient import TestClient
+
+    from posthog.mcp import instrument
+
+    server = FastMCP(
+        "ua-wire-v1",
+        stateless_http=True,
+        json_response=True,
+        # TestClient sends Host: testserver; allow it past DNS-rebinding protection.
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+    )
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    client = FakeClient()
+    instrument(server, client)
+
+    with TestClient(server.streamable_http_app()) as http:
+        http.post(
+            "/mcp",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "User-Agent": UA,
+                "X-Anthropic-Client": "cli",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "add",
+                    "arguments": {"a": 1, "b": 2, "context": "real v1 header check"},
+                },
+            },
+        )
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert calls, "the tool call was not captured at all"
+    props = calls[0]["properties"]
+    assert props[P.CLIENT_USER_AGENT] == UA
+    assert props[P.VENDOR_CLIENT] == "cli"
