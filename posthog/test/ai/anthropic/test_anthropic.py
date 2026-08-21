@@ -1779,6 +1779,16 @@ class RecordingStream:
         self.closed = True
 
 
+class FailingRecordingStream(RecordingStream):
+    def __next__(self):
+        raise RuntimeError("stream failed")
+
+
+class FailingRecordingAsyncStream(RecordingAsyncStream):
+    async def __anext__(self):
+        raise RuntimeError("stream failed")
+
+
 def _anthropic_stream_events():
     final = MockStreamEvent("message_delta")
     final.usage = MockUsage(
@@ -1825,6 +1835,107 @@ def _anthropic_raw_stream_events():
         ),
         RawMessageStopEvent(type="message_stop"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_sync_async_accumulation_parity(mock_client):
+    kwargs = {
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "Foo"}],
+        "max_tokens": 1,
+        "stream": True,
+    }
+
+    sync_client = Anthropic(api_key="test-key", posthog_client=mock_client)
+    sync_response = sync_client.messages._track_streaming_response(
+        RecordingStream(_anthropic_raw_stream_events()),
+        "test-user",
+        "test-trace",
+        None,
+        False,
+        None,
+        kwargs,
+        0,
+    )
+    list(sync_response)
+    sync_properties = mock_client.capture.call_args.kwargs["properties"]
+
+    mock_client.capture.reset_mock()
+
+    async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+    async_response = async_client.messages._track_streaming_response(
+        RecordingAsyncStream(_anthropic_raw_stream_events()),
+        "test-user",
+        "test-trace",
+        None,
+        False,
+        None,
+        kwargs,
+        0,
+    )
+    [event async for event in async_response]
+    async_properties = mock_client.capture.call_args.kwargs["properties"]
+
+    parity_keys = (
+        "$ai_input",
+        "$ai_output_choices",
+        "$ai_input_tokens",
+        "$ai_output_tokens",
+        "$ai_usage",
+        "$ai_stop_reason",
+    )
+    assert {key: sync_properties[key] for key in parity_keys} == {
+        key: async_properties[key] for key in parity_keys
+    }
+
+
+@pytest.mark.asyncio
+async def test_streaming_sync_async_exceptions_capture_and_close(mock_client):
+    kwargs = {
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "Foo"}],
+        "stream": True,
+    }
+
+    sync_source = FailingRecordingStream([])
+    sync_client = Anthropic(api_key="test-key", posthog_client=mock_client)
+    sync_response = sync_client.messages._track_streaming_response(
+        sync_source,
+        None,
+        "test-trace",
+        None,
+        False,
+        None,
+        kwargs,
+        0,
+    )
+    with pytest.raises(RuntimeError, match="stream failed"):
+        with sync_response as stream:
+            list(stream)
+
+    assert sync_source.closed is True
+    assert mock_client.capture.call_count == 1
+
+    mock_client.capture.reset_mock()
+
+    async_source = FailingRecordingAsyncStream([])
+    async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+    async_response = async_client.messages._track_streaming_response(
+        async_source,
+        None,
+        "test-trace",
+        None,
+        False,
+        None,
+        kwargs,
+        0,
+    )
+    with pytest.raises(RuntimeError, match="stream failed"):
+        async with async_response as stream:
+            [event async for event in stream]
+
+    assert async_source.closed is True
+    assert mock_client.capture.call_count == 1
 
 
 def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(
@@ -1937,6 +2048,29 @@ async def test_async_messages_create_streaming_supports_async_with(mock_client):
             events = [event async for event in stream]
 
     assert len(events) == 3
+    assert mock_client.capture.call_count == 1
+
+
+def test_messages_streaming_early_exit_closes_provider_stream(mock_client):
+    source = RecordingStream(_anthropic_stream_events())
+
+    with patch(
+        "anthropic.resources.messages.Messages.create",
+        return_value=source,
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-3-opus-20240229",
+            messages=[{"role": "user", "content": "Foo"}],
+            stream=True,
+            max_tokens=1,
+        )
+
+        with response as stream:
+            for _ in stream:
+                break
+
+    assert source.closed is True
     assert mock_client.capture.call_count == 1
 
 
