@@ -151,3 +151,27 @@ async def test_instrumented_server_failure_carries_them():
     assert props[P.IS_ERROR] is True
     assert props[P.ERROR_TYPE]
     assert "explode" in props[P.ERROR_MESSAGE]
+
+
+async def test_a_secret_in_the_message_is_redacted_on_both_surfaces():
+    """An exception message is free text a server wrote, so it can carry the
+    credential that caused the failure. It must be redacted before it leaves —
+    on the new scalar *and* on the `$exception` sibling, which had been shipping
+    it raw since before this property existed."""
+    client, captured = make_client()
+    client.capture_tool_call(
+        "add",
+        is_error=True,
+        error=ValueError(
+            "auth failed for token phc_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        ),
+    )
+    await _flush()
+
+    message = _events(captured, "$mcp_tool_call")[0]["properties"][P.ERROR_MESSAGE]
+    sibling = _events(captured, "$exception")[0]["properties"]["$exception_list"][0]
+
+    assert "phc_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in message
+    assert "phc_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in sibling["value"]
+    # the frame's other fields are untouched — this is redaction, not deletion
+    assert sibling["type"] == "ValueError"

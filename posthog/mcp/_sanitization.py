@@ -64,8 +64,8 @@ def sanitize_captured_value(value: Any) -> Any:
 
 
 def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Sanitize an event's response, parameters, and user_intent. Returns a new
-    shallow copy; does not mutate the input."""
+    """Sanitize an event's response, parameters, user_intent and error. Returns
+    a new shallow copy; does not mutate the input."""
     result = {**event}
 
     if result.get("response") is not None:
@@ -79,7 +79,33 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("user_intent") is not None:
         result["user_intent"] = sanitize_captured_value(result["user_intent"])
 
+    # An exception message is free text a server wrote, so it can carry the
+    # credential that caused the failure ("invalid token sk-..."). It reaches
+    # PostHog on the $exception sibling and, since it is also surfaced as
+    # $mcp_error_message, on the primary event too.
+    if result.get("error") is not None:
+        result["error"] = _sanitize_exception_values(result["error"])
+
     return result
+
+
+def _sanitize_exception_values(error: Any) -> Any:
+    """Redact the ``value`` of every frame in an ``$exception_list``, leaving
+    the rest of the error-tracking shape untouched."""
+    if not isinstance(error, dict):
+        return error
+    exception_list = error.get("$exception_list")
+    if not isinstance(exception_list, list):
+        return error
+    return {
+        **error,
+        "$exception_list": [
+            {**exception, "value": sanitize_captured_value(exception.get("value"))}
+            if isinstance(exception, dict)
+            else exception
+            for exception in exception_list
+        ],
+    }
 
 
 def _sanitize_response(response: Any) -> Any:
