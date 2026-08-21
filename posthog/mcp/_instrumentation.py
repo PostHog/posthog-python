@@ -22,7 +22,7 @@ from ._exceptions import capture_exception
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
 from .logger import log, warn
-from .request_headers import get_request_headers
+from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
@@ -277,12 +277,8 @@ def _is_sse_request(extra: Optional[Dict[str, Any]]) -> bool:
     mint cannot fix -- the mint sets a response header an SSE client never replays --
     so :func:`_warn_stateless_session_not_wired` would be recommending a remedy that
     does not apply."""
-    if not isinstance(extra, dict):
-        return False
     try:
-        params = getattr(
-            getattr(extra.get("ctx"), "request", None), "query_params", None
-        )
+        params = getattr(get_request(extra), "query_params", None)
         return bool(params is not None and params.get("session_id"))
     except Exception:  # noqa: BLE001 - a transport probe must never break a tool call
         return False
@@ -360,7 +356,7 @@ async def prepare_request(
     )
     if (
         session_source == "generated"
-        and get_request_headers(extra) is not None
+        and get_request(extra) is not None
         and not _is_sse_request(extra)
     ):
         _warn_stateless_session_not_wired(data)
