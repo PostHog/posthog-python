@@ -263,13 +263,18 @@ def _app_was_already_built(server: Any) -> bool:
     The tell is ``_session_manager``, created lazily on the first
     ``streamable_http_app()`` call and non-``None`` forever after. It sits on the
     server itself on the official SDK's ``FastMCP`` (1.x) and on the low-level
-    server it delegates to (2.x moved it there), so check both.
+    server it delegates to (2.x's ``MCPServer`` renamed that attribute
+    ``_lowlevel_server``; older/other wrappers may still use ``_mcp_server``), so
+    check both names.
 
     Deliberately partial: jlowin's ``fastmcp`` 2.x/3.x keeps its session manager as
     a local inside ``http_app()`` and never stores it, so there is nothing to probe
     and those servers get no instrument-time warning. The runtime warning in
     ``_instrumentation`` still covers them."""
-    for candidate in (server, getattr(server, "_mcp_server", None)):
+    low_level = getattr(server, "_mcp_server", None) or getattr(
+        server, "_lowlevel_server", None
+    )
+    for candidate in (server, low_level):
         try:
             if getattr(candidate, "_session_manager", None) is not None:
                 return True

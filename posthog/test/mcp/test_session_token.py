@@ -12,8 +12,10 @@ import pytest
 from posthog.mcp._internal import MCPAnalyticsData
 from posthog.mcp.asgi import (
     PostHogMcpStatelessSessionMiddleware,
+    _app_was_already_built,
     get_mcp_session,
 )
+from posthog.test.mcp._helpers import MCP_MAJOR
 from posthog.mcp import logger as logger_module
 from posthog.mcp._instrumentation import prepare_request
 from posthog.mcp.logger import set_logger
@@ -501,10 +503,6 @@ def test_instrument_autowires_stateless_mint_no_manual_middleware():
 
     from posthog.mcp import instrument
 
-    class _Sink:
-        def capture(self, *_: object, **__: object) -> None:
-            pass
-
     srv = FastMCP(
         "posthog-autowire-test",
         stateless_http=True,
@@ -830,3 +828,33 @@ def test_no_instrument_warning_when_app_not_yet_built():
     set_logger(None)  # instrument() installs the option globally; undo it
 
     assert not [m for m in logs if _WRONG_ORDER in m]
+
+
+def _server_for_installed_major(name: str):
+    """A streamable-HTTP server built with whichever MCP SDK major is installed."""
+    if MCP_MAJOR < 2:
+        from mcp.server.fastmcp import FastMCP
+
+        return FastMCP(name, stateless_http=True)
+    from mcp.server.mcpserver import MCPServer
+
+    return MCPServer(name)
+
+
+def test_app_built_probe_fires_on_the_installed_sdk_major():
+    """``_app_was_already_built`` must flip once the app exists -- on *both* MCP
+    majors, which is why this runs unguarded on whichever one is installed.
+
+    The attribute holding the low-level server was renamed across the major
+    boundary (``_mcp_server`` on 1.x's FastMCP, ``_lowlevel_server`` on 2.x's
+    MCPServer). A probe that knows only one name still passes every 1.x test
+    while silently never firing on 2.x, so the instrument-time warning goes dark
+    on exactly one half of the matrix with nothing failing to say so."""
+    srv = _server_for_installed_major("posthog-probe-major")
+
+    assert _app_was_already_built(srv) is False, "probe fired before the app existed"
+    srv.streamable_http_app()
+    assert _app_was_already_built(srv) is True, (
+        f"probe blind to a built app on MCP {MCP_MAJOR}.x -- the ordering warning "
+        "cannot fire for these servers"
+    )
