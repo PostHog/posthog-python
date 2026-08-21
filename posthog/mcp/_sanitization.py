@@ -39,7 +39,38 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
         return "[binary data redacted - not supported by PostHog MCP analytics]"
-    return _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value)
+    return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+
+
+def _redact_secret_tokens(value: str) -> str:
+    """Redact credential-looking words, leaving the surrounding text intact.
+
+    The PostHog-token pattern above only knows ``phc_``/``phx_``; a failure
+    message like ``auth failed for sk-proj-...`` carries someone else's key.
+    Rather than enumerate every vendor's format — an arms race that fails
+    quietly in both directions — this reuses the SDK's own detector
+    (``exception_utils._looks_like_secret``: entropy, known formats such as AWS
+    key ids, PEM markers), which the code-variables path already ships.
+
+    Applied per whitespace-separated token, not to the whole string: redacting
+    an entire exception message would destroy the diagnostic value that
+    ``$mcp_error_message`` exists to provide, and ordinary prose is left alone
+    because no single word in it looks like a credential.
+    """
+    if " " not in value:
+        return _REDACTED_VALUE if _is_secret(value) else value
+    return " ".join(
+        _REDACTED_VALUE if _is_secret(word) else word for word in value.split(" ")
+    )
+
+
+def _is_secret(word: str) -> bool:
+    try:
+        from posthog.exception_utils import _looks_like_secret
+
+        return bool(word) and _looks_like_secret(word)
+    except Exception:  # noqa: BLE001 - redaction must never break capture
+        return False
 
 
 def sanitize_captured_value(value: Any) -> Any:
@@ -64,8 +95,8 @@ def sanitize_captured_value(value: Any) -> Any:
 
 
 def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Sanitize an event's response, parameters, and user_intent. Returns a new
-    shallow copy; does not mutate the input."""
+    """Sanitize an event's response, parameters, user_intent and error. Returns
+    a new shallow copy; does not mutate the input."""
     result = {**event}
 
     if result.get("response") is not None:
@@ -79,7 +110,39 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("user_intent") is not None:
         result["user_intent"] = sanitize_captured_value(result["user_intent"])
 
+    # An exception message is free text a server wrote, and it reaches PostHog
+    # on the $exception sibling and — since it is also surfaced as
+    # $mcp_error_message — on the primary event, so run it through the same
+    # sanitizer as every other captured value.
+    #
+    # That sanitizer redacts PostHog tokens and sensitive-looking keys; it is
+    # deliberately not a general credential scrubber, because enumerating every
+    # vendor's key format is an arms race that fails quietly in both directions.
+    # A host with strict requirements should gate free text in `before_send`.
+    # Same scope as @posthog/mcp's sanitizeCapturedValue.
+    if result.get("error") is not None:
+        result["error"] = _sanitize_exception_values(result["error"])
+
     return result
+
+
+def _sanitize_exception_values(error: Any) -> Any:
+    """Redact the ``value`` of every frame in an ``$exception_list``, leaving
+    the rest of the error-tracking shape untouched."""
+    if not isinstance(error, dict):
+        return error
+    exception_list = error.get("$exception_list")
+    if not isinstance(exception_list, list):
+        return error
+    return {
+        **error,
+        "$exception_list": [
+            {**exception, "value": sanitize_captured_value(exception.get("value"))}
+            if isinstance(exception, dict)
+            else exception
+            for exception in exception_list
+        ],
+    }
 
 
 def _sanitize_response(response: Any) -> Any:

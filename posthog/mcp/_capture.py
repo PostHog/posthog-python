@@ -63,6 +63,7 @@ def capture_event(
         "user_intent_source": event_input.get("user_intent_source"),
         "is_error": event_input.get("is_error"),
         "error": event_input.get("error"),
+        "error_type": event_input.get("error_type"),
         "conversation_id": event_input.get("conversation_id"),
         "properties": event_input.get("properties"),
     }

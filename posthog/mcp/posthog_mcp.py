@@ -87,6 +87,7 @@ class PostHogMCP(Client):
         duration_ms: Optional[float] = None,
         is_error: bool = False,
         error: Any = None,
+        error_type: Optional[str] = None,
         category: Optional[str] = None,
         tool_description: Optional[str] = None,
         protocol_version: Optional[str] = None,
@@ -115,6 +116,7 @@ class PostHogMCP(Client):
         event["response"] = response
         event["duration"] = duration_ms
         event["is_error"] = is_error
+        event["error_type"] = error_type
         _apply_intent(event, intent, intent_source)
         if is_error:
             event["error"] = capture_exception(
@@ -165,6 +167,7 @@ class PostHogMCP(Client):
         duration_ms: Optional[float] = None,
         is_error: bool = False,
         error: Any = None,
+        error_type: Optional[str] = None,
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -190,6 +193,7 @@ class PostHogMCP(Client):
         event["response"] = response
         event["duration"] = duration_ms
         event["is_error"] = is_error
+        event["error_type"] = error_type
         if is_error:
             event["error"] = capture_exception(
                 error if error is not None else "tools/list failed"
