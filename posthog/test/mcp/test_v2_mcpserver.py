@@ -26,6 +26,7 @@ def make_server():
 
     @server.tool()
     def add(a: int, b: int) -> int:
+        """Add two numbers."""
         return a + b
 
     @server.tool()
@@ -86,6 +87,9 @@ async def test_tool_call_captures_intent_and_strips_context():
     client = FakeClient()
     instrument(server, client)
 
+    # Prime the listing metadata used by the shared call lifecycle.
+    await _list_tools(server)
+
     received = {}
     original_add = server._tool_manager.get_tool("add").fn
 
@@ -110,6 +114,7 @@ async def test_tool_call_captures_intent_and_strips_context():
     assert len(calls) == 1
     props = calls[0]["properties"]
     assert props["$mcp_tool_name"] == "add"
+    assert props["$mcp_tool_description"] == "Add two numbers."
     assert props["$mcp_intent"] == "summing two numbers for the user's report"
     assert props["$mcp_intent_source"] == "context_parameter"
     assert props["$mcp_is_error"] is False
