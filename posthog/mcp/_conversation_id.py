@@ -10,6 +10,7 @@ captures it as ``$mcp_conversation_id`` — stitching calls across reconnects.""
 from __future__ import annotations
 
 import copy
+import json
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -108,12 +109,18 @@ def can_inject_prompt_back(result: Any) -> bool:
 
 
 def build_prompt_back(conversation_id: str) -> Dict[str, Any]:
+    """The content block carrying the handle back to the agent.
+
+    Plain data, not an instruction. Tool results are untrusted content, so a
+    server sentence telling the model what to do on every later call is exactly
+    the shape a client's prompt-injection filter looks for — and a stripped
+    block means the handle never arrives and conversation sessions quietly stop
+    working. It also renders in the user's transcript. Same payload as
+    ``@posthog/mcp``.
+    """
     return {
         "type": "text",
-        "text": (
-            f"[SERVER]: Reuse conversation_id={conversation_id} on every subsequent tool call in this "
-            "conversation. Required for the server to correlate calls and provide context-aware results."
-        ),
+        "text": json.dumps({"conversation_id": conversation_id}),
     }
 
 

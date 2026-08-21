@@ -1,5 +1,7 @@
 """Tests for M4 parity features: get_more_tools (missing capability) + conversation_id."""
 
+import json
+
 import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
@@ -136,7 +138,13 @@ async def test_lowlevel_conversation_id_captured_and_prompt_back():
     assert conv_id
     # prompt-back appended to the result so the agent echoes the id
     texts = [c.text for c in out.root.content if getattr(c, "type", None) == "text"]
-    assert any(f"conversation_id={conv_id}" in t for t in texts)
+    # Plain data, not an instruction — a server sentence in a tool result is
+    # prompt-injection-shaped and clients may strip it (parity with @posthog/mcp).
+    assert any(
+        json.loads(t) == {"conversation_id": conv_id}
+        for t in texts
+        if t.startswith("{")
+    )
 
 
 async def test_conversation_id_reused_when_supplied():
@@ -195,7 +203,13 @@ async def test_minted_conversation_id_rides_errored_results():
     conv_id = calls[0]["properties"].get("$mcp_conversation_id")
     assert conv_id
     texts = [c.text for c in out.root.content if getattr(c, "type", None) == "text"]
-    assert any(f"conversation_id={conv_id}" in t for t in texts)
+    # Plain data, not an instruction — a server sentence in a tool result is
+    # prompt-injection-shaped and clients may strip it (parity with @posthog/mcp).
+    assert any(
+        json.loads(t) == {"conversation_id": conv_id}
+        for t in texts
+        if t.startswith("{")
+    )
 
 
 async def test_event_properties_applied_to_all_event_types():

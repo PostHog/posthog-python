@@ -16,7 +16,6 @@ posthog-js#4449 — so it is the only topology tested here.
 """
 
 import json
-import re
 from contextlib import asynccontextmanager
 
 import httpx
@@ -171,13 +170,15 @@ async def test_modern_conversation_anchors_session_across_instances():
         )
     await _flush()
 
+    # The handle rides back as plain data, not an instruction (a server sentence
+    # in a tool result is prompt-injection-shaped and clients may strip it).
     content = response.json()["result"]["content"]
-    prompt_back = next(
-        block["text"]
+    minted = next(
+        json.loads(block["text"])["conversation_id"]
         for block in content
-        if "conversation_id=" in block.get("text", "")
+        if block.get("text", "").startswith("{")
+        and "conversation_id" in block.get("text", "")
     )
-    minted = re.search(r"conversation_id=([0-9a-f-]+)", prompt_back).group(1)
 
     # Pod B: a different process; the agent echoes the handle.
     server_b = make_server()
