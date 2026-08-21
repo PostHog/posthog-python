@@ -1,5 +1,6 @@
 import base64
 import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -421,6 +422,38 @@ class TestPostHogTracingProcessor:
         # Token counts should still be present
         assert call_kwargs["properties"]["$ai_input_tokens"] == 10
         assert call_kwargs["properties"]["$ai_output_tokens"] == 20
+
+    def test_client_privacy_mode_redacts_content(self, mock_client, mock_span):
+        mock_client.privacy_mode = True
+        processor = PostHogTracingProcessor(client=mock_client)
+        mock_span.span_data = GenerationSpanData(
+            input=[{"role": "user", "content": "Secret message"}],
+            output=[{"role": "assistant", "content": "Secret response"}],
+            model="gpt-4o",
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        properties = mock_client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] is None
+        assert properties["$ai_output_choices"] is None
+
+    def test_client_without_privacy_mode_captures_content(self, mock_span):
+        client = SimpleNamespace(capture=MagicMock())
+        processor = PostHogTracingProcessor(client=client)
+        mock_span.span_data = GenerationSpanData(
+            input=[{"role": "user", "content": "Visible message"}],
+            model="gpt-4o",
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        properties = client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] == [
+            {"role": "user", "content": "Visible message"}
+        ]
 
     def test_generation_span_image_input_is_redacted(
         self, processor, mock_client, mock_span
@@ -998,6 +1031,27 @@ class TestInstrumentHelper:
 
             assert processor._groups == {"company": "acme"}
             assert processor._properties == {"env": "test"}
+
+
+class TestCapturePolicy:
+    def test_processor_groups_are_forwarded(self, mock_client):
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            groups={"company": "acme"},
+        )
+
+        processor._capture_event("$ai_trace", {})
+
+        assert mock_client.capture.call_args.kwargs["groups"] == {"company": "acme"}
+
+    def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
+        mock_client.capture.side_effect = RuntimeError("capture failed")
+        processor = PostHogTracingProcessor(client=mock_client)
+
+        with caplog.at_level(logging.DEBUG, logger="posthog"):
+            processor._capture_event("$ai_trace", {})
+
+        assert "Failed to capture PostHog event: capture failed" in caplog.text
 
 
 def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_trace):

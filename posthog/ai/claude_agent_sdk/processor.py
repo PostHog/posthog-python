@@ -30,7 +30,11 @@ from posthog.ai.claude_agent_sdk.formatting import (
     format_tool_result_content,
 )
 from posthog.ai.media import ensure_serializable as _ensure_serializable
-from posthog.ai.utils import _capture_ai_event, finalize_ai_content
+from posthog.ai.utils import (
+    _capture_processor_event,
+    finalize_ai_content,
+    with_privacy_mode,
+)
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -182,13 +186,6 @@ class PostHogClaudeAgentProcessor:
             return str(self._distinct_id)
         return None
 
-    def _with_privacy_mode(self, value: Any) -> Any:
-        if self._privacy_mode or (
-            hasattr(self._client, "privacy_mode") and self._client.privacy_mode
-        ):
-            return None
-        return value
-
     def _capture_event(
         self,
         event: str,
@@ -196,26 +193,14 @@ class PostHogClaudeAgentProcessor:
         distinct_id: Optional[str] = None,
         groups: Optional[Dict[str, Any]] = None,
     ) -> None:
-        try:
-            if not hasattr(self._client, "capture") or not callable(
-                self._client.capture
-            ):
-                return
-
-            final_properties = {
-                **properties,
-                **self._properties,
-            }
-
-            _capture_ai_event(
-                self._client,
-                event,
-                distinct_id=distinct_id or "unknown",
-                properties=final_properties,
-                groups=groups if groups is not None else self._groups,
-            )
-        except Exception as e:
-            log.debug(f"Failed to capture PostHog event: {e}")
+        _capture_processor_event(
+            self._client,
+            event,
+            properties,
+            default_properties=self._properties,
+            distinct_id=distinct_id,
+            groups=groups if groups is not None else self._groups,
+        )
 
     async def query(
         self,
@@ -434,20 +419,16 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = (
-                None
-                if privacy
-                else self._with_privacy_mode(
-                    finalize_ai_content(input_messages, self._client)
-                )
+            properties["$ai_input"] = with_privacy_mode(
+                self._client,
+                privacy,
+                finalize_ai_content(input_messages, self._client),
             )
         if output_choices is not None:
-            properties["$ai_output_choices"] = (
-                None
-                if privacy
-                else self._with_privacy_mode(
-                    finalize_ai_content(output_choices, self._client)
-                )
+            properties["$ai_output_choices"] = with_privacy_mode(
+                self._client,
+                privacy,
+                finalize_ai_content(output_choices, self._client),
             )
 
         if gen.cache_read_input_tokens:
@@ -503,20 +484,16 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = (
-                None
-                if privacy
-                else self._with_privacy_mode(
-                    finalize_ai_content(input_messages, self._client)
-                )
+            properties["$ai_input"] = with_privacy_mode(
+                self._client,
+                privacy,
+                finalize_ai_content(input_messages, self._client),
             )
         if output_choices is not None:
-            properties["$ai_output_choices"] = (
-                None
-                if privacy
-                else self._with_privacy_mode(
-                    finalize_ai_content(output_choices, self._client)
-                )
+            properties["$ai_output_choices"] = with_privacy_mode(
+                self._client,
+                privacy,
+                finalize_ai_content(output_choices, self._client),
             )
 
         cache_read = usage.get("cache_read_input_tokens", 0)
@@ -561,9 +538,7 @@ class PostHogClaudeAgentProcessor:
             **extra_props,
         }
 
-        if not privacy and not (
-            hasattr(self._client, "privacy_mode") and self._client.privacy_mode
-        ):
+        if with_privacy_mode(self._client, privacy, True):
             properties["$ai_input_state"] = finalize_ai_content(
                 _ensure_serializable(block.input), self._client
             )

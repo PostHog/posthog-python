@@ -22,7 +22,11 @@ from agents.tracing.span_data import (
 from posthog import setup
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
-from posthog.ai.utils import _capture_ai_event, finalize_ai_content
+from posthog.ai.utils import (
+    _capture_processor_event,
+    finalize_ai_content,
+    with_privacy_mode,
+)
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -119,11 +123,7 @@ class PostHogTracingProcessor(TracingProcessor):
 
     def _with_privacy_mode(self, value: Any) -> Any:
         """Apply privacy mode redaction if enabled."""
-        if self._privacy_mode or (
-            hasattr(self._client, "privacy_mode") and self._client.privacy_mode
-        ):
-            return None
-        return value
+        return with_privacy_mode(self._client, self._privacy_mode, value)
 
     def _evict_stale_entries(self) -> None:
         """Evict oldest entries if dicts exceed max size to prevent unbounded growth."""
@@ -159,34 +159,15 @@ class PostHogTracingProcessor(TracingProcessor):
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
     ) -> None:
-        """Capture an event to PostHog with error handling.
-
-        Args:
-            distinct_id: The resolved distinct ID. When the user didn't provide
-                one, callers should pass ``user_distinct_id or fallback_id``
-                (matching the langchain/openai pattern) and separately set
-                ``$process_person_profile`` in properties.
-        """
-        try:
-            if not hasattr(self._client, "capture") or not callable(
-                self._client.capture
-            ):
-                return
-
-            final_properties = {
-                **properties,
-                **self._properties,
-            }
-
-            _capture_ai_event(
-                self._client,
-                event,
-                distinct_id=distinct_id or "unknown",
-                properties=final_properties,
-                groups=self._groups,
-            )
-        except Exception as e:
-            log.debug(f"Failed to capture PostHog event: {e}")
+        """Capture an event without allowing telemetry failures to escape."""
+        _capture_processor_event(
+            self._client,
+            event,
+            properties,
+            default_properties=self._properties,
+            distinct_id=distinct_id,
+            groups=self._groups,
+        )
 
     def on_trace_start(self, trace: Trace) -> None:
         """Called when a new trace begins. Stores metadata for spans; the $ai_trace event is emitted in on_trace_end."""
