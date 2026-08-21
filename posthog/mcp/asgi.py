@@ -40,7 +40,7 @@ import functools
 import json
 from typing import Any, Optional
 
-from .logger import log
+from .logger import log, warn
 from .session import new_session_id
 from .session_token import (
     MCP_SESSION_HEADER,
@@ -245,6 +245,7 @@ def autowire_stateless_mint(server: Any) -> None:
     On fastmcp 2.x, ``streamable_http_app`` / ``sse_app`` can be thin wrappers over
     ``http_app``; wrapping all three could add the middleware twice to one app, so
     the factory guards against a double-add (see ``_app_already_wrapped``)."""
+    _warn_if_app_built_before_instrument(server)
     for attr in ("streamable_http_app", "sse_app", "http_app"):
         original = getattr(server, attr, None)
         if not callable(original) or getattr(original, _AUTOWIRED, False):
@@ -253,6 +254,46 @@ def autowire_stateless_mint(server: Any) -> None:
             setattr(server, attr, _wrap_app_factory(original))
         except Exception as error:  # noqa: BLE001 - never let wiring break instrument()
             log(f"PostHog MCP: could not auto-wire stateless mint on {attr} - {error}")
+
+
+def _app_was_already_built(server: Any) -> bool:
+    """Whether the streamable-HTTP app already exists, so wrapping the factories
+    now cannot retrofit it.
+
+    The tell is ``_session_manager``, created lazily on the first
+    ``streamable_http_app()`` call and non-``None`` forever after. It sits on the
+    server itself on the official SDK's ``FastMCP`` (1.x) and on the low-level
+    server it delegates to (2.x moved it there), so check both.
+
+    Deliberately partial: jlowin's ``fastmcp`` 2.x/3.x keeps its session manager as
+    a local inside ``http_app()`` and never stores it, so there is nothing to probe
+    and those servers get no instrument-time warning. The runtime warning in
+    ``_instrumentation`` still covers them."""
+    for candidate in (server, getattr(server, "_mcp_server", None)):
+        try:
+            if getattr(candidate, "_session_manager", None) is not None:
+                return True
+        except Exception:  # noqa: BLE001 - never let a probe break instrument()
+            continue
+    return False
+
+
+def _warn_if_app_built_before_instrument(server: Any) -> None:
+    """Catch the ordering trap that silently disables stateless capture: the
+    streamable-HTTP app was built (and likely already mounted) *before* ``instrument()``
+    ran, so wrapping the factories now can't retrofit that already-built app."""
+    if not _app_was_already_built(server):
+        return
+    warn(
+        "Warning: streamable_http_app() was called before instrument(), so the ASGI app "
+        "already in use has no PostHog MCP middleware and stateless sessions will not be "
+        "captured (autowiring only affects apps built after instrument() runs). Call "
+        "instrument(server) before building or mounting the app, or add the middleware "
+        "manually: app.add_middleware(PostHogMcpStatelessSessionMiddleware). "
+        "You can ignore this if you already added the middleware yourself — the app is "
+        "built by then, so there is no way for us to tell from here. "
+        "See posthog/mcp/README.md (stateless / multi-pod servers)."
+    )
 
 
 def _app_already_wrapped(app: Any) -> bool:

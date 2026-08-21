@@ -4,6 +4,8 @@ codec, its use in session resolution, and the ASGI minting middleware."""
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +14,9 @@ from posthog.mcp.asgi import (
     PostHogMcpStatelessSessionMiddleware,
     get_mcp_session,
 )
+from posthog.mcp import logger as logger_module
+from posthog.mcp._instrumentation import prepare_request
+from posthog.mcp.logger import set_logger
 from posthog.mcp.session import new_session_id, resolve_session_id
 from posthog.mcp.session_token import (
     MCP_SESSION_HEADER,
@@ -542,3 +547,286 @@ def test_instrument_autowires_stateless_mint_no_manual_middleware():
         assert payload is not None, "instrument() did not auto-wire the mint"
         assert payload.client_name == "Cursor"
         assert payload.client_version == "0.42"
+
+
+# --- loud diagnostics for the silent "middleware never attached" failure -----
+#
+# The failure these guard: on a stateless server whose mint middleware never
+# attached, every request falls back to a per-process session and `$session_id`
+# fragments across pods with nothing in the SDK saying so. Two signals cover it --
+# one at instrument() time, one on the first affected request.
+
+# Substring unique to the runtime warning (the instrument-time one has its own).
+_NO_SESSION = "no session id"
+_WRONG_ORDER = "streamable_http_app() was called before instrument()"
+
+
+class _Sink:
+    def capture(self, *_: object, **__: object) -> None:
+        pass
+
+
+@contextmanager
+def _captured_logs():
+    """Route the SDK logger into a list for the duration of the block, then put
+    back whatever sink was installed before -- `set_logger` is global process
+    state, so restoring `None` unconditionally would silence a concurrent test."""
+    logs: list[str] = []
+    previous = logger_module._active_logger
+    set_logger(logs.append)
+    try:
+        yield logs
+    finally:
+        set_logger(previous)
+
+
+def _http_ctx(headers=None):
+    """The per-request context shape callbacks receive as `extra["ctx"]` on an
+    HTTP transport. `request=None` is how every SDK major represents stdio."""
+    return SimpleNamespace(request=SimpleNamespace(headers=headers or {}))
+
+
+def _stateless_server(name: str):
+    """A real stateless streamable-HTTP FastMCP with one tool."""
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    srv = FastMCP(
+        name,
+        stateless_http=True,
+        json_response=True,
+        # TestClient sends Host: testserver; allow it past DNS-rebinding protection.
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+    )
+
+    @srv.tool()
+    def ping() -> str:
+        return "pong"
+
+    return srv
+
+
+def _rpc(method, params=None, id=1, extra_headers=None):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        **(extra_headers or {}),
+    }
+    body = {"jsonrpc": "2.0", "id": id, "method": method}
+    if params is not None:
+        body["params"] = params
+    return headers, json.dumps(body)
+
+
+def _call_ping(client, extra_headers=None, id=1):
+    headers, body = _rpc(
+        "tools/call",
+        {"name": "ping", "arguments": {}},
+        id=id,
+        extra_headers=extra_headers,
+    )
+    return client.post("/mcp", headers=headers, content=body)
+
+
+# --- runtime signal, end to end ----------------------------------------------
+
+
+def test_runtime_warns_when_app_was_built_before_instrument():
+    """The customer's ordering trap, reproduced against a real transport: the ASGI
+    app is built before instrument(), so autowiring can't retrofit it and a real
+    tools/call arrives with no session of any kind. Both signals must fire."""
+    pytest.importorskip("starlette.testclient")
+    pytest.importorskip("mcp.server.fastmcp")  # v1-only server; skipped under mcp>=2
+    from starlette.testclient import TestClient
+
+    from posthog.mcp import instrument
+
+    srv = _stateless_server("posthog-ordering-trap")
+    app = srv.streamable_http_app()  # BEFORE instrument() -- the trap
+
+    with _captured_logs() as logs:
+        instrument(srv, _Sink())
+        with TestClient(app) as client:
+            resp = _call_ping(client)
+            assert resp.status_code == 200, resp.text
+
+    assert [m for m in logs if _WRONG_ORDER in m], "no instrument-time warning"
+    assert [m for m in logs if _NO_SESSION in m], "no runtime warning"
+
+
+def test_runtime_silent_when_correctly_wired():
+    """The regression that matters most: a correctly-ordered stateless server whose
+    client replays the minted token must stay completely quiet. A diagnostic that
+    cries wolf on healthy servers is worse than no diagnostic."""
+    pytest.importorskip("starlette.testclient")
+    pytest.importorskip("mcp.server.fastmcp")
+    from starlette.testclient import TestClient
+
+    from posthog.mcp import instrument
+
+    srv = _stateless_server("posthog-correctly-wired")
+
+    with _captured_logs() as logs:
+        instrument(srv, _Sink())  # BEFORE building the app -- autowiring works
+        app = srv.streamable_http_app()
+
+        with TestClient(app) as client:
+            headers, body = _rpc(
+                "initialize",
+                {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "Claude Code", "version": "9.9.9"},
+                },
+            )
+            resp = client.post("/mcp", headers=headers, content=body)
+            assert resp.status_code == 200, resp.text
+            token = resp.headers.get(MCP_SESSION_HEADER)
+            assert decode_session_id(token) is not None, "mint did not attach"
+
+            # A compliant client replays the token on every subsequent request.
+            resp2 = _call_ping(
+                client,
+                extra_headers={
+                    MCP_SESSION_HEADER: token,
+                    "mcp-protocol-version": "2025-06-18",
+                },
+                id=2,
+            )
+            assert resp2.status_code == 200, resp2.text
+
+    assert not [m for m in logs if _WRONG_ORDER in m]
+    assert not [m for m in logs if _NO_SESSION in m]
+
+
+def test_warnings_are_visible_without_configuring_a_logger(caplog):
+    """The point of the whole change. `log()` is a no-op unless the host passes
+    MCPAnalyticsOptions(logger=...), so routing these warnings through it alone
+    would leave the failure exactly as dark as it was -- the customer who lost
+    weeks of sessions had no logger configured. They go to the `posthog.mcp`
+    stdlib logger too, which a default-configured host actually sees."""
+    pytest.importorskip("starlette.testclient")
+    pytest.importorskip("mcp.server.fastmcp")
+    from starlette.testclient import TestClient
+
+    from posthog.mcp import instrument
+
+    srv = _stateless_server("posthog-no-logger-configured")
+    app = srv.streamable_http_app()
+
+    set_logger(None)  # explicitly no `logger` option anywhere
+    with caplog.at_level("WARNING", logger="posthog.mcp"):
+        instrument(srv, _Sink())
+        with TestClient(app) as client:
+            _call_ping(client)
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "posthog.mcp"]
+    assert [m for m in messages if _NO_SESSION in m], "runtime warning not visible"
+    assert [m for m in messages if _WRONG_ORDER in m], "ordering warning not visible"
+
+
+# --- runtime signal, predicate edges -----------------------------------------
+
+
+async def test_no_warning_for_stdio():
+    """stdio carries no request at all, so a per-process session is correct there.
+    Warning would be pure noise on the most common local-dev path."""
+    with _captured_logs() as logs:
+        data = _data()
+        await prepare_request(
+            data,
+            mcp_session_id=None,
+            client_name=None,
+            client_version=None,
+            request={"method": "tools/call", "params": {}},
+            extra={"ctx": SimpleNamespace(request=None)},
+        )
+
+    assert not [m for m in logs if _NO_SESSION in m]
+    assert data.warned_no_stateless_session is False
+
+
+async def test_no_warning_when_session_is_anchored_by_conversation_id():
+    """A conversation-anchored session is derived deterministically and agrees
+    across pods, so it does not fragment -- no warning, even though the request is
+    HTTP and carries no session header.
+
+    Regression test for a real trap: `resolve_session_id` returns early on this
+    path and never writes `data.session_source`, so a check that read that shared
+    field afterwards would see a stale "generated" and warn about a session that
+    is perfectly healthy."""
+    with _captured_logs() as logs:
+        data = _data()
+        session_id = await prepare_request(
+            data,
+            mcp_session_id=None,
+            client_name=None,
+            client_version=None,
+            request={"method": "tools/call", "params": {}},
+            extra={"ctx": _http_ctx()},
+            conversation_id="0199e0a1-0000-7000-8000-000000000000",
+        )
+
+    assert session_id.startswith("ses_")
+    assert not [m for m in logs if _NO_SESSION in m]
+
+
+async def test_no_warning_for_sse_transport():
+    """The deprecated SSE transport carries its session as a query param, and the
+    mint sets a response header an SSE client never replays -- so the middleware we
+    would be recommending cannot help. Stay quiet rather than give wrong advice."""
+    ctx = _http_ctx()
+    ctx.request.query_params = {"session_id": "sse-session-1"}
+
+    with _captured_logs() as logs:
+        await prepare_request(
+            _data(),
+            mcp_session_id=None,
+            client_name=None,
+            client_version=None,
+            request={"method": "tools/call", "params": {}},
+            extra={"ctx": ctx},
+        )
+
+    assert not [m for m in logs if _NO_SESSION in m]
+
+
+async def test_runtime_warning_fires_once_per_server():
+    """Warn-once: a busy server must not write this line on every request."""
+    with _captured_logs() as logs:
+        data = _data()
+        for _ in range(3):
+            await prepare_request(
+                data,
+                mcp_session_id=None,
+                client_name=None,
+                client_version=None,
+                request={"method": "tools/call", "params": {}},
+                extra={"ctx": _http_ctx()},
+            )
+
+    warnings = [m for m in logs if _NO_SESSION in m]
+    assert len(warnings) == 1
+    assert "add_middleware(PostHogMcpStatelessSessionMiddleware)" in warnings[0]
+    assert data.warned_no_stateless_session is True
+
+
+# --- instrument-time signal ---------------------------------------------------
+
+
+def test_no_instrument_warning_when_app_not_yet_built():
+    """The correctly-ordered path: instrument() on a server whose app has never
+    been built has nothing to complain about."""
+    pytest.importorskip("mcp.server.fastmcp")
+
+    from posthog.mcp import instrument
+
+    srv = _stateless_server("posthog-app-not-built")
+
+    logs: list[str] = []
+    instrument(srv, _Sink(), MCPAnalyticsOptions(logger=logs.append))
+    set_logger(None)  # instrument() installs the option globally; undo it
+
+    assert not [m for m in logs if _WRONG_ORDER in m]
