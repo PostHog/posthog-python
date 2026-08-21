@@ -23,6 +23,7 @@ from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
 from .logger import log
 from ._sanitization import build_captured_mcp_parameters
+from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id
 from .session_token import SessionTokenPayload, decode_session_id
 
@@ -211,6 +212,7 @@ async def _maybe_emit_initialize(
     await _apply_event_properties(
         data, event, {"method": "initialize", "params": {}}, extra
     )
+    stamp_transport_identity(event, extra)
     fire_and_forget(capture_event(data, event), data)
 
 
@@ -364,6 +366,7 @@ async def record_tool_call(
         if props is not None:
             event["properties"] = props
 
+        stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_tool_call failed (event dropped, tool unaffected): {err}")
@@ -458,6 +461,7 @@ async def record_missing_capability(
             event["user_intent"] = context.strip()
             event["user_intent_source"] = "context_parameter"
         await _apply_event_properties(data, event, request, extra)
+        stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_missing_capability failed (event dropped): {err}")
@@ -495,6 +499,7 @@ async def record_tools_list(
         if error is not None:
             event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
+        stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_tools_list failed (event dropped): {err}")

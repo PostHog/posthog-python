@@ -56,7 +56,9 @@ class PostHogMCPAnalyticsProperty:
     """PostHog property wire-keys emitted on MCP events."""
 
     CLIENT_NAME = "$mcp_client_name"
+    CLIENT_USER_AGENT = "$mcp_client_user_agent"
     CLIENT_VERSION = "$mcp_client_version"
+    VENDOR_CLIENT = "$mcp_vendor_client"
     PROTOCOL_VERSION = "$mcp_protocol_version"
     CONVERSATION_ID = "$mcp_conversation_id"
     DURATION_MS = "$mcp_duration_ms"

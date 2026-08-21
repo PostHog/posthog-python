@@ -151,6 +151,20 @@ def _patch_add_request_handler(
 # --- ctx readers -----------------------------------------------------------------
 
 
+def _request_context_of(context: Any) -> Any:
+    """The request context behind a v2 ``Context``, or ``None``.
+
+    Reads the public property rather than the private ``_request_context`` it
+    wraps, guarded because it *raises* outside a request (the same trap the
+    FastMCP adapter hit). Falls back to the private attribute so a stand-in
+    object that only carries that still works.
+    """
+    try:
+        return context.request_context
+    except (LookupError, ValueError, AttributeError):
+        return getattr(context, "_request_context", None)
+
+
 def _ctx_client_info(ctx: Any) -> Tuple[Optional[str], Optional[str]]:
     try:
         client_params = ctx.session.client_params
@@ -243,7 +257,7 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         context: Any = None,
         convert_result: bool = False,
     ) -> Any:
-        ctx = getattr(context, "_request_context", None)
+        ctx = _request_context_of(context)
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )

@@ -93,6 +93,8 @@ class PostHogMCP(Client):
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
@@ -107,6 +109,8 @@ class PostHogMCP(Client):
             groups,
             properties,
             timestamp,
+            client_user_agent,
+            vendor_client,
         )
         event["resource_name"] = tool_name
         event["tool_description"] = tool_description
@@ -135,6 +139,8 @@ class PostHogMCP(Client):
         duration_ms: Optional[float] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
@@ -149,6 +155,8 @@ class PostHogMCP(Client):
             groups,
             properties,
             timestamp,
+            client_user_agent,
+            vendor_client,
         )
         event["client_name"] = client_name
         event["client_version"] = client_version
@@ -171,6 +179,8 @@ class PostHogMCP(Client):
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
@@ -186,6 +196,8 @@ class PostHogMCP(Client):
             groups,
             properties,
             timestamp,
+            client_user_agent,
+            vendor_client,
         )
         event["listed_tool_names"] = tool_names
         event["protocol_version"] = protocol_version
@@ -208,6 +220,8 @@ class PostHogMCP(Client):
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
@@ -223,6 +237,8 @@ class PostHogMCP(Client):
             groups,
             properties,
             timestamp,
+            client_user_agent,
+            vendor_client,
         )
         event["resource_name"] = self._missing_capability_tool_name
         event["protocol_version"] = protocol_version
@@ -285,6 +301,8 @@ class PostHogMCP(Client):
         groups: Optional[Dict[str, str]],
         properties: Optional[JsonRecord],
         timestamp: Optional[datetime],
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
     ) -> Dict[str, Any]:
         event: Dict[str, Any] = {
             "event_type": event_type,
@@ -292,6 +310,11 @@ class PostHogMCP(Client):
             "timestamp": timestamp or datetime.now(timezone.utc),
             "properties": properties,
             "groups": groups,
+            # Raw transport headers. A custom dispatcher holds its own request
+            # object, so it passes these itself; instrumented servers read them
+            # off the request automatically.
+            "client_user_agent": client_user_agent,
+            "vendor_client": vendor_client,
         }
         if distinct_id:
             event["identify_actor_given_id"] = distinct_id
