@@ -176,15 +176,22 @@ async def test_v1_minted_then_echoed_reuses_one_session():
     minted = first["$mcp_conversation_id"]
     assert minted
 
-    # The agent echoes it back.
-    await server._tool_manager.call_tool(
-        "echo", {"msg": "b", "conversation_id": minted, "context": "second"}
-    )
+    # The minting call itself is NOT anchored: at that point the handle is
+    # unproven, and anchoring it would strand the events if the prompt-back
+    # turned out to be undeliverable. It stays in this instance's session.
+    expected = derive_session_id_from_conversation(minted)
+    assert first["$session_id"] != expected
+
+    # The agent echoes it back — now the handle is confirmed, so it anchors,
+    # and every later call in the conversation joins that one session.
+    for msg in ("b", "c"):
+        await server._tool_manager.call_tool(
+            "echo", {"msg": msg, "conversation_id": minted, "context": "later"}
+        )
     await _flush()
 
-    calls = _events(client, "$mcp_tool_call")
-    expected = derive_session_id_from_conversation(minted)
-    assert [c["properties"]["$session_id"] for c in calls] == [expected, expected]
+    later = _events(client, "$mcp_tool_call")[1:]
+    assert [c["properties"]["$session_id"] for c in later] == [expected, expected]
 
 
 @pytest.mark.skipif(MCP_MAJOR != 1, reason="v1 FastMCP server")
@@ -251,3 +258,40 @@ async def test_v1_feature_off_keeps_transport_sessions():
     assert props["$session_id"] != derive_session_id_from_conversation(
         MINTED_SHAPE_HANDLE
     )
+
+
+@pytest.mark.skipif(MCP_MAJOR != 1, reason="v1 FastMCP server")
+async def test_an_undelivered_mint_does_not_strand_events_in_orphan_sessions():
+    """A freshly minted handle must not anchor the session before we know the
+    agent received it. If it did, a tool that fails before the prompt-back can
+    ride the result would put every call in its own unreachable
+    conversation-derived session — one orphan per call, worse than not
+    anchoring at all."""
+    from mcp.server.fastmcp import FastMCP
+
+    from posthog.mcp import instrument
+
+    server = FastMCP("orphan-guard")
+
+    @server.tool()
+    def boom() -> str:
+        raise ValueError("explode")
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    for i in range(2):
+        try:
+            await server._tool_manager.call_tool(
+                "boom", {"context": f"call {i}"}, convert_result=True
+            )
+        except Exception:
+            pass
+    await _flush()
+
+    sessions = {e["properties"].get("$session_id") for e in client.events}
+    assert len(sessions) == 1, (
+        f"minted handles stranded events in {len(sessions)} sessions"
+    )
+    # and nothing claims a conversation the agent never received
+    assert all("$mcp_conversation_id" not in e["properties"] for e in client.events)

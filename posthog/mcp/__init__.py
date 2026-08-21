@@ -89,8 +89,8 @@ __all__ = [
     "CaptureEventData",
     "PreparedToolCall",
     "get_more_tools_result",
-    # Read HTTP headers inside identify/intent_fallback/event_properties/
-    # before_send callbacks on either SDK major: the raw per-request context
+    # Read HTTP headers inside identify / intent_fallback /
+    # event_properties callbacks on either SDK major: the per-request context
     # arrives as extra["ctx"] and its shape differs between them.
     "get_request_headers",
     "derive_session_id_from_mcp_session",

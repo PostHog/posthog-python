@@ -304,10 +304,14 @@ async def test_mirror_rides_every_response_not_just_the_minting_one():
     await _flush()
 
     assert second.structured_content[MCP_INSTRUCTIONS_KEY]["conversation_id"] == handle
-    sessions = {
-        c["properties"]["$session_id"] for c in _events(client, "$mcp_tool_call")
-    }
-    assert len(sessions) == 1
+    # The minting call is not anchored (the handle is unproven until echoed);
+    # the echoing call is, so it lands in the conversation's own session.
+    from posthog.mcp import derive_session_id_from_conversation
+
+    calls = _events(client, "$mcp_tool_call")
+    assert calls[1]["properties"]["$session_id"] == derive_session_id_from_conversation(
+        handle
+    )
 
 
 async def test_mirror_is_skipped_when_no_listing_declared_the_key():

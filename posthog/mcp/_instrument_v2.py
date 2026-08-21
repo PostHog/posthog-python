@@ -263,7 +263,9 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             request=request,
             extra=extra,
             token=token,
-            conversation_id=conversation_id,
+            # Only an echoed handle anchors the session: a freshly minted one
+            # is unproven until the agent sends it back (see prepare_request).
+            conversation_id=None if minted else conversation_id,
         )
 
         if data.options.report_missing and name == missing_name:
@@ -439,7 +441,9 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             request=request,
             extra=extra,
             token=token,
-            conversation_id=conversation_id,
+            # Only an echoed handle anchors the session: a freshly minted one
+            # is unproven until the agent sends it back (see prepare_request).
+            conversation_id=None if minted else conversation_id,
         )
 
         if data.options.report_missing and name == missing_name:
