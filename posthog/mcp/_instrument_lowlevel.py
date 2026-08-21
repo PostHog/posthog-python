@@ -125,21 +125,24 @@ def _wrap_call_tool(
             data.options.enable_conversation_id, arguments, name, missing_name
         )
 
-        session_id = await prepare_request(
-            data,
-            mcp_session_id=mcp_session_id,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
-            # Only an echoed handle anchors the session: a freshly minted one
-            # is unproven until the agent sends it back (see prepare_request).
-            conversation_id=None if minted else conversation_id,
-        )
+        # Resolved once the handle's fate is known — a minted handle only
+        # anchors the session after we have confirmed the agent received it,
+        # so the call that mints it still joins its own conversation.
+        async def _session(anchor: Optional[str]) -> str:
+            return await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+                conversation_id=anchor,
+            )
 
         if data.options.report_missing and name == missing_name:
+            session_id = await _session(None)
             await record_missing_capability(
                 data,
                 session_id,
@@ -184,6 +187,7 @@ def _wrap_call_tool(
             # request_handlers can raise — capture before re-raising so the failed
             # call isn't silently dropped. A minted (undelivered) conversation_id is
             # not stamped, matching the FastMCP path.
+            session_id = await _session(None if minted else conversation_id)
             await record_tool_call(
                 data,
                 session_id,
@@ -245,6 +249,7 @@ def _wrap_call_tool(
                     else call_result
                 )
 
+        session_id = await _session(delivered_conversation_id)
         await record_tool_call(
             data,
             session_id,
