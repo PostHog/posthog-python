@@ -131,6 +131,12 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.CLIENT_NAME] = event["client_name"]
     if event.get("client_version"):
         properties[_P.CLIENT_VERSION] = event["client_version"]
+    # HTTP transports only, and only for the request that carried the header —
+    # stdio and in-memory servers simply never set these.
+    if event.get("client_user_agent"):
+        properties[_P.CLIENT_USER_AGENT] = event["client_user_agent"]
+    if event.get("vendor_client"):
+        properties[_P.VENDOR_CLIENT] = event["vendor_client"]
     if event.get("protocol_version"):
         properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
     if event.get("user_intent"):
