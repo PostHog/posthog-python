@@ -295,3 +295,60 @@ async def test_an_undelivered_mint_does_not_strand_events_in_orphan_sessions():
     )
     # and nothing claims a conversation the agent never received
     assert all("$mcp_conversation_id" not in e["properties"] for e in client.events)
+
+
+@pytest.mark.skipif(MCP_MAJOR != 1, reason="v1 FastMCP server")
+async def test_in_tool_events_are_not_attributed_to_the_previous_caller():
+    """A custom event captured *inside* a tool body reads the shared
+    ``data.session_id``. The conversation anchor can only be resolved after the
+    call, so unless that field is settled first, caller B's in-tool event is
+    attributed to caller A's session — and, through the identity cache, to
+    caller A's person."""
+    from types import SimpleNamespace
+
+    from mcp.server.fastmcp import FastMCP
+
+    from posthog.mcp import instrument
+    from posthog.mcp._internal import get_server_tracking_data
+    from posthog.mcp.session import derive_session_id_from_mcp_session
+
+    def caller(session_header):
+        return SimpleNamespace(
+            request_context=SimpleNamespace(
+                request=SimpleNamespace(headers={"mcp-session-id": session_header}),
+                session=SimpleNamespace(client_params=None),
+            )
+        )
+
+    server = FastMCP("in-tool")
+    seen = {}
+
+    @server.tool()
+    def echo(msg: str) -> str:
+        return msg
+
+    client = FakeClient()
+    handle = instrument(server, client, MCPAnalyticsOptions())
+
+    @server.tool()
+    def emits(msg: str) -> str:
+        data = get_server_tracking_data(handle._key)
+        seen["session_during_body"] = data.session_id if data else None
+        return msg
+
+    # Caller A runs first and leaves its session behind on the shared state.
+    await server._tool_manager.call_tool(
+        "echo", {"msg": "a", "context": "caller A"}, context=caller("session-A")
+    )
+    # Caller B's tool body must see *its own* session, not A's.
+    await server._tool_manager.call_tool(
+        "emits", {"msg": "b", "context": "caller B"}, context=caller("session-B")
+    )
+    await _flush()
+
+    assert seen["session_during_body"] == derive_session_id_from_mcp_session(
+        "session-B"
+    )
+    assert seen["session_during_body"] != derive_session_id_from_mcp_session(
+        "session-A"
+    )

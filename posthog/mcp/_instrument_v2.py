@@ -51,6 +51,7 @@ from ._instrumentation import (
     build_tool_call_request,
     params_to_request_dict,
     prepare_request,
+    prime_session,
     read_tool_category,
     record_missing_capability,
     record_tool_call,
@@ -310,6 +311,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                     k: v for k, v in arguments.items() if k not in strip_keys
                 }
 
+        # Settle the shared session before the tool body runs, so an in-tool
+        # `analytics.capture()` is attributed to this caller and not the last one.
+        await prime_session(data, mcp_session_id=mcp_session_id, token=token)
+
         start = time.monotonic()
         try:
             result = await original(
@@ -473,6 +478,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                     )
                 ]
             )
+
+        # Settle the shared session before the tool body runs, so an in-tool
+        # `analytics.capture()` is attributed to this caller and not the last one.
+        await prime_session(data, mcp_session_id=mcp_session_id, token=token)
 
         start = time.monotonic()
         try:
