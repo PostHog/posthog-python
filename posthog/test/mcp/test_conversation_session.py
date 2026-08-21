@@ -176,22 +176,22 @@ async def test_v1_minted_then_echoed_reuses_one_session():
     minted = first["$mcp_conversation_id"]
     assert minted
 
-    # The minting call itself is NOT anchored: at that point the handle is
-    # unproven, and anchoring it would strand the events if the prompt-back
-    # turned out to be undeliverable. It stays in this instance's session.
+    # The minting call anchors too — but only because delivery was confirmed
+    # before the session was resolved. Had the prompt-back been undeliverable,
+    # this call would have stayed in the instance session instead of stranding
+    # its events in a conversation nobody holds (see the orphan-guard test).
     expected = derive_session_id_from_conversation(minted)
-    assert first["$session_id"] != expected
+    assert first["$session_id"] == expected
 
-    # The agent echoes it back — now the handle is confirmed, so it anchors,
-    # and every later call in the conversation joins that one session.
+    # The agent echoes it back, and every later call joins the same session.
     for msg in ("b", "c"):
         await server._tool_manager.call_tool(
             "echo", {"msg": msg, "conversation_id": minted, "context": "later"}
         )
     await _flush()
 
-    later = _events(client, "$mcp_tool_call")[1:]
-    assert [c["properties"]["$session_id"] for c in later] == [expected, expected]
+    calls = _events(client, "$mcp_tool_call")
+    assert [c["properties"]["$session_id"] for c in calls] == [expected] * 3
 
 
 @pytest.mark.skipif(MCP_MAJOR != 1, reason="v1 FastMCP server")

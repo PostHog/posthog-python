@@ -254,21 +254,24 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             data.options.enable_conversation_id, arguments, name, missing_name
         )
 
-        session_id = await prepare_request(
-            data,
-            mcp_session_id=mcp_session_id,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
-            # Only an echoed handle anchors the session: a freshly minted one
-            # is unproven until the agent sends it back (see prepare_request).
-            conversation_id=None if minted else conversation_id,
-        )
+        # Resolved once the handle's fate is known — a minted handle only
+        # anchors the session after we have confirmed the agent received it,
+        # so the call that mints it still joins its own conversation.
+        async def _session(anchor: Optional[str]) -> str:
+            return await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+                conversation_id=anchor,
+            )
 
         if data.options.report_missing and name == missing_name:
+            session_id = await _session(None)
             await record_missing_capability(
                 data,
                 session_id,
@@ -316,6 +319,7 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             # The raise is converted to CallToolResult(is_error=True) one layer
             # up (MCPServer._handle_call_tool), so the prompt-back never rides
             # it — a minted (undelivered) conversation_id is not stamped.
+            session_id = await _session(None if minted else conversation_id)
             await record_tool_call(
                 data,
                 session_id,
@@ -341,6 +345,7 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             if minted and not delivered:
                 delivered_conversation_id = None
 
+        session_id = await _session(delivered_conversation_id)
         await record_tool_call(
             data,
             session_id,
@@ -432,21 +437,24 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             data.options.enable_conversation_id, arguments, name, missing_name
         )
 
-        session_id = await prepare_request(
-            data,
-            mcp_session_id=mcp_session_id,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
-            # Only an echoed handle anchors the session: a freshly minted one
-            # is unproven until the agent sends it back (see prepare_request).
-            conversation_id=None if minted else conversation_id,
-        )
+        # Resolved once the handle's fate is known — a minted handle only
+        # anchors the session after we have confirmed the agent received it,
+        # so the call that mints it still joins its own conversation.
+        async def _session(anchor: Optional[str]) -> str:
+            return await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+                conversation_id=anchor,
+            )
 
         if data.options.report_missing and name == missing_name:
+            session_id = await _session(None)
             await record_missing_capability(
                 data,
                 session_id,
@@ -473,6 +481,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             # v2 low-level handlers raise through to JSON-RPC errors (no
             # auto-conversion) — capture before re-raising. The prompt-back was
             # never delivered, so a minted conversation_id is not stamped.
+            session_id = await _session(None if minted else conversation_id)
             await record_tool_call(
                 data,
                 session_id,
@@ -498,6 +507,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             if minted and not delivered:
                 delivered_conversation_id = None
 
+        session_id = await _session(delivered_conversation_id)
         await record_tool_call(
             data,
             session_id,
