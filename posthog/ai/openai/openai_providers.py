@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING as _TYPE_CHECKING, Optional
+
 try:
     import openai
 except ImportError:
@@ -5,10 +7,21 @@ except ImportError:
         "Please install the Open AI SDK to use this feature: 'pip install openai'"
     )
 
-from .openai import _SYNC_RESOURCE_WRAPPERS
-from .openai_async import _ASYNC_RESOURCE_WRAPPERS
+from .openai import (
+    WrappedBeta as WrappedBeta,
+    WrappedChat as WrappedChat,
+    WrappedEmbeddings as WrappedEmbeddings,
+    WrappedResponses as WrappedResponses,
+    _SYNC_RESOURCE_WRAPPERS,
+)
+from .openai_async import (
+    WrappedBeta as AsyncWrappedBeta,
+    WrappedChat as AsyncWrappedChat,
+    WrappedEmbeddings as AsyncWrappedEmbeddings,
+    WrappedResponses as AsyncWrappedResponses,
+    _ASYNC_RESOURCE_WRAPPERS,
+)
 from .wrapper_utils import _wrap_openai_resources
-from typing import Optional
 
 from posthog.client import Client as PostHogClient
 from posthog import setup
@@ -34,6 +47,13 @@ class AzureOpenAI(openai.AzureOpenAI):
 
         _wrap_openai_resources(self, _SYNC_RESOURCE_WRAPPERS)
 
+        # Keep dynamically installed resources visible to API and type inspection.
+        if _TYPE_CHECKING:
+            self.chat = WrappedChat(self, self._original_chat)
+            self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
+            self.beta = WrappedBeta(self, self._original_beta)
+            self.responses = WrappedResponses(self, self._original_responses)
+
 
 class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
     """
@@ -54,3 +74,10 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
         self._ph_client = posthog_client or setup()
 
         _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
+
+        # Keep dynamically installed resources visible to API and type inspection.
+        if _TYPE_CHECKING:
+            self.chat = AsyncWrappedChat(self, self._original_chat)
+            self.embeddings = AsyncWrappedEmbeddings(self, self._original_embeddings)
+            self.beta = AsyncWrappedBeta(self, self._original_beta)
+            self.responses = AsyncWrappedResponses(self, self._original_responses)

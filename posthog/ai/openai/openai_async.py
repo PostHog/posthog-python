@@ -1,8 +1,9 @@
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING as _TYPE_CHECKING, Any, Dict, Optional
 
 from posthog.ai.stream import AsyncStreamWrapper
+from posthog.ai.types import TokenUsage as TokenUsage
 
 try:
     import openai
@@ -14,12 +15,11 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
-    _capture_ai_event,
     extract_available_tool_calls as extract_available_tool_calls,
-    finalize_ai_content,
+    finalize_ai_content as finalize_ai_content,
     get_model_params as get_model_params,
     merge_usage_stats as merge_usage_stats,
-    with_privacy_mode,
+    with_privacy_mode as with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
     accumulate_openai_tool_calls as accumulate_openai_tool_calls,
@@ -35,7 +35,7 @@ from posthog.ai.openai._streaming import (
     _ResponsesStreamState,
     _build_streaming_event_data,
 )
-from .embeddings import _capture_embedding_event
+from ._embeddings import _capture_embedding_event
 from .wrapper_utils import (
     _OpenAIWrapperResource,
     _wrap_openai_resources,
@@ -63,6 +63,13 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         self._ph_client = posthog_client or setup()
 
         _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
+
+        # Keep dynamically installed resources visible to API and type inspection.
+        if _TYPE_CHECKING:
+            self.chat = WrappedChat(self, self._original_chat)
+            self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
+            self.beta = WrappedBeta(self, self._original_beta)
+            self.responses = WrappedResponses(self, self._original_responses)
 
 
 async def _parse_and_track(
