@@ -16,16 +16,22 @@ from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
     _capture_ai_event,
+    extract_available_tool_calls as extract_available_tool_calls,
     finalize_ai_content,
     get_model_params as get_model_params,
+    merge_usage_stats as merge_usage_stats,
     with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
+    accumulate_openai_tool_calls as accumulate_openai_tool_calls,
+    extract_openai_content_from_chunk as extract_openai_content_from_chunk,
+    extract_openai_tool_calls_from_chunk as extract_openai_tool_calls_from_chunk,
+    extract_openai_usage_from_chunk as extract_openai_usage_from_chunk,
     format_openai_streaming_input,
     format_openai_streaming_output,
 )
 from posthog.client import Client as PostHogClient
-from posthog.ai.openai.streaming import (
+from posthog.ai.openai._streaming import (
     _ChatCompletionsStreamState,
     _ResponsesStreamState,
     _build_streaming_event_data,

@@ -2,6 +2,8 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
+from posthog.ai.types import TokenUsage as TokenUsage
+
 try:
     import openai
 except ImportError:
@@ -12,16 +14,22 @@ except ImportError:
 from posthog.ai.utils import (
     call_llm_and_track_usage,
     _capture_ai_event,
+    extract_available_tool_calls as extract_available_tool_calls,
     finalize_ai_content,
+    merge_usage_stats as merge_usage_stats,
     with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
-    format_openai_streaming_input,
-    format_openai_streaming_output,
+    accumulate_openai_tool_calls as accumulate_openai_tool_calls,
+    extract_openai_content_from_chunk as extract_openai_content_from_chunk,
+    extract_openai_tool_calls_from_chunk as extract_openai_tool_calls_from_chunk,
+    extract_openai_usage_from_chunk as extract_openai_usage_from_chunk,
+    format_openai_streaming_input as _format_openai_streaming_input,
+    format_openai_streaming_output as _format_openai_streaming_output,
 )
 from posthog.client import Client as PostHogClient
 from posthog import setup
-from posthog.ai.openai.streaming import (
+from posthog.ai.openai._streaming import (
     _ChatCompletionsStreamState,
     _ResponsesStreamState,
     _build_streaming_event_data,
@@ -205,8 +213,8 @@ class WrappedResponses(_OpenAIWrapperResource):
         event_data = _build_streaming_event_data(
             base_url=self._client.base_url,
             kwargs=kwargs,
-            formatted_input=format_openai_streaming_input(kwargs, "responses"),
-            formatted_output=format_openai_streaming_output(state.output, "responses"),
+            formatted_input=_format_openai_streaming_input(kwargs, "responses"),
+            formatted_output=_format_openai_streaming_output(state.output, "responses"),
             usage_stats=state.usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
@@ -422,8 +430,8 @@ class WrappedCompletions(_OpenAIWrapperResource):
         event_data = _build_streaming_event_data(
             base_url=self._client.base_url,
             kwargs=kwargs,
-            formatted_input=format_openai_streaming_input(kwargs, "chat"),
-            formatted_output=format_openai_streaming_output(
+            formatted_input=_format_openai_streaming_input(kwargs, "chat"),
+            formatted_output=_format_openai_streaming_output(
                 state.output, "chat", state.tool_calls
             ),
             usage_stats=state.usage_stats,
