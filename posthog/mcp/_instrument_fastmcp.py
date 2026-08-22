@@ -26,41 +26,22 @@ from typing import Any, Dict, Optional, Tuple
 
 import mcp.types as mcp_types
 
-from ._context_parameters import (
-    add_context_parameter_to_schema,
-    get_context_description,
-    is_context_enabled,
-)
-from ._conversation_id import (
-    add_conversation_id_to_schema,
-    build_prompt_back,
-    resolve_conversation_id,
-)
+from ._conversation_id import build_prompt_back
 from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
-    build_tool_call_request,
+    collect_listed_tools,
     extract_tools,
-    prepare_request,
-    prime_session,
-    read_tool_category,
-    record_missing_capability,
-    record_tool_call,
-    record_tools_list,
+    mutate_tool_schema,
     request_to_dict,
     resolve_session_and_client,
+    start_tool_call_lifecycle,
+    start_tools_list_lifecycle,
 )
 from ._internal import MCPAnalyticsData
-from ._output_instructions import (
-    add_instructions_to_output_schema,
-    mirror_instructions_into_structured_content,
-)
+from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
-from .tools import (
-    GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
-    get_more_tools_result_text,
-    resolve_missing_capability_tool_name,
-)
+from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -103,54 +84,25 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 mcp_session_id, client_name, client_version, protocol_version
             )
         )
-        request = build_tool_call_request(name, arguments)
-        # `ctx` is the SDK's own per-request context, handed to host callbacks
-        # unchanged and identically on both SDK majors (read headers off it with
-        # the exported `get_request_headers`). Never captured — the event
-        # pipeline keeps only a scalar projection of `extra`.
-        extra: Dict[str, Any] = {
-            "session_id": mcp_session_id,
-            "ctx": _tool_call_request_context(context),
-        }
-
-        # Resolve the conversation handle before the session: when the agent
-        # carries (or is about to receive) one, it anchors $session_id for every
-        # event of this request (ADR-0004) — the only correlation that survives
-        # the 2026-07-28 revision's per-request server instances.
-        missing_name = resolve_missing_capability_tool_name(data.options)
-        conversation_id, minted = resolve_conversation_id(
-            data.options.enable_conversation_id, arguments, name, missing_name
+        # Context lookup and dispatch stay adapter-specific; the lifecycle owns
+        # only the common session/capture policy.
+        lifecycle = start_tool_call_lifecycle(
+            data,
+            name=name,
+            arguments=arguments,
+            mcp_session_id=mcp_session_id,
+            token=token,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            extra={
+                "session_id": mcp_session_id,
+                "ctx": _tool_call_request_context(context),
+            },
         )
 
-        # Resolved once the handle's fate is known — a minted handle only
-        # anchors the session after we have confirmed the agent received it,
-        # so the call that mints it still joins its own conversation.
-        async def _session(anchor: Optional[str]) -> str:
-            return await prepare_request(
-                data,
-                mcp_session_id=mcp_session_id,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                request=request,
-                extra=extra,
-                token=token,
-                conversation_id=anchor,
-            )
-
-        if data.options.report_missing and name == missing_name:
-            session_id = await _session(None)
-            await record_missing_capability(
-                data,
-                session_id,
-                tool_name=missing_name,
-                context=(arguments or {}).get("context"),
-                arguments=arguments,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                extra=extra,
-            )
+        if lifecycle.is_missing_capability:
+            await lifecycle.record_missing_capability()
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
             ]
@@ -174,7 +126,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
-        await prime_session(data, mcp_session_id=mcp_session_id, token=token)
+        await lifecycle.prime_session()
 
         start = time.monotonic()
         try:
@@ -184,20 +136,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         except Exception as error:
             # The minted prompt-back was never delivered to the agent — don't stamp
             # an orphan conversation_id it can't echo (an agent-supplied id is kept).
-            session_id = await _session(None if minted else conversation_id)
-            await record_tool_call(
-                data,
-                session_id,
-                name=name,
-                arguments=arguments,
-                error=error,
-                duration_ms=(time.monotonic() - start) * 1000,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                conversation_id=None if minted else conversation_id,
-                extra=extra,
-            )
+            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
 
         # Deliver the handle first, then capture the result the agent actually got.
@@ -205,35 +144,22 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         # tools whose output schema we declared the key on — clients that read
         # structuredContent never see the text block), and the prompt-back text
         # block on the minting response only.
-        delivered_conversation_id = conversation_id
-        if conversation_id:
-            delivered = False
+        delivered = False
+        if lifecycle.conversation_id:
             if data.tool_output_instructions.get(name):
                 result, delivered = mirror_instructions_into_structured_content(
-                    result, conversation_id
+                    result, lifecycle.conversation_id
                 )
-            if minted:
-                injected = _inject_prompt_back(result, conversation_id)
+            if lifecycle.minted_conversation_id:
+                injected = _inject_prompt_back(result, lifecycle.conversation_id)
                 if injected is not result:
                     delivered = True
                 result = injected
-                # Only a minted handle can be lost — one the agent supplied, it has.
-                if not delivered:
-                    delivered_conversation_id = None
 
-        session_id = await _session(delivered_conversation_id)
-        await record_tool_call(
-            data,
-            session_id,
-            name=name,
-            arguments=arguments,
-            result=result,
-            duration_ms=(time.monotonic() - start) * 1000,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            conversation_id=delivered_conversation_id,
-            extra=extra,
+        await lifecycle.record_result(
+            result,
+            (time.monotonic() - start) * 1000,
+            conversation_id_delivered=delivered,
         )
         return result
 
@@ -251,29 +177,14 @@ def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> No
     population pass, so the schema the SDK validates against always matches the
     one we advertised — see the note in ``list_handler``.
     """
-    context_enabled = is_context_enabled(data.options.context)
-    description = get_context_description(data.options.context)
     for tool in tools:
-        if tool.name == _GET_MORE_TOOLS_NAME:
-            continue
-        owns_context = _tool_owns_context(server, tool.name)
-        schema = getattr(tool, "inputSchema", None)
-        if context_enabled and not owns_context:
-            schema = add_context_parameter_to_schema(schema, tool.name, description)
-        if data.options.enable_conversation_id:
-            schema = add_conversation_id_to_schema(schema, tool.name)
-        if schema is not getattr(tool, "inputSchema", None):
-            try:
-                tool.inputSchema = schema
-            except Exception:  # noqa: BLE001 - some schema attrs may be read-only
-                log(f"WARN: could not set inputSchema on tool {tool.name}")
-        # Declare the structuredContent channel and remember the answer:
-        # clients that read structuredContent never see the content text
-        # block, and only a declared key may be written back on a call.
-        if data.options.enable_conversation_id:
-            data.tool_output_instructions[tool.name] = (
-                add_instructions_to_output_schema(tool)
-            )
+        mutate_tool_schema(
+            data,
+            tool,
+            schema_attribute="inputSchema",
+            owns_context=_tool_owns_context(server, tool.name),
+            context_required=True,
+        )
 
 
 def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
@@ -313,49 +224,27 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         }
         # Resolve session, emit $mcp_initialize (once per session) and identify here
         # too — a client may list tools without ever calling one.
-        session_id = await prepare_request(
+        lifecycle = await start_tools_list_lifecycle(
             data,
+            request=request,
+            extra=extra,
             mcp_session_id=mcp_session_id,
+            token=token,
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
         )
 
         start = time.monotonic()
         try:
             result = await original(req)
         except Exception as error:
-            await record_tools_list(
-                data,
-                session_id,
-                names=[],
-                request=request,
-                duration_ms=(time.monotonic() - start) * 1000,
-                is_error=True,
-                error=error,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                extra=extra,
-            )
+            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
         duration_ms = (time.monotonic() - start) * 1000
         tools = extract_tools(result)
-        # Zero advertised tools is treated as an errored tools/list (parity with the
-        # TS SDK), checked before we append our own get_more_tools virtual tool.
-        empty = len(tools) == 0
-
-        names = []
-        for tool in tools:
-            names.append(tool.name)
-            if getattr(tool, "description", None):
-                data.tool_descriptions[tool.name] = tool.description
-            category = read_tool_category(tool)
-            if category:
-                data.tool_categories[tool.name] = category
+        # Empty is computed before adding the virtual missing-capability tool.
+        names, empty = collect_listed_tools(data, tools)
 
         _inject_tool_schemas(server, data, tools)
 
@@ -365,19 +254,11 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
                 append_get_more_tools(result, missing_name)
                 names.append(missing_name)
 
-        await record_tools_list(
-            data,
-            session_id,
+        await lifecycle.record_result(
             names=names,
-            request=request,
             response=_to_jsonable(result),
             duration_ms=duration_ms,
-            is_error=empty,
-            error="tools/list returned no tools" if empty else None,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            extra=extra,
+            is_empty=empty,
         )
 
         return result

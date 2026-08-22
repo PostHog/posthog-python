@@ -108,6 +108,8 @@ async def test_tool_call_captured_with_client_identity():
     client = FakeClient()
     instrument(server, client)
 
+    # Prime the listing metadata used by the shared call lifecycle.
+    await _list_tools(server)
     result = await _call_tool(
         server, "add", {"a": 2, "b": 3, "context": "adding for a report"}
     )
@@ -119,6 +121,7 @@ async def test_tool_call_captured_with_client_identity():
     assert len(calls) == 1
     props = calls[0]["properties"]
     assert props["$mcp_tool_name"] == "add"
+    assert props["$mcp_tool_description"] == "Add two numbers"
     assert props["$mcp_intent"] == "adding for a report"
     assert props["$mcp_is_error"] is False
     assert props["$mcp_client_name"] == "test-client"

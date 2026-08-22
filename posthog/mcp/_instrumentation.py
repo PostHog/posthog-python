@@ -13,20 +13,29 @@ import asyncio
 import concurrent.futures
 import os
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ._capture import capture_event
+from ._context_parameters import (
+    add_context_parameter_to_schema,
+    get_context_description,
+    is_context_enabled,
+)
+from ._conversation_id import add_conversation_id_to_schema, resolve_conversation_id
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._output_instructions import add_instructions_to_output_schema
 from .logger import log, warn
 from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
+from .tools import GET_MORE_TOOLS_NAME, resolve_missing_capability_tool_name
 
 # Keep strong refs to in-flight capture tasks/futures and their lifecycle owners so
 # they aren't GC'd mid-flight and lifecycle drains can select only their own work.
@@ -369,6 +378,140 @@ async def prepare_request(
     return session_id
 
 
+@dataclass(frozen=True)
+class ToolCallLifecycle:
+    """Common analytics policy for one tool call.
+
+    Adapters still own request-context lookup, argument stripping, dispatch, result
+    shape, and conversation-id delivery. This object only keeps the shared session,
+    missing-capability, and capture ordering in one place.
+    """
+
+    data: MCPAnalyticsData
+    name: str
+    arguments: Optional[Dict[str, Any]]
+    request: Dict[str, Any]
+    extra: Dict[str, Any]
+    mcp_session_id: Optional[str]
+    token: Optional[SessionTokenPayload]
+    client_name: Optional[str]
+    client_version: Optional[str]
+    protocol_version: Optional[str]
+    missing_name: str
+    conversation_id: Optional[str]
+    minted_conversation_id: bool
+
+    @property
+    def is_missing_capability(self) -> bool:
+        return self.data.options.report_missing and self.name == self.missing_name
+
+    async def prepare_session(self, conversation_id: Optional[str]) -> str:
+        return await prepare_request(
+            self.data,
+            mcp_session_id=self.mcp_session_id,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            request=self.request,
+            extra=self.extra,
+            token=self.token,
+            conversation_id=conversation_id,
+        )
+
+    async def prime_session(self) -> None:
+        await prime_session(
+            self.data, mcp_session_id=self.mcp_session_id, token=self.token
+        )
+
+    async def record_missing_capability(self) -> None:
+        session_id = await self.prepare_session(None)
+        await record_missing_capability(
+            self.data,
+            session_id,
+            tool_name=self.missing_name,
+            context=(self.arguments or {}).get("context"),
+            arguments=self.arguments,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+
+    async def record_error(self, error: Any, duration_ms: float) -> None:
+        # A freshly minted handle cannot anchor or be captured when dispatch
+        # raised: no adapter had an opportunity to deliver it to the agent.
+        conversation_id = None if self.minted_conversation_id else self.conversation_id
+        session_id = await self.prepare_session(conversation_id)
+        await record_tool_call(
+            self.data,
+            session_id,
+            name=self.name,
+            arguments=self.arguments,
+            error=error,
+            duration_ms=duration_ms,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            conversation_id=conversation_id,
+            extra=self.extra,
+        )
+
+    async def record_result(
+        self, result: Any, duration_ms: float, *, conversation_id_delivered: bool
+    ) -> None:
+        conversation_id = self.conversation_id
+        if self.minted_conversation_id and not conversation_id_delivered:
+            conversation_id = None
+        session_id = await self.prepare_session(conversation_id)
+        await record_tool_call(
+            self.data,
+            session_id,
+            name=self.name,
+            arguments=self.arguments,
+            result=result,
+            duration_ms=duration_ms,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            conversation_id=conversation_id,
+            extra=self.extra,
+        )
+
+
+def start_tool_call_lifecycle(
+    data: MCPAnalyticsData,
+    *,
+    name: str,
+    arguments: Optional[Dict[str, Any]],
+    mcp_session_id: Optional[str],
+    token: Optional[SessionTokenPayload],
+    client_name: Optional[str],
+    client_version: Optional[str],
+    protocol_version: Optional[str],
+    extra: Dict[str, Any],
+) -> ToolCallLifecycle:
+    """Resolve adapter-independent policy for a tool call without dispatching it."""
+    missing_name = resolve_missing_capability_tool_name(data.options)
+    conversation_id, minted = resolve_conversation_id(
+        data.options.enable_conversation_id, arguments, name, missing_name
+    )
+    return ToolCallLifecycle(
+        data=data,
+        name=name,
+        arguments=arguments,
+        request=build_tool_call_request(name, arguments),
+        extra=extra,
+        mcp_session_id=mcp_session_id,
+        token=token,
+        client_name=client_name,
+        client_version=client_version,
+        protocol_version=protocol_version,
+        missing_name=missing_name,
+        conversation_id=conversation_id,
+        minted_conversation_id=minted,
+    )
+
+
 async def record_tool_call(
     data: MCPAnalyticsData,
     session_id: str,
@@ -459,6 +602,57 @@ def read_tool_category(tool: Any) -> Optional[str]:
     return None
 
 
+def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str], bool]:
+    """Cache common tool metadata and return the pre-injection listing summary."""
+    names = []
+    for tool in tools:
+        names.append(tool.name)
+        if getattr(tool, "description", None):
+            data.tool_descriptions[tool.name] = tool.description
+        category = read_tool_category(tool)
+        if category:
+            data.tool_categories[tool.name] = category
+    return names, not tools
+
+
+def mutate_tool_schema(
+    data: MCPAnalyticsData,
+    tool: Any,
+    *,
+    schema_attribute: str,
+    owns_context: bool,
+    context_required: bool,
+) -> None:
+    """Apply the common analytics schema pipeline and write it back in place.
+
+    The adapter explicitly supplies its SDK model's schema attribute and its own
+    ownership decision. Those are the parts that differ across MCP generations;
+    context/conversation mutation and output-channel bookkeeping do not.
+    """
+    if tool.name == GET_MORE_TOOLS_NAME:
+        return
+    schema = getattr(tool, schema_attribute, None)
+    original_schema = schema
+    if is_context_enabled(data.options.context) and not owns_context:
+        schema = add_context_parameter_to_schema(
+            schema,
+            tool.name,
+            get_context_description(data.options.context),
+            required=context_required,
+        )
+    if data.options.enable_conversation_id:
+        schema = add_conversation_id_to_schema(schema, tool.name)
+    if schema is not original_schema:
+        try:
+            setattr(tool, schema_attribute, schema)
+        except Exception:  # noqa: BLE001 - some schema attrs may be read-only
+            log(f"WARN: could not set {schema_attribute} on tool {tool.name}")
+    if data.options.enable_conversation_id:
+        data.tool_output_instructions[tool.name] = add_instructions_to_output_schema(
+            tool
+        )
+
+
 def request_to_dict(req: Any) -> Dict[str, Any]:
     """Shape a request object into the JSON-RPC-ish dict the sanitizer expects."""
     method = getattr(req, "method", None) or "tools/list"
@@ -481,6 +675,89 @@ def params_to_request_dict(
         except Exception:  # noqa: BLE001
             params_dict = {}
     return {"method": method, "params": params_dict}
+
+
+@dataclass(frozen=True)
+class ToolsListLifecycle:
+    """Common capture lifecycle for one client-facing tools/list dispatch."""
+
+    data: MCPAnalyticsData
+    session_id: str
+    request: Dict[str, Any]
+    extra: Dict[str, Any]
+    client_name: Optional[str]
+    client_version: Optional[str]
+    protocol_version: Optional[str]
+
+    async def record_error(self, error: Any, duration_ms: float) -> None:
+        await record_tools_list(
+            self.data,
+            self.session_id,
+            names=[],
+            request=self.request,
+            duration_ms=duration_ms,
+            is_error=True,
+            error=error,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+
+    async def record_result(
+        self,
+        *,
+        names: List[str],
+        response: Any,
+        duration_ms: float,
+        is_empty: bool,
+    ) -> None:
+        await record_tools_list(
+            self.data,
+            self.session_id,
+            names=names,
+            request=self.request,
+            response=response,
+            duration_ms=duration_ms,
+            is_error=is_empty,
+            error="tools/list returned no tools" if is_empty else None,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+
+
+async def start_tools_list_lifecycle(
+    data: MCPAnalyticsData,
+    *,
+    request: Dict[str, Any],
+    extra: Dict[str, Any],
+    mcp_session_id: Optional[str],
+    token: Optional[SessionTokenPayload],
+    client_name: Optional[str],
+    client_version: Optional[str],
+    protocol_version: Optional[str],
+) -> ToolsListLifecycle:
+    session_id = await prepare_request(
+        data,
+        mcp_session_id=mcp_session_id,
+        client_name=client_name,
+        client_version=client_version,
+        protocol_version=protocol_version,
+        request=request,
+        extra=extra,
+        token=token,
+    )
+    return ToolsListLifecycle(
+        data=data,
+        session_id=session_id,
+        request=request,
+        extra=extra,
+        client_name=client_name,
+        client_version=client_version,
+        protocol_version=protocol_version,
+    )
 
 
 async def record_missing_capability(

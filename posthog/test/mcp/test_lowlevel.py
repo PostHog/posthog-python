@@ -85,6 +85,8 @@ async def test_tool_call_success_captures_intent():
     assert len(calls) == 1
     props = calls[0]["properties"]
     assert props["$mcp_tool_name"] == "echo"
+    # tools/list metadata and tools/call capture share the same lifecycle policy.
+    assert props["$mcp_tool_description"] == "Echo back a message"
     assert props["$mcp_intent"] == "echoing a message for the test"
     assert props["$mcp_is_error"] is False
     # context is stripped from captured parameters
