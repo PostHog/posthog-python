@@ -735,7 +735,7 @@ def finalize_ai_content(value: Any, ph_client: Any = None) -> Any:
     return redact_media(value, ph_client=ph_client)
 
 
-def with_privacy_mode(ph_client: Any, privacy_mode: bool, value: Any):
+def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
     if getattr(ph_client, "privacy_mode", False) or privacy_mode:
         return None
     return value

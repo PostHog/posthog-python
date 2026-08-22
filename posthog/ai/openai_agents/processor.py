@@ -25,7 +25,7 @@ from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
 from posthog.ai.utils import (
     _capture_processor_event,
     finalize_ai_content,
-    with_privacy_mode,
+    with_privacy_mode as _with_privacy_mode,
 )
 from posthog.client import Client
 
@@ -123,7 +123,7 @@ class PostHogTracingProcessor(TracingProcessor):
 
     def _with_privacy_mode(self, value: Any) -> Any:
         """Apply privacy mode redaction if enabled."""
-        return with_privacy_mode(self._client, self._privacy_mode, value)
+        return _with_privacy_mode(self._client, self._privacy_mode, value)
 
     def _evict_stale_entries(self) -> None:
         """Evict oldest entries if dicts exceed max size to prevent unbounded growth."""

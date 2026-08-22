@@ -33,7 +33,7 @@ from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.utils import (
     _capture_processor_event,
     finalize_ai_content,
-    with_privacy_mode,
+    with_privacy_mode as _with_privacy_mode,
 )
 from posthog.client import Client
 
@@ -419,13 +419,13 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = with_privacy_mode(
+            properties["$ai_input"] = _with_privacy_mode(
                 self._client,
                 privacy,
                 finalize_ai_content(input_messages, self._client),
             )
         if output_choices is not None:
-            properties["$ai_output_choices"] = with_privacy_mode(
+            properties["$ai_output_choices"] = _with_privacy_mode(
                 self._client,
                 privacy,
                 finalize_ai_content(output_choices, self._client),
@@ -484,13 +484,13 @@ class PostHogClaudeAgentProcessor:
         }
 
         if input_messages is not None:
-            properties["$ai_input"] = with_privacy_mode(
+            properties["$ai_input"] = _with_privacy_mode(
                 self._client,
                 privacy,
                 finalize_ai_content(input_messages, self._client),
             )
         if output_choices is not None:
-            properties["$ai_output_choices"] = with_privacy_mode(
+            properties["$ai_output_choices"] = _with_privacy_mode(
                 self._client,
                 privacy,
                 finalize_ai_content(output_choices, self._client),
@@ -538,7 +538,7 @@ class PostHogClaudeAgentProcessor:
             **extra_props,
         }
 
-        if with_privacy_mode(self._client, privacy, True):
+        if _with_privacy_mode(self._client, privacy, True):
             properties["$ai_input_state"] = finalize_ai_content(
                 _ensure_serializable(block.input), self._client
             )
