@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
@@ -458,6 +459,67 @@ class TestTraceEmission:
 
 class TestPrivacyMode:
     @pytest.mark.asyncio
+    async def test_client_privacy_mode_redacts_generation_input(self, mock_client):
+        mock_client.privacy_mode = True
+        proc = PostHogClaudeAgentProcessor(client=mock_client, distinct_id="user")
+        messages = [_make_message_start(), _make_message_stop()]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(prompt="secret", options=ClaudeAgentOptions()):
+                pass
+
+        properties = mock_client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("processor_privacy", "call_privacy", "expected_input"),
+        [(False, True, None), (True, False, [{"role": "user", "content": "secret"}])],
+    )
+    async def test_per_call_privacy_mode_overrides_processor_mode(
+        self, mock_client, processor_privacy, call_privacy, expected_input
+    ):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client,
+            distinct_id="user",
+            privacy_mode=processor_privacy,
+        )
+        messages = [_make_message_start(), _make_message_stop()]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(
+                prompt="secret",
+                options=ClaudeAgentOptions(),
+                posthog_privacy_mode=call_privacy,
+            ):
+                pass
+
+        properties = mock_client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] == expected_input
+
+    @pytest.mark.asyncio
+    async def test_client_without_privacy_mode_captures_content(self):
+        client = SimpleNamespace(capture=MagicMock())
+        proc = PostHogClaudeAgentProcessor(client=client, distinct_id="user")
+        messages = [_make_message_start(), _make_message_stop()]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(prompt="visible", options=ClaudeAgentOptions()):
+                pass
+
+        properties = client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] == [{"role": "user", "content": "visible"}]
+
+    @pytest.mark.asyncio
     async def test_privacy_mode_redacts_tool_input(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
             client=mock_client,
@@ -596,12 +658,59 @@ class TestPersonlessMode:
             "posthog.ai.claude_agent_sdk.processor.original_query",
             side_effect=lambda **kw: _fake_query(messages),
         ):
-            async for _ in proc.query(prompt="Hi", options=ClaudeAgentOptions()):
+            async for _ in proc.query(
+                prompt="Hi",
+                options=ClaudeAgentOptions(),
+                posthog_trace_id="trace-fallback",
+            ):
                 pass
 
         for call in mock_client.capture.call_args_list:
             props = call.kwargs.get("properties") or call[1].get("properties")
             assert props.get("$process_person_profile") is False
+            assert call.kwargs["distinct_id"] == "trace-fallback"
+
+
+class TestCapturePolicy:
+    def test_explicit_groups_override_preserves_empty_groups(self, mock_client):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client,
+            groups={"company": "default"},
+        )
+
+        proc._capture_event("$ai_trace", {}, groups={})
+
+        assert mock_client.capture.call_args.kwargs["groups"] == {}
+
+    def test_default_properties_keep_existing_precedence(self, mock_client):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client,
+            properties={"environment": "processor"},
+        )
+
+        proc._capture_event(
+            "$ai_trace",
+            {"environment": "event", "$ai_trace_id": "trace-id"},
+        )
+
+        assert mock_client.capture.call_args.kwargs["properties"] == {
+            "environment": "processor",
+            "$ai_trace_id": "trace-id",
+        }
+
+    def test_client_without_capture_capability_is_ignored(self):
+        proc = PostHogClaudeAgentProcessor(client=object())
+
+        proc._capture_event("$ai_trace", {})
+
+    def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
+        mock_client.capture.side_effect = RuntimeError("capture failed")
+        proc = PostHogClaudeAgentProcessor(client=mock_client)
+
+        with caplog.at_level(logging.DEBUG, logger="posthog"):
+            proc._capture_event("$ai_trace", {})
+
+        assert "Failed to capture PostHog event: capture failed" in caplog.text
 
 
 class TestCustomProperties:
