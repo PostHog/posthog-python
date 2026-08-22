@@ -51,8 +51,31 @@ async def resolve_session_id(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
 ) -> str:
+    """The session id for this request. See :func:`resolve_session_id_with_source`,
+    which this wraps -- callers that need to know *where* the session came from
+    should use that instead of reading ``data.session_source`` afterwards."""
+    session_id, _ = await resolve_session_id_with_source(
+        data, mcp_session_id, token=token, conversation_id=conversation_id
+    )
+    return session_id
+
+
+async def resolve_session_id_with_source(
+    data: MCPAnalyticsData,
+    mcp_session_id: Optional[str],
+    *,
+    token: Optional[SessionTokenPayload] = None,
+    conversation_id: Optional[str] = None,
+) -> tuple[str, str]:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
+
+    Returns ``(session_id, source)`` where source is one of ``"conversation"``,
+    ``"token"``, ``"mcp"`` or ``"generated"`` -- describing *this* request. Callers
+    must not infer it from ``data.session_source`` instead: that field is shared
+    mutable state which the conversation branch below deliberately never writes, so
+    reading it after the fact reports whatever some earlier request happened to
+    leave there.
 
     Priority mirrors posthog-js ``getSessionId``: the agent's ``conversation_id``
     handle first (the only id that survives the 2026-07-28 revision's
@@ -75,7 +98,7 @@ async def resolve_session_id(
     a genuine token session never needs the fallback.
     """
     if conversation_id:
-        return derive_session_id_from_conversation(conversation_id)
+        return derive_session_id_from_conversation(conversation_id), "conversation"
 
     async with data.session_lock:
         now = datetime.now(timezone.utc)
@@ -87,20 +110,20 @@ async def resolve_session_id(
             data.session_id = token.session_id
             data.session_source = "token"
             data.last_activity = now
-            return data.session_id
+            return data.session_id, "token"
 
         if mcp_session_id:
             data.session_id = derive_session_id_from_mcp_session(mcp_session_id)
             data.last_mcp_session_id = mcp_session_id
             data.session_source = "mcp"
             data.last_activity = now
-            return data.session_id
+            return data.session_id, "mcp"
 
         # Once a session is MCP-derived, keep it even if a later request arrives
         # without the MCP session id, so the session doesn't fragment.
         if data.session_source == "mcp" and data.last_mcp_session_id:
             data.last_activity = now
-            return data.session_id
+            return data.session_id, "mcp"
 
         # Memory fallback (single-owner transports like stdio). A leftover token
         # session must NOT leak to a credential-less request, so anything that
@@ -112,4 +135,4 @@ async def resolve_session_id(
             data.session_id = new_session_id()
             data.session_source = "generated"
         data.last_activity = now
-        return data.session_id
+        return data.session_id, "generated"
