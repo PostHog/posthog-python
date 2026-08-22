@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING as _TYPE_CHECKING, Optional
+
 try:
     import openai
 except ImportError:
@@ -5,17 +7,21 @@ except ImportError:
         "Please install the Open AI SDK to use this feature: 'pip install openai'"
     )
 
-from posthog.ai.openai.openai import (
-    WrappedBeta,
-    WrappedChat,
-    WrappedEmbeddings,
-    WrappedResponses,
+from .openai import (
+    WrappedBeta as WrappedBeta,
+    WrappedChat as WrappedChat,
+    WrappedEmbeddings as WrappedEmbeddings,
+    WrappedResponses as WrappedResponses,
+    _SYNC_RESOURCE_WRAPPERS,
 )
-from posthog.ai.openai.openai_async import WrappedBeta as AsyncWrappedBeta
-from posthog.ai.openai.openai_async import WrappedChat as AsyncWrappedChat
-from posthog.ai.openai.openai_async import WrappedEmbeddings as AsyncWrappedEmbeddings
-from posthog.ai.openai.openai_async import WrappedResponses as AsyncWrappedResponses
-from typing import Optional
+from .openai_async import (
+    WrappedBeta as AsyncWrappedBeta,
+    WrappedChat as AsyncWrappedChat,
+    WrappedEmbeddings as AsyncWrappedEmbeddings,
+    WrappedResponses as AsyncWrappedResponses,
+    _ASYNC_RESOURCE_WRAPPERS,
+)
+from .wrapper_utils import _wrap_openai_resources
 
 from posthog.client import Client as PostHogClient
 from posthog import setup
@@ -39,23 +45,13 @@ class AzureOpenAI(openai.AzureOpenAI):
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
 
-        # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, "chat", None)
-        self._original_embeddings = getattr(self, "embeddings", None)
-        self._original_beta = getattr(self, "beta", None)
-        self._original_responses = getattr(self, "responses", None)
+        _wrap_openai_resources(self, _SYNC_RESOURCE_WRAPPERS)
 
-        # Replace with wrapped versions (only if originals exist)
-        if self._original_chat is not None:
+        # Keep dynamically installed resources visible to API and type inspection.
+        if _TYPE_CHECKING:
             self.chat = WrappedChat(self, self._original_chat)
-
-        if self._original_embeddings is not None:
             self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-
-        if self._original_beta is not None:
             self.beta = WrappedBeta(self, self._original_beta)
-
-        if self._original_responses is not None:
             self.responses = WrappedResponses(self, self._original_responses)
 
 
@@ -77,22 +73,11 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
 
-        # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, "chat", None)
-        self._original_embeddings = getattr(self, "embeddings", None)
-        self._original_beta = getattr(self, "beta", None)
-        self._original_responses = getattr(self, "responses", None)
+        _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
 
-        # Replace with wrapped versions (only if originals exist)
-        if self._original_chat is not None:
+        # Keep dynamically installed resources visible to API and type inspection.
+        if _TYPE_CHECKING:
             self.chat = AsyncWrappedChat(self, self._original_chat)
-
-        if self._original_embeddings is not None:
             self.embeddings = AsyncWrappedEmbeddings(self, self._original_embeddings)
-
-        if self._original_beta is not None:
             self.beta = AsyncWrappedBeta(self, self._original_beta)
-
-        # Only add responses if available (newer OpenAI versions)
-        if self._original_responses is not None:
             self.responses = AsyncWrappedResponses(self, self._original_responses)
