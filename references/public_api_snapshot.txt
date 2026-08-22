@@ -349,6 +349,7 @@ alias posthog.mcp.asgi.encode_session_id -> posthog.mcp.session_token.encode_ses
 alias posthog.mcp.asgi.log -> posthog.mcp.logger.log
 alias posthog.mcp.asgi.new_session_id -> posthog.mcp.session.new_session_id
 alias posthog.mcp.asgi.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
+alias posthog.mcp.asgi.warn -> posthog.mcp.logger.warn
 alias posthog.mcp.decode_session_id -> posthog.mcp.session_token.decode_session_id
 alias posthog.mcp.derive_session_id_from_conversation -> posthog.mcp.session.derive_session_id_from_conversation
 alias posthog.mcp.derive_session_id_from_mcp_session -> posthog.mcp.session.derive_session_id_from_mcp_session

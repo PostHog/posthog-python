@@ -29,10 +29,11 @@ from ._exceptions import capture_exception
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
 from ._output_instructions import add_instructions_to_output_schema
-from .logger import log
+from .logger import log, warn
+from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
-from .session import resolve_session_id
+from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import GET_MORE_TOOLS_NAME, resolve_missing_capability_tool_name
 
@@ -277,6 +278,46 @@ async def prime_session(
     await resolve_session_id(data, mcp_session_id, token=token)
 
 
+def _is_sse_request(extra: Optional[Dict[str, Any]]) -> bool:
+    """True for the deprecated SSE transport, which carries its session as a
+    ``session_id`` query parameter rather than a header.
+
+    Such a request resolves to a ``generated`` session for a reason the stateless
+    mint cannot fix -- the mint sets a response header an SSE client never replays --
+    so :func:`_warn_stateless_session_not_wired` would be recommending a remedy that
+    does not apply."""
+    try:
+        params = getattr(get_request(extra), "query_params", None)
+        return bool(params is not None and params.get("session_id"))
+    except Exception:  # noqa: BLE001 - a transport probe must never break a tool call
+        return False
+
+
+def _warn_stateless_session_not_wired(data: MCPAnalyticsData) -> None:
+    """Warn once per server when a tool call/listing arrives over HTTP but the
+    session still had to come from this process's memory.
+
+    That is the fingerprint of a stateless/multi-pod server whose mint middleware
+    never attached — most often because the ASGI app was built (or mounted from
+    another module) *before* ``instrument()`` ran, so wrapping the app factories
+    couldn't retrofit the already-built app. The result is a silently fragmented
+    ``$session_id``; this makes that failure loud instead of dark-in-prod."""
+    if data.warned_no_stateless_session:
+        return
+    data.warned_no_stateless_session = True
+    warn(
+        "Warning: an MCP tool request arrived over streamable HTTP with no session id, so "
+        "PostHog generated a per-process $session_id that will fragment across requests "
+        "and pods. This usually means PostHogMcpStatelessSessionMiddleware never attached "
+        "— e.g. the ASGI app was built or mounted before instrument() ran. If you build "
+        "the app yourself, add the middleware explicitly: "
+        "app.add_middleware(PostHogMcpStatelessSessionMiddleware). "
+        "Enabling conversation ids (MCPAnalyticsOptions(enable_conversation_id=True)) also "
+        "anchors the session without any middleware. "
+        "See posthog/mcp/README.md (stateless / multi-pod servers)."
+    )
+
+
 async def prepare_request(
     data: MCPAnalyticsData,
     *,
@@ -314,10 +355,20 @@ async def prepare_request(
     when ``capture_event`` builds the initialize event — otherwise the first
     ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
     (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
-    the Python SDK handles initialize in the session layer, not ``request_handlers``.)"""
-    session_id = await resolve_session_id(
+    the Python SDK handles initialize in the session layer, not ``request_handlers``.)
+
+    A request that reached us over HTTP yet still resolved to this process's memory
+    has nothing correlating it across pods, which on a stateless server means the
+    mint middleware never attached — warn once rather than fragment silently."""
+    session_id, session_source = await resolve_session_id_with_source(
         data, mcp_session_id, token=token, conversation_id=conversation_id
     )
+    if (
+        session_source == "generated"
+        and get_request(extra) is not None
+        and not _is_sse_request(extra)
+    ):
+        _warn_stateless_session_not_wired(data)
     identify_event = await handle_identify(data, session_id, request, extra)
     if identify_event:
         fire_and_forget(capture_event(data, identify_event), data)
