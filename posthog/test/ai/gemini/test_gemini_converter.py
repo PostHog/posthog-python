@@ -249,3 +249,65 @@ class TestGeminiResponse:
         assert types_seen == ["text", "image"]
         assert content[0] == {"type": "text", "text": "here: "}
         assert content[1]["inline_data"]["data"] == base64.b64encode(PNG).decode()
+
+
+class TestGeminiThoughtParts:
+    def test_response_thought_part_becomes_thinking_block(self):
+        resp = types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(
+                        role="model",
+                        parts=[
+                            types.Part(text="Weighing the options...", thought=True),
+                            types.Part(text='{"verdict": "yes"}'),
+                        ],
+                    ),
+                )
+            ]
+        )
+        out = format_gemini_response(resp)
+        assert out[0]["content"] == [
+            {"type": "thinking", "thinking": "Weighing the options..."},
+            {"type": "text", "text": '{"verdict": "yes"}'},
+        ]
+
+    def test_input_thought_part_becomes_thinking_block(self):
+        # Multi-turn callers append the model's prior content (thoughts included)
+        # back into the conversation, so thought parts also arrive as input.
+        contents = [
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(text="Considering...", thought=True),
+                    types.Part(text="answer"),
+                ],
+            )
+        ]
+        out = format_gemini_input(contents)
+        assert out[0]["content"] == [
+            {"type": "thinking", "thinking": "Considering..."},
+            {"type": "text", "text": "answer"},
+        ]
+
+    def test_streaming_chunk_thought_part_becomes_thinking_block(self):
+        chunk = types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text="Hmm, ", thought=True)],
+                    )
+                )
+            ]
+        )
+        blocks = extract_gemini_content_from_chunk(chunk)
+        assert blocks == [{"type": "thinking", "thinking": "Hmm, "}]
+
+        out = format_gemini_streaming_output(
+            blocks + [{"type": "text", "text": "done"}]
+        )
+        assert out[0]["content"] == [
+            {"type": "thinking", "thinking": "Hmm, "},
+            {"type": "text", "text": "done"},
+        ]
