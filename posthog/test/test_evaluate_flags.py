@@ -395,6 +395,81 @@ class TestEvaluateFlagsLocalPayloads(unittest.TestCase):
         self.assertEqual(properties["$feature_flag_payload"], {"copy": "new"})
 
 
+class TestEvaluateFlagsMissingLocalDefinition(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "name": "Local flag",
+                "key": "local-flag",
+                "active": True,
+                "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+            }
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @staticmethod
+    def _remote_response():
+        return {
+            "flags": {
+                "local-flag": {"enabled": False, "variant": None},
+                "remote-only": {"enabled": True, "variant": None},
+                "unrequested": {"enabled": True, "variant": None},
+            }
+        }
+
+    @mock.patch("posthog.client.flags")
+    def test_missing_requested_key_triggers_one_scoped_fallback(self, patch_flags):
+        patch_flags.return_value = self._remote_response()
+        requested_keys = ["local-flag", "remote-only"]
+
+        flags = self.client.evaluate_flags("user-1", flag_keys=requested_keys)
+
+        self.assertEqual(set(flags.keys), set(requested_keys))
+        self.assertTrue(flags.get_flag("local-flag"))
+        self.assertTrue(flags.get_flag("remote-only"))
+        patch_flags.assert_called_once()
+        self.assertEqual(
+            patch_flags.call_args.kwargs["flag_keys_to_evaluate"], requested_keys
+        )
+
+    @mock.patch("posthog.client.flags")
+    def test_missing_requested_key_is_omitted_for_local_only_evaluation(
+        self, patch_flags
+    ):
+        patch_flags.return_value = self._remote_response()
+
+        flags = self.client.evaluate_flags(
+            "user-1",
+            flag_keys=["local-flag", "remote-only"],
+            only_evaluate_locally=True,
+        )
+
+        self.assertEqual(flags.keys, ["local-flag"])
+        self.assertTrue(flags.get_flag("local-flag"))
+        self.assertIsNone(flags.get_flag("remote-only"))
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    def test_server_missing_key_falls_back_once_per_evaluation_call(self, patch_flags):
+        patch_flags.return_value = {"flags": {}}
+        requested_keys = ["local-flag", "typo-flag"]
+
+        first = self.client.evaluate_flags("user-1", flag_keys=requested_keys)
+        second = self.client.evaluate_flags("user-1", flag_keys=requested_keys)
+
+        for flags in (first, second):
+            self.assertEqual(flags.keys, ["local-flag"])
+            self.assertTrue(flags.get_flag("local-flag"))
+            self.assertIsNone(flags.get_flag("typo-flag"))
+        self.assertEqual(patch_flags.call_count, 2)
+        for call in patch_flags.call_args_list:
+            self.assertEqual(call.kwargs["flag_keys_to_evaluate"], requested_keys)
+
+
 class TestEvaluateFlagsLocalDeviceBucketing(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY)
