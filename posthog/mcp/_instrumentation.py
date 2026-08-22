@@ -338,7 +338,7 @@ class ToolCallLifecycle:
 
     data: MCPAnalyticsData
     name: str
-    arguments: Dict[str, Any]
+    arguments: Optional[Dict[str, Any]]
     request: Dict[str, Any]
     extra: Dict[str, Any]
     mcp_session_id: Optional[str]
@@ -378,7 +378,7 @@ class ToolCallLifecycle:
             self.data,
             session_id,
             tool_name=self.missing_name,
-            context=self.arguments.get("context"),
+            context=(self.arguments or {}).get("context"),
             arguments=self.arguments,
             client_name=self.client_name,
             client_version=self.client_version,
@@ -431,7 +431,7 @@ def start_tool_call_lifecycle(
     data: MCPAnalyticsData,
     *,
     name: str,
-    arguments: Dict[str, Any],
+    arguments: Optional[Dict[str, Any]],
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
     client_name: Optional[str],

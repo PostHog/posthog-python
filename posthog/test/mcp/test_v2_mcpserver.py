@@ -365,6 +365,20 @@ async def test_report_missing_advertises_and_captures():
     assert missing[0]["properties"]["$mcp_intent"] == "need a tool to send emails"
 
 
+async def test_report_missing_accepts_omitted_arguments():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+
+    result = await _call_tool(server, "get_more_tools", None)
+    await _flush()
+
+    assert result.is_error is False
+    missing = _events(client, "$mcp_missing_capability")
+    assert missing
+    assert "$mcp_intent" not in missing[0]["properties"]
+
+
 async def test_instrument_is_idempotent():
     server = make_server()
     client = FakeClient()
