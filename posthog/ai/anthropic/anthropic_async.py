@@ -11,10 +11,24 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from posthog import setup
-from ..stream import AsyncStreamWrapper
-from ..types import StreamingContentBlock, TokenUsage
-from ..utils import call_llm_and_track_usage_async
-from .anthropic_stream import AnthropicStreamAccumulator
+from ..stream import AsyncStreamWrapper as AsyncStreamWrapper
+from ..types import (
+    StreamingContentBlock as StreamingContentBlock,
+    TokenUsage as TokenUsage,
+    ToolInProgress as ToolInProgress,
+)
+from ..utils import (
+    call_llm_and_track_usage_async as call_llm_and_track_usage_async,
+    merge_usage_stats as merge_usage_stats,
+)
+from ._anthropic_stream import _AnthropicStreamAccumulator
+from .anthropic_converter import (
+    extract_anthropic_usage_from_event as extract_anthropic_usage_from_event,
+    finalize_anthropic_tool_input as finalize_anthropic_tool_input,
+    handle_anthropic_content_block_start as handle_anthropic_content_block_start,
+    handle_anthropic_text_delta as handle_anthropic_text_delta,
+    handle_anthropic_tool_delta as handle_anthropic_tool_delta,
+)
 from posthog.client import Client as PostHogClient
 
 
@@ -171,7 +185,7 @@ class AsyncWrappedMessages(AsyncMessages):
         kwargs: Dict[str, Any],
         start_time: float,
     ):
-        accumulator = AnthropicStreamAccumulator()
+        accumulator = _AnthropicStreamAccumulator()
 
         async def generator():
             try:

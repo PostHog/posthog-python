@@ -11,7 +11,7 @@ from .anthropic_converter import (
 )
 
 
-class AnthropicStreamAccumulator:
+class _AnthropicStreamAccumulator:
     """Accumulates sync-neutral capture state from Anthropic stream events."""
 
     def __init__(self) -> None:
