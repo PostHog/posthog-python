@@ -1,14 +1,25 @@
 import time
 from typing import Any, Dict, Optional
 
+from ... import setup as setup
 from ...client import Client as PostHogClient
+from ..types import StreamingEventData as StreamingEventData
 from ..types import TokenUsage
-from ..utils import call_llm_and_track_usage, merge_usage_stats
+from ..utils import (
+    call_llm_and_track_usage,
+    capture_streaming_event as capture_streaming_event,
+    finalize_ai_content as finalize_ai_content,
+    merge_system_prompt as merge_system_prompt,
+    merge_usage_stats,
+    with_privacy_mode as with_privacy_mode,
+)
 from ._shared import _GeminiModelsPolicy, _resolve_posthog_client
 from .gemini_converter import (
     extract_gemini_content_from_chunk,
+    extract_gemini_embedding_token_count as extract_gemini_embedding_token_count,
     extract_gemini_stop_reason_from_chunk,
     extract_gemini_usage_from_chunk,
+    format_gemini_streaming_output as format_gemini_streaming_output,
 )
 
 
