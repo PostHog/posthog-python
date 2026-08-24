@@ -1,5 +1,11 @@
 # posthog
 
+## 7.43.0 — 2026-08-24
+
+### Minor changes
+
+- [35220f3](https://github.com/posthog/posthog-python/commit/35220f3b11c070d3b85fbbd9d73b7a2c2bec060c) Fall back to remote evaluation when a requested flag is missing from local definitions. This changes the previous behavior where the key was omitted without a request. — Thanks @marandaneto!
+
 ## 7.42.1 — 2026-08-23
 
 ### Patch changes
