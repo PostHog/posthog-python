@@ -532,6 +532,15 @@ class Prompts:
             if response.status_code == 404:
                 raise Exception(f"[PostHog Prompts] {prompt_title} not found")
 
+            if response.status_code == 401:
+                raise Exception(
+                    f"[PostHog Prompts] Authentication failed for {prompt_reference}. "
+                    "The personal_api_key may be missing, expired, or the wrong type. "
+                    "Prompt fetches need a personal API key (starts with 'phx_'), not a "
+                    "project secret key. Check that you passed a personal_api_key and not "
+                    "a secret key."
+                )
+
             if response.status_code == 403:
                 raise Exception(
                     f"[PostHog Prompts] Access denied for {prompt_reference}. "
