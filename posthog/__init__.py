@@ -349,6 +349,12 @@ Attributes:
         feature flag definitions across workers.
     capture_exception_code_variables: Capture local variable values on exception
         stack frames.
+    capture_trace_context: When OpenTelemetry is installed and a valid span is
+        active at capture time, add its trace and span IDs as ``$trace_id`` and
+        ``$span_id`` properties to events captured with ``capture()`` and
+        ``capture_ai()``. Explicit ``$trace_id``/``$span_id`` values passed in
+        ``properties`` win. Exception events always attach these IDs regardless
+        of this setting. Defaults to False.
     code_variables_mask_patterns: Variable-name patterns to mask when capturing
         code variables.
     code_variables_ignore_patterns: Variable-name patterns to omit when capturing
@@ -410,6 +416,7 @@ _enable_multimodal_capture = False  # type: bool
 
 default_client = None  # type: Optional[Client]
 
+capture_trace_context = False
 capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -1260,6 +1267,7 @@ def setup() -> Client:
             enable_local_evaluation=enable_local_evaluation,
             flag_definition_cache_provider=flag_definition_cache_provider,
             capture_exception_code_variables=capture_exception_code_variables,
+            capture_trace_context=capture_trace_context,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
             code_variables_mask_url_credentials=code_variables_mask_url_credentials,

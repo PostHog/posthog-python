@@ -689,6 +689,7 @@ class Client(object):
         enable_local_evaluation=True,
         flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None,
         capture_exception_code_variables=False,
+        capture_trace_context=False,
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         code_variables_mask_url_credentials=None,
@@ -778,6 +779,13 @@ class Client(object):
                 sharing feature flag definitions across workers.
             capture_exception_code_variables: Capture local variable values on
                 exception stack frames.
+            capture_trace_context: When OpenTelemetry is installed and a valid span is
+                active at capture time, add its trace and span IDs as ``$trace_id`` and
+                ``$span_id`` properties to events captured with ``capture()`` and
+                ``capture_ai()``, so they can be correlated with backend traces. Explicit
+                ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
+                events (``capture_exception``) always attach these IDs regardless of this
+                setting. Defaults to False.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -925,6 +933,7 @@ class Client(object):
         # server reports it, so full events are the fail-safe.
         self._minimal_flag_called_events: bool = False
 
+        self.capture_trace_context = capture_trace_context
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
             code_variables_mask_patterns
@@ -1589,6 +1598,9 @@ class Client(object):
         property_allowlist = kwargs.get("_property_allowlist", None)
 
         properties = {**(properties or {}), **system_context()}
+
+        if self.capture_trace_context:
+            properties = {**_get_current_otel_span_properties(), **properties}
 
         properties = add_context_tags(properties)
         assert properties is not None  # Type hint for mypy
