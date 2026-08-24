@@ -535,10 +535,11 @@ class Prompts:
             if response.status_code == 401:
                 raise Exception(
                     f"[PostHog Prompts] Authentication failed for {prompt_reference}. "
-                    "The personal_api_key may be missing, expired, or the wrong type. "
-                    "Prompt fetches need a personal API key (starts with 'phx_'), not a "
-                    "project secret key. Check that you passed a personal_api_key and not "
-                    "a secret key."
+                    "The key may be missing, expired, or the wrong type. Prompt fetches "
+                    "require a personal API key (starts with 'phx_'); a project secret "
+                    "key is not accepted. Pass this key as personal_api_key when you "
+                    "construct Prompts directly, or as secret_key when you configure the "
+                    "PostHog client."
                 )
 
             if response.status_code == 403:
