@@ -1,5 +1,11 @@
 # posthog
 
+## 7.43.1 — 2026-08-25
+
+### Patch changes
+
+- [8046114](https://github.com/posthog/posthog-python/commit/804611456f79d77ffcb5af1e9099a0a67056a373) Return an empty feature flag snapshot without evaluation when feature flag keys are explicitly empty. — Thanks @marandaneto!
+
 ## 7.43.0 — 2026-08-24
 
 ### Minor changes
