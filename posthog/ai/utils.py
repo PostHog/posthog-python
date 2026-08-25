@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
@@ -68,6 +69,32 @@ def _capture_ai_event(ph_client, event: str, **kwargs):
         if callable(capture_ai):
             return capture_ai(event=event, **kwargs)
     return ph_client.capture(event=event, **kwargs)
+
+
+def _capture_processor_event(
+    ph_client: Any,
+    event: str,
+    properties: Dict[str, Any],
+    *,
+    default_properties: Optional[Dict[str, Any]] = None,
+    distinct_id: Optional[str] = None,
+    groups: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Apply the shared capture policy used by AI SDK processors."""
+    try:
+        capture = getattr(ph_client, "capture", None)
+        if not callable(capture):
+            return
+
+        _capture_ai_event(
+            ph_client,
+            event,
+            distinct_id=distinct_id or "unknown",
+            properties={**properties, **(default_properties or {})},
+            groups=groups,
+        )
+    except Exception as exc:
+        logging.getLogger("posthog").debug("Failed to capture PostHog event: %s", exc)
 
 
 def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
@@ -709,7 +736,7 @@ def finalize_ai_content(value: Any, ph_client: Any = None) -> Any:
 
 
 def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
-    if ph_client.privacy_mode or privacy_mode:
+    if getattr(ph_client, "privacy_mode", False) or privacy_mode:
         return None
     return value
 
