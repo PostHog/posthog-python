@@ -476,11 +476,11 @@ class TestPrivacyMode:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("processor_privacy", "call_privacy", "expected_input"),
-        [(False, True, None), (True, False, [{"role": "user", "content": "secret"}])],
+        ("processor_privacy", "call_privacy"),
+        [(False, True), (True, False)],
     )
-    async def test_per_call_privacy_mode_overrides_processor_mode(
-        self, mock_client, processor_privacy, call_privacy, expected_input
+    async def test_per_call_privacy_mode_cannot_disable_processor_mode(
+        self, mock_client, processor_privacy, call_privacy
     ):
         proc = PostHogClaudeAgentProcessor(
             client=mock_client,
@@ -501,7 +501,7 @@ class TestPrivacyMode:
                 pass
 
         properties = mock_client.capture.call_args.kwargs["properties"]
-        assert properties["$ai_input"] == expected_input
+        assert properties["$ai_input"] is None
 
     @pytest.mark.asyncio
     async def test_client_without_privacy_mode_captures_content(self):

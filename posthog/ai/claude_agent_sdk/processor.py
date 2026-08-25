@@ -237,11 +237,9 @@ class PostHogClaudeAgentProcessor:
         distinct_id_override = posthog_distinct_id or self._distinct_id
         trace_id = posthog_trace_id or str(uuid.uuid4())
         extra_props = posthog_properties or {}
-        privacy = (
-            posthog_privacy_mode
-            if posthog_privacy_mode is not None
-            else self._privacy_mode
-        )
+        # Per-call privacy can enable redaction, but cannot disable the
+        # processor-level setting. This preserves the existing precedence.
+        privacy = self._privacy_mode or posthog_privacy_mode is True
         groups = posthog_groups or self._groups
 
         # Ensure partial messages are enabled for per-generation tracking
