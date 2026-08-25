@@ -38,22 +38,35 @@ __all__ = ["get_request_headers"]
 RequestHeaderBag = Dict[str, str]
 
 
-def get_request_headers(extra: Any) -> Optional[RequestHeaderBag]:
-    """The request's HTTP headers as a plain dict with lowercase keys, or ``None``.
+def get_request(extra: Any) -> Optional[Any]:
+    """The transport's per-request object (Starlette ``Request`` or equivalent)
+    underneath ``extra``, or ``None`` on stdio / in-memory transports.
 
     Accepts the ``extra`` dict handed to a callback, or the raw per-request
-    context itself, so it works whichever one a host happens to hold.
+    context itself, so it works whichever one a host happens to hold. Both SDK
+    majors reach it the same way from their own context object
+    (``ServerRequestContext`` on 2.x, ``RequestContext`` on 1.x).
+
+    Shared by anything that needs to read the request beyond just its headers
+    (e.g. query params) -- one place that knows how to unwrap ``extra``/``ctx``
+    down to the request, instead of each caller re-deriving it.
     """
     ctx = extra
     if isinstance(extra, dict):
         ctx = extra.get("ctx")
     if ctx is None:
         return None
+    return getattr(ctx, "request", None)
 
-    # Both majors reach the transport's request the same way from their own
-    # context object (`ServerRequestContext` on 2.x, `RequestContext` on 1.x);
+
+def get_request_headers(extra: Any) -> Optional[RequestHeaderBag]:
+    """The request's HTTP headers as a plain dict with lowercase keys, or ``None``.
+
+    Accepts the ``extra`` dict handed to a callback, or the raw per-request
+    context itself, so it works whichever one a host happens to hold.
+    """
     # `request` is None on stdio.
-    source = getattr(getattr(ctx, "request", None), "headers", None)
+    source = getattr(get_request(extra), "headers", None)
     if source is None:
         return None
     return _to_header_bag(source)

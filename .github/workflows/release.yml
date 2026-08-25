@@ -45,7 +45,7 @@ jobs:
     name: Notify Slack - Approval Needed
     needs: check-changesets
     if: needs.check-changesets.outputs.has-changesets == 'true'
-    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@5fc4680761e8ac29a61b212756230eba0e276d8c
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@5ba5d24966f2c416ca792654638e4ce6f19f545b
     with:
       slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
       slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
@@ -101,7 +101,7 @@ jobs:
           python-version: 3.11.11
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.32"
           enable-cache: true
@@ -306,7 +306,7 @@ jobs:
           python-version: 3.11.11
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.32"
           enable-cache: true
@@ -473,7 +473,7 @@ jobs:
           python-version: 3.11.11
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.11.32"
           enable-cache: true

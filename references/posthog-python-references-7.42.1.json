@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.43.0",
+    "version": "7.42.1",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -871,7 +871,7 @@
             },
             {
               "name": "flag_keys",
-              "description": "Optional non-empty list that scopes local evaluation, the underlying         ``/flags`` request, and the returned snapshot. An empty list is treated like         ``None`` and evaluates all flags. A requested key absent from loaded local         definitions is included in one remote fallback per ``evaluate_flags`` call unless         ``only_evaluate_locally`` is True. If the server also does not know the key, it is         omitted from the snapshot.",
+              "description": "Optional list of flag keys to scope the underlying ``/flags``         request to a subset.",
               "isOptional": true,
               "type": "list[str]"
             },
@@ -2205,7 +2205,7 @@
             },
             {
               "name": "only_evaluate_locally",
-              "description": "If ``True``, never fall back to remote evaluation and         omit flags that cannot be evaluated locally.",
+              "description": "If ``True``, never fall back to remote evaluation.",
               "isOptional": false,
               "type": "bool"
             },
@@ -2217,7 +2217,7 @@
             },
             {
               "name": "flag_keys",
-              "description": "Optional non-empty list that scopes local evaluation, the underlying         ``/flags`` request, and the returned snapshot. An empty list is treated like ``None``         and evaluates all flags. A requested key absent from loaded local definitions is         included in one remote fallback per ``evaluate_flags`` call unless         ``only_evaluate_locally`` is ``True``. If the server also does not know the key, it is         omitted from the snapshot.",
+              "description": "Optional list of flag keys. When provided, only these flags are         evaluated \u2014 the underlying ``/flags`` request asks the server for just         this subset, which makes the response smaller and the request cheaper.         Use this when you only need a handful of flags out of many.",
               "isOptional": true,
               "type": "list[str]"
             },

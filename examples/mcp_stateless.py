@@ -37,10 +37,19 @@ if __name__ == "__main__":
     server.run(transport="streamable-http")
 
 
-# No FastMCP server to wire (a custom dispatcher)? Add the middleware to your own
-# ASGI app and read the recovered session per request:
+# Building the ASGI app yourself (e.g. mounting into FastAPI) or wiring a custom
+# dispatcher? Autowiring only affects an app built AFTER instrument() runs, so an app
+# built or mounted earlier gets no middleware. Add it to your own app explicitly, and
+# read the recovered session per request:
 #
 #     from posthog.mcp import PostHogMcpStatelessSessionMiddleware, get_mcp_session
 #
 #     app.add_middleware(PostHogMcpStatelessSessionMiddleware)
 #     sess = get_mcp_session(request)   # sess.session_id, sess.client_name, ...
+#
+# Get that wrong and the SDK now says so, on the `posthog.mcp` logger: once at
+# instrument() time, and once on the first request that resolves without a session.
+# MCPAnalyticsOptions(enable_conversation_id=True) sidesteps the whole ordering
+# question -- it anchors the session with no middleware at all.
+#
+# See posthog/mcp/README.md (stateless / multi-pod servers) for the full rundown.
