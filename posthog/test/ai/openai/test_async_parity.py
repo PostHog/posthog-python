@@ -13,7 +13,7 @@ the way the sync twin, anthropic and gemini all do.
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -142,6 +142,53 @@ async def test_responses_streaming_properties_have_sync_async_parity(mock_client
     assert async_props["$ai_model"] == "gpt-4o-response"
     assert async_props["$ai_stop_reason"] == "completed"
     assert async_props["$ai_provider"] == "groq"
+
+
+@pytest.mark.asyncio
+async def test_embedding_telemetry_has_sync_async_parity(mock_client):
+    response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=12, total_tokens=12))
+    request = {
+        "model": "text-embedding-3-small",
+        "input": "private input",
+        "posthog_trace_id": "shared-trace",
+        "posthog_properties": {"custom": "value"},
+        "posthog_privacy_mode": True,
+        "posthog_groups": {"company": "test-company"},
+        "posthog_provider_override": "azure",
+    }
+    provider_request = {
+        "model": "text-embedding-3-small",
+        "input": "private input",
+    }
+
+    with patch(
+        "openai.resources.embeddings.Embeddings.create", return_value=response
+    ) as sync_create:
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        assert client.embeddings.create(**request) is response
+    sync_create.assert_called_once_with(**provider_request)
+    sync_capture = mock_client.capture.call_args
+
+    async_create = AsyncMock(return_value=response)
+    mock_client.capture.reset_mock()
+    with patch("openai.resources.embeddings.AsyncEmbeddings.create", new=async_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+        assert await client.embeddings.create(**request) is response
+    async_create.assert_awaited_once_with(**provider_request)
+    async_capture = mock_client.capture.call_args
+
+    sync_props = sync_capture.kwargs["properties"]
+    async_props = async_capture.kwargs["properties"]
+    sync_without_latency = {k: v for k, v in sync_props.items() if k != "$ai_latency"}
+    async_without_latency = {k: v for k, v in async_props.items() if k != "$ai_latency"}
+
+    assert async_without_latency == sync_without_latency
+    assert async_props["$ai_input"] is None
+    assert async_props["$ai_input_tokens"] == 12
+    assert async_props["$ai_provider"] == "azure"
+    assert async_props["$process_person_profile"] is False
+    assert async_capture.kwargs["distinct_id"] == "shared-trace"
+    assert async_capture.kwargs["groups"] == {"company": "test-company"}
 
 
 def test_sync_stream_close_after_early_exit_captures_partial_state(

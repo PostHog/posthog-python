@@ -1,9 +1,9 @@
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING as _TYPE_CHECKING, Any, Dict, Optional
 
 from posthog.ai.stream import AsyncStreamWrapper
-from posthog.ai.types import TokenUsage
+from posthog.ai.types import TokenUsage as TokenUsage
 
 try:
     import openai
@@ -15,12 +15,11 @@ except ImportError:
 from posthog import setup
 from posthog.ai.utils import (
     call_llm_and_track_usage_async,
-    _capture_ai_event,
     extract_available_tool_calls as extract_available_tool_calls,
-    finalize_ai_content,
+    finalize_ai_content as finalize_ai_content,
     get_model_params as get_model_params,
     merge_usage_stats as merge_usage_stats,
-    with_privacy_mode,
+    with_privacy_mode as with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
     accumulate_openai_tool_calls as accumulate_openai_tool_calls,
@@ -36,8 +35,10 @@ from posthog.ai.openai._streaming import (
     _ResponsesStreamState,
     _build_streaming_event_data,
 )
-from posthog.ai.openai.wrapper_utils import (
+from ._embeddings import _capture_embedding_event
+from .wrapper_utils import (
     _OpenAIWrapperResource,
+    _wrap_openai_resources,
     merge_provider_override,
 )
 
@@ -48,6 +49,12 @@ class AsyncOpenAI(openai.AsyncOpenAI):
     """
 
     _ph_client: PostHogClient
+
+    if _TYPE_CHECKING:
+        chat: "WrappedChat"
+        embeddings: "WrappedEmbeddings"
+        beta: "WrappedBeta"
+        responses: "WrappedResponses"
 
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
@@ -61,24 +68,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
 
-        # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, "chat", None)
-        self._original_embeddings = getattr(self, "embeddings", None)
-        self._original_beta = getattr(self, "beta", None)
-        self._original_responses = getattr(self, "responses", None)
-
-        # Replace with wrapped versions (only if originals exist)
-        if self._original_chat is not None:
-            self.chat = WrappedChat(self, self._original_chat)
-
-        if self._original_embeddings is not None:
-            self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-
-        if self._original_beta is not None:
-            self.beta = WrappedBeta(self, self._original_beta)
-
-        if self._original_responses is not None:
-            self.responses = WrappedResponses(self, self._original_responses)
+        _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
 
 
 async def _parse_and_track(
@@ -496,47 +486,18 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         response = await self._original.create(**kwargs)
         end_time = time.time()
 
-        # Extract usage statistics if available
-        usage_stats: TokenUsage = TokenUsage()
-
-        if hasattr(response, "usage") and response.usage:
-            usage_stats = TokenUsage(
-                input_tokens=getattr(response.usage, "prompt_tokens", 0),
-                output_tokens=getattr(response.usage, "completion_tokens", 0),
-            )
-
-        latency = end_time - start_time
-
-        # Build the event properties
-        event_properties = {
-            "$ai_provider": "openai",
-            "$ai_model": kwargs.get("model"),
-            "$ai_input": with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                finalize_ai_content(kwargs.get("input"), self._client._ph_client),
-            ),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("input_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(self._client.base_url),
-            **(posthog_properties or {}),
-        }
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        # Send capture event for embeddings
-        if hasattr(self._client._ph_client, "capture"):
-            _capture_ai_event(
-                self._client._ph_client,
-                "$ai_embedding",
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                properties=event_properties,
-                groups=posthog_groups,
-            )
-
+        _capture_embedding_event(
+            posthog_client=self._client._ph_client,
+            base_url=self._client.base_url,
+            response=response,
+            request_kwargs=kwargs,
+            latency=end_time - start_time,
+            distinct_id=posthog_distinct_id,
+            trace_id=posthog_trace_id,
+            properties=posthog_properties,
+            privacy_mode=posthog_privacy_mode,
+            groups=posthog_groups,
+        )
         return response
 
 
@@ -600,3 +561,11 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
             posthog_provider_override,
             **kwargs,
         )
+
+
+_ASYNC_RESOURCE_WRAPPERS = {
+    "chat": WrappedChat,
+    "embeddings": WrappedEmbeddings,
+    "beta": WrappedBeta,
+    "responses": WrappedResponses,
+}
