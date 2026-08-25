@@ -628,7 +628,8 @@ class TestClient(unittest.TestCase):
     @parameterized.expand(
         [
             (
-                "active_context",
+                "capture_active_context",
+                "capture",
                 0x123,
                 0x456,
                 {},
@@ -636,19 +637,40 @@ class TestClient(unittest.TestCase):
                 "0000000000000456",
             ),
             (
-                "explicit_properties_win",
+                "capture_explicit_properties_win",
+                "capture",
                 0x123,
                 0x456,
                 {"$trace_id": "custom-trace", "$span_id": "custom-span"},
                 "custom-trace",
                 "custom-span",
             ),
-            ("invalid_context", 0, 0, {}, None, None),
+            ("capture_invalid_context", "capture", 0, 0, {}, None, None),
+            (
+                "capture_ai_active_context",
+                "capture_ai",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "capture_ai_explicit_properties_win",
+                "capture_ai",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("capture_ai_invalid_context", "capture_ai", 0, 0, {}, None, None),
         ]
     )
     def test_capture_uses_current_otel_span_context_when_enabled(
         self,
         _,
+        entrypoint,
         context_trace_id,
         context_span_id,
         properties,
@@ -669,9 +691,8 @@ class TestClient(unittest.TestCase):
             client = Client(
                 FAKE_TEST_API_KEY, sync_mode=True, capture_trace_context=True
             )
-            client.capture(
-                "test_event", distinct_id="distinct_id", properties=properties
-            )
+            capture = getattr(client, entrypoint)
+            capture("$ai_event", distinct_id="distinct_id", properties=properties)
 
         event = mock_post.call_args.kwargs["batch"][0]
         if expected_trace_id is None:
@@ -681,7 +702,8 @@ class TestClient(unittest.TestCase):
             self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
             self.assertEqual(event["properties"]["$span_id"], expected_span_id)
 
-    def test_capture_does_not_attach_otel_span_context_by_default(self):
+    @parameterized.expand([("capture",), ("capture_ai",)])
+    def test_capture_does_not_attach_otel_span_context_by_default(self, entrypoint):
         span_context = SpanContext(
             trace_id=0x123,
             span_id=0x456,
@@ -694,7 +716,8 @@ class TestClient(unittest.TestCase):
             use_span(NonRecordingSpan(span_context)),
         ):
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
-            client.capture("test_event", distinct_id="distinct_id")
+            capture = getattr(client, entrypoint)
+            capture("$ai_event", distinct_id="distinct_id")
 
         event = mock_post.call_args.kwargs["batch"][0]
         self.assertNotIn("$trace_id", event["properties"])
