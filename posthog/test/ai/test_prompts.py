@@ -402,6 +402,22 @@ class TestPromptsGet(TestPrompts):
             'Access denied for prompt "restricted-prompt"', str(context.exception)
         )
 
+    @patch("posthog.ai.prompts._get_session")
+    def test_handle_401_response(self, mock_get_session):
+        """Should explain the likely auth causes on a 401 response."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(status_code=401, ok=False)
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog)
+
+        with self.assertRaises(Exception) as context:
+            prompts.get("restricted-prompt", with_metadata=False)
+
+        message = str(context.exception)
+        self.assertIn('Authentication failed for prompt "restricted-prompt"', message)
+        self.assertIn("personal API key", message)
+
     def test_throw_when_no_personal_api_key_configured(self):
         """Should throw when no personal_api_key is configured."""
         posthog = self.create_mock_posthog(personal_api_key=None)

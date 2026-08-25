@@ -11,17 +11,22 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ..stream import _StreamWrapper
-from posthog.ai.types import StreamingContentBlock, TokenUsage, ToolInProgress
-from posthog.ai.utils import (
-    call_llm_and_track_usage,
-    merge_usage_stats,
+from ..types import (
+    StreamingContentBlock as StreamingContentBlock,
+    TokenUsage as TokenUsage,
+    ToolInProgress as ToolInProgress,
 )
-from posthog.ai.anthropic.anthropic_converter import (
-    extract_anthropic_usage_from_event,
-    handle_anthropic_content_block_start,
-    handle_anthropic_text_delta,
-    handle_anthropic_tool_delta,
-    finalize_anthropic_tool_input,
+from ..utils import (
+    call_llm_and_track_usage as call_llm_and_track_usage,
+    merge_usage_stats as merge_usage_stats,
+)
+from ._anthropic_stream import _AnthropicStreamAccumulator
+from .anthropic_converter import (
+    extract_anthropic_usage_from_event as extract_anthropic_usage_from_event,
+    finalize_anthropic_tool_input as finalize_anthropic_tool_input,
+    handle_anthropic_content_block_start as handle_anthropic_content_block_start,
+    handle_anthropic_text_delta as handle_anthropic_text_delta,
+    handle_anthropic_tool_delta as handle_anthropic_tool_delta,
 )
 from posthog.client import Client as PostHogClient
 from posthog import setup
@@ -180,72 +185,13 @@ class WrappedMessages(Messages):
         kwargs: Dict[str, Any],
         start_time: float,
     ):
-        usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
-        accumulated_content = ""
-        content_blocks: List[StreamingContentBlock] = []
-        tools_in_progress: Dict[str, ToolInProgress] = {}
-        current_text_block: Optional[StreamingContentBlock] = None
-        stop_reason: Optional[str] = None
+        accumulator = _AnthropicStreamAccumulator()
 
         def generator():
-            nonlocal usage_stats
-            nonlocal accumulated_content
-            nonlocal content_blocks
-            nonlocal tools_in_progress
-            nonlocal current_text_block
-            nonlocal stop_reason
-
             try:
                 for event in response:
-                    # Extract usage stats from event
-                    event_usage = extract_anthropic_usage_from_event(event)
-                    merge_usage_stats(usage_stats, event_usage)
-
-                    # Handle content block start events
-                    if hasattr(event, "type") and event.type == "content_block_start":
-                        block, tool = handle_anthropic_content_block_start(event)
-
-                        if block:
-                            content_blocks.append(block)
-
-                            if block.get("type") in ("text", "thinking"):
-                                current_text_block = block
-                            else:
-                                current_text_block = None
-
-                        if tool:
-                            tool_id = tool["block"].get("id")
-                            if tool_id:
-                                tools_in_progress[tool_id] = tool
-
-                    # Handle text delta events
-                    delta_text = handle_anthropic_text_delta(event, current_text_block)
-
-                    if delta_text:
-                        accumulated_content += delta_text
-
-                    # Handle tool input delta events
-                    handle_anthropic_tool_delta(
-                        event, content_blocks, tools_in_progress
-                    )
-
-                    # Handle content block stop events
-                    if hasattr(event, "type") and event.type == "content_block_stop":
-                        current_text_block = None
-                        finalize_anthropic_tool_input(
-                            event, content_blocks, tools_in_progress
-                        )
-
-                    # Capture stop reason from message_delta events
-                    if hasattr(event, "type") and event.type == "message_delta":
-                        delta = getattr(event, "delta", None)
-                        if delta is not None:
-                            delta_stop_reason = getattr(delta, "stop_reason", None)
-                            if delta_stop_reason is not None:
-                                stop_reason = delta_stop_reason
-
+                    accumulator.consume(event)
                     yield event
-
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
@@ -257,11 +203,11 @@ class WrappedMessages(Messages):
                     posthog_privacy_mode,
                     posthog_groups,
                     kwargs,
-                    usage_stats,
+                    accumulator.usage_stats,
                     latency,
-                    content_blocks,
-                    accumulated_content,
-                    stop_reason=stop_reason,
+                    accumulator.content_blocks,
+                    accumulator.accumulated_content,
+                    stop_reason=accumulator.stop_reason,
                 )
 
         return _StreamWrapper(generator(), stream=response)
