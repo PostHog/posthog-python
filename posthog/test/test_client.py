@@ -625,6 +625,104 @@ class TestClient(unittest.TestCase):
             self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
             self.assertEqual(event["properties"]["$span_id"], expected_span_id)
 
+    @parameterized.expand(
+        [
+            (
+                "capture_active_context",
+                "capture",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "capture_explicit_properties_win",
+                "capture",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("capture_invalid_context", "capture", 0, 0, {}, None, None),
+            (
+                "capture_ai_active_context",
+                "capture_ai",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "capture_ai_explicit_properties_win",
+                "capture_ai",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("capture_ai_invalid_context", "capture_ai", 0, 0, {}, None, None),
+        ]
+    )
+    def test_capture_uses_current_otel_span_context_when_enabled(
+        self,
+        _,
+        entrypoint,
+        context_trace_id,
+        context_span_id,
+        properties,
+        expected_trace_id,
+        expected_span_id,
+    ):
+        span_context = SpanContext(
+            trace_id=context_trace_id,
+            span_id=context_span_id,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(
+                FAKE_TEST_API_KEY, sync_mode=True, capture_trace_context=True
+            )
+            capture = getattr(client, entrypoint)
+            capture("$ai_event", distinct_id="distinct_id", properties=properties)
+
+        event = mock_post.call_args.kwargs["batch"][0]
+        if expected_trace_id is None:
+            self.assertNotIn("$trace_id", event["properties"])
+            self.assertNotIn("$span_id", event["properties"])
+        else:
+            self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
+            self.assertEqual(event["properties"]["$span_id"], expected_span_id)
+
+    @parameterized.expand([("capture",), ("capture_ai",)])
+    def test_capture_does_not_attach_otel_span_context_by_default(self, entrypoint):
+        span_context = SpanContext(
+            trace_id=0x123,
+            span_id=0x456,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            capture = getattr(client, entrypoint)
+            capture("$ai_event", distinct_id="distinct_id")
+
+        event = mock_post.call_args.kwargs["batch"][0]
+        self.assertNotIn("$trace_id", event["properties"])
+        self.assertNotIn("$span_id", event["properties"])
+
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             client = self.client
