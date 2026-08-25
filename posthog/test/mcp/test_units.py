@@ -3,6 +3,7 @@ schema/loop-back, session-id rollover, and the identity cache. These complement 
 end-to-end adapter tests by exercising edge branches directly."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from posthog.mcp._conversation_id import (
     add_conversation_id_to_schema,
@@ -11,6 +12,7 @@ from posthog.mcp._conversation_id import (
     inject_prompt_back,
     resolve_conversation_id,
 )
+from posthog.mcp._instrumentation import mutate_tool_schema
 from posthog.mcp._intent import _get_context_argument, resolve_tool_call_intent
 from posthog.mcp._internal import (
     IdentityCache,
@@ -98,6 +100,24 @@ def test_add_conversation_id_adds_property():
 def test_add_conversation_id_skips_when_already_present():
     schema = {"type": "object", "properties": {"conversation_id": {"type": "string"}}}
     assert add_conversation_id_to_schema(schema, "t") is schema
+
+
+def test_schema_pipeline_does_not_warn_for_owned_conversation_id(monkeypatch):
+    warnings = []
+    monkeypatch.setattr("posthog.mcp._conversation_id.log", warnings.append)
+    schema = {"type": "object", "properties": {"conversation_id": {"type": "string"}}}
+    tool = SimpleNamespace(name="t", input_schema=schema)
+
+    mutate_tool_schema(
+        _data(context=False, enable_conversation_id=True),
+        tool,
+        schema_attribute="input_schema",
+        owns_context=False,
+        context_required=False,
+    )
+
+    assert tool.input_schema is schema
+    assert warnings == []
 
 
 def test_add_conversation_id_skips_complex_schema():

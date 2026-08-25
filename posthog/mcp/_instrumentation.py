@@ -22,6 +22,7 @@ from ._context_parameters import (
     add_context_parameter_to_schema,
     get_context_description,
     is_context_enabled,
+    schema_has_param,
 )
 from ._conversation_id import add_conversation_id_to_schema, resolve_conversation_id
 from ._event_types import MCPAnalyticsEventType
@@ -640,7 +641,9 @@ def mutate_tool_schema(
             get_context_description(data.options.context),
             required=context_required,
         )
-    if data.options.enable_conversation_id:
+    if data.options.enable_conversation_id and not schema_has_param(
+        schema, "conversation_id"
+    ):
         schema = add_conversation_id_to_schema(schema, tool.name)
     if schema is not original_schema:
         try:
