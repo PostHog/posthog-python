@@ -50,6 +50,12 @@ class AsyncOpenAI(openai.AsyncOpenAI):
 
     _ph_client: PostHogClient
 
+    if _TYPE_CHECKING:
+        chat: "WrappedChat"
+        embeddings: "WrappedEmbeddings"
+        beta: "WrappedBeta"
+        responses: "WrappedResponses"
+
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
         Args:
@@ -63,13 +69,6 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         self._ph_client = posthog_client or setup()
 
         _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
-
-        # Keep dynamically installed resources visible to API and type inspection.
-        if _TYPE_CHECKING:
-            self.chat = WrappedChat(self, self._original_chat)
-            self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-            self.beta = WrappedBeta(self, self._original_beta)
-            self.responses = WrappedResponses(self, self._original_responses)
 
 
 async def _parse_and_track(

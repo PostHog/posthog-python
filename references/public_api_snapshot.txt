@@ -403,28 +403,28 @@ attribute posthog.ai.langchain.callbacks.SpanMetadata.latency: float
 attribute posthog.ai.langchain.callbacks.SpanMetadata.name: str
 attribute posthog.ai.langchain.callbacks.SpanMetadata.start_time: float
 attribute posthog.ai.langchain.callbacks.log = logging.getLogger('posthog')
-attribute posthog.ai.openai.openai.OpenAI.beta = WrappedBeta(self, self._original_beta)
-attribute posthog.ai.openai.openai.OpenAI.chat = WrappedChat(self, self._original_chat)
-attribute posthog.ai.openai.openai.OpenAI.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-attribute posthog.ai.openai.openai.OpenAI.responses = WrappedResponses(self, self._original_responses)
+attribute posthog.ai.openai.openai.OpenAI.beta: WrappedBeta
+attribute posthog.ai.openai.openai.OpenAI.chat: WrappedChat
+attribute posthog.ai.openai.openai.OpenAI.embeddings: WrappedEmbeddings
+attribute posthog.ai.openai.openai.OpenAI.responses: WrappedResponses
 attribute posthog.ai.openai.openai.WrappedBeta.chat
 attribute posthog.ai.openai.openai.WrappedBetaChat.completions
 attribute posthog.ai.openai.openai.WrappedChat.completions
-attribute posthog.ai.openai.openai_async.AsyncOpenAI.beta = WrappedBeta(self, self._original_beta)
-attribute posthog.ai.openai.openai_async.AsyncOpenAI.chat = WrappedChat(self, self._original_chat)
-attribute posthog.ai.openai.openai_async.AsyncOpenAI.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-attribute posthog.ai.openai.openai_async.AsyncOpenAI.responses = WrappedResponses(self, self._original_responses)
+attribute posthog.ai.openai.openai_async.AsyncOpenAI.beta: WrappedBeta
+attribute posthog.ai.openai.openai_async.AsyncOpenAI.chat: WrappedChat
+attribute posthog.ai.openai.openai_async.AsyncOpenAI.embeddings: WrappedEmbeddings
+attribute posthog.ai.openai.openai_async.AsyncOpenAI.responses: WrappedResponses
 attribute posthog.ai.openai.openai_async.WrappedBeta.chat
 attribute posthog.ai.openai.openai_async.WrappedBetaChat.completions
 attribute posthog.ai.openai.openai_async.WrappedChat.completions
-attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.beta = AsyncWrappedBeta(self, self._original_beta)
-attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.chat = AsyncWrappedChat(self, self._original_chat)
-attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.embeddings = AsyncWrappedEmbeddings(self, self._original_embeddings)
-attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.responses = AsyncWrappedResponses(self, self._original_responses)
-attribute posthog.ai.openai.openai_providers.AzureOpenAI.beta = WrappedBeta(self, self._original_beta)
-attribute posthog.ai.openai.openai_providers.AzureOpenAI.chat = WrappedChat(self, self._original_chat)
-attribute posthog.ai.openai.openai_providers.AzureOpenAI.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-attribute posthog.ai.openai.openai_providers.AzureOpenAI.responses = WrappedResponses(self, self._original_responses)
+attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.beta: AsyncWrappedBeta
+attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.chat: AsyncWrappedChat
+attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.embeddings: AsyncWrappedEmbeddings
+attribute posthog.ai.openai.openai_providers.AsyncAzureOpenAI.responses: AsyncWrappedResponses
+attribute posthog.ai.openai.openai_providers.AzureOpenAI.beta: WrappedBeta
+attribute posthog.ai.openai.openai_providers.AzureOpenAI.chat: WrappedChat
+attribute posthog.ai.openai.openai_providers.AzureOpenAI.embeddings: WrappedEmbeddings
+attribute posthog.ai.openai.openai_providers.AzureOpenAI.responses: WrappedResponses
 attribute posthog.ai.openai.wrapper_utils.log = logging.getLogger('posthog')
 attribute posthog.ai.openai_agents.processor.log = logging.getLogger('posthog')
 attribute posthog.ai.otel.spans.AI_SPAN_PREFIXES = ('gen_ai.', 'llm.', 'ai.', 'traceloop.')
