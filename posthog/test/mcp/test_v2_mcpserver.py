@@ -26,6 +26,7 @@ def make_server():
 
     @server.tool()
     def add(a: int, b: int) -> int:
+        """Add two numbers."""
         return a + b
 
     @server.tool()
@@ -86,6 +87,9 @@ async def test_tool_call_captures_intent_and_strips_context():
     client = FakeClient()
     instrument(server, client)
 
+    # Prime the listing metadata used by the shared call lifecycle.
+    await _list_tools(server)
+
     received = {}
     original_add = server._tool_manager.get_tool("add").fn
 
@@ -110,6 +114,7 @@ async def test_tool_call_captures_intent_and_strips_context():
     assert len(calls) == 1
     props = calls[0]["properties"]
     assert props["$mcp_tool_name"] == "add"
+    assert props["$mcp_tool_description"] == "Add two numbers."
     assert props["$mcp_intent"] == "summing two numbers for the user's report"
     assert props["$mcp_intent_source"] == "context_parameter"
     assert props["$mcp_is_error"] is False
@@ -358,6 +363,20 @@ async def test_report_missing_advertises_and_captures():
     missing = _events(client, "$mcp_missing_capability")
     assert missing
     assert missing[0]["properties"]["$mcp_intent"] == "need a tool to send emails"
+
+
+async def test_report_missing_accepts_omitted_arguments():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+
+    result = await _call_tool(server, "get_more_tools", None)
+    await _flush()
+
+    assert result.is_error is False
+    missing = _events(client, "$mcp_missing_capability")
+    assert missing
+    assert "$mcp_intent" not in missing[0]["properties"]
 
 
 async def test_instrument_is_idempotent():
