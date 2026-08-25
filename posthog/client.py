@@ -4044,12 +4044,12 @@ class Client(object):
             only_evaluate_locally: If True, never fall back to remote evaluation —
                 flags that can't be evaluated locally are simply omitted from the snapshot.
             disable_geoip: Whether to disable GeoIP lookup.
-            flag_keys: Optional non-empty list that scopes local evaluation, the underlying
-                ``/flags`` request, and the returned snapshot. An empty list is treated like
-                ``None`` and evaluates all flags. A requested key absent from loaded local
-                definitions is included in one remote fallback per ``evaluate_flags`` call unless
-                ``only_evaluate_locally`` is True. If the server also does not know the key, it is
-                omitted from the snapshot.
+            flag_keys: Optional list that scopes local evaluation, the underlying
+                ``/flags`` request, and the returned snapshot. When omitted or ``None``, all
+                flags are evaluated. An empty list returns an empty snapshot without evaluating
+                flags. A requested key absent from loaded local definitions is included in one
+                remote fallback per ``evaluate_flags`` call unless ``only_evaluate_locally`` is
+                True. If the server also does not know the key, it is omitted from the snapshot.
             device_id: Optional device ID override. If not provided, falls back to the
                 context device_id (which may be set via tracing headers). Used by
                 experience-continuity flags to match users across distinct_id changes.
@@ -4088,6 +4088,15 @@ class Client(object):
             # is_enabled()/get_flag() on it won't emit events.
             return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
 
+        if flag_keys == []:
+            return FeatureFlagEvaluations(
+                host=host,
+                distinct_id=str(distinct_id),
+                flags={},
+                groups=groups,
+                disable_geoip=disable_geoip,
+            )
+
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
                 groups or {},
@@ -4096,7 +4105,6 @@ class Client(object):
             )
         )
         groups = groups or {}
-        # Keep the existing API convention that an empty list means no scope.
         requested_keys = set(flag_keys) if flag_keys else None
 
         records: Dict[str, _EvaluatedFlagRecord] = {}
