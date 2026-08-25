@@ -1,5 +1,11 @@
 # posthog
 
+## 7.44.0 — 2026-08-25
+
+### Minor changes
+
+- [9a1d137](https://github.com/posthog/posthog-python/commit/9a1d1378388ac69eb439ac1381eeecc440beea1f) Add an opt-in `capture_trace_context` client option. When enabled, and a valid OpenTelemetry span is active at capture time, its trace and span IDs are attached to events captured with `capture()` and `capture_ai()` as `$trace_id` and `$span_id`, so they can be correlated with backend traces. Disabled by default, and explicit `$trace_id`/`$span_id` properties take precedence. — Thanks @DanielVisca!
+
 ## 7.43.1 — 2026-08-25
 
 ### Patch changes
