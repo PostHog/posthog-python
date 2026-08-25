@@ -689,7 +689,6 @@ class Client(object):
         enable_local_evaluation=True,
         flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None,
         capture_exception_code_variables=False,
-        capture_trace_context=False,
         code_variables_mask_patterns=None,
         code_variables_ignore_patterns=None,
         code_variables_mask_url_credentials=None,
@@ -704,6 +703,9 @@ class Client(object):
         secret_key=None,
         metrics: Optional[dict] = None,
         enable_full_ai_capture=False,
+        # Appended rather than grouped with the other `capture_*` options so
+        # existing positional arguments keep their slots.
+        capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
     ):
