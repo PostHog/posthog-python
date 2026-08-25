@@ -56,6 +56,39 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
         self.assertIsInstance(flags, FeatureFlagEvaluations)
         self.assertEqual(patch_flags.call_count, 1)
 
+    def test_empty_flag_keys_returns_empty_without_evaluation_work(self):
+        self.client.flag_cache = mock.Mock()
+
+        with (
+            mock.patch.object(
+                self.client, "_add_local_person_and_group_properties"
+            ) as add_local_properties,
+            mock.patch.object(
+                self.client, "_person_properties_for_local_evaluation"
+            ) as local_person_properties,
+            mock.patch.object(
+                self.client, "_get_all_flags_and_payloads_locally"
+            ) as local_evaluation,
+            mock.patch.object(self.client, "load_feature_flags") as load_definitions,
+            mock.patch.object(self.client, "_get_flags_decision") as remote_evaluation,
+        ):
+            flags = self.client.evaluate_flags(
+                "user-1",
+                groups={"organization": "org-1"},
+                person_properties={"plan": "enterprise"},
+                flag_keys=[],
+            )
+
+        self.assertIsInstance(flags, FeatureFlagEvaluations)
+        self.assertEqual(flags.keys, [])
+        self.assertEqual(flags._get_event_properties(), {})
+        self.assertEqual(self.client.flag_cache.mock_calls, [])
+        add_local_properties.assert_not_called()
+        local_person_properties.assert_not_called()
+        local_evaluation.assert_not_called()
+        load_definitions.assert_not_called()
+        remote_evaluation.assert_not_called()
+
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
     def test_does_not_fire_events_for_unaccessed_flags(
