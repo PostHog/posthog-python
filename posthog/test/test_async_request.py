@@ -58,11 +58,11 @@ assert posthog.AsyncClient
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
-def test_build_client_scopes_requests_to_host_and_follows_redirects():
+def test_build_client_scopes_requests_to_host_without_following_redirects():
     with mock.patch("posthog._async_request.httpx.AsyncClient") as async_client:
         _build_client("https://example.com/")
     async_client.assert_called_once_with(
-        base_url="https://example.com", follow_redirects=True
+        base_url="https://example.com", follow_redirects=False
     )
 
 

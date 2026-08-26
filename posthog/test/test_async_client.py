@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from unittest import mock
 
 import pytest
 
 from posthog import AsyncClient, AsyncPosthog, CaptureCompression, CaptureMode
+from posthog.consumer import MAX_MSG_SIZE
+from posthog.contexts import (
+    new_context,
+    set_capture_exception_code_variables_context,
+    set_code_variables_detect_secrets_context,
+    set_code_variables_ignore_patterns_context,
+    set_code_variables_mask_patterns_context,
+    set_code_variables_mask_url_credentials_context,
+)
 from posthog.request import APIError
 
 
@@ -80,6 +90,24 @@ async def test_capture_runs_async_before_send_in_consumer():
 
 
 @pytest.mark.asyncio
+async def test_capture_offloads_synchronous_before_send():
+    callback_thread = None
+
+    def before_send(event):
+        nonlocal callback_thread
+        callback_thread = threading.get_ident()
+        return event
+
+    with mock.patch("posthog._async_consumer.async_batch_post", new=mock.AsyncMock()):
+        client = AsyncPosthog("test-key", before_send=before_send)
+        result = await client.capture_immediate("event", distinct_id="user-1")
+        await client.shutdown()
+
+    assert result is not None
+    assert callback_thread != threading.get_ident()
+
+
+@pytest.mark.asyncio
 async def test_capture_drops_event_when_before_send_raises():
     async def before_send(_event):
         raise RuntimeError("callback failed")
@@ -134,6 +162,23 @@ async def test_capture_immediate_supports_async_before_send():
 
     assert result is not None
     assert batches[0][0]["properties"]["processed"] is True
+
+
+@pytest.mark.asyncio
+async def test_capture_immediate_drops_oversized_event_after_before_send():
+    def before_send(event):
+        event["properties"]["user_input"] = "x" * MAX_MSG_SIZE
+        return event
+
+    with mock.patch(
+        "posthog._async_consumer.async_batch_post", new=mock.AsyncMock()
+    ) as batch_post:
+        client = AsyncPosthog("test-key", before_send=before_send)
+        result = await client.capture_immediate("event", distinct_id="user-1")
+        await client.shutdown()
+
+    assert result is None
+    batch_post.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -475,6 +520,39 @@ async def test_capture_exception_never_raises_in_debug_mode():
     client = AsyncPosthog("test-key", send=False, debug=True)
     with mock.patch.object(client, "capture", side_effect=RuntimeError("broken")):
         assert client.capture_exception(ValueError("boom")) is None
+    await client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_capture_exception_uses_context_code_variable_settings():
+    client = AsyncPosthog(
+        "test-key",
+        send=False,
+        capture_exception_code_variables=False,
+    )
+    with (
+        new_context(),
+        mock.patch(
+            "posthog.async_client.try_attach_code_variables_to_frames"
+        ) as attach,
+    ):
+        set_capture_exception_code_variables_context(True)
+        set_code_variables_mask_patterns_context(["mask-me"])
+        set_code_variables_ignore_patterns_context(["ignore-me"])
+        set_code_variables_mask_url_credentials_context(False)
+        set_code_variables_detect_secrets_context(False)
+        try:
+            raise ValueError("boom")
+        except ValueError as error:
+            assert client.capture_exception(error, distinct_id="user-1") is not None
+
+    attach.assert_called_once()
+    assert attach.call_args.kwargs == {
+        "mask_patterns": ["mask-me"],
+        "ignore_patterns": ["ignore-me"],
+        "mask_url_credentials": False,
+        "detect_secrets": False,
+    }
     await client.shutdown()
 
 
