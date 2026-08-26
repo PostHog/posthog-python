@@ -13,8 +13,8 @@ from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
-from ._async_consumer import _FLUSH, _STOP, _AsyncConsumer
-from ._async_request import _build_client
+from ._async_consumer import _STOP, _AsyncConsumer
+from ._async_request import _build_client, _require_httpx
 from .args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from .capture_compression import (
     CaptureCompression,
@@ -259,6 +259,10 @@ class AsyncClient:
             http_client=http_client,
         )
 
+    def _validate_transport_available(self) -> None:
+        if self.capture_mode == CaptureMode.V0:
+            _require_httpx()
+
     def _ensure_workers_started(self) -> None:
         if self.disabled or not self.send or self._closed or self._worker_tasks:
             return
@@ -407,12 +411,15 @@ class AsyncClient:
             if not self.send:
                 return sent_uuid
 
+            self._validate_transport_available()
             try:
-                self._ensure_workers_started()
+                asyncio.get_running_loop()
             except RuntimeError:
-                # Construction and capture before the loop starts are supported.
-                # flush()/shutdown() will bind the client and start the workers.
+                # Capture before the loop starts is supported. flush()/shutdown()
+                # will bind the client and start the workers.
                 pass
+            else:
+                self._ensure_workers_started()
 
             self._queue.put_nowait(prepared)
             self.log.debug("queued async event %s", event)
@@ -615,10 +622,13 @@ class AsyncClient:
             return None
         if not self.send:
             return sent_uuid
+        self._validate_transport_available()
         try:
-            self._ensure_workers_started()
+            asyncio.get_running_loop()
         except RuntimeError:
             pass
+        else:
+            self._ensure_workers_started()
         self._queue.put_nowait(prepared)
         return sent_uuid
 
@@ -702,12 +712,8 @@ class AsyncClient:
             else asyncio.get_running_loop().time() + timeout_seconds
         )
         try:
-            for _ in self._worker_tasks:
-                if deadline is None:
-                    await self._queue.put(_FLUSH)
-                else:
-                    remaining = max(0.0, deadline - asyncio.get_running_loop().time())
-                    await asyncio.wait_for(self._queue.put(_FLUSH), remaining)
+            for consumer in self._consumers:
+                consumer.request_flush()
 
             if deadline is None:
                 await self._queue.join()

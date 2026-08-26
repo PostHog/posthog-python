@@ -160,6 +160,23 @@ async def test_capture_immediate_uses_capture_v1_without_building_httpx_client()
 
 
 @pytest.mark.asyncio
+async def test_missing_async_extra_does_not_accept_undeliverable_events():
+    with mock.patch(
+        "posthog.async_client._require_httpx",
+        side_effect=RuntimeError("install posthog[async]"),
+    ):
+        client = AsyncPosthog("test-key")
+        assert client.capture("event", distinct_id="user-1") is None
+        assert (
+            client.set(distinct_id="user-1", properties={"email": "a@example.com"})
+            is None
+        )
+        assert client._pending_queue_items() == 0
+        assert client._worker_tasks == []
+        await client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_send_false_accepts_without_starting_workers_or_transport():
     with mock.patch("posthog.async_client._build_client") as build_client:
         client = AsyncPosthog("test-key", send=False)
@@ -245,6 +262,41 @@ async def test_batch_size_overflow_event_is_sent_in_the_next_batch():
         ["first"],
         ["second"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_flush_wakes_each_worker_with_a_partial_batch():
+    slow_callback_started = asyncio.Event()
+    allow_slow_callback = asyncio.Event()
+    delivered = []
+
+    async def before_send(event):
+        if event["event"] == "slow":
+            slow_callback_started.set()
+            await allow_slow_callback.wait()
+        return event
+
+    async def batch_post(*args, **kwargs):
+        delivered.extend(kwargs["batch"])
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        client = AsyncPosthog(
+            "test-key",
+            thread=2,
+            flush_at=100,
+            flush_interval=30,
+            before_send=before_send,
+        )
+        client.capture("slow", distinct_id="user-1")
+        await slow_callback_started.wait()
+        client.capture("fast", distinct_id="user-1")
+        flush = asyncio.create_task(client.flush(timeout_seconds=1))
+        await asyncio.sleep(0)
+        allow_slow_callback.set()
+        await flush
+        await client.shutdown()
+
+    assert sorted(event["event"] for event in delivered) == ["fast", "slow"]
 
 
 @pytest.mark.asyncio

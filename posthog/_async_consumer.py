@@ -13,7 +13,6 @@ from .capture_mode import CaptureMode
 from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
 from .request import APIError, DatetimeSerializer, EVENTS_ENDPOINT
 
-_FLUSH = object()
 _STOP = object()
 
 
@@ -55,6 +54,7 @@ class _AsyncConsumer:
         self.capture_compression = capture_compression
         self.http_client = http_client
         self._carryover: Optional[tuple[dict[str, Any], int]] = None
+        self._flush_event = asyncio.Event()
 
     async def run(self) -> None:
         self.log.debug("async consumer is running")
@@ -73,6 +73,29 @@ class _AsyncConsumer:
             )
         finally:
             self.log.debug("async consumer exited")
+
+    def request_flush(self) -> None:
+        self._flush_event.set()
+
+    async def _get_or_flush(self, timeout: float) -> tuple[Any, bool]:
+        get_task = asyncio.create_task(self.queue.get())
+        flush_task = asyncio.create_task(self._flush_event.wait())
+        done, pending = await asyncio.wait(
+            {get_task, flush_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        if get_task in done:
+            return get_task.result(), False
+        if flush_task in done:
+            self._flush_event.clear()
+            return None, True
+        return None, False
 
     async def upload(self, batch: list[dict[str, Any]]) -> None:
         try:
@@ -115,14 +138,10 @@ class _AsyncConsumer:
             if remaining <= 0:
                 break
 
-            try:
-                queued = await asyncio.wait_for(self.queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+            queued, flush_requested = await self._get_or_flush(remaining)
+            if flush_requested or queued is None:
                 break
 
-            if queued is _FLUSH:
-                self.queue.task_done()
-                break
             if queued is _STOP:
                 self.queue.task_done()
                 stop = True
