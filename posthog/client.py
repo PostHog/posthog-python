@@ -2097,12 +2097,12 @@ class Client(object):
                 "$cymbal_errors",
             }
             properties = {
+                **_get_current_otel_span_properties(),
                 **{
                     key: value
                     for key, value in properties.items()
                     if key not in reserved_properties
                 },
-                **_get_current_otel_span_properties(),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 "$exception_level": _normalize_exception_level(
                     capture_metadata.get("level")
