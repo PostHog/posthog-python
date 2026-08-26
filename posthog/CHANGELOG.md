@@ -1,5 +1,11 @@
 # posthog
 
+## 7.44.1 — 2026-08-26
+
+### Patch changes
+
+- [0e70f0c](https://github.com/posthog/posthog-python/commit/0e70f0caf37f3aaa31ecbc7779843b98abfef2ba) Align local `is_set` and `is_not_set` evaluation with partial property context. — Thanks @marandaneto!
+
 ## 7.44.0 — 2026-08-25
 
 ### Minor changes
