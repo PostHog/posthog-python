@@ -12,6 +12,8 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
+from posthog.async_client import AsyncClient as AsyncClient
+from posthog.async_client import AsyncPosthog as AsyncPosthog
 from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
     identify_context as inner_identify_context,

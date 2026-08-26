@@ -3,6 +3,8 @@
 # Public API scope: public posthog modules (excluding tests) and their exported
 # members. Modules with __all__ use it; other modules include non-underscore
 # names. External imports are excluded.
+alias posthog.AsyncClient -> posthog.async_client.AsyncClient
+alias posthog.AsyncPosthog -> posthog.async_client.AsyncPosthog
 alias posthog.BeforeSendCallback -> posthog.types.BeforeSendCallback
 alias posthog.CaptureCompression -> posthog.capture_compression.CaptureCompression
 alias posthog.CaptureMode -> posthog.capture_mode.CaptureMode
@@ -515,6 +517,33 @@ attribute posthog.args.OptionalSetArgs.distinct_id: NotRequired[Optional[ID_TYPE
 attribute posthog.args.OptionalSetArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalSetArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
 attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
+attribute posthog.async_client.AsyncClient.api_key = (project_api_key or '').strip()
+attribute posthog.async_client.AsyncClient.before_send = before_send
+attribute posthog.async_client.AsyncClient.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
+attribute posthog.async_client.AsyncClient.capture_exception_code_variables = capture_exception_code_variables
+attribute posthog.async_client.AsyncClient.capture_mode = _resolve_capture_mode(capture_mode)
+attribute posthog.async_client.AsyncClient.capture_trace_context = capture_trace_context
+attribute posthog.async_client.AsyncClient.code_variables_detect_secrets = code_variables_detect_secrets if code_variables_detect_secrets is not None else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
+attribute posthog.async_client.AsyncClient.code_variables_ignore_patterns = code_variables_ignore_patterns if code_variables_ignore_patterns is not None else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+attribute posthog.async_client.AsyncClient.code_variables_mask_patterns = code_variables_mask_patterns if code_variables_mask_patterns is not None else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+attribute posthog.async_client.AsyncClient.code_variables_mask_url_credentials = code_variables_mask_url_credentials if code_variables_mask_url_credentials is not None else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
+attribute posthog.async_client.AsyncClient.debug = debug
+attribute posthog.async_client.AsyncClient.disable_geoip = disable_geoip
+attribute posthog.async_client.AsyncClient.disabled = disabled or not self.api_key
+attribute posthog.async_client.AsyncClient.gzip = gzip
+attribute posthog.async_client.AsyncClient.historical_migration = historical_migration
+attribute posthog.async_client.AsyncClient.host = determine_server_host(host)
+attribute posthog.async_client.AsyncClient.in_app_modules = in_app_modules
+attribute posthog.async_client.AsyncClient.is_server = is_server
+attribute posthog.async_client.AsyncClient.log = logging.getLogger('posthog')
+attribute posthog.async_client.AsyncClient.log_captured_exceptions = log_captured_exceptions
+attribute posthog.async_client.AsyncClient.max_retries = max(0, max_retries)
+attribute posthog.async_client.AsyncClient.on_error = on_error
+attribute posthog.async_client.AsyncClient.project_root = os.getcwd()
+attribute posthog.async_client.AsyncClient.raw_host = normalize_host(host)
+attribute posthog.async_client.AsyncClient.send = send
+attribute posthog.async_client.AsyncClient.super_properties = super_properties
+attribute posthog.async_client.AsyncClient.timeout = timeout
 attribute posthog.before_send = None
 attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
@@ -918,6 +947,8 @@ class posthog.ai.types.TokenUsage
 class posthog.ai.types.ToolInProgress 
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
+class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: int = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False)
+class posthog.async_client.AsyncPosthog 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
 class posthog.capture_compression.CaptureCompression 
 class posthog.capture_mode.CaptureMode 
@@ -1250,6 +1281,16 @@ method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariable
 method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
 method posthog.ai.stream.AsyncStreamWrapper.aclose() -> None
 method posthog.ai.stream.AsyncStreamWrapper.close() -> None
+method posthog.async_client.AsyncClient.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
+method posthog.async_client.AsyncClient.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.capture_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.flush(timeout_seconds: Optional[float] = 10) -> None
+method posthog.async_client.AsyncClient.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.async_client.AsyncClient.join() -> None
+method posthog.async_client.AsyncClient.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.shutdown() -> None
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
 method posthog.client.Client.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
@@ -1412,6 +1453,7 @@ module posthog.ai.stream
 module posthog.ai.types
 module posthog.ai.utils
 module posthog.args
+module posthog.async_client
 module posthog.bucketed_rate_limiter
 module posthog.capture_compression
 module posthog.capture_mode
