@@ -5072,16 +5072,33 @@ class TestMatchProperties(unittest.TestCase):
             match_property(property_a, {"key2": "value"})
             match_property(property_c, {"key2": "value1"})  # overrides don't have 'key'
 
-    def test_match_properties_is_set(self):
-        property_a = self.property(key="key", value="is_set", operator="is_set")
-        self.assertTrue(match_property(property_a, {"key": "value"}))
-        self.assertTrue(match_property(property_a, {"key": "value2"}))
-        self.assertTrue(match_property(property_a, {"key": ""}))
-        self.assertFalse(match_property(property_a, {"key": None}))
+    @parameterized.expand(
+        [
+            ("is_set_none", "is_set", None, True),
+            ("is_set_false", "is_set", False, True),
+            ("is_set_zero", "is_set", 0, True),
+            ("is_set_empty_string", "is_set", "", True),
+            ("is_set_empty_list", "is_set", [], True),
+            ("is_set_empty_dict", "is_set", {}, True),
+            ("is_not_set_none", "is_not_set", None, False),
+            ("is_not_set_false", "is_not_set", False, False),
+            ("is_not_set_zero", "is_not_set", 0, False),
+            ("is_not_set_empty_string", "is_not_set", "", False),
+            ("is_not_set_empty_list", "is_not_set", [], False),
+            ("is_not_set_empty_dict", "is_not_set", {}, False),
+        ]
+    )
+    def test_match_properties_presence_operator_with_present_key(
+        self, _name, operator, value, expected
+    ):
+        prop = self.property(key="key", value=operator, operator=operator)
+        self.assertEqual(expected, match_property(prop, {"key": value}))
 
+    @parameterized.expand([("is_set", "is_set"), ("is_not_set", "is_not_set")])
+    def test_match_properties_presence_operator_with_omitted_key(self, _name, operator):
+        prop = self.property(key="key", value=operator, operator=operator)
         with self.assertRaises(InconclusiveMatchError):
-            match_property(property_a, {"key2": "value"})
-            match_property(property_a, {})
+            match_property(prop, {})
 
     def test_match_properties_icontains(self):
         property_a = self.property(key="key", value="valUe", operator="icontains")
@@ -5454,9 +5471,6 @@ class TestMatchProperties(unittest.TestCase):
         property_a = self.property(key="key", value="none", operator="is_not")
         self.assertFalse(match_property(property_a, {"key": None}))
         self.assertTrue(match_property(property_a, {"key": "non"}))
-
-        property_b = self.property(key="key", value=None, operator="is_set")
-        self.assertFalse(match_property(property_b, {"key": None}))
 
         property_c = self.property(key="key", value="no", operator="icontains")
         self.assertFalse(match_property(property_c, {"key": None}))

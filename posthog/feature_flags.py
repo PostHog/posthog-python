@@ -509,7 +509,6 @@ _UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
 
 def match_property(property, property_values) -> bool:
     # only looks for matches where key exists in override_property_values
-    # doesn't support operator is_not_set
     key = property.get("key")
     operator = property.get("operator") or "exact"
     value = property.get("value")
@@ -522,8 +521,8 @@ def match_property(property, property_values) -> bool:
             "can't match properties without a given property value"
         )
 
-    if operator == "is_not_set":
-        raise InconclusiveMatchError("can't match properties with operator is_not_set")
+    if operator in ("is_set", "is_not_set"):
+        return operator == "is_set"
 
     override_value = property_values[key]
 
@@ -543,9 +542,6 @@ def match_property(property, property_values) -> bool:
             return compute_exact_match(value, override_value)
         else:
             return not compute_exact_match(value, override_value)
-
-    if operator == "is_set":
-        return key in property_values
 
     if operator == "icontains":
         return utils.str_icontains(override_value, value)
