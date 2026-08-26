@@ -157,6 +157,16 @@ def test_exception_hooks_delegate_and_restore_previous_hooks(monkeypatch):
     capture.close()
 
     assert client.capture_exception.call_count == 2
+    assert client.capture_exception.call_args_list[0].kwargs["_capture_metadata"] == {
+        "level": "fatal",
+        "source": "python.sys_excepthook",
+        "mechanism": {"type": "onuncaughtexception", "handled": False},
+    }
+    assert client.capture_exception.call_args_list[1].kwargs["_capture_metadata"] == {
+        "level": "error",
+        "source": "python.threading_excepthook",
+        "mechanism": {"type": "onuncaughtexception", "handled": False},
+    }
     sys_hook.assert_called_once_with(*exc_info)
     thread_hook.assert_called_once_with(thread_args)
     assert sys.excepthook is sys_hook
@@ -248,7 +258,7 @@ def test_uncaught_thread_exception_preserves_default_diagnostic():
         from posthog.exception_capture import ExceptionCapture
 
         class Client:
-            def capture_exception(self, exception, distinct_id=None):
+            def capture_exception(self, exception, distinct_id=None, _capture_metadata=None):
                 print(f"captured:{exception[0].__name__}")
 
         capture = ExceptionCapture(Client())
@@ -295,10 +305,10 @@ def test_excepthook(tmpdir):
     assert b"ZeroDivisionError" in output
     assert b"LOL" in output
     assert b"DEBUG:posthog:[PostHog] data uploaded successfully" in output
-    assert (
-        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
-        in output
-    )
+    assert b'"$exception_level": "fatal"' in output
+    assert b'"$exception_source": "python.sys_excepthook"' in output
+    assert b'"type": "onuncaughtexception"' in output
+    assert b'"handled": false' in output
 
 
 class _RootError(Exception):
@@ -337,6 +347,19 @@ def test_exception_list_canonical_order_explicit_cause():
     assert types == ["_WrapperError", "_RootError"]
     assert exceptions[0]["value"] == "wrapper"
     assert exceptions[-1]["value"] == "root"
+    assert exceptions[0]["mechanism"] == {
+        "type": "generic",
+        "handled": True,
+        "synthetic": False,
+        "exception_id": 0,
+    }
+    assert exceptions[1]["mechanism"] == {
+        "type": "chained",
+        "source": "cause",
+        "synthetic": False,
+        "exception_id": 1,
+        "parent_id": 0,
+    }
 
 
 def test_exception_list_canonical_order_implicit_context():
@@ -358,6 +381,7 @@ def test_exception_list_canonical_order_implicit_context():
     assert types == ["_WrapperError", "_RootError"]
     assert exceptions[0]["value"] == "wrapper"
     assert exceptions[-1]["value"] == "root"
+    assert exceptions[1]["mechanism"]["source"] == "context"
 
 
 @pytest.mark.skipif(

@@ -57,6 +57,7 @@ from posthog.exception_utils import (
     _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
+    _normalize_exception_level,
     try_attach_code_variables_to_frames,
 )
 from posthog.feature_flag_evaluations import (
@@ -2056,7 +2057,16 @@ class Client(object):
                 return None
 
             # Format stack trace for cymbal
-            all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
+            capture_metadata_input = dict(kwargs).get("_capture_metadata")
+            capture_metadata = (
+                capture_metadata_input
+                if isinstance(capture_metadata_input, dict)
+                else {}
+            )
+            mechanism = capture_metadata.get("mechanism")
+            all_exceptions_with_trace = exceptions_from_error_tuple(
+                exc_info, mechanism=mechanism if isinstance(mechanism, dict) else None
+            )
 
             # Add in-app property to frames in the exceptions
             event = handle_in_app(
@@ -2070,11 +2080,38 @@ class Client(object):
             )
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
-            properties = {
-                "$exception_list": all_exceptions_with_trace_and_in_app,
-                **_get_current_otel_span_properties(),
-                **properties,
+            reserved_properties = {
+                "$exception_list",
+                "$exception_level",
+                "$exception_source",
+                "$debug_images",
+                "$exception_handled",
+                "$exception_types",
+                "$exception_values",
+                "$exception_sources",
+                "$exception_functions",
+                "$exception_fingerprint_version",
+                "$exception_fingerprint_record",
+                "$exception_issue_id",
+                "$exception_release",
+                "$cymbal_errors",
             }
+            properties = {
+                **{
+                    key: value
+                    for key, value in properties.items()
+                    if key not in reserved_properties
+                },
+                **_get_current_otel_span_properties(),
+                "$exception_list": all_exceptions_with_trace_and_in_app,
+                "$exception_level": _normalize_exception_level(
+                    capture_metadata.get("level")
+                )
+                or "error",
+            }
+            source = capture_metadata.get("source")
+            if isinstance(source, str) and source:
+                properties["$exception_source"] = source
 
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
