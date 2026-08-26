@@ -318,7 +318,8 @@ Attributes:
     debug: Enable verbose SDK logging and re-raise errors from public APIs.
     send: If False, queueing succeeds but events are not sent to PostHog.
     sync_mode: If True, send events synchronously instead of using background
-        worker threads.
+        worker threads. This blocks the calling thread; in asyncio applications
+        such as FastAPI, use ``AsyncPosthog`` instead.
     disabled: If True, disable captures and API requests. Useful in tests.
     secret_key: A Personal API Key or Project Secret API Key used for local
         feature flag evaluation and remote config payloads.

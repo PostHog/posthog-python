@@ -38,7 +38,7 @@ def _require_httpx():
 def _build_client(host: Optional[str] = None):
     httpx_module = _require_httpx()
     base_url = remove_trailing_slash(normalize_host(host))
-    return httpx_module.AsyncClient(base_url=base_url, follow_redirects=True)
+    return httpx_module.AsyncClient(base_url=base_url, follow_redirects=False)
 
 
 def _serialize_v0_body(

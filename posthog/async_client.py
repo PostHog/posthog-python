@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
-from ._async_consumer import _STOP, _AsyncConsumer
+from ._async_consumer import _STOP, _AsyncConsumer, _serialized_event_size
 from ._async_request import (
     _build_client,
     _require_httpx,
@@ -37,6 +37,11 @@ from .client import (
     stringify_id as _stringify_id,
 )
 from .contexts import (
+    get_capture_exception_code_variables_context,
+    get_code_variables_detect_secrets_context,
+    get_code_variables_ignore_patterns_context,
+    get_code_variables_mask_patterns_context,
+    get_code_variables_mask_url_credentials_context,
     get_context_device_id as _get_context_device_id,
     get_context_distinct_id as _get_context_distinct_id,
     get_context_session_id as _get_context_session_id,
@@ -54,6 +59,7 @@ from .exception_utils import (
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
 )
+from .consumer import MAX_MSG_SIZE
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -391,9 +397,12 @@ class AsyncClient:
 
         original_uuid = msg["uuid"]
         try:
-            result = self.before_send(msg)
-            if inspect.isawaitable(result):
-                result = await result
+            if inspect.iscoroutinefunction(self.before_send):
+                result = await self.before_send(msg)
+            else:
+                result = await asyncio.to_thread(self.before_send, msg)
+                if inspect.isawaitable(result):
+                    result = await result
             if result is None:
                 self.log.debug("event dropped by before_send callback")
                 return None
@@ -521,6 +530,21 @@ class AsyncClient:
             error_batch = [processed]
             if not self.send:
                 return sent_uuid
+            try:
+                event_size = await _serialized_event_size(processed)
+            except Exception:
+                self.log.error(
+                    "unable to serialize immediate event for sizing, dropping"
+                )
+                return None
+            if event_size > MAX_MSG_SIZE:
+                self.log.error(
+                    "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
+                    processed.get("event"),
+                    event_size,
+                    MAX_MSG_SIZE // 1024,
+                )
+                return None
 
             consumer = self._new_consumer()
             await consumer.request(error_batch)
@@ -719,14 +743,42 @@ class AsyncClient:
                 "$exception_list": exceptions,
                 **(kwargs.get("properties") or {}),
             }
-            if self.capture_exception_code_variables:
+            context_enabled = get_capture_exception_code_variables_context()
+            context_mask = get_code_variables_mask_patterns_context()
+            context_ignore = get_code_variables_ignore_patterns_context()
+            context_mask_url_credentials = (
+                get_code_variables_mask_url_credentials_context()
+            )
+            context_detect_secrets = get_code_variables_detect_secrets_context()
+            enabled = (
+                context_enabled
+                if context_enabled is not None
+                else self.capture_exception_code_variables
+            )
+            if enabled:
                 try_attach_code_variables_to_frames(
                     exceptions,
                     exc_info,
-                    mask_patterns=self.code_variables_mask_patterns,
-                    ignore_patterns=self.code_variables_ignore_patterns,
-                    mask_url_credentials=self.code_variables_mask_url_credentials,
-                    detect_secrets=self.code_variables_detect_secrets,
+                    mask_patterns=(
+                        context_mask
+                        if context_mask is not None
+                        else self.code_variables_mask_patterns
+                    ),
+                    ignore_patterns=(
+                        context_ignore
+                        if context_ignore is not None
+                        else self.code_variables_ignore_patterns
+                    ),
+                    mask_url_credentials=(
+                        context_mask_url_credentials
+                        if context_mask_url_credentials is not None
+                        else self.code_variables_mask_url_credentials
+                    ),
+                    detect_secrets=(
+                        context_detect_secrets
+                        if context_detect_secrets is not None
+                        else self.code_variables_detect_secrets
+                    ),
                 )
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)

@@ -16,6 +16,11 @@ from .request import APIError, DatetimeSerializer, EVENTS_ENDPOINT
 _STOP = object()
 
 
+async def _serialized_event_size(event: dict[str, Any]) -> int:
+    serialized = await asyncio.to_thread(json.dumps, event, cls=DatetimeSerializer)
+    return len(serialized.encode())
+
+
 class _AsyncConsumer:
     """Consume an asyncio queue and upload capture batches."""
 
@@ -162,10 +167,7 @@ class _AsyncConsumer:
                 continue
 
             try:
-                serialized = await asyncio.to_thread(
-                    json.dumps, item, cls=DatetimeSerializer
-                )
-                item_size = len(serialized.encode())
+                item_size = await _serialized_event_size(item)
             except Exception:
                 self.log.error("unable to serialize queued event for sizing, dropping")
                 self.queue.task_done()
