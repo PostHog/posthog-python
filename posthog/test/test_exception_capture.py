@@ -327,6 +327,10 @@ class _LeafTwo(Exception):
     pass
 
 
+class _ExceptionWithMetadata(Exception):
+    exceptions = 1
+
+
 def test_exception_list_canonical_order_explicit_cause():
     # Canonical ordering: $exception_list[0] is the caught/outermost exception
     # and the root cause is last. For `raise B from A`, B is caught and A is the
@@ -384,6 +388,19 @@ def test_exception_list_canonical_order_implicit_context():
     assert exceptions[1]["mechanism"]["source"] == "context"
 
 
+def test_ordinary_exception_does_not_treat_exceptions_attribute_as_group_members():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        raise _ExceptionWithMetadata("ordinary")
+    except _ExceptionWithMetadata:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    assert [exception["type"] for exception in exceptions] == ["_ExceptionWithMetadata"]
+
+
 @pytest.mark.skipif(
     sys.version_info < (3, 11),
     reason="ExceptionGroup requires Python 3.11+",
@@ -405,3 +422,24 @@ def test_exception_list_canonical_order_exception_group():
     types = [e["type"] for e in exceptions]
     assert types[0] == "ExceptionGroup"
     assert types[1:] == ["_LeafOne", "_LeafTwo"]
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_exception_group_serializes_a_repeated_object_only_once():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    shared = _LeafOne("shared")
+    try:
+        raise ExceptionGroup("group", [shared, shared])  # noqa: F821
+    except BaseException:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    assert [exception["value"] for exception in exceptions] == [
+        "group",
+        "shared",
+    ]

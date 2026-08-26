@@ -737,7 +737,9 @@ def _exceptions_from_error(
         exceptions.extend(child_exceptions)
 
     # Add exceptions from an ExceptionGroup.
-    is_exception_group = exc_value and hasattr(exc_value, "exceptions")
+    is_exception_group = BaseExceptionGroup is not None and isinstance(
+        exc_value, BaseExceptionGroup
+    )
     if is_exception_group:
         for e in exc_value.exceptions:  # type: ignore
             if exception_id >= 50:
