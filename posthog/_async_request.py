@@ -8,10 +8,17 @@ from datetime import datetime, timezone
 from gzip import GzipFile
 from io import BytesIO
 from typing import Any, Optional
+from urllib.parse import quote
 
 from .capture_compression import CaptureCompression
 from .capture_v1 import _send_v1_batch
-from .request import APIError, DatetimeSerializer, USER_AGENT, normalize_host
+from .request import (
+    APIError,
+    DatetimeSerializer,
+    QuotaLimitError,
+    USER_AGENT,
+    normalize_host,
+)
 from .utils import remove_trailing_slash
 
 try:  # pragma: no cover - exercised when the optional dependency is absent
@@ -82,6 +89,86 @@ def _process_response(response: Any) -> None:
     except (KeyError, TypeError, ValueError):
         detail = response.text
     raise APIError(response.status_code, detail, retry_after=retry_after)
+
+
+def _process_flags_response(response: Any) -> Any:
+    _process_response(response)
+    payload = response.json()
+    if (
+        isinstance(payload, dict)
+        and isinstance(payload.get("quotaLimited"), list)
+        and "feature_flags" in payload["quotaLimited"]
+    ):
+        raise QuotaLimitError(response.status_code, "Feature flags quota limited")
+    return payload
+
+
+async def async_flags(
+    api_key: str,
+    host: Optional[str],
+    *,
+    timeout: int,
+    max_retries: int,
+    client: Optional[Any] = None,
+    **request_data: Any,
+) -> Any:
+    """Evaluate feature flags with the sync SDK's bounded retry contract."""
+    retries = max(0, max_retries)
+    httpx_module = _require_httpx()
+    owns_client = client is None
+    http_client = client or _build_client(host)
+    try:
+        for failed_attempt in range(retries + 1):
+            try:
+                data, headers = await asyncio.to_thread(
+                    _serialize_v0_body, api_key, False, request_data
+                )
+                response = await http_client.post(
+                    "/flags/?v=2", content=data, headers=headers, timeout=timeout
+                )
+                return await asyncio.to_thread(_process_flags_response, response)
+            except (httpx_module.TimeoutException, httpx_module.NetworkError):
+                if failed_attempt >= retries:
+                    raise
+            except APIError as error:
+                if error.status not in (502, 504) or failed_attempt >= retries:
+                    raise
+            await asyncio.sleep(0.3 * (2**failed_attempt))
+    finally:
+        if owns_client:
+            await http_client.aclose()
+
+
+def _process_remote_config_response(response: Any) -> Any:
+    _process_response(response)
+    return response.json()
+
+
+async def async_remote_config(
+    secret_key: str,
+    project_api_key: str,
+    host: Optional[str],
+    key: str,
+    *,
+    timeout: int,
+    client: Optional[Any] = None,
+) -> Any:
+    """Fetch and decrypt one remote-config payload."""
+    owns_client = client is None
+    http_client = client or _build_client(host)
+    path = f"/api/projects/@current/feature_flags/{quote(key, safe='')}/remote_config"
+    headers = {"Authorization": f"Bearer {secret_key}", "User-Agent": USER_AGENT}
+    try:
+        response = await http_client.get(
+            path,
+            params={"token": project_api_key},
+            headers=headers,
+            timeout=timeout,
+        )
+        return await asyncio.to_thread(_process_remote_config_response, response)
+    finally:
+        if owns_client:
+            await http_client.aclose()
 
 
 async def async_batch_post(

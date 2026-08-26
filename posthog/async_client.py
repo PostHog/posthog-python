@@ -8,13 +8,18 @@ import sys
 import warnings
 import weakref
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Mapping, Optional, Union
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
 from ._async_consumer import _STOP, _AsyncConsumer
-from ._async_request import _build_client, _require_httpx
+from ._async_request import (
+    _build_client,
+    _require_httpx,
+    async_flags as _async_flags,
+    async_remote_config as _async_remote_config,
+)
 from .args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from .capture_compression import (
     CaptureCompression,
@@ -22,12 +27,20 @@ from .capture_compression import (
 )
 from .capture_mode import CaptureMode, _resolve_capture_mode
 from .client import (
+    MAX_DICT_SIZE as _MAX_DICT_SIZE,
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     Client as _SyncClient,
+    _metadata_has_experiment,
+    _parse_flag_payload,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
 )
-from .contexts import get_context_session_id as _get_context_session_id
+from .contexts import (
+    get_context_device_id as _get_context_device_id,
+    get_context_distinct_id as _get_context_distinct_id,
+    get_context_session_id as _get_context_session_id,
+)
 from .exception_utils import (
     DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
@@ -41,8 +54,14 @@ from .exception_utils import (
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
 )
-from .request import determine_server_host, normalize_host
-from .utils import _normalize_timestamp, clean, system_context
+from .feature_flag_evaluations import (
+    FeatureFlagEvaluations,
+    _EvaluatedFlagRecord,
+    _FeatureFlagEvaluationsHost,
+)
+from .request import QuotaLimitError, determine_server_host, normalize_host
+from .types import FlagMetadata, FlagValue, normalize_flags_response
+from .utils import SizeLimitedDict, _normalize_timestamp, clean, system_context
 from .version import VERSION
 
 __all__ = ["AsyncClient", "AsyncPosthog"]
@@ -89,6 +108,10 @@ class AsyncClient:
         capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         capture_trace_context: bool = False,
+        secret_key: Optional[str] = None,
+        personal_api_key: Optional[str] = None,
+        feature_flags_request_timeout_seconds: int = 3,
+        feature_flags_request_max_retries: int = 1,
     ) -> None:
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -114,6 +137,34 @@ class AsyncClient:
             capture_compression, gzip_fallback=gzip
         )
         self.capture_trace_context = capture_trace_context
+        if personal_api_key is not None and secret_key is None:
+            warnings.warn(
+                "`personal_api_key` is deprecated; use `secret_key` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif personal_api_key is not None and secret_key is not None:
+            self.log.warning(
+                "[FEATURE FLAGS] Both secret_key and personal_api_key were provided; "
+                "using secret_key."
+            )
+        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
+        self.secret_key = (
+            resolved_secret_key.strip()
+            if isinstance(resolved_secret_key, str)
+            else resolved_secret_key
+        ) or None
+        self.personal_api_key = self.secret_key
+        self.feature_flags_request_timeout_seconds = (
+            feature_flags_request_timeout_seconds
+        )
+        self.feature_flags_request_max_retries = max(
+            0, feature_flags_request_max_retries
+        )
+        self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+        self._feature_flag_evaluations_host_cache: Optional[
+            _FeatureFlagEvaluationsHost
+        ] = None
         self.log_captured_exceptions = log_captured_exceptions
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
@@ -167,7 +218,7 @@ class AsyncClient:
         self._consumers: list[_AsyncConsumer] = []
         self._worker_tasks: list[asyncio.Task[None]] = []
         self._immediate_callers: dict[asyncio.Task[Any], int] = {}
-        self._immediate_completions: set[asyncio.Future[None]] = set()
+        self._inflight_operations: set[asyncio.Future[None]] = set()
         self._http_client: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._accepting = True
@@ -433,6 +484,16 @@ class AsyncClient:
             self.log.exception("Error in async capture: %s", error)
             return None
 
+    def _start_inflight_operation(self) -> asyncio.Future[None]:
+        completion: asyncio.Future[None] = self._bind_loop().create_future()
+        self._inflight_operations.add(completion)
+        return completion
+
+    def _finish_inflight_operation(self, completion: asyncio.Future[None]) -> None:
+        if not completion.done():
+            completion.set_result(None)
+        self._inflight_operations.discard(completion)
+
     async def capture_immediate(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
@@ -442,9 +503,7 @@ class AsyncClient:
             return None
         if not self._accepting:
             return None
-        loop = self._bind_loop()
-        completion: asyncio.Future[None] = loop.create_future()
-        self._immediate_completions.add(completion)
+        completion = self._start_inflight_operation()
         self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
         error_batch: list[dict[str, Any]] = []
         try:
@@ -490,9 +549,7 @@ class AsyncClient:
                 self._immediate_callers[current] = remaining_calls
             else:
                 del self._immediate_callers[current]
-            if not completion.done():
-                completion.set_result(None)
-            self._immediate_completions.discard(completion)
+            self._finish_inflight_operation(completion)
 
     def _build_person_properties_event(
         self, event: str, property_key: str, kwargs: OptionalSetArgs
@@ -691,6 +748,240 @@ class AsyncClient:
             self.log.exception("Failed to capture exception: %s", error)
             return None
 
+    def _get_feature_flag_evaluations_host(self) -> _FeatureFlagEvaluationsHost:
+        if self._feature_flag_evaluations_host_cache is None:
+            self._feature_flag_evaluations_host_cache = _FeatureFlagEvaluationsHost(
+                capture_flag_called_event_if_needed=self._capture_feature_flag_called_if_needed,
+                log_warning=lambda message: self.log.warning(message),
+            )
+        return self._feature_flag_evaluations_host_cache
+
+    async def _get_flags_decision(
+        self,
+        distinct_id: ID_TYPES,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
+        flag_keys: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ):
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
+        request_data: dict[str, Any] = {
+            "distinct_id": distinct_id,
+            "groups": groups or {},
+            "person_properties": person_properties or {},
+            "group_properties": group_properties or {},
+            "geoip_disable": disable_geoip,
+            "device_id": device_id,
+        }
+        if flag_keys:
+            request_data["flag_keys_to_evaluate"] = flag_keys
+        response = await _async_flags(
+            self.api_key,
+            self.host,
+            timeout=self.feature_flags_request_timeout_seconds,
+            max_retries=self.feature_flags_request_max_retries,
+            client=self._get_http_client(),
+            **request_data,
+        )
+        return normalize_flags_response(response)
+
+    async def evaluate_flags(
+        self,
+        distinct_id: Optional[ID_TYPES] = None,
+        *,
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        person_properties: Optional[Dict[str, Any]] = None,
+        group_properties: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_geoip: Optional[bool] = None,
+        flag_keys: Optional[list[str]] = None,
+        device_id: Optional[str] = None,
+    ) -> FeatureFlagEvaluations:
+        """Evaluate flags remotely without blocking the event loop.
+
+        The returned snapshot has synchronous in-memory accessors. Pass it to
+        ``capture(flags=...)`` to attach the exact values used for branching.
+        """
+        host = self._get_feature_flag_evaluations_host()
+        if distinct_id is None:
+            distinct_id = _get_context_distinct_id()
+        if device_id is None:
+            device_id = _get_context_device_id()
+        if not distinct_id or self.disabled:
+            return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
+
+        resolved_groups = groups or {}
+        if flag_keys == []:
+            return FeatureFlagEvaluations(
+                host=host,
+                distinct_id=str(distinct_id),
+                flags={},
+                groups=resolved_groups,
+                disable_geoip=disable_geoip,
+            )
+
+        records: dict[str, _EvaluatedFlagRecord] = {}
+        request_id: Optional[str] = None
+        evaluated_at: Optional[int] = None
+        errors_while_computing = False
+        quota_limited = False
+        minimal_flag_called_events = False
+        requested_keys = set(flag_keys) if flag_keys else None
+        if not self._accepting:
+            return FeatureFlagEvaluations(
+                host=host,
+                distinct_id=str(distinct_id),
+                flags={},
+                groups=resolved_groups,
+                disable_geoip=disable_geoip,
+            )
+        completion = self._start_inflight_operation()
+
+        try:
+            response = await self._get_flags_decision(
+                distinct_id,
+                groups=resolved_groups,
+                person_properties=person_properties,
+                group_properties=group_properties,
+                disable_geoip=disable_geoip,
+                flag_keys=flag_keys,
+                device_id=device_id,
+            )
+            request_id = response.get("requestId")
+            raw_evaluated_at = response.get("evaluatedAt")
+            evaluated_at = (
+                raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
+            )
+            errors_while_computing = bool(
+                response.get("errorsWhileComputingFlags", False)
+            )
+            minimal_flag_called_events = response.get("minimalFlagCalledEvents") is True
+            for key, detail in response.get("flags", {}).items():
+                if requested_keys is not None and key not in requested_keys:
+                    continue
+                metadata = detail.metadata
+                records[key] = _EvaluatedFlagRecord(
+                    key=key,
+                    enabled=detail.enabled,
+                    variant=detail.variant,
+                    payload=_parse_flag_payload(metadata.payload),
+                    id=metadata.id if isinstance(metadata, FlagMetadata) else None,
+                    version=(
+                        metadata.version if isinstance(metadata, FlagMetadata) else None
+                    ),
+                    reason=(
+                        detail.reason.description
+                        if detail.reason and detail.reason.description
+                        else None
+                    ),
+                    locally_evaluated=False,
+                    has_experiment=_metadata_has_experiment(metadata),
+                )
+        except QuotaLimitError:
+            self.log.warning(
+                "[FEATURE FLAGS] Feature flag evaluation was quota limited"
+            )
+            quota_limited = True
+        except Exception as error:
+            self.log.error(
+                "[FEATURE FLAGS] Async evaluation failed (%s, status=%s)",
+                type(error).__name__,
+                getattr(error, "status", None),
+            )
+        finally:
+            self._finish_inflight_operation(completion)
+
+        return FeatureFlagEvaluations(
+            host=host,
+            distinct_id=str(distinct_id),
+            flags=records,
+            groups=resolved_groups,
+            disable_geoip=disable_geoip,
+            request_id=request_id,
+            evaluated_at=evaluated_at,
+            errors_while_computing=errors_while_computing,
+            quota_limited=quota_limited,
+            minimal_flag_called_events=minimal_flag_called_events,
+        )
+
+    async def get_remote_config_payload(self, key: str) -> Optional[Any]:
+        """Fetch and decrypt a remote-config payload without blocking the loop."""
+        if self.disabled:
+            return None
+        if self.secret_key is None:
+            self.log.warning(
+                "[FEATURE FLAGS] secret_key is required to fetch remote config"
+            )
+            return None
+        if not self._accepting:
+            return None
+        completion = self._start_inflight_operation()
+        try:
+            return await _async_remote_config(
+                self.secret_key,
+                self.api_key,
+                self.host,
+                key,
+                timeout=self.feature_flags_request_timeout_seconds,
+                client=self._get_http_client(),
+            )
+        except Exception as error:
+            self.log.error(
+                "[FEATURE FLAGS] Async remote config failed (%s, status=%s)",
+                type(error).__name__,
+                getattr(error, "status", None),
+            )
+            return None
+        finally:
+            self._finish_inflight_operation(completion)
+
+    def _capture_feature_flag_called_if_needed(
+        self,
+        *,
+        distinct_id: ID_TYPES,
+        key: str,
+        response: Optional[FlagValue],
+        properties: dict[str, Any],
+        groups: Optional[Mapping[str, Union[str, int]]] = None,
+        disable_geoip: Optional[bool] = None,
+        has_experiment: Optional[bool] = None,
+        minimal_flag_called_events: bool = False,
+    ) -> None:
+        groups_key = (
+            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
+        )
+        reported_key = (key, response, groups_key)
+        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
+        if reported_key in reported_flags:
+            return
+
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+        capture_kwargs: dict[str, Any] = {}
+        if minimal_flag_called_events and has_experiment is False:
+            capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
+        capture_groups = {
+            str(group_type): _stringify_id(group_key)
+            for group_type, group_key in (groups or {}).items()
+        }
+        self.capture(
+            "$feature_flag_called",
+            distinct_id=distinct_id,
+            properties=properties,
+            groups=capture_groups,
+            disable_geoip=disable_geoip,
+            **capture_kwargs,
+        )
+        reported_flags.add(reported_key)
+
     def _pending_queue_items(self) -> int:
         return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
 
@@ -747,13 +1038,13 @@ class AsyncClient:
             self._accepting = False
             errors: list[Exception] = []
 
-            pending_immediate = [
+            pending_operations = [
                 completion
-                for completion in self._immediate_completions
+                for completion in self._inflight_operations
                 if not completion.done()
             ]
-            if pending_immediate:
-                await asyncio.gather(*pending_immediate, return_exceptions=True)
+            if pending_operations:
+                await asyncio.gather(*pending_operations, return_exceptions=True)
 
             try:
                 await self.flush(timeout_seconds=None)
@@ -785,6 +1076,7 @@ class AsyncClient:
                 self.log.exception("Failed to unregister async client")
                 errors.append(error)
 
+            self.distinct_ids_feature_flags_reported.clear()
             self._closed = True
             if errors and self.debug:
                 raise errors[0]
