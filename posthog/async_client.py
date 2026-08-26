@@ -90,6 +90,11 @@ class AsyncClient:
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         capture_trace_context: bool = False,
     ) -> None:
+        if flush_at <= 0:
+            raise ValueError("flush_at must be greater than zero")
+        if flush_interval <= 0:
+            raise ValueError("flush_interval must be greater than zero")
+
         self.api_key = (project_api_key or "").strip()
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
@@ -338,8 +343,6 @@ class AsyncClient:
                 raise TypeError("before_send must return a dict or None")
             processed = clean(result)
             processed["uuid"] = original_uuid
-            if not self._accepting:
-                return None
             return processed
         except Exception as error:
             self.log.exception("Error in before_send callback: %s", error)

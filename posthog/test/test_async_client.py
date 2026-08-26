@@ -255,8 +255,34 @@ async def test_shutdown_called_from_before_send_is_deferred_without_deadlock():
         await asyncio.wait_for(callback_finished.wait(), timeout=1)
         await asyncio.wait_for(client.shutdown(), timeout=1)
 
-    batch_post.assert_not_awaited()
+    batch_post.assert_awaited_once()
     assert client.capture("after shutdown", distinct_id="user-1") is None
+
+
+@pytest.mark.asyncio
+async def test_external_shutdown_delivers_event_already_in_before_send():
+    callback_started = asyncio.Event()
+    allow_callback = asyncio.Event()
+    delivered = []
+
+    async def before_send(event):
+        callback_started.set()
+        await allow_callback.wait()
+        return event
+
+    async def batch_post(*args, **kwargs):
+        delivered.extend(kwargs["batch"])
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        client = AsyncPosthog("test-key", before_send=before_send, flush_at=1)
+        client.capture("event", distinct_id="user-1")
+        await callback_started.wait()
+        shutdown = asyncio.create_task(client.shutdown())
+        await asyncio.sleep(0)
+        allow_callback.set()
+        await shutdown
+
+    assert [event["event"] for event in delivered] == ["event"]
 
 
 @pytest.mark.asyncio
@@ -324,6 +350,12 @@ def test_capture_before_loop_starts_is_flushed_when_loop_runs():
 
     asyncio.run(flush_and_close())
     assert batches[0][0]["event"] == "event"
+
+
+@pytest.mark.parametrize(("option", "value"), [("flush_at", 0), ("flush_interval", 0)])
+def test_rejects_non_positive_batch_settings(option, value):
+    with pytest.raises(ValueError, match=option):
+        AsyncPosthog("test-key", **{option: value})
 
 
 @pytest.mark.asyncio
