@@ -18,7 +18,7 @@ export POSTHOG_HOST="https://us.i.posthog.com"
 # Required only by the remote-config endpoint:
 export POSTHOG_SECRET_KEY="phx_..."
 uv sync
-uv run python app.py
+uv run python main.py
 ```
 
 Open <http://127.0.0.1:8000/docs> for the interactive API documentation.
