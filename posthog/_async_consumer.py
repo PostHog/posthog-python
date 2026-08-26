@@ -54,6 +54,7 @@ class _AsyncConsumer:
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
         self.http_client = http_client
+        self._carryover: Optional[tuple[dict[str, Any], int]] = None
 
     async def run(self) -> None:
         self.log.debug("async consumer is running")
@@ -100,6 +101,12 @@ class _AsyncConsumer:
         total_size = 0
         stop = False
         started = asyncio.get_running_loop().time()
+
+        if self._carryover is not None:
+            carried_item, carried_size = self._carryover
+            self._carryover = None
+            items.append(carried_item)
+            total_size = carried_size
 
         while len(items) < self.flush_at:
             remaining = self.flush_interval - (
@@ -155,11 +162,13 @@ class _AsyncConsumer:
                 self.queue.task_done()
                 continue
 
-            items.append(item)
-            total_size += item_size
-            if total_size >= BATCH_SIZE_LIMIT:
+            if items and total_size + item_size > BATCH_SIZE_LIMIT:
+                self._carryover = (item, item_size)
                 self.log.debug("hit async batch size limit (size: %d)", total_size)
                 break
+
+            items.append(item)
+            total_size += item_size
 
         return items, stop
 

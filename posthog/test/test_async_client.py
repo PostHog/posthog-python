@@ -225,6 +225,29 @@ async def test_capture_after_shutdown_is_dropped_without_restarting_workers():
 
 
 @pytest.mark.asyncio
+async def test_batch_size_overflow_event_is_sent_in_the_next_batch():
+    batches = []
+
+    async def batch_post(*args, **kwargs):
+        batches.append(kwargs["batch"])
+
+    with (
+        mock.patch("posthog._async_consumer.BATCH_SIZE_LIMIT", 800),
+        mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post),
+    ):
+        client = AsyncPosthog("test-key", flush_at=10, flush_interval=30)
+        client.capture("first", distinct_id="user-1", properties={"value": "a" * 400})
+        client.capture("second", distinct_id="user-1", properties={"value": "b" * 400})
+        await client.flush(timeout_seconds=1)
+        await client.shutdown()
+
+    assert [[event["event"] for event in batch] for batch in batches] == [
+        ["first"],
+        ["second"],
+    ]
+
+
+@pytest.mark.asyncio
 async def test_shutdown_waits_for_an_in_flight_batch_instead_of_cancelling_it():
     upload_started = asyncio.Event()
     allow_upload = asyncio.Event()
