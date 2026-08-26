@@ -154,11 +154,22 @@ async def test_async_flags_sends_v2_request_payload():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [502, 504])
-async def test_async_flags_retries_only_contract_statuses(status):
+@pytest.mark.parametrize(
+    ("transient_statuses", "expected_delays"),
+    [
+        ([502], [0.3]),
+        ([502, 504], [0.3, 0.6]),
+    ],
+)
+async def test_async_flags_retries_contract_statuses_until_success(
+    transient_statuses, expected_delays
+):
     client = FakeAsyncClient(
         [
-            FakeResponse(status, {"detail": "temporary"}),
+            *(
+                FakeResponse(status, {"detail": "temporary"})
+                for status in transient_statuses
+            ),
             FakeResponse(200, {"flags": {}}),
         ]
     )
@@ -168,13 +179,13 @@ async def test_async_flags_retries_only_contract_statuses(status):
             "project-key",
             "https://example.com",
             timeout=3,
-            max_retries=1,
+            max_retries=len(transient_statuses),
             client=client,
             distinct_id="user-1",
         )
 
-    assert len(client.calls) == 2
-    sleep.assert_awaited_once_with(0.3)
+    assert len(client.calls) == len(transient_statuses) + 1
+    assert [call.args[0] for call in sleep.await_args_list] == expected_delays
 
 
 @pytest.mark.asyncio
