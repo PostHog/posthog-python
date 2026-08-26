@@ -362,6 +362,51 @@ class TestLocalEvaluation(unittest.TestCase):
             self.client.get_feature_flag("early-exit-flag", "some-distinct-id")
         )
 
+    @mock.patch("posthog.client.flags")
+    def test_early_exit_preserves_fallback_after_inconclusive_presence_condition(
+        self, patch_flags
+    ):
+        patch_flags.return_value = {
+            "featureFlags": {"early-exit-presence-flag": "server-fallback"}
+        }
+
+        for operator in ("is_set", "is_not_set"):
+            with self.subTest(operator=operator):
+                self.client.feature_flags = [
+                    {
+                        "id": 1,
+                        "name": "Early Exit Presence Feature",
+                        "key": "early-exit-presence-flag",
+                        "active": True,
+                        "filters": {
+                            "early_exit": True,
+                            "groups": [
+                                {
+                                    "properties": [
+                                        {
+                                            "key": "plan",
+                                            "operator": operator,
+                                            "value": "",
+                                            "type": "person",
+                                        }
+                                    ],
+                                    "rollout_percentage": 100,
+                                },
+                                {"properties": [], "rollout_percentage": 0},
+                            ],
+                        },
+                    }
+                ]
+
+                self.assertEqual(
+                    "server-fallback",
+                    self.client.get_feature_flag(
+                        "early-exit-presence-flag", "some-distinct-id"
+                    ),
+                )
+
+        self.assertEqual(patch_flags.call_count, 2)
+
     def test_early_exit_does_not_trigger_on_property_mismatch(self):
         # First group fails on its property (region mismatch), not rollout — so even with
         # early_exit enabled, evaluation must continue to the second group, which matches.
