@@ -732,7 +732,9 @@ class Client(object):
             gzip: Whether to gzip event upload payloads.
             max_retries: Number of upload retries. Values below 0 are treated as 0.
             sync_mode: If True, send each event synchronously instead of using
-                background worker threads.
+                background worker threads. This blocks the calling thread; in
+                asyncio applications such as FastAPI, use ``AsyncPosthog``
+                instead.
             timeout: HTTP request timeout in seconds for event uploads.
             thread: Number of background consumer threads.
             poll_interval: Seconds between local feature flag definition refreshes.
