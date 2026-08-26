@@ -426,8 +426,10 @@ def match_feature_flag_properties(
                 and match_result == ConditionMatch.OUT_OF_ROLLOUT_BOUND
             ):
                 # The condition's property filters (if any) matched and only the rollout check
-                # failed, so re-evaluating later groups can't change the outcome. Return a
-                # deterministic False, mirroring the server-side engine.
+                # failed, so re-evaluating later groups can't change the outcome. If an earlier
+                # condition was inconclusive, stop here but preserve that result for fallback.
+                if is_inconclusive:
+                    break
                 return False
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
@@ -509,7 +511,6 @@ _UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
 
 def match_property(property, property_values) -> bool:
     # only looks for matches where key exists in override_property_values
-    # doesn't support operator is_not_set
     key = property.get("key")
     operator = property.get("operator") or "exact"
     value = property.get("value")
@@ -522,8 +523,8 @@ def match_property(property, property_values) -> bool:
             "can't match properties without a given property value"
         )
 
-    if operator == "is_not_set":
-        raise InconclusiveMatchError("can't match properties with operator is_not_set")
+    if operator in ("is_set", "is_not_set"):
+        return operator == "is_set"
 
     override_value = property_values[key]
 
@@ -543,9 +544,6 @@ def match_property(property, property_values) -> bool:
             return compute_exact_match(value, override_value)
         else:
             return not compute_exact_match(value, override_value)
-
-    if operator == "is_set":
-        return key in property_values
 
     if operator == "icontains":
         return utils.str_icontains(override_value, value)
