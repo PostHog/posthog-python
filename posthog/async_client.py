@@ -345,7 +345,7 @@ class AsyncClient:
             processed["uuid"] = original_uuid
             return processed
         except Exception as error:
-            self.log.exception("Error in before_send callback: %s", error)
+            self.log.error("Error in before_send callback (%s)", type(error).__name__)
             return None
 
     def _build_capture_event(
@@ -461,10 +461,16 @@ class AsyncClient:
                     if inspect.isawaitable(callback_result):
                         await callback_result
                 except Exception as callback_error:
-                    self.log.error("on_error handler failed: %s", callback_error)
+                    self.log.error(
+                        "on_error handler failed (%s)", type(callback_error).__name__
+                    )
             if self.debug:
                 raise
-            self.log.exception("Error in immediate async capture: %s", error)
+            self.log.error(
+                "Immediate async capture failed (%s, status=%s)",
+                type(error).__name__,
+                getattr(error, "status", None),
+            )
             return None
         finally:
             self._immediate_tasks.discard(current)

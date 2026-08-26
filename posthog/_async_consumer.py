@@ -66,8 +66,10 @@ class _AsyncConsumer:
                     return
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self.log.exception("async consumer stopped after an unexpected error")
+        except Exception as error:
+            self.log.error(
+                "async consumer stopped after an unexpected %s", type(error).__name__
+            )
         finally:
             self.log.debug("async consumer exited")
 
@@ -75,14 +77,20 @@ class _AsyncConsumer:
         try:
             await self.request(batch)
         except Exception as error:
-            self.log.error("error uploading async capture batch: %s", error)
+            self.log.error(
+                "async capture upload failed (%s, status=%s)",
+                type(error).__name__,
+                getattr(error, "status", None),
+            )
             if self.on_error:
                 try:
                     result = self.on_error(error, batch)
                     if inspect.isawaitable(result):
                         await result
                 except Exception as callback_error:
-                    self.log.error("on_error handler failed: %s", callback_error)
+                    self.log.error(
+                        "on_error handler failed (%s)", type(callback_error).__name__
+                    )
         finally:
             for _ in batch:
                 self.queue.task_done()
@@ -115,8 +123,11 @@ class _AsyncConsumer:
 
             try:
                 item = await self.process_event(queued)
-            except Exception:
-                self.log.exception("unable to process queued event, dropping")
+            except Exception as error:
+                self.log.error(
+                    "unable to process queued event, dropping (%s)",
+                    type(error).__name__,
+                )
                 self.queue.task_done()
                 continue
 

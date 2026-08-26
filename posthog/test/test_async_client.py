@@ -7,6 +7,7 @@ from unittest import mock
 import pytest
 
 from posthog import AsyncClient, AsyncPosthog, CaptureCompression, CaptureMode
+from posthog.request import APIError
 
 
 @pytest.mark.asyncio
@@ -380,6 +381,28 @@ async def test_queued_payload_is_not_written_to_debug_logs(caplog):
 
     assert "super-secret" not in caplog.text
     assert "test-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("immediate", [False, True])
+async def test_failed_capture_does_not_log_server_response_detail(caplog, immediate):
+    caplog.set_level(logging.DEBUG, logger="posthog")
+    server_error = APIError(400, "password=server-secret")
+
+    with mock.patch(
+        "posthog._async_consumer.async_batch_post", side_effect=server_error
+    ):
+        client = AsyncPosthog("test-key", flush_at=1, max_retries=0)
+        if immediate:
+            await client.capture_immediate("event", distinct_id="user-1")
+        else:
+            client.capture("event", distinct_id="user-1")
+            await client.flush(timeout_seconds=1)
+        await client.shutdown()
+
+    assert "server-secret" not in caplog.text
+    assert "APIError" in caplog.text
+    assert "status=400" in caplog.text
 
 
 @pytest.mark.asyncio
