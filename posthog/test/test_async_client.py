@@ -321,6 +321,31 @@ async def test_external_shutdown_delivers_event_already_in_before_send():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_waits_for_immediate_operation_not_its_long_lived_caller():
+    upload_started = asyncio.Event()
+    allow_upload = asyncio.Event()
+    shutdown_task = None
+
+    async def batch_post(*args, **kwargs):
+        upload_started.set()
+        await allow_upload.wait()
+
+    async def capture_then_await_shutdown(client):
+        result = await client.capture_immediate("event", distinct_id="user-1")
+        assert result is not None
+        assert shutdown_task is not None
+        await shutdown_task
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        client = AsyncPosthog("test-key")
+        caller = asyncio.create_task(capture_then_await_shutdown(client))
+        await upload_started.wait()
+        shutdown_task = asyncio.create_task(client.shutdown())
+        allow_upload.set()
+        await asyncio.wait_for(caller, timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_shutdown_waits_for_in_flight_immediate_capture():
     upload_started = asyncio.Event()
     allow_upload = asyncio.Event()

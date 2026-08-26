@@ -166,7 +166,8 @@ class AsyncClient:
         self._flush_interval = flush_interval
         self._consumers: list[_AsyncConsumer] = []
         self._worker_tasks: list[asyncio.Task[None]] = []
-        self._immediate_tasks: set[asyncio.Task[Any]] = set()
+        self._immediate_callers: dict[asyncio.Task[Any], int] = {}
+        self._immediate_completions: set[asyncio.Future[None]] = set()
         self._http_client: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._accepting = True
@@ -434,8 +435,10 @@ class AsyncClient:
             return None
         if not self._accepting:
             return None
-        self._bind_loop()
-        self._immediate_tasks.add(current)
+        loop = self._bind_loop()
+        completion: asyncio.Future[None] = loop.create_future()
+        self._immediate_completions.add(completion)
+        self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
         error_batch: list[dict[str, Any]] = []
         try:
             msg, disable_geoip, property_allowlist = self._build_capture_event(
@@ -475,7 +478,14 @@ class AsyncClient:
             )
             return None
         finally:
-            self._immediate_tasks.discard(current)
+            remaining_calls = self._immediate_callers[current] - 1
+            if remaining_calls:
+                self._immediate_callers[current] = remaining_calls
+            else:
+                del self._immediate_callers[current]
+            if not completion.done():
+                completion.set_result(None)
+            self._immediate_completions.discard(completion)
 
     def _build_person_properties_event(
         self, event: str, property_key: str, kwargs: OptionalSetArgs
@@ -719,7 +729,7 @@ class AsyncClient:
 
     async def shutdown(self) -> None:
         current = asyncio.current_task()
-        if current in self._worker_tasks or current in self._immediate_tasks:
+        if current in self._worker_tasks or current in self._immediate_callers:
             self._accepting = False
             self._defer_lifecycle_call(self.shutdown())
             return
@@ -731,11 +741,10 @@ class AsyncClient:
             self._accepting = False
             errors: list[Exception] = []
 
-            current = asyncio.current_task()
             pending_immediate = [
-                task
-                for task in self._immediate_tasks
-                if task is not current and not task.done()
+                completion
+                for completion in self._immediate_completions
+                if not completion.done()
             ]
             if pending_immediate:
                 await asyncio.gather(*pending_immediate, return_exceptions=True)
