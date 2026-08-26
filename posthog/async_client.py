@@ -152,6 +152,8 @@ class AsyncClient:
         if debug:
             logging.basicConfig()
             self.log.setLevel(logging.DEBUG)
+        else:
+            self.log.setLevel(logging.WARNING)
 
         if not self.api_key:
             self.log.error(

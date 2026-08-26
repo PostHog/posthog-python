@@ -11,6 +11,17 @@ from posthog.request import APIError
 
 
 @pytest.mark.asyncio
+async def test_debug_logging_does_not_leak_to_later_clients():
+    debug_client = AsyncPosthog("test-key", send=False, debug=True)
+    assert debug_client.log.level == logging.DEBUG
+    await debug_client.shutdown()
+
+    normal_client = AsyncPosthog("test-key", send=False)
+    assert normal_client.log.level == logging.WARNING
+    await normal_client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_async_posthog_is_the_customer_facing_async_client():
     client = AsyncPosthog("test-key", send=False)
     assert isinstance(client, AsyncClient)
