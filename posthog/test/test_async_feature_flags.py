@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import MappingProxyType
 from unittest import mock
 
 import pytest
@@ -53,7 +54,7 @@ async def test_evaluate_flags_uses_remote_async_request_and_returns_snapshot():
         client = AsyncPosthog("project-key", send=False)
         snapshot = await client.evaluate_flags(
             "user-1",
-            groups={"company": "company-1"},
+            groups=MappingProxyType({"company": "company-1"}),
             person_properties={"plan": "pro"},
             group_properties={"company": {"size": 10}},
             disable_geoip=False,

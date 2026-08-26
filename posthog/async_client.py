@@ -771,7 +771,7 @@ class AsyncClient:
             disable_geoip = self.disable_geoip
         request_data: dict[str, Any] = {
             "distinct_id": distinct_id,
-            "groups": groups or {},
+            "groups": dict(groups) if groups is not None else {},
             "person_properties": person_properties or {},
             "group_properties": group_properties or {},
             "geoip_disable": disable_geoip,
