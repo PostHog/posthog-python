@@ -92,6 +92,20 @@ async def test_evaluate_flags_uses_context_device_id():
 
 
 @pytest.mark.asyncio
+async def test_integer_zero_is_a_valid_distinct_id():
+    with mock.patch(
+        "posthog.async_client._async_flags",
+        new=mock.AsyncMock(return_value=flags_response()),
+    ) as async_flags:
+        client = AsyncPosthog("project-key", send=False)
+        snapshot = await client.evaluate_flags(0)
+        await client.shutdown()
+
+    assert snapshot.get_flag("beta") == "control"
+    assert async_flags.await_args.kwargs["distinct_id"] == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("distinct_id", [None, ""])
 async def test_evaluate_flags_without_distinct_id_returns_empty_snapshot(distinct_id):
     with mock.patch(

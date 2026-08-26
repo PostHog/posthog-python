@@ -810,7 +810,7 @@ class AsyncClient:
             distinct_id = _get_context_distinct_id()
         if device_id is None:
             device_id = _get_context_device_id()
-        if not distinct_id or self.disabled:
+        if distinct_id is None or distinct_id == "" or self.disabled:
             return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
 
         resolved_groups = groups or {}
