@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+import contextvars
 import logging
 import os
 import sys
@@ -13,7 +13,15 @@ from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
-from ._async_consumer import _STOP, _AsyncConsumer, _serialized_event_size
+from ._async_consumer import (
+    _STOP,
+    _AsyncConsumer,
+    _invoke_callback,
+    _is_processing_event,
+    _QueuedEvent,
+    _run_outside_processing_event,
+    _serialized_event_size,
+)
 from ._async_request import (
     _build_client,
     _require_httpx,
@@ -397,12 +405,7 @@ class AsyncClient:
 
         original_uuid = msg["uuid"]
         try:
-            if inspect.iscoroutinefunction(self.before_send):
-                result = await self.before_send(msg)
-            else:
-                result = await asyncio.to_thread(self.before_send, msg)
-                if inspect.isawaitable(result):
-                    result = await result
+            result = await _invoke_callback(self.before_send, msg)
             if result is None:
                 self.log.debug("event dropped by before_send callback")
                 return None
@@ -481,7 +484,7 @@ class AsyncClient:
             else:
                 self._ensure_workers_started()
 
-            self._queue.put_nowait(prepared)
+            self._queue.put_nowait(_QueuedEvent(prepared, contextvars.copy_context()))
             self.log.debug("queued async event %s", event)
             return sent_uuid
         except asyncio.QueueFull:
@@ -552,9 +555,7 @@ class AsyncClient:
         except Exception as error:
             if self.on_error:
                 try:
-                    callback_result = self.on_error(error, error_batch)
-                    if inspect.isawaitable(callback_result):
-                        await callback_result
+                    await _invoke_callback(self.on_error, error, error_batch)
                 except Exception as callback_error:
                     self.log.error(
                         "on_error handler failed (%s)", type(callback_error).__name__
@@ -710,7 +711,7 @@ class AsyncClient:
             pass
         else:
             self._ensure_workers_started()
-        self._queue.put_nowait(prepared)
+        self._queue.put_nowait(_QueuedEvent(prepared, contextvars.copy_context()))
         return sent_uuid
 
     def capture_exception(
@@ -1038,12 +1039,12 @@ class AsyncClient:
         return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
 
     def _defer_lifecycle_call(self, awaitable) -> None:
-        task = asyncio.create_task(awaitable)
+        task = asyncio.create_task(_run_outside_processing_event(awaitable))
         self._deferred_lifecycle_tasks.add(task)
         task.add_done_callback(self._deferred_lifecycle_tasks.discard)
 
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
-        if asyncio.current_task() in self._worker_tasks:
+        if asyncio.current_task() in self._worker_tasks or _is_processing_event():
             self._defer_lifecycle_call(self.flush(timeout_seconds))
             return
         if not self.send or self.disabled or self._pending_queue_items() == 0:
@@ -1078,7 +1079,11 @@ class AsyncClient:
 
     async def shutdown(self) -> None:
         current = asyncio.current_task()
-        if current in self._worker_tasks or current in self._immediate_callers:
+        if (
+            current in self._worker_tasks
+            or current in self._immediate_callers
+            or _is_processing_event()
+        ):
             self._accepting = False
             self._defer_lifecycle_call(self.shutdown())
             return

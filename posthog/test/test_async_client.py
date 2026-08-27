@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import threading
 from unittest import mock
@@ -87,6 +88,38 @@ async def test_capture_runs_async_before_send_in_consumer():
 
     assert batches[0][0]["properties"]["from_before_send"] is True
     assert batches[0][0]["uuid"] == event_uuid
+
+
+@pytest.mark.asyncio
+async def test_capture_preserves_context_for_each_buffered_event():
+    request_id = contextvars.ContextVar("request_id")
+    batches = []
+
+    def before_send(event):
+        event["properties"]["request_id"] = request_id.get()
+        return event
+
+    async def batch_post(*args, **kwargs):
+        batches.append(kwargs["batch"])
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        client = AsyncPosthog("test-key", before_send=before_send, flush_interval=30)
+        token = request_id.set("request-A")
+        client.capture("event-A", distinct_id="user-1")
+        request_id.reset(token)
+
+        token = request_id.set("request-B")
+        client.capture("event-B", distinct_id="user-1")
+        request_id.reset(token)
+
+        await client.flush(timeout_seconds=1)
+        await client.shutdown()
+
+    events = [event for batch in batches for event in batch]
+    assert [event["properties"]["request_id"] for event in events] == [
+        "request-A",
+        "request-B",
+    ]
 
 
 @pytest.mark.asyncio
@@ -385,7 +418,12 @@ async def test_shutdown_called_from_before_send_is_deferred_without_deadlock():
         client = AsyncPosthog("test-key", before_send=before_send, flush_at=1)
         client.capture("event", distinct_id="user-1")
         await asyncio.wait_for(callback_finished.wait(), timeout=1)
-        await asyncio.wait_for(client.shutdown(), timeout=1)
+
+        async def wait_until_closed():
+            while not client._closed:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_until_closed(), timeout=1)
 
     batch_post.assert_awaited_once()
     assert client.capture("after shutdown", distinct_id="user-1") is None
@@ -570,6 +608,26 @@ async def test_queued_payload_is_not_written_to_debug_logs(caplog):
 
     assert "super-secret" not in caplog.text
     assert "test-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_capture_immediate_offloads_synchronous_on_error():
+    callback_thread = None
+
+    def on_error(error, batch):
+        nonlocal callback_thread
+        callback_thread = threading.get_ident()
+
+    with mock.patch(
+        "posthog._async_consumer.async_batch_post",
+        side_effect=APIError(400, "failed"),
+    ):
+        client = AsyncPosthog("test-key", on_error=on_error, max_retries=0)
+        result = await client.capture_immediate("event", distinct_id="user-1")
+        await client.shutdown()
+
+    assert result is None
+    assert callback_thread != threading.get_ident()
 
 
 @pytest.mark.asyncio

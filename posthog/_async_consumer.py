@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from ._async_request import async_batch_post, async_send_v1_batch
@@ -14,6 +16,36 @@ from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
 from .request import APIError, DatetimeSerializer, EVENTS_ENDPOINT
 
 _STOP = object()
+_PROCESSING_EVENT = contextvars.ContextVar(
+    "posthog_async_processing_event", default=False
+)
+
+
+def _is_processing_event() -> bool:
+    return _PROCESSING_EVENT.get()
+
+
+async def _run_outside_processing_event(awaitable):
+    token = _PROCESSING_EVENT.set(False)
+    try:
+        return await awaitable
+    finally:
+        _PROCESSING_EVENT.reset(token)
+
+
+@dataclass(frozen=True)
+class _QueuedEvent:
+    event: dict[str, Any]
+    context: contextvars.Context
+
+
+async def _invoke_callback(callback, *args):
+    if inspect.iscoroutinefunction(callback):
+        return await callback(*args)
+    result = await asyncio.to_thread(callback, *args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 async def _serialized_event_size(event: dict[str, Any]) -> int:
@@ -102,6 +134,15 @@ class _AsyncConsumer:
             return None, True
         return None, False
 
+    async def _process_queued_event(
+        self, event: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        token = _PROCESSING_EVENT.set(True)
+        try:
+            return await self.process_event(event)
+        finally:
+            _PROCESSING_EVENT.reset(token)
+
     async def upload(self, batch: list[dict[str, Any]]) -> None:
         try:
             await self.request(batch)
@@ -113,9 +154,7 @@ class _AsyncConsumer:
             )
             if self.on_error:
                 try:
-                    result = self.on_error(error, batch)
-                    if inspect.isawaitable(result):
-                        await result
+                    await _invoke_callback(self.on_error, error, batch)
                 except Exception as callback_error:
                     self.log.error(
                         "on_error handler failed (%s)", type(callback_error).__name__
@@ -153,7 +192,10 @@ class _AsyncConsumer:
                 break
 
             try:
-                item = await self.process_event(queued)
+                process_task = queued.context.run(
+                    asyncio.create_task, self._process_queued_event(queued.event)
+                )
+                item = await process_task
             except Exception as error:
                 self.log.error(
                     "unable to process queued event, dropping (%s)",
