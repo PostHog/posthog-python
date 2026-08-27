@@ -17,10 +17,10 @@ from posthog.request import APIError
 
 
 class FakeResponse:
-    def __init__(self, status_code=200, payload=None):
+    def __init__(self, status_code=200, payload=None, headers=None):
         self.status_code = status_code
         self._payload = payload if payload is not None else {"ok": True}
-        self.headers = {}
+        self.headers = headers or {}
         self.text = str(self._payload)
 
     def json(self):
@@ -29,13 +29,17 @@ class FakeResponse:
 
 class FakeAsyncClient:
     def __init__(self, response=None):
-        self.response = response or FakeResponse()
+        self.responses = (
+            list(response)
+            if isinstance(response, list)
+            else [response or FakeResponse()]
+        )
         self.calls = []
         self.closed = False
 
     async def post(self, *args, **kwargs):
         self.calls.append((args, kwargs))
-        return self.response
+        return self.responses.pop(0)
 
     async def aclose(self):
         self.closed = True
@@ -83,6 +87,50 @@ async def test_async_batch_post_uses_relative_path_and_sanitized_logs(caplog):
     assert "super-secret" not in caplog.text
     assert "test-secret-key" not in caplog.text
     assert "https://example.com" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_batch_post_follows_same_origin_temporary_redirect():
+    client = FakeAsyncClient(
+        [
+            FakeResponse(307, headers={"Location": "/redirected-batch/"}),
+            FakeResponse(200),
+        ]
+    )
+
+    await async_batch_post(
+        "test-key",
+        "https://example.com",
+        batch=[{"event": "event"}],
+        path="/batch/",
+        client=client,
+    )
+
+    assert [call[0] for call in client.calls] == [
+        ("/batch/",),
+        ("/redirected-batch/",),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_batch_post_rejects_cross_origin_temporary_redirect():
+    client = FakeAsyncClient(
+        FakeResponse(
+            307,
+            headers={"Location": "https://attacker.example/redirected-batch/"},
+        )
+    )
+
+    with pytest.raises(APIError):
+        await async_batch_post(
+            "test-key",
+            "https://example.com",
+            batch=[{"event": "event"}],
+            path="/batch/",
+            client=client,
+        )
+
+    assert len(client.calls) == 1
 
 
 @pytest.mark.asyncio

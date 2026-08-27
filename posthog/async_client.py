@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextvars
 import logging
 import os
 import sys
+import threading
 import warnings
 import weakref
 from datetime import datetime, timezone
@@ -186,6 +188,7 @@ class AsyncClient:
         self._immediate_completions: set[asyncio.Future[None]] = set()
         self._http_client: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_thread_id: Optional[int] = None
         self._accepting = True
         self._closed = False
         self._shutdown_lock = asyncio.Lock()
@@ -244,6 +247,7 @@ class AsyncClient:
         loop = asyncio.get_running_loop()
         if self._loop is None:
             self._loop = loop
+            self._loop_thread_id = threading.get_ident()
         elif self._loop is not loop:
             raise RuntimeError("AsyncClient cannot be shared across event loops")
         return loop
@@ -287,6 +291,42 @@ class AsyncClient:
             consumer = self._new_consumer()
             self._consumers.append(consumer)
             self._worker_tasks.append(asyncio.create_task(consumer.run()))
+
+    def _enqueue_prepared_event(self, prepared: dict[str, Any]) -> None:
+        queued_event = _QueuedEvent(prepared, contextvars.copy_context())
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if self._loop is None:
+            if running_loop is not None:
+                self._ensure_workers_started()
+            self._queue.put_nowait(queued_event)
+            return
+
+        if running_loop is self._loop:
+            self._ensure_workers_started()
+            self._queue.put_nowait(queued_event)
+            return
+        if running_loop is not None:
+            raise RuntimeError("AsyncClient cannot be shared across event loops")
+        if self._loop_thread_id == threading.get_ident() or not self._loop.is_running():
+            raise RuntimeError("AsyncClient event loop is not running")
+
+        admitted: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        def enqueue_on_bound_loop() -> None:
+            try:
+                self._ensure_workers_started()
+                self._queue.put_nowait(queued_event)
+            except BaseException as error:
+                admitted.set_exception(error)
+            else:
+                admitted.set_result(None)
+
+        self._loop.call_soon_threadsafe(enqueue_on_bound_loop)
+        admitted.result()
 
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
         raw_uuid = msg.pop("uuid", None)
@@ -426,16 +466,7 @@ class AsyncClient:
                 return sent_uuid
 
             self._validate_transport_available()
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                # Capture before the loop starts is supported. flush()/shutdown()
-                # will bind the client and start the workers.
-                pass
-            else:
-                self._ensure_workers_started()
-
-            self._queue.put_nowait(_QueuedEvent(prepared, contextvars.copy_context()))
+            self._enqueue_prepared_event(prepared)
             self.log.debug("queued async event %s", event)
             return sent_uuid
         except asyncio.QueueFull:
@@ -650,13 +681,7 @@ class AsyncClient:
         if not self.send:
             return sent_uuid
         self._validate_transport_available()
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            self._ensure_workers_started()
-        self._queue.put_nowait(_QueuedEvent(prepared, contextvars.copy_context()))
+        self._enqueue_prepared_event(prepared)
         return sent_uuid
 
     def capture_exception(
@@ -754,6 +779,63 @@ class AsyncClient:
         self._deferred_lifecycle_tasks.add(task)
         task.add_done_callback(self._deferred_lifecycle_tasks.discard)
 
+    def _discard_undrainable_queue(self) -> None:
+        discarded = 0
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._queue.task_done()
+            discarded += 1
+
+        orphaned = self._pending_queue_items()
+        for _ in range(orphaned):
+            self._queue.task_done()
+        discarded += orphaned
+        if discarded:
+            self.log.warning(
+                "discarded %d async capture items because all workers exited",
+                discarded,
+            )
+
+    async def _wait_for_queue_drain(self, deadline: Optional[float]) -> None:
+        live_workers = [task for task in self._worker_tasks if not task.done()]
+        if not live_workers:
+            self._discard_undrainable_queue()
+            return
+
+        queue_join = asyncio.create_task(self._queue.join())
+
+        async def wait_for_workers() -> None:
+            await asyncio.wait(live_workers, return_when=asyncio.ALL_COMPLETED)
+
+        workers_finished = asyncio.create_task(wait_for_workers())
+        try:
+            timeout = (
+                None
+                if deadline is None
+                else max(0.0, deadline - asyncio.get_running_loop().time())
+            )
+            done, _ = await asyncio.wait(
+                {queue_join, workers_finished},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                raise asyncio.TimeoutError
+            if queue_join in done:
+                await queue_join
+                return
+
+            self._discard_undrainable_queue()
+            await queue_join
+        finally:
+            for task in (queue_join, workers_finished):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(queue_join, workers_finished, return_exceptions=True)
+
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         if asyncio.current_task() in self._worker_tasks or _is_processing_event():
             self._defer_lifecycle_call(self.flush(timeout_seconds))
@@ -770,11 +852,7 @@ class AsyncClient:
             for consumer in self._consumers:
                 consumer.request_flush()
 
-            if deadline is None:
-                await self._queue.join()
-            else:
-                remaining = max(0.0, deadline - asyncio.get_running_loop().time())
-                await asyncio.wait_for(self._queue.join(), remaining)
+            await self._wait_for_queue_drain(deadline)
         except asyncio.TimeoutError:
             self.log.warning(
                 "flush timed out after %s seconds with %s items pending",
@@ -821,10 +899,11 @@ class AsyncClient:
                 errors.append(error)
 
             try:
-                for _ in self._worker_tasks:
+                live_workers = [task for task in self._worker_tasks if not task.done()]
+                for _ in live_workers:
                     await self._queue.put(_STOP)
                 if self._worker_tasks:
-                    await asyncio.gather(*self._worker_tasks, return_exceptions=False)
+                    await asyncio.gather(*self._worker_tasks, return_exceptions=True)
             except Exception as error:
                 self.log.exception("Failed to stop async capture workers")
                 errors.append(error)
