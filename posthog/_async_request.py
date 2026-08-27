@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from gzip import GzipFile
 from io import BytesIO
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 
 from .capture_compression import CaptureCompression
 from .capture_v1 import _send_v1_batch
@@ -66,6 +66,24 @@ def _serialize_v0_body(
             )
 
     return data, headers
+
+
+def _origin(url: str) -> tuple[str, str, Optional[int]]:
+    parsed = urlsplit(url)
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+
+def _same_origin_redirect_path(
+    base_url: str, current_path: str, location: str
+) -> Optional[str]:
+    target = urlsplit(urljoin(urljoin(f"{base_url}/", current_path), location))
+    if _origin(target.geturl()) != _origin(base_url):
+        return None
+    path = target.path or "/"
+    return f"{path}?{target.query}" if target.query else path
 
 
 def _parse_retry_after(response: Any) -> Optional[float]:
@@ -200,10 +218,29 @@ async def async_batch_post(
     http_client = client or _build_client(host)
     try:
         logging.getLogger("posthog").debug("making async capture request")
-        response = await http_client.post(
-            path, content=data, headers=headers, timeout=timeout
-        )
-        _process_response(response)
+        base_url = remove_trailing_slash(normalize_host(host))
+        request_path = path
+        for redirect_count in range(6):
+            response = await http_client.post(
+                request_path, content=data, headers=headers, timeout=timeout
+            )
+            if response.status_code not in (307, 308):
+                _process_response(response)
+                return
+
+            location = response.headers.get("Location") or response.headers.get(
+                "location"
+            )
+            redirect_path = (
+                _same_origin_redirect_path(base_url, request_path, location)
+                if location
+                else None
+            )
+            if redirect_path is None:
+                raise APIError(400, "Cross-origin or invalid redirect blocked")
+            if redirect_count >= 5:
+                raise APIError(400, "Too many capture redirects")
+            request_path = redirect_path
     finally:
         if owns_client:
             await http_client.aclose()

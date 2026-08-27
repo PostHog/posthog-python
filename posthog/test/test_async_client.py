@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import subprocess
+import sys
 import threading
 from unittest import mock
 
@@ -65,6 +67,90 @@ async def test_capture_is_a_synchronous_queue_write_and_flushes():
     assert event["properties"]["$geoip_disable"] is True
     assert event["properties"]["$is_server"] is True
     assert event["uuid"] == event_uuid
+
+
+def test_capture_from_worker_thread_wakes_loop_bound_queue():
+    script = r"""
+import asyncio
+import os
+import threading
+from unittest import mock
+from posthog import AsyncPosthog
+
+async def main():
+    delivered = []
+
+    async def batch_post(*args, **kwargs):
+        delivered.extend(kwargs["batch"])
+
+    with mock.patch(
+        "posthog._async_consumer.async_batch_post", side_effect=batch_post
+    ):
+        client = AsyncPosthog("test-key", flush_interval=30)
+        client._ensure_workers_started()
+        while not client._queue._getters:
+            await asyncio.sleep(0)
+
+        asyncio.get_running_loop().set_debug(True)
+        capture_result = []
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("threaded event", distinct_id="user-1")
+            ),
+            daemon=True,
+        )
+        capture_thread.start()
+        for _ in range(100):
+            if not capture_thread.is_alive():
+                break
+            await asyncio.sleep(0.01)
+
+        if capture_thread.is_alive():
+            os._exit(2)
+        if len(capture_result) != 1 or capture_result[0] is None:
+            os._exit(3)
+
+        await asyncio.wait_for(client.flush(), timeout=1)
+        await client.shutdown()
+        if [event["event"] for event in delivered] != ["threaded event"]:
+            os._exit(4)
+
+asyncio.run(main())
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
+    client = AsyncPosthog("test-key", flush_interval=30)
+    client._ensure_workers_started()
+    scheduled_callbacks = []
+    capture_result = []
+
+    with mock.patch.object(
+        client._loop,
+        "call_soon_threadsafe",
+        side_effect=lambda callback: scheduled_callbacks.append(callback),
+    ):
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("threaded event", distinct_id="user-1")
+            ),
+            daemon=True,
+        )
+        capture_thread.start()
+        while not scheduled_callbacks:
+            await asyncio.sleep(0)
+
+        client._accepting = False
+        scheduled_callbacks.pop()()
+        capture_thread.join(timeout=1)
+
+    assert capture_result == [None]
+    for task in client._worker_tasks:
+        task.cancel()
+    await asyncio.gather(*client._worker_tasks, return_exceptions=True)
+    await client._close_transport()
 
 
 @pytest.mark.asyncio
@@ -453,6 +539,22 @@ async def test_external_shutdown_delivers_event_already_in_before_send():
         await shutdown
 
     assert [event["event"] for event in delivered] == ["event"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_returns_when_all_workers_exited_with_queued_work():
+    client = AsyncPosthog("test-key", flush_interval=30)
+    client._ensure_workers_started()
+    for task in client._worker_tasks:
+        task.cancel()
+    await asyncio.gather(*client._worker_tasks, return_exceptions=True)
+
+    assert client.capture("undrainable event", distinct_id="user-1") is not None
+    try:
+        await asyncio.wait_for(client.shutdown(), timeout=0.1)
+    finally:
+        if client._http_client is not None:
+            await client._http_client.aclose()
 
 
 @pytest.mark.asyncio
