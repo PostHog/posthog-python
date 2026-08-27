@@ -529,6 +529,26 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual(mock_get.call_count, 2)
 
     @patch("posthog.ai.prompts._get_session")
+    @patch("posthog.ai.prompts.time.time")
+    def test_default_cache_ttl_seconds_zero_disables_caching(
+        self, mock_time, mock_get_session
+    ):
+        """A default TTL of 0 should disable caching, matching the per-call option."""
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+        mock_time.return_value = 1000.0
+
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, default_cache_ttl_seconds=0)
+
+        prompts.get("test-prompt", with_metadata=False)
+        self.assertEqual(mock_get.call_count, 1)
+
+        # No time has passed, and a TTL of 0 still means every read refetches.
+        prompts.get("test-prompt", with_metadata=False)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("posthog.ai.prompts._get_session")
     def test_url_encode_prompt_names_with_special_characters(self, mock_get_session):
         """Should URL-encode prompt names with special characters."""
         mock_get = mock_get_session.return_value.get
