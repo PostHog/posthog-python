@@ -121,6 +121,39 @@ asyncio.run(main())
 
 
 @pytest.mark.asyncio
+async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
+    client = AsyncPosthog("test-key", flush_interval=30)
+    client._ensure_workers_started()
+    scheduled_callbacks = []
+    capture_result = []
+
+    with mock.patch.object(
+        client._loop,
+        "call_soon_threadsafe",
+        side_effect=lambda callback: scheduled_callbacks.append(callback),
+    ):
+        capture_thread = threading.Thread(
+            target=lambda: capture_result.append(
+                client.capture("threaded event", distinct_id="user-1")
+            ),
+            daemon=True,
+        )
+        capture_thread.start()
+        while not scheduled_callbacks:
+            await asyncio.sleep(0)
+
+        client._accepting = False
+        scheduled_callbacks.pop()()
+        capture_thread.join(timeout=1)
+
+    assert capture_result == [None]
+    for task in client._worker_tasks:
+        task.cancel()
+    await asyncio.gather(*client._worker_tasks, return_exceptions=True)
+    await client._close_transport()
+
+
+@pytest.mark.asyncio
 async def test_capture_runs_async_before_send_in_consumer():
     batches = []
 

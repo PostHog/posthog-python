@@ -292,7 +292,9 @@ class AsyncClient:
             self._consumers.append(consumer)
             self._worker_tasks.append(asyncio.create_task(consumer.run()))
 
-    def _enqueue_prepared_event(self, prepared: dict[str, Any]) -> None:
+    def _enqueue_prepared_event(self, prepared: dict[str, Any]) -> bool:
+        if not self._accepting or self._closed:
+            return False
         queued_event = _QueuedEvent(prepared, contextvars.copy_context())
         try:
             running_loop = asyncio.get_running_loop()
@@ -303,30 +305,33 @@ class AsyncClient:
             if running_loop is not None:
                 self._ensure_workers_started()
             self._queue.put_nowait(queued_event)
-            return
+            return True
 
         if running_loop is self._loop:
             self._ensure_workers_started()
             self._queue.put_nowait(queued_event)
-            return
+            return True
         if running_loop is not None:
             raise RuntimeError("AsyncClient cannot be shared across event loops")
         if self._loop_thread_id == threading.get_ident() or not self._loop.is_running():
             raise RuntimeError("AsyncClient event loop is not running")
 
-        admitted: concurrent.futures.Future[None] = concurrent.futures.Future()
+        admitted: concurrent.futures.Future[bool] = concurrent.futures.Future()
 
         def enqueue_on_bound_loop() -> None:
             try:
+                if not self._accepting or self._closed:
+                    admitted.set_result(False)
+                    return
                 self._ensure_workers_started()
                 self._queue.put_nowait(queued_event)
             except BaseException as error:
                 admitted.set_exception(error)
             else:
-                admitted.set_result(None)
+                admitted.set_result(True)
 
         self._loop.call_soon_threadsafe(enqueue_on_bound_loop)
-        admitted.result()
+        return admitted.result()
 
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
         raw_uuid = msg.pop("uuid", None)
@@ -466,7 +471,8 @@ class AsyncClient:
                 return sent_uuid
 
             self._validate_transport_available()
-            self._enqueue_prepared_event(prepared)
+            if not self._enqueue_prepared_event(prepared):
+                return None
             self.log.debug("queued async event %s", event)
             return sent_uuid
         except asyncio.QueueFull:
@@ -681,7 +687,8 @@ class AsyncClient:
         if not self.send:
             return sent_uuid
         self._validate_transport_available()
-        self._enqueue_prepared_event(prepared)
+        if not self._enqueue_prepared_event(prepared):
+            return None
         return sent_uuid
 
     def capture_exception(
