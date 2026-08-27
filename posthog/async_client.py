@@ -19,6 +19,7 @@ from ._async_consumer import (
     _invoke_callback,
     _is_processing_event,
     _QueuedEvent,
+    _run_outside_processing_event,
     _serialized_event_size,
 )
 from ._async_request import _build_client, _require_httpx
@@ -749,7 +750,7 @@ class AsyncClient:
         return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
 
     def _defer_lifecycle_call(self, awaitable) -> None:
-        task = asyncio.create_task(awaitable)
+        task = asyncio.create_task(_run_outside_processing_event(awaitable))
         self._deferred_lifecycle_tasks.add(task)
         task.add_done_callback(self._deferred_lifecycle_tasks.discard)
 

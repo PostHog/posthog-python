@@ -25,6 +25,14 @@ def _is_processing_event() -> bool:
     return _PROCESSING_EVENT.get()
 
 
+async def _run_outside_processing_event(awaitable):
+    token = _PROCESSING_EVENT.set(False)
+    try:
+        return await awaitable
+    finally:
+        _PROCESSING_EVENT.reset(token)
+
+
 @dataclass(frozen=True)
 class _QueuedEvent:
     event: dict[str, Any]

@@ -418,7 +418,12 @@ async def test_shutdown_called_from_before_send_is_deferred_without_deadlock():
         client = AsyncPosthog("test-key", before_send=before_send, flush_at=1)
         client.capture("event", distinct_id="user-1")
         await asyncio.wait_for(callback_finished.wait(), timeout=1)
-        await asyncio.wait_for(client.shutdown(), timeout=1)
+
+        async def wait_until_closed():
+            while not client._closed:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_until_closed(), timeout=1)
 
     batch_post.assert_awaited_once()
     assert client.capture("after shutdown", distinct_id="user-1") is None
