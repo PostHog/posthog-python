@@ -5102,22 +5102,23 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_c, {"key2": "value"})
 
-    def test_match_properties_exact_uses_unicode_lowercase(self):
-        matching_cases = [("Ä", "ä"), ("323.0", 323.0)]
-        non_matching_cases = [("ß", "ss"), ("Σ", "ς")]
+    @parameterized.expand(
+        [
+            ("non_ascii_case_variant", "Ä", "ä", True),
+            ("float_stringification", "323.0", 323.0, True),
+            ("casefold_expansion", "ß", "ss", False),
+            ("final_sigma", "Σ", "ς", False),
+        ]
+    )
+    def test_match_properties_exact_uses_unicode_lowercase(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
 
-        for filter_value, property_value in matching_cases:
-            exact = self.property("key", filter_value, "exact")
-            is_not = self.property("key", filter_value, "is_not")
-            self.assertTrue(match_property(exact, {"key": property_value}))
-            self.assertFalse(match_property(is_not, {"key": property_value}))
-
-        for filter_value, property_value in non_matching_cases:
-            exact = self.property("key", filter_value, "exact")
-            is_not = self.property("key", filter_value, "is_not")
-            self.assertFalse(match_property(exact, {"key": property_value}))
-            self.assertTrue(match_property(is_not, {"key": property_value}))
-
+    def test_match_properties_exact_array_uses_unicode_lowercase(self):
         exact_array = self.property("key", ["free", "Ä"], "exact")
         is_not_array = self.property("key", ["free", "Ä"], "is_not")
         self.assertTrue(match_property(exact_array, {"key": "ä"}))
@@ -5246,12 +5247,16 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(positive, {"key": value}))
         self.assertTrue(match_property(negative, {"key": value}))
 
-    def test_string_operators_preserve_float_stringification(self):
-        contains = self.property("key", ".0", "icontains")
-        starts_with = self.property("key", "323", "starts_with")
-        ends_with = self.property("key", ".0", "ends_with")
-        for prop in (contains, starts_with, ends_with):
-            self.assertTrue(match_property(prop, {"key": 323.0}))
+    @parameterized.expand(
+        [
+            ("icontains", ".0"),
+            ("starts_with", "323"),
+            ("ends_with", ".0"),
+        ]
+    )
+    def test_string_operators_preserve_float_stringification(self, operator, value):
+        prop = self.property("key", value, operator)
+        self.assertTrue(match_property(prop, {"key": 323.0}))
 
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")
