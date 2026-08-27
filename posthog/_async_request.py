@@ -127,7 +127,7 @@ async def async_flags(
                     "/flags/?v=2", content=data, headers=headers, timeout=timeout
                 )
                 return await asyncio.to_thread(_process_flags_response, response)
-            except (httpx_module.TimeoutException, httpx_module.NetworkError):
+            except httpx_module.TransportError:
                 if failed_attempt >= retries:
                     raise
             except APIError as error:

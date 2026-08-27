@@ -7,6 +7,7 @@ import subprocess
 import sys
 from unittest import mock
 
+import httpx
 import pytest
 
 from posthog._async_request import (
@@ -42,11 +43,17 @@ class FakeAsyncClient:
 
     async def post(self, *args, **kwargs):
         self.calls.append(("post", args, kwargs))
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
     async def get(self, *args, **kwargs):
         self.calls.append(("get", args, kwargs))
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
     async def aclose(self):
         self.closed = True
@@ -186,6 +193,30 @@ async def test_async_flags_retries_contract_statuses_until_success(
 
     assert len(client.calls) == len(transient_statuses) + 1
     assert [call.args[0] for call in sleep.await_args_list] == expected_delays
+
+
+@pytest.mark.asyncio
+async def test_async_flags_retries_remote_disconnect_then_succeeds():
+    client = FakeAsyncClient(
+        [
+            httpx.RemoteProtocolError("server disconnected"),
+            FakeResponse(200, {"flags": {}}),
+        ]
+    )
+
+    with mock.patch("posthog._async_request.asyncio.sleep") as sleep:
+        result = await async_flags(
+            "project-key",
+            "https://example.com",
+            timeout=3,
+            max_retries=1,
+            client=client,
+            distinct_id="user-1",
+        )
+
+    assert result == {"flags": {}}
+    assert len(client.calls) == 2
+    sleep.assert_awaited_once_with(0.3)
 
 
 @pytest.mark.asyncio
