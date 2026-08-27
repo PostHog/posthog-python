@@ -7,6 +7,7 @@ import warnings
 from enum import Enum
 from typing import Optional
 
+from posthog import utils as utils
 from posthog.types import FlagValue
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 

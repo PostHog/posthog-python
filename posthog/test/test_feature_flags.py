@@ -217,7 +217,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(person_properties, {"region": "USA"})
         self.assertEqual(patch_flags.call_count, 0)
 
-    def test_case_insensitive_matching(self):
+    def test_exact_matching_uses_unicode_lowercase(self):
         self.client.feature_flags = [
             {
                 "id": 1,
@@ -259,6 +259,16 @@ class TestLocalEvaluation(unittest.TestCase):
                 "person-flag",
                 "some-distinct-id",
                 person_properties={"location": "straße"},
+                only_evaluate_locally=True,
+            )
+        )
+
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"location": "strasse"},
+                only_evaluate_locally=True,
             )
         )
 
@@ -266,19 +276,17 @@ class TestLocalEvaluation(unittest.TestCase):
             self.client.get_feature_flag(
                 "person-flag",
                 "some-distinct-id",
-                person_properties={"location": "strasse"},
+                person_properties={"star": "ſun"},
+                only_evaluate_locally=True,
             )
         )
 
-        self.assertTrue(
+        self.assertFalse(
             self.client.get_feature_flag(
-                "person-flag", "some-distinct-id", person_properties={"star": "ſun"}
-            )
-        )
-
-        self.assertTrue(
-            self.client.get_feature_flag(
-                "person-flag", "some-distinct-id", person_properties={"star": "sun"}
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"star": "sun"},
+                only_evaluate_locally=True,
             )
         )
 
