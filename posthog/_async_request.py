@@ -86,6 +86,20 @@ def _same_origin_redirect_path(
     return f"{path}?{target.query}" if target.query else path
 
 
+def _serialize_flags_body(
+    project_api_key: str, body: dict[str, Any]
+) -> tuple[str, dict[str, str]]:
+    payload = {
+        **body,
+        "sent_at": datetime.now(tz=timezone.utc).isoformat(),
+        "token": project_api_key,
+    }
+    return json.dumps(payload, cls=DatetimeSerializer), {
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
+
+
 def _parse_retry_after(response: Any) -> Optional[float]:
     value = response.headers.get("Retry-After")
     if value is None:
@@ -139,7 +153,7 @@ async def async_flags(
         for failed_attempt in range(retries + 1):
             try:
                 data, headers = await asyncio.to_thread(
-                    _serialize_v0_body, api_key, False, request_data
+                    _serialize_flags_body, api_key, request_data
                 )
                 response = await http_client.post(
                     "/flags/?v=2", content=data, headers=headers, timeout=timeout

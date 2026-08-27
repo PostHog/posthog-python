@@ -197,7 +197,8 @@ async def test_async_flags_sends_v2_request_payload():
     _, args, kwargs = client.calls[0]
     assert args == ("/flags/?v=2",)
     payload = json.loads(kwargs["content"])
-    assert payload["api_key"] == "project-key"
+    assert payload["token"] == "project-key"
+    assert "api_key" not in payload
     assert payload["distinct_id"] == "user-1"
     assert payload["groups"] == {"company": "company-1"}
     assert "sent_at" in payload
