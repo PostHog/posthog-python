@@ -1,5 +1,11 @@
 # posthog
 
+## 7.44.2 — 2026-08-27
+
+### Patch changes
+
+- [fc7e043](https://github.com/posthog/posthog-python/commit/fc7e0432bbee915c834c2779310ab1232ffe6302) Honor `default_cache_ttl_seconds=0` in AI prompts so callers can disable default prompt caching. — Thanks @ckarnell for your first contribution 🎉!
+
 ## 7.44.1 — 2026-08-26
 
 ### Patch changes
