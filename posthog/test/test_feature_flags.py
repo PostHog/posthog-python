@@ -5094,6 +5094,29 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_c, {"key2": "value"})
 
+    def test_match_properties_exact_uses_unicode_lowercase(self):
+        matching_cases = [("Ä", "ä"), ("323.0", 323.0)]
+        non_matching_cases = [("ß", "ss"), ("Σ", "ς")]
+
+        for filter_value, property_value in matching_cases:
+            exact = self.property("key", filter_value, "exact")
+            is_not = self.property("key", filter_value, "is_not")
+            self.assertTrue(match_property(exact, {"key": property_value}))
+            self.assertFalse(match_property(is_not, {"key": property_value}))
+
+        for filter_value, property_value in non_matching_cases:
+            exact = self.property("key", filter_value, "exact")
+            is_not = self.property("key", filter_value, "is_not")
+            self.assertFalse(match_property(exact, {"key": property_value}))
+            self.assertTrue(match_property(is_not, {"key": property_value}))
+
+        exact_array = self.property("key", ["free", "Ä"], "exact")
+        is_not_array = self.property("key", ["free", "Ä"], "is_not")
+        self.assertTrue(match_property(exact_array, {"key": "ä"}))
+        self.assertFalse(match_property(is_not_array, {"key": "ä"}))
+        self.assertFalse(match_property(exact_array, {"key": "paid"}))
+        self.assertTrue(match_property(is_not_array, {"key": "paid"}))
+
     def test_match_properties_not_in(self):
         property_a = self.property(key="key", value="value", operator="is_not")
         self.assertTrue(match_property(property_a, {"key": "value2"}))
@@ -5201,6 +5224,26 @@ class TestMatchProperties(unittest.TestCase):
         for missing_properties in ({"other_key": "value"}, {}):
             with self.assertRaises(InconclusiveMatchError):
                 match_property(prop, missing_properties)
+
+    @parameterized.expand(
+        [
+            ("icontains", "prefixÄsuffix"),
+            ("starts_with", "Äsuffix"),
+            ("ends_with", "prefixÄ"),
+        ]
+    )
+    def test_string_operators_use_ascii_only_case_folding(self, operator, value):
+        positive = self.property("key", "ä", operator)
+        negative = self.property("key", "ä", f"not_{operator}")
+        self.assertFalse(match_property(positive, {"key": value}))
+        self.assertTrue(match_property(negative, {"key": value}))
+
+    def test_string_operators_preserve_float_stringification(self):
+        contains = self.property("key", ".0", "icontains")
+        starts_with = self.property("key", "323", "starts_with")
+        ends_with = self.property("key", ".0", "ends_with")
+        for prop in (contains, starts_with, ends_with):
+            self.assertTrue(match_property(prop, {"key": 323.0}))
 
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")

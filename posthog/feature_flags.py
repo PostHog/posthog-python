@@ -7,7 +7,6 @@ import warnings
 from enum import Enum
 from typing import Optional
 
-from posthog import utils
 from posthog.types import FlagValue
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
@@ -507,6 +506,13 @@ def is_condition_match(
 # branch in match_property. Distinct from the unknown-operator rejection at the top
 # of the function so the dispatch-completeness test can tell the two apart.
 _UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
+_ASCII_LOWER_TRANSLATION = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
+
+def _ascii_lower(value) -> str:
+    return str(value).translate(_ASCII_LOWER_TRANSLATION)
 
 
 def match_property(property, property_values) -> bool:
@@ -534,34 +540,37 @@ def match_property(property, property_values) -> bool:
     if operator in ("exact", "is_not"):
 
         def compute_exact_match(value, override_value):
+            override_value = str(override_value).lower()
             if isinstance(value, list):
-                return str(override_value).casefold() in [
-                    str(val).casefold() for val in value
-                ]
-            return utils.str_iequals(value, override_value)
+                return override_value in [str(val).lower() for val in value]
+            return str(value).lower() == override_value
 
         if operator == "exact":
             return compute_exact_match(value, override_value)
         else:
             return not compute_exact_match(value, override_value)
 
-    if operator == "icontains":
-        return utils.str_icontains(override_value, value)
+    if operator in (
+        "icontains",
+        "not_icontains",
+        "starts_with",
+        "not_starts_with",
+        "ends_with",
+        "not_ends_with",
+    ):
+        property_string = _ascii_lower(override_value)
+        filter_string = _ascii_lower(value)
 
-    if operator == "not_icontains":
-        return not utils.str_icontains(override_value, value)
+        if operator in ("icontains", "not_icontains"):
+            matched = filter_string in property_string
+        elif operator in ("starts_with", "not_starts_with"):
+            matched = property_string.startswith(filter_string)
+        else:
+            matched = property_string.endswith(filter_string)
 
-    if operator == "starts_with":
-        return utils.str_istartswith(override_value, value)
-
-    if operator == "not_starts_with":
-        return not utils.str_istartswith(override_value, value)
-
-    if operator == "ends_with":
-        return utils.str_iendswith(override_value, value)
-
-    if operator == "not_ends_with":
-        return not utils.str_iendswith(override_value, value)
+        if operator.startswith("not_"):
+            return not matched
+        return matched
 
     if operator == "regex":
         return (
