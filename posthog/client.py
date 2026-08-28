@@ -2014,7 +2014,9 @@ class Client(object):
         Args:
             exception: The exception to capture.
             distinct_id: The distinct ID of the user.
-            properties: A dictionary of additional properties.
+            properties: A dictionary of additional properties. Overriding reserved
+                exception properties is deprecated and will stop working in the next
+                major version.
             flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
                 Attaches those exact flag values to the captured `$exception` event.
             send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
@@ -2096,13 +2098,26 @@ class Client(object):
                 "$exception_release",
                 "$cymbal_errors",
             }
+            reserved_property_overrides = reserved_properties.intersection(properties)
+            if reserved_property_overrides:
+                try:
+                    warnings.warn(
+                        "Reserved exception properties passed through "
+                        "`capture_exception(properties=...)` currently override "
+                        "SDK-owned metadata, but this behavior is deprecated and will "
+                        "be removed in the next major version: "
+                        + ", ".join(sorted(reserved_property_overrides)),
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                except DeprecationWarning:
+                    # capture_exception must not drop an event when applications
+                    # promote deprecation warnings to errors.
+                    pass
+
+            caller_properties = properties
             properties = {
                 **_get_current_otel_span_properties(),
-                **{
-                    key: value
-                    for key, value in properties.items()
-                    if key not in reserved_properties
-                },
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 "$exception_level": _normalize_exception_level(
                     capture_metadata.get("level")
@@ -2112,6 +2127,7 @@ class Client(object):
             source = capture_metadata.get("source")
             if isinstance(source, str) and source:
                 properties["$exception_source"] = source
+            properties.update(caller_properties)
 
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
