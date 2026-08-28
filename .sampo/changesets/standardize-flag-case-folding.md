@@ -2,4 +2,4 @@
 pypi/posthog: patch
 ---
 
-Match local feature flag string operators using the same ASCII and Unicode lowercasing rules as the flags service.
+Match local feature flag string operators using the flags service's boolean coercion, JSON stringification, and casing rules.

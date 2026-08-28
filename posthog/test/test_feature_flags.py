@@ -5107,7 +5107,11 @@ class TestMatchProperties(unittest.TestCase):
             ("non_ascii_case_variant", "Ä", "ä", True),
             ("float_stringification", "323.0", 323.0, True),
             ("casefold_expansion", "ß", "ss", False),
-            ("final_sigma", "Σ", "ς", False),
+            ("single_final_sigma", "Σ", "ς", False),
+            ("word_final_sigma", "ΟΔΟΣ", "οδος", True),
+            ("word_medial_sigma", "ΟΔΟΣ", "οδοσ", False),
+            ("dotted_capital_i", "İ", "i\u0307", True),
+            ("plain_i", "İ", "i", False),
         ]
     )
     def test_match_properties_exact_uses_unicode_lowercase(
@@ -5125,6 +5129,87 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(is_not_array, {"key": "ä"}))
         self.assertFalse(match_property(exact_array, {"key": "paid"}))
         self.assertTrue(match_property(is_not_array, {"key": "paid"}))
+
+    @parameterized.expand(
+        [
+            ("false_matches_non_truthy_string", False, "banana", True),
+            ("false_string_matches_zero", "false", 0, True),
+            ("false_array_matches_null", ["false"], None, True),
+            ("mixed_boolean_array_rejects_true", ["true", "false"], "true", False),
+            ("mixed_boolean_array_matches_non_truthy", ["true", "false"], "pro", True),
+            ("empty_array_matches_true", [], True, True),
+            ("empty_array_matches_empty_array", [], [], True),
+            ("empty_array_rejects_false", [], False, False),
+            ("ordinary_array_uses_any", ["FREE", "PRO"], "pro", True),
+        ]
+    )
+    def test_match_properties_exact_uses_backend_boolean_precedence(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    @parameterized.expand(
+        [
+            ("compact_array", "[1,2]", [1, 2], True),
+            ("python_array_spelling", "[1, 2]", [1, 2], False),
+            (
+                "sorted_object",
+                '{"a":1,"b":2}',
+                {"b": 2, "a": 1},
+                True,
+            ),
+            (
+                "recursive_sorting",
+                '{"a":"x","z":[{"a":2,"b":1}]}',
+                {"z": [{"b": 1, "a": 2}], "a": "x"},
+                True,
+            ),
+        ]
+    )
+    def test_match_properties_exact_uses_backend_json_stringification(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    @parameterized.expand(
+        [
+            ("integral_float", "323.0", 323.0, True),
+            ("negative_zero", "-0.0", -0.0, True),
+            ("small_exponent", "1e-7", 1e-7, True),
+            ("large_exponent", "1e+16", 1e16, True),
+            ("fixed_small_decimal", "0.00001", 1e-5, True),
+            ("fixed_small_decimal_fraction", "0.000099", 9.9e-5, True),
+            ("python_padded_exponent", "1e-07", 1e-7, False),
+        ]
+    )
+    def test_match_properties_exact_uses_backend_float_stringification(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    @parameterized.expand(
+        [
+            ("nan", "value", float("nan")),
+            ("positive_infinity", "value", float("inf")),
+            ("negative_infinity", "value", float("-inf")),
+            ("boolean_filter_with_nan", False, float("nan")),
+        ]
+    )
+    def test_match_properties_exact_non_json_numbers_are_inconclusive(
+        self, _name, filter_value, property_value
+    ):
+        exact = self.property("key", filter_value, "exact")
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(exact, {"key": property_value})
 
     def test_match_properties_not_in(self):
         property_a = self.property(key="key", value="value", operator="is_not")
@@ -5249,14 +5334,18 @@ class TestMatchProperties(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("icontains", ".0"),
-            ("starts_with", "323"),
-            ("ends_with", ".0"),
+            ("icontains_integral_float", "icontains", ".0", 323.0),
+            ("starts_with_integral_float", "starts_with", "323", 323.0),
+            ("ends_with_integral_float", "ends_with", ".0", 323.0),
+            ("small_exponent", "ends_with", "e-7", 1e-7),
+            ("fixed_small_decimal", "starts_with", "0.00001", 1e-5),
         ]
     )
-    def test_string_operators_preserve_float_stringification(self, operator, value):
+    def test_string_operators_preserve_float_stringification(
+        self, _name, operator, value, property_value
+    ):
         prop = self.property("key", value, operator)
-        self.assertTrue(match_property(prop, {"key": 323.0}))
+        self.assertTrue(match_property(prop, {"key": property_value}))
 
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")
@@ -5570,8 +5659,11 @@ class TestMatchProperties(unittest.TestCase):
 
     def test_none_property_value_with_all_operators(self):
         property_a = self.property(key="key", value="none", operator="is_not")
-        self.assertFalse(match_property(property_a, {"key": None}))
+        self.assertTrue(match_property(property_a, {"key": None}))
         self.assertTrue(match_property(property_a, {"key": "non"}))
+
+        exact_null = self.property(key="key", value="null", operator="exact")
+        self.assertTrue(match_property(exact_null, {"key": None}))
 
         property_c = self.property(key="key", value="no", operator="icontains")
         self.assertFalse(match_property(property_c, {"key": None}))
