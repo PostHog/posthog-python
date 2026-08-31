@@ -1,5 +1,11 @@
 # posthog
 
+## 7.45.1 — 2026-08-31
+
+### Patch changes
+
+- [131cc1a](https://github.com/posthog/posthog-python/commit/131cc1a9b8f836f62495abaa394a1f302f8e5287) Match local feature flag string operators using the flags service's boolean coercion, JSON stringification, and casing rules. — Thanks @marandaneto!
+
 ## 7.45.0 — 2026-08-31
 
 ### Minor changes
