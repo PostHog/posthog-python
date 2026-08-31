@@ -283,8 +283,15 @@ class CallbackHandler(BaseCallbackHandler):
             "on_tool_start", run_id, parent_run_id, input_str=input_str
         )
         self._set_parent_of_run(run_id, parent_run_id)
+        # LangChain hands us the tool input twice: `input_str` is `str(tool_input)`, which
+        # renders a dict as a Python repr (single quotes) rather than JSON, and the `inputs`
+        # kwarg carries the original dict. Prefer the structured value so `$ai_input_state`
+        # stays machine-readable and consistent with `on_chain_start`; tools invoked with a
+        # plain string have no `inputs` and keep using `input_str`.
+        inputs = kwargs.get("inputs")
+        tool_input = inputs if isinstance(inputs, dict) else input_str
         self._set_trace_or_span_metadata(
-            serialized, input_str, run_id, parent_run_id, **kwargs
+            serialized, tool_input, run_id, parent_run_id, **kwargs
         )
 
     def on_tool_end(

@@ -2442,6 +2442,48 @@ def test_agent_action_and_finish_imports():
     assert call_args["event"] == "$ai_span"
 
 
+def test_tool_span_input_state_prefers_structured_inputs(mock_client):
+    """A dict tool input is captured as a dict, not LangChain's `str(tool_input)` repr."""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    parent_run_id = uuid.uuid4()
+    tool_input = {"query": "SELECT 1", "truncate": True}
+
+    # Mirrors how langchain_core's BaseTool.run/arun calls on_tool_start: the positional
+    # argument is str(tool_input), while the original dict comes through `inputs`.
+    callbacks.on_tool_start(
+        {"name": "execute_sql"},
+        str(tool_input),
+        run_id=run_id,
+        parent_run_id=parent_run_id,
+        inputs=tool_input,
+    )
+    callbacks.on_tool_end("1", run_id=run_id, parent_run_id=parent_run_id)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_state"] == tool_input
+
+
+def test_tool_span_input_state_falls_back_to_string(mock_client):
+    """A tool invoked with a plain string still records that string."""
+    callbacks = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    parent_run_id = uuid.uuid4()
+
+    # langchain_core passes inputs=None when tool_input isn't a dict.
+    callbacks.on_tool_start(
+        {"name": "get_weather"},
+        "sf",
+        run_id=run_id,
+        parent_run_id=parent_run_id,
+        inputs=None,
+    )
+    callbacks.on_tool_end("sunny", run_id=run_id, parent_run_id=parent_run_id)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_state"] == "sf"
+
+
 def test_posthog_properties_field_in_generation_metadata(mock_client):
     """Test that posthog_properties is properly stored in GenerationMetadata."""
     callbacks = CallbackHandler(mock_client)
