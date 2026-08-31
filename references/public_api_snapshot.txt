@@ -1025,7 +1025,7 @@ function posthog.ai.gateway.is_posthog_ai_gateway_url(base_url: Any) -> bool
 function posthog.ai.gateway.warn_if_posthog_ai_gateway(base_url: Any) -> None
 function posthog.ai.gateway.warn_if_posthog_ai_gateway_otel_attributes(attributes: Optional[Mapping[str, Any]]) -> None
 function posthog.ai.gemini.gemini_converter.extract_gemini_content_from_chunk(chunk: Any) -> Optional[List[FormattedContentItem]]
-function posthog.ai.gemini.gemini_converter.extract_gemini_embedding_token_count(response) -> int
+function posthog.ai.gemini.gemini_converter.extract_gemini_embedding_token_count(response) -> Optional[int]
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason(response: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_system_instruction(config: Any) -> Optional[str]
