@@ -12,6 +12,8 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
+from posthog.async_client import AsyncClient as AsyncClient
+from posthog.async_client import AsyncPosthog as AsyncPosthog
 from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
     identify_context as inner_identify_context,
@@ -316,7 +318,8 @@ Attributes:
     debug: Enable verbose SDK logging and re-raise errors from public APIs.
     send: If False, queueing succeeds but events are not sent to PostHog.
     sync_mode: If True, send events synchronously instead of using background
-        worker threads.
+        worker threads. This blocks the calling thread; in asyncio applications
+        such as FastAPI, use ``AsyncPosthog`` instead.
     disabled: If True, disable captures and API requests. Useful in tests.
     secret_key: A Personal API Key or Project Secret API Key used for local
         feature flag evaluation and remote config payloads.
