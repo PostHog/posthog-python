@@ -1,5 +1,12 @@
 # posthog
 
+## 7.45.0 — 2026-08-31
+
+### Minor changes
+
+- [f50f333](https://github.com/posthog/posthog-python/commit/f50f33396f42af49217f6604c90f85b1a1fe73dd) Add non-blocking feature flag evaluation and remote config APIs to AsyncPosthog — Thanks @marandaneto!
+- [f50f333](https://github.com/posthog/posthog-python/commit/f50f33396f42af49217f6604c90f85b1a1fe73dd) Add an asyncio-native client for buffered and immediate event capture — Thanks @marandaneto!
+
 ## 7.44.2 — 2026-08-27
 
 ### Patch changes
