@@ -882,7 +882,7 @@ class TestPostHogTracingProcessor:
         mock_client.flush.assert_called_once()
 
     def test_generation_span_with_no_usage(self, processor, mock_client, mock_span):
-        """Test GenerationSpanData with no usage data defaults to zero tokens."""
+        """Test GenerationSpanData with no usage data omits the token counts."""
         span_data = GenerationSpanData(model="gpt-4o")
         mock_span.span_data = span_data
 
@@ -890,9 +890,9 @@ class TestPostHogTracingProcessor:
         processor.on_span_end(mock_span)
 
         call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$ai_input_tokens"] == 0
-        assert call_kwargs["properties"]["$ai_output_tokens"] == 0
-        assert call_kwargs["properties"]["$ai_total_tokens"] == 0
+        assert "$ai_input_tokens" not in call_kwargs["properties"]
+        assert "$ai_output_tokens" not in call_kwargs["properties"]
+        assert "$ai_total_tokens" not in call_kwargs["properties"]
 
     def test_generation_span_with_partial_usage(
         self, processor, mock_client, mock_span
@@ -909,7 +909,9 @@ class TestPostHogTracingProcessor:
 
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$ai_input_tokens"] == 42
-        assert call_kwargs["properties"]["$ai_output_tokens"] == 0
+        # The output side was never reported, so it is omitted rather than 0;
+        # the total is the sum of the reported sides.
+        assert "$ai_output_tokens" not in call_kwargs["properties"]
         assert call_kwargs["properties"]["$ai_total_tokens"] == 42
 
     def test_error_type_categorization_by_type_field_only(

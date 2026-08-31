@@ -18,7 +18,7 @@ def _capture_embedding_event(
 ) -> None:
     """Build and capture telemetry shared by sync and async embedding wrappers."""
     usage = getattr(response, "usage", None)
-    input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+    input_tokens = getattr(usage, "prompt_tokens", None) if usage else None
 
     event_properties = {
         "$ai_provider": "openai",
@@ -29,7 +29,9 @@ def _capture_embedding_event(
             finalize_ai_content(request_kwargs.get("input"), posthog_client),
         ),
         "$ai_http_status": 200,
-        "$ai_input_tokens": input_tokens,
+        # Omitted when the provider never reported a count: absent means
+        # unknown, 0 is a report of nothing.
+        **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
         "$ai_latency": latency,
         "$ai_trace_id": trace_id,
         "$ai_base_url": str(base_url),

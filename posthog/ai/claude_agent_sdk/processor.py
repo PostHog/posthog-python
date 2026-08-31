@@ -45,10 +45,12 @@ class _GenerationData:
     """Data accumulated for a single LLM generation (one API call)."""
 
     model: Optional[str] = None
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
+    # None when the provider never reported a count: absent means unknown,
+    # 0 is a report of nothing.
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cache_read_input_tokens: Optional[int] = None
+    cache_creation_input_tokens: Optional[int] = None
     raw_usage: Optional[Dict[str, Any]] = None
     start_time: float = 0.0
     end_time: float = 0.0
@@ -79,13 +81,11 @@ class _GenerationTracker:
             message = raw.get("message", {})
             self._current.model = message.get("model")
             usage = message.get("usage", {})
-            self._current.input_tokens = usage.get("input_tokens", 0)
-            self._current.output_tokens = usage.get("output_tokens", 0)
-            self._current.cache_read_input_tokens = usage.get(
-                "cache_read_input_tokens", 0
-            )
+            self._current.input_tokens = usage.get("input_tokens")
+            self._current.output_tokens = usage.get("output_tokens")
+            self._current.cache_read_input_tokens = usage.get("cache_read_input_tokens")
             self._current.cache_creation_input_tokens = usage.get(
-                "cache_creation_input_tokens", 0
+                "cache_creation_input_tokens"
             )
             self._current.raw_usage = dict(usage)
 
@@ -410,8 +410,16 @@ class PostHogClaudeAgentProcessor:
             "$ai_provider": "anthropic",
             "$ai_framework": "claude-agent-sdk",
             "$ai_model": gen.model,
-            "$ai_input_tokens": gen.input_tokens,
-            "$ai_output_tokens": gen.output_tokens,
+            **(
+                {"$ai_input_tokens": gen.input_tokens}
+                if gen.input_tokens is not None
+                else {}
+            ),
+            **(
+                {"$ai_output_tokens": gen.output_tokens}
+                if gen.output_tokens is not None
+                else {}
+            ),
             "$ai_latency": latency,
             **extra_props,
         }
@@ -472,8 +480,16 @@ class PostHogClaudeAgentProcessor:
             "$ai_provider": "anthropic",
             "$ai_framework": "claude-agent-sdk",
             "$ai_model": model,
-            "$ai_input_tokens": usage.get("input_tokens", 0),
-            "$ai_output_tokens": usage.get("output_tokens", 0),
+            **(
+                {"$ai_input_tokens": usage["input_tokens"]}
+                if usage.get("input_tokens") is not None
+                else {}
+            ),
+            **(
+                {"$ai_output_tokens": usage["output_tokens"]}
+                if usage.get("output_tokens") is not None
+                else {}
+            ),
             "$ai_latency": result.duration_api_ms / 1000.0
             if result.duration_api_ms
             else 0,
@@ -494,8 +510,8 @@ class PostHogClaudeAgentProcessor:
                 finalize_ai_content(output_choices, self._client),
             )
 
-        cache_read = usage.get("cache_read_input_tokens", 0)
-        cache_creation = usage.get("cache_creation_input_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens")
+        cache_creation = usage.get("cache_creation_input_tokens")
         if cache_read:
             properties["$ai_cache_read_input_tokens"] = cache_read
         if cache_creation:

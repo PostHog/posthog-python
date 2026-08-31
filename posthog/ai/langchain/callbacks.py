@@ -664,11 +664,16 @@ class CallbackHandler(BaseCallbackHandler):
         else:
             # Add usage
             usage = _parse_usage(output, run.provider, run.model)
-            event_properties["$ai_input_tokens"] = usage.input_tokens
-            event_properties["$ai_output_tokens"] = usage.output_tokens
-            event_properties["$ai_cache_creation_input_tokens"] = (
-                usage.cache_write_tokens
-            )
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            if usage.input_tokens is not None:
+                event_properties["$ai_input_tokens"] = usage.input_tokens
+            if usage.output_tokens is not None:
+                event_properties["$ai_output_tokens"] = usage.output_tokens
+            if usage.cache_write_tokens is not None:
+                event_properties["$ai_cache_creation_input_tokens"] = (
+                    usage.cache_write_tokens
+                )
             if (
                 usage.cache_write_5m_tokens is not None
                 and usage.cache_write_1h_tokens is not None
@@ -679,8 +684,12 @@ class CallbackHandler(BaseCallbackHandler):
                 event_properties["$ai_cache_creation_1h_input_tokens"] = (
                     usage.cache_write_1h_tokens
                 )
-            event_properties["$ai_cache_read_input_tokens"] = usage.cache_read_tokens
-            event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
+            if usage.cache_read_tokens is not None:
+                event_properties["$ai_cache_read_input_tokens"] = (
+                    usage.cache_read_tokens
+                )
+            if usage.reasoning_tokens is not None:
+                event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
 
             # Generation results
             generation_result = output.generations[-1]
@@ -875,7 +884,7 @@ def _parse_usage_model(
     }
     normalized_usage = ModelUsage(
         **{
-            dataclass_key: parsed_usage.get(mapped_key) or 0
+            dataclass_key: parsed_usage.get(mapped_key)
             for mapped_key, dataclass_key in field_mapping.items()
         },
         cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),

@@ -195,7 +195,9 @@ class _GeminiModelsPolicy:
         error: Optional[Exception],
         latency: float,
     ) -> None:
-        input_tokens = extract_gemini_embedding_token_count(response) if response else 0
+        input_tokens = (
+            extract_gemini_embedding_token_count(response) if response else None
+        )
         event_properties = {
             "$ai_provider": "gemini",
             "$ai_model": model,
@@ -207,7 +209,9 @@ class _GeminiModelsPolicy:
             "$ai_http_status": (
                 getattr(error, "status_code", 0) if error is not None else 200
             ),
-            "$ai_input_tokens": input_tokens,
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
             "$ai_latency": latency,
             "$ai_trace_id": trace_id,
             "$ai_base_url": self._base_url,

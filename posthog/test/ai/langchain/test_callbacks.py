@@ -1602,8 +1602,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 1000
     assert generation_props["$ai_output_tokens"] == 50
     assert generation_props["$ai_cache_creation_input_tokens"] == 800
-    assert generation_props["$ai_cache_read_input_tokens"] == 0
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    # Not reported by the fixture, so omitted rather than fabricated as 0.
+    assert "$ai_cache_read_input_tokens" not in generation_props
+    assert "$ai_reasoning_tokens" not in generation_props
 
     # Reset mock for second call
     mock_client.reset_mock()
@@ -1637,9 +1638,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
         generation_props["$ai_input_tokens"] == 1200
     )  # No provider metadata, no subtraction
     assert generation_props["$ai_output_tokens"] == 30
-    assert generation_props["$ai_cache_creation_input_tokens"] == 0
+    assert "$ai_cache_creation_input_tokens" not in generation_props
     assert generation_props["$ai_cache_read_input_tokens"] == 800
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    assert "$ai_reasoning_tokens" not in generation_props
 
 
 def test_anthropic_provider_subtracts_cache_tokens(mock_client):
@@ -1941,8 +1942,10 @@ def test_openai_cache_read_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 150  # No subtraction for OpenAI
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
+    # cache_creation is reported as an explicit 0 by the fixture, so it stays 0;
+    # reasoning was never reported, so it is omitted.
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    assert "$ai_reasoning_tokens" not in generation_props
 
 
 def test_openai_cache_creation_tokens(mock_client):
@@ -1983,8 +1986,10 @@ def test_openai_cache_creation_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 2000
     assert generation_props["$ai_output_tokens"] == 25
     assert generation_props["$ai_cache_creation_input_tokens"] == 1500
+    # cache_read is reported as an explicit 0 by the fixture, so it stays 0;
+    # reasoning was never reported, so it is omitted.
     assert generation_props["$ai_cache_read_input_tokens"] == 0
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    assert "$ai_reasoning_tokens" not in generation_props
 
 
 def test_combined_reasoning_and_cache_tokens(mock_client):
@@ -2315,7 +2320,7 @@ def test_no_cache_read_tokens_no_subtraction(mock_client):
     # Input tokens should remain unchanged at 100
     assert generation_props["$ai_input_tokens"] == 100
     assert generation_props["$ai_output_tokens"] == 30
-    assert generation_props["$ai_cache_read_input_tokens"] == 0
+    assert "$ai_cache_read_input_tokens" not in generation_props
 
 
 def test_zero_input_tokens_with_cache_read(mock_client):
@@ -2396,7 +2401,7 @@ def test_non_anthropic_cache_write_tokens_not_subtracted_from_input(mock_client)
     assert generation_props["$ai_input_tokens"] == 1000
     assert generation_props["$ai_output_tokens"] == 20
     assert generation_props["$ai_cache_creation_input_tokens"] == 800
-    assert generation_props["$ai_cache_read_input_tokens"] == 0
+    assert "$ai_cache_read_input_tokens" not in generation_props
 
 
 def test_agent_action_and_finish_imports():

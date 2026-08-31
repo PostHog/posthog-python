@@ -546,7 +546,7 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
         TokenUsage with standardized usage statistics
     """
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
-        return TokenUsage(input_tokens=0, output_tokens=0)
+        return TokenUsage()
 
     usage = _extract_usage_from_metadata(response.usage_metadata)
 
@@ -715,17 +715,19 @@ def format_gemini_streaming_output(
     return [{"role": "assistant", "content": [{"type": "text", "text": ""}]}]
 
 
-def extract_gemini_embedding_token_count(response) -> int:
+def extract_gemini_embedding_token_count(response) -> Optional[int]:
     """
     Extract total token count from a Gemini embed_content response.
     Token counts are only available per-embedding via Vertex AI's statistics.token_count.
-    Returns 0 if no token counts are available.
+    Returns None when no embedding carried a token count.
     """
     total = 0
+    reported = False
     if hasattr(response, "embeddings") and response.embeddings:
         for embedding in response.embeddings:
             if hasattr(embedding, "statistics") and embedding.statistics:
                 token_count = getattr(embedding.statistics, "token_count", None)
                 if token_count is not None:
                     total += int(token_count)
-    return total
+                    reported = True
+    return total if reported else None

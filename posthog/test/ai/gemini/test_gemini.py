@@ -1312,7 +1312,31 @@ def test_embed_content_without_token_counts(
     )
 
     props = mock_client.capture.call_args[1]["properties"]
-    assert props["$ai_input_tokens"] == 0
+    # No embedding carried a token count, so the property is omitted, not 0.
+    assert "$ai_input_tokens" not in props
+
+
+def test_streaming_without_usage_omits_token_counts(
+    mock_client, mock_google_genai_client
+):
+    """A stream that never reported usage omits the counts instead of sending 0."""
+    chunk = MagicMock()
+    chunk.text = "Hello"
+    chunk.usage_metadata = None
+
+    mock_google_genai_client.models.generate_content_stream.return_value = iter([chunk])
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.generate_content_stream(
+        model="gemini-2.0-flash",
+        contents=["Write a short story"],
+        posthog_distinct_id="test-id",
+    )
+    list(response)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert "$ai_input_tokens" not in props
+    assert "$ai_output_tokens" not in props
 
 
 def test_embed_content_privacy_mode(
