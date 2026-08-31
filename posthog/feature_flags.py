@@ -1,13 +1,16 @@
 import calendar
 import datetime
 import hashlib
+import json
 import logging
+import math
 import re
 import warnings
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from posthog import utils
+from posthog import utils as utils
 from posthog.types import FlagValue
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
@@ -507,6 +510,87 @@ def is_condition_match(
 # branch in match_property. Distinct from the unknown-operator rejection at the top
 # of the function so the dispatch-completeness test can tell the two apart.
 _UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
+_ASCII_LOWER_TRANSLATION = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
+
+def _format_json_float(value: float) -> str:
+    if not math.isfinite(value):
+        raise InconclusiveMatchError(
+            "Non-finite property values cannot be represented by the flags service"
+        )
+
+    representation = repr(value)
+    if "e" not in representation:
+        return representation
+
+    mantissa, exponent_text = representation.split("e")
+    exponent = int(exponent_text)
+    if -6 < exponent < 0:
+        return format(Decimal(representation), "f")
+
+    sign = "+" if exponent >= 0 else ""
+    return f"{mantissa}e{sign}{exponent}"
+
+
+def _json_value_to_string(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _format_json_float(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_json_value_to_string(item) for item in value) + "]"
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise InconclusiveMatchError(
+                "Property object keys must be strings for local evaluation"
+            )
+        items = (
+            f"{json.dumps(key, ensure_ascii=False)}:{_json_value_to_string(value[key])}"
+            for key in sorted(value)
+        )
+        return "{" + ",".join(items) + "}"
+
+    raise InconclusiveMatchError(
+        f"Property value of type {type(value).__name__} is not JSON-compatible"
+    )
+
+
+def _value_to_string(value) -> str:
+    if isinstance(value, str):
+        return value
+    return _json_value_to_string(value)
+
+
+def _ascii_lower(value) -> str:
+    return _value_to_string(value).translate(_ASCII_LOWER_TRANSLATION)
+
+
+def _is_truthy_or_falsy_property_value(value) -> bool:
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, str):
+        return value.lower() in ("true", "false")
+    if isinstance(value, list):
+        return all(_is_truthy_or_falsy_property_value(item) for item in value)
+    return False
+
+
+def _is_truthy_property_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() == "true"
+    if isinstance(value, list):
+        return all(_is_truthy_property_value(item) for item in value)
+    return False
 
 
 def match_property(property, property_values) -> bool:
@@ -528,40 +612,54 @@ def match_property(property, property_values) -> bool:
 
     override_value = property_values[key]
 
-    if (operator not in NONE_VALUES_ALLOWED_OPERATORS) and override_value is None:
+    if (
+        operator not in NONE_VALUES_ALLOWED_OPERATORS
+        and operator != "exact"
+        and override_value is None
+    ):
         return False
 
     if operator in ("exact", "is_not"):
 
         def compute_exact_match(value, override_value):
+            override_string = _value_to_string(override_value).lower()
+            if _is_truthy_or_falsy_property_value(value):
+                return _is_truthy_property_value(value) == _is_truthy_property_value(
+                    override_value
+                )
+
             if isinstance(value, list):
-                return str(override_value).casefold() in [
-                    str(val).casefold() for val in value
+                return override_string in [
+                    _value_to_string(candidate).lower() for candidate in value
                 ]
-            return utils.str_iequals(value, override_value)
+            return _value_to_string(value).lower() == override_string
 
         if operator == "exact":
             return compute_exact_match(value, override_value)
         else:
             return not compute_exact_match(value, override_value)
 
-    if operator == "icontains":
-        return utils.str_icontains(override_value, value)
+    if operator in (
+        "icontains",
+        "not_icontains",
+        "starts_with",
+        "not_starts_with",
+        "ends_with",
+        "not_ends_with",
+    ):
+        property_string = _ascii_lower(override_value)
+        filter_string = _ascii_lower(value)
 
-    if operator == "not_icontains":
-        return not utils.str_icontains(override_value, value)
+        if operator in ("icontains", "not_icontains"):
+            matched = filter_string in property_string
+        elif operator in ("starts_with", "not_starts_with"):
+            matched = property_string.startswith(filter_string)
+        else:
+            matched = property_string.endswith(filter_string)
 
-    if operator == "starts_with":
-        return utils.str_istartswith(override_value, value)
-
-    if operator == "not_starts_with":
-        return not utils.str_istartswith(override_value, value)
-
-    if operator == "ends_with":
-        return utils.str_iendswith(override_value, value)
-
-    if operator == "not_ends_with":
-        return not utils.str_iendswith(override_value, value)
+        if operator.startswith("not_"):
+            return not matched
+        return matched
 
     if operator == "regex":
         return (
