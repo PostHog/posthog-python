@@ -159,6 +159,22 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
 
 _TOOL_DISPATCH_WRAPPERS = ("ToolError", "UnexpectedToolError")
 
+# Where the SDKs define their dispatch wrappers: mcp.server.fastmcp.exceptions
+# (mcp 1.x), mcp.server.mcpserver.exceptions (mcp 2.x), fastmcp.exceptions
+# (standalone fastmcp). An application's own exception carries its own module,
+# so a matching name alone must not unwrap it.
+_SDK_MODULE_PREFIXES = ("mcp.", "fastmcp.")
+
+
+def _is_dispatch_wrapper(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return (
+        entry.get("type") in _TOOL_DISPATCH_WRAPPERS
+        and str(entry.get("module") or "").startswith(_SDK_MODULE_PREFIXES)
+        and str(entry.get("value", "")).startswith("Error executing tool")
+    )
+
 
 def _primary_exception(error: Any) -> Dict[str, Any]:
     """Pick the ``$exception_list`` entry that carries the failure reason.
@@ -168,23 +184,23 @@ def _primary_exception(error: Any) -> Dict[str, Any]:
     mcp >= 2.1 masks the original text out of that message entirely, keeping
     it only on ``__cause__`` — the next entry of the chain here. The wrapper
     says nothing the event's tool name does not already say, so the scalars
-    read the entry behind it. Matched by type name and message prefix because
-    each SDK major ships its own ``ToolError`` class.
+    step past every consecutive wrapper (a tool invoking a failing tool is
+    wrapped once per dispatch) to the first real exception.
     """
     if not isinstance(error, dict):
         return {}
     exception_list = error.get("$exception_list")
     if not isinstance(exception_list, list) or not exception_list:
         return {}
-    first = exception_list[0] if isinstance(exception_list[0], dict) else {}
-    if (
-        len(exception_list) > 1
-        and isinstance(exception_list[1], dict)
-        and first.get("type") in _TOOL_DISPATCH_WRAPPERS
-        and str(first.get("value", "")).startswith("Error executing tool")
+    index = 0
+    while (
+        index + 1 < len(exception_list)
+        and isinstance(exception_list[index + 1], dict)
+        and _is_dispatch_wrapper(exception_list[index])
     ):
-        return exception_list[1]
-    return first
+        index += 1
+    entry = exception_list[index]
+    return entry if isinstance(entry, dict) else {}
 
 
 def _add_error_details(event: Event, properties: Dict[str, Any]) -> None:
