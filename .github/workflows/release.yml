@@ -545,12 +545,16 @@ jobs:
           REJECTED=$(echo "$RESPONSE" | jq '[.[] | select(.state == "rejected")] | length')
           if [ "$REJECTED" -gt 0 ]; then
             echo "was_rejected=true" >> "$GITHUB_OUTPUT"
-            COMMENT=$(echo "$RESPONSE" | jq -r '.[] | select(.state == "rejected") | .comment // empty' | head -1)
+            COMMENT=$(echo "$RESPONSE" | jq -r 'first(.[] | select(.state == "rejected") | .comment // empty)')
             if [ -n "$COMMENT" ]; then
+              # Random delimiter: a rejection comment is reviewer-controlled text, and a
+              # literal delimiter line inside it would close the block early and let the
+              # rest be parsed as step outputs.
+              DELIMITER="EOF_$(openssl rand -hex 16)"
               {
-                echo 'message<<EOF'
+                echo "message<<$DELIMITER"
                 echo "🚫 Release was rejected: $COMMENT"
-                echo 'EOF'
+                echo "$DELIMITER"
               } >> "$GITHUB_OUTPUT"
             else
               echo "message=🚫 Release was rejected." >> "$GITHUB_OUTPUT"
