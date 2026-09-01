@@ -23,6 +23,23 @@ def make_client(**kwargs):
     return client, captured
 
 
+class ToolError(Exception):
+    """An application's own ToolError. It shares the SDK wrapper's name but not
+    its module, so the unwrap must leave it alone. Module-level so the recorded
+    type is the bare name and not a ``<locals>`` path."""
+
+
+def _sdk_tool_error() -> type:
+    """The real dispatch-wrapper class for the installed SDK major."""
+    from posthog.test.mcp._helpers import MCP_MAJOR
+
+    if MCP_MAJOR >= 2:
+        from mcp.server.mcpserver.exceptions import ToolError as SDKToolError
+    else:
+        from mcp.server.fastmcp.exceptions import ToolError as SDKToolError
+    return SDKToolError
+
+
 async def test_failed_call_carries_message_and_type():
     client, captured = make_client()
     client.capture_tool_call("add", is_error=True, error=ValueError("bad input"))
@@ -151,6 +168,102 @@ async def test_instrumented_server_failure_carries_them():
     assert props[P.IS_ERROR] is True
     assert props[P.ERROR_TYPE]
     assert "explode" in props[P.ERROR_MESSAGE]
+
+
+async def test_the_sdk_dispatch_wrapper_is_unwrapped_to_its_cause():
+    """mcp >= 2.1 masks an unexpected tool exception to ``Error executing tool
+    <name>`` and keeps the original only on ``__cause__``. The scalars must
+    carry that original; the ``$exception`` sibling keeps the full chain."""
+    client, captured = make_client()
+    sdk_tool_error = _sdk_tool_error()
+
+    try:
+        try:
+            raise ValueError("explode")
+        except ValueError as original:
+            raise sdk_tool_error("Error executing tool boom") from original
+    except sdk_tool_error as wrapper:
+        client.capture_tool_call("boom", is_error=True, error=wrapper)
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props[P.ERROR_MESSAGE] == "explode"
+    assert props[P.ERROR_TYPE] == "ValueError"
+    sibling = _events(captured, "$exception")[0]["properties"]["$exception_list"]
+    assert sibling[0]["type"] == "ToolError"
+
+
+async def test_a_dispatch_wrapper_without_a_cause_is_kept():
+    """With no chained cause the wrapper's own message is all there is."""
+    client, captured = make_client()
+
+    client.capture_tool_call(
+        "boom", is_error=True, error=_sdk_tool_error()("Error executing tool boom")
+    )
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props[P.ERROR_MESSAGE] == "Error executing tool boom"
+    assert props[P.ERROR_TYPE] == "ToolError"
+
+
+async def test_an_application_error_sharing_the_wrapper_name_is_kept():
+    """``capture_tool_call`` accepts arbitrary exceptions. The wrapper is
+    matched by SDK module, not just name, so an application's own ToolError
+    keeps the message and type the application chose to surface."""
+    client, captured = make_client()
+
+    try:
+        try:
+            raise ValueError("inner detail")
+        except ValueError as original:
+            raise ToolError("Error executing tool application task") from original
+    except ToolError as wrapper:
+        client.capture_tool_call("task", is_error=True, error=wrapper)
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props[P.ERROR_MESSAGE] == "Error executing tool application task"
+    assert props[P.ERROR_TYPE] == "ToolError"
+
+
+async def test_nested_dispatch_wrappers_unwrap_to_the_root_cause():
+    """An outer tool that invokes a failing inner tool gets wrapped twice —
+    once per dispatch — so the scalars must step past every wrapper, not just
+    the first, on both the inner and the outer event."""
+    from posthog.test.mcp._helpers import MCP_MAJOR, FakeClient
+
+    if MCP_MAJOR >= 2:
+        from mcp.server.mcpserver import MCPServer as Server
+    else:
+        from mcp.server.fastmcp import FastMCP as Server
+
+    from posthog.mcp import instrument
+
+    server = Server("nested-e2e")
+
+    @server.tool()
+    def inner() -> str:
+        raise ValueError("root failure")
+
+    @server.tool()
+    async def outer() -> str:
+        return await server._tool_manager.call_tool("inner", {})
+
+    client = FakeClient()
+    instrument(server, client)
+
+    try:
+        await server._tool_manager.call_tool("outer", {})
+    except Exception:
+        pass
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 2
+    for call in calls:
+        assert call["properties"][P.IS_ERROR] is True
+        assert "root failure" in call["properties"][P.ERROR_MESSAGE]
 
 
 async def test_a_secret_in_the_message_is_redacted_on_both_surfaces():
