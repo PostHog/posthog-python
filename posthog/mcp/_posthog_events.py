@@ -157,6 +157,36 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties["$set"] = {**identify_actor_data}
 
 
+_TOOL_DISPATCH_WRAPPERS = ("ToolError", "UnexpectedToolError")
+
+
+def _primary_exception(error: Any) -> Dict[str, Any]:
+    """Pick the ``$exception_list`` entry that carries the failure reason.
+
+    The MCP SDK's tool dispatch re-raises whatever a tool raised as a
+    ``ToolError`` whose message starts ``Error executing tool <name>``, and
+    mcp >= 2.1 masks the original text out of that message entirely, keeping
+    it only on ``__cause__`` — the next entry of the chain here. The wrapper
+    says nothing the event's tool name does not already say, so the scalars
+    read the entry behind it. Matched by type name and message prefix because
+    each SDK major ships its own ``ToolError`` class.
+    """
+    if not isinstance(error, dict):
+        return {}
+    exception_list = error.get("$exception_list")
+    if not isinstance(exception_list, list) or not exception_list:
+        return {}
+    first = exception_list[0] if isinstance(exception_list[0], dict) else {}
+    if (
+        len(exception_list) > 1
+        and isinstance(exception_list[1], dict)
+        and first.get("type") in _TOOL_DISPATCH_WRAPPERS
+        and str(first.get("value", "")).startswith("Error executing tool")
+    ):
+        return exception_list[1]
+    return first
+
+
 def _add_error_details(event: Event, properties: Dict[str, Any]) -> None:
     """Surface the failure reason on the primary event itself.
 
@@ -164,17 +194,11 @@ def _add_error_details(event: Event, properties: Dict[str, Any]) -> None:
     know *why* a call failed — and that sibling can be switched off with
     ``enable_exception_autocapture``, or never emitted when no error value was
     passed. Both values are read off the ``$exception_list`` the sibling would
-    carry, so the two always agree; the message is already bounded to
+    carry — the sibling keeps the full chain while the scalars carry the entry
+    ``_primary_exception`` picks; the message is already bounded to
     ``_MAX_ERROR_MESSAGE_LENGTH`` because truncation runs before this mapping.
     """
-    first: Dict[str, Any] = {}
-    error = event.get("error")
-    if isinstance(error, dict):
-        exception_list = error.get("$exception_list")
-        if isinstance(exception_list, list) and exception_list:
-            candidate = exception_list[0]
-            if isinstance(candidate, dict):
-                first = candidate
+    first = _primary_exception(event.get("error"))
 
     # An explicit coarse category (e.g. "validation", "timeout") beats the
     # thrown type; a custom dispatcher can pass one that means something to the
