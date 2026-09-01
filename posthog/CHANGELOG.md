@@ -1,5 +1,11 @@
 # posthog
 
+## 7.45.2 — 2026-09-01
+
+### Patch changes
+
+- [9444ec5](https://github.com/posthog/posthog-python/commit/9444ec5618bb7414adf5787252ff36697b6d456b) Omit `$ai_input_tokens` and `$ai_output_tokens` when the provider never reported usage, instead of sending `0`, so an interrupted stream no longer looks like a free call. A zero reported by the provider is still sent, and zero keeps meaning a real report of nothing. Covers the OpenAI, Anthropic, Gemini, LangChain, OpenAI Agents and Claude Agent SDK integrations. — Thanks @bernatixer!
+
 ## 7.45.1 — 2026-08-31
 
 ### Patch changes
