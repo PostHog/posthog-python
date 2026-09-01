@@ -15,7 +15,7 @@ class _AnthropicStreamAccumulator:
     """Accumulates sync-neutral capture state from Anthropic stream events."""
 
     def __init__(self) -> None:
-        self.usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
+        self.usage_stats: TokenUsage = TokenUsage()
         self.accumulated_content = ""
         self.content_blocks: List[StreamingContentBlock] = []
         self.tools_in_progress: Dict[str, ToolInProgress] = {}

@@ -216,7 +216,7 @@ class Models(_GeminiModelsPolicy):
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: TokenUsage = TokenUsage(input_tokens=0, output_tokens=0)
+        usage_stats: TokenUsage = TokenUsage()
         accumulated_content = []
         stop_reason: Optional[str] = None
 

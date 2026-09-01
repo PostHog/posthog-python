@@ -460,13 +460,13 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     Returns:
         TokenUsage with standardized usage statistics
     """
-    if not hasattr(response, "usage"):
-        return TokenUsage(input_tokens=0, output_tokens=0)
+    if not hasattr(response, "usage") or not response.usage:
+        return TokenUsage()
 
-    cached_tokens = 0
-    input_tokens = 0
-    output_tokens = 0
-    reasoning_tokens = 0
+    cached_tokens = None
+    input_tokens = None
+    output_tokens = None
+    reasoning_tokens = None
 
     # Responses API format
     if hasattr(response.usage, "input_tokens"):
@@ -496,10 +496,11 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     ):
         reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
 
-    result = TokenUsage(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-    )
+    result = TokenUsage()
+    if input_tokens is not None:
+        result["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        result["output_tokens"] = output_tokens
 
     if cached_tokens is not None and cached_tokens > 0:
         result["cache_read_input_tokens"] = cached_tokens

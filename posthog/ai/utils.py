@@ -281,7 +281,7 @@ def get_usage(response, provider: str) -> TokenUsage:
 
         return extract_gemini_usage_from_response(response)
 
-    return TokenUsage(input_tokens=0, output_tokens=0)
+    return TokenUsage()
 
 
 def format_response(response, provider: str):
@@ -490,8 +490,14 @@ def call_llm_and_track_usage(
                 ),
             )
             tag("$ai_http_status", http_status)
-            tag("$ai_input_tokens", usage.get("input_tokens", 0))
-            tag("$ai_output_tokens", usage.get("output_tokens", 0))
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            input_tokens = usage.get("input_tokens")
+            if input_tokens is not None:
+                tag("$ai_input_tokens", input_tokens)
+            output_tokens = usage.get("output_tokens")
+            if output_tokens is not None:
+                tag("$ai_output_tokens", output_tokens)
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
             tag("$ai_base_url", str(base_url))
@@ -647,8 +653,14 @@ async def call_llm_and_track_usage_async(
                 ),
             )
             tag("$ai_http_status", http_status)
-            tag("$ai_input_tokens", usage.get("input_tokens", 0))
-            tag("$ai_output_tokens", usage.get("output_tokens", 0))
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            input_tokens = usage.get("input_tokens")
+            if input_tokens is not None:
+                tag("$ai_input_tokens", input_tokens)
+            output_tokens = usage.get("output_tokens")
+            if output_tokens is not None:
+                tag("$ai_output_tokens", output_tokens)
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
             tag("$ai_base_url", str(base_url))
@@ -765,6 +777,11 @@ def capture_streaming_event(
     """
     trace_id = event_data.get("trace_id") or str(uuid.uuid4())
 
+    # Omitted when the provider never reported a count: absent means unknown,
+    # 0 is a report of nothing. An interrupted stream often reports neither.
+    input_tokens = event_data["usage_stats"].get("input_tokens")
+    output_tokens = event_data["usage_stats"].get("output_tokens")
+
     # Build base event properties
     event_properties = {
         "$ai_provider": event_data["provider"],
@@ -781,8 +798,8 @@ def capture_streaming_event(
             finalize_ai_content(event_data["formatted_output"], ph_client),
         ),
         "$ai_http_status": 200,
-        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
-        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
+        **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
+        **({"$ai_output_tokens": output_tokens} if output_tokens is not None else {}),
         "$ai_latency": event_data["latency"],
         "$ai_trace_id": trace_id,
         "$ai_base_url": str(event_data["base_url"]),
