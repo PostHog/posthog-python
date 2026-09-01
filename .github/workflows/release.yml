@@ -527,3 +527,48 @@ jobs:
           thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
           message: "🚀 posthog-python released successfully!"
           emoji_reaction: "rocket"
+
+  notify-rejected:
+    name: Notify Slack - Rejected
+    needs: [version-bump, notify-approval-needed]
+    runs-on: ubuntu-latest
+    if: always() && needs.version-bump.result == 'failure' && needs.notify-approval-needed.outputs.slack_ts != ''
+    permissions:
+      actions: read
+    steps:
+      - name: Check for rejection
+        id: check-rejection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RESPONSE=$(gh api /repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals)
+          REJECTED=$(echo "$RESPONSE" | jq '[.[] | select(.state == "rejected")] | length')
+          if [ "$REJECTED" -gt 0 ]; then
+            echo "was_rejected=true" >> "$GITHUB_OUTPUT"
+            COMMENT=$(echo "$RESPONSE" | jq -r 'first(.[] | select(.state == "rejected") | .comment // empty)')
+            if [ -n "$COMMENT" ]; then
+              # Random delimiter: a rejection comment is reviewer-controlled text, and a
+              # literal delimiter line inside it would close the block early and let the
+              # rest be parsed as step outputs.
+              DELIMITER="EOF_$(openssl rand -hex 16)"
+              {
+                echo "message<<$DELIMITER"
+                echo "🚫 Release was rejected: $COMMENT"
+                echo "$DELIMITER"
+              } >> "$GITHUB_OUTPUT"
+            else
+              echo "message=🚫 Release was rejected." >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "was_rejected=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify Slack - Rejected
+        if: steps.check-rejection.outputs.was_rejected == 'true'
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "${{ steps.check-rejection.outputs.message }}"
+          emoji_reaction: "no_entry_sign"
