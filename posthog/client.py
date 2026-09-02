@@ -2708,8 +2708,11 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to flush metrics on shutdown", self._metrics.flush, errors
             )
+            # _close (not reset): mark the metrics client terminal so a late
+            # autocapture sample that outran the join above can't re-seed the
+            # window and schedule a network flush after shutdown.
             self._run_lifecycle_cleanup(
-                "Failed to reset metrics on shutdown", self._metrics.reset, errors
+                "Failed to close metrics on shutdown", self._metrics._close, errors
             )
         self._join_once(errors, flush_queues=False, lanes_prepared=True)
         self._run_lifecycle_cleanup(
