@@ -19,6 +19,10 @@ from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
+from posthog.runtime_metrics import (
+    MetricsAutocapture,
+    _DEFAULT_SAMPLE_INTERVAL_SECONDS,
+)
 from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
@@ -702,6 +706,7 @@ class Client(object):
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
         metrics: Optional[dict] = None,
+        metrics_autocapture: bool = False,
         enable_full_ai_capture=False,
         # Appended rather than grouped with the other `capture_*` options so
         # existing positional arguments keep their slots.
@@ -773,6 +778,15 @@ class Client(object):
                 skips string truncation and passes media (base64/data URIs)
                 through unredacted. ``privacy_mode`` always wins. Defaults to
                 False.
+            metrics_autocapture: When True, periodically sample a small,
+                low-cardinality set of process/host runtime metrics (CPU time,
+                memory, threads, GC, load average; richer values when ``psutil``
+                is installed) and report them through the ``metrics`` client to
+                PostHog's Metrics product. Off by default and no required
+                dependencies. Configure the cadence with
+                ``metrics={"autocapture_interval": 30}`` (seconds, default 60)
+                and identity via the ``metrics`` resource attributes (a per-process
+                ``service.instance.id`` of ``hostname-pid`` is set when absent).
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
@@ -901,6 +915,8 @@ class Client(object):
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
         self._metrics_lock = threading.Lock()
+        self._metrics_autocapture_enabled = metrics_autocapture
+        self._metrics_autocapture: Optional[MetricsAutocapture] = None
         # `_use_ai_lane` / `_enable_multimodal_capture` are deprecated aliases.
         self.enable_full_ai_capture = (
             enable_full_ai_capture is True
@@ -1011,6 +1027,9 @@ class Client(object):
                 refill_rate=self.exception_autocapture_refill_rate,
                 refill_interval_seconds=self.exception_autocapture_refill_interval_seconds,
             )
+
+        if self._metrics_autocapture_enabled and not self.disabled:
+            self._start_metrics_autocapture()
 
         if not sync_mode and send:
             # On program exit, allow the consumer threads to exit cleanly.
@@ -2217,6 +2236,10 @@ class Client(object):
         self._metrics_lock = threading.Lock()
         if self._metrics is not None:
             self._metrics._reinit_after_fork()
+        # The sampler thread does not survive fork(); restart it (with a fresh
+        # per-process instance id) so each preforked worker reports on itself.
+        if self._metrics_autocapture is not None:
+            self._metrics_autocapture._reinit_after_fork()
 
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
@@ -2439,6 +2462,24 @@ class Client(object):
                         self._metrics = PostHogMetrics(self, None)
         return self._metrics
 
+    def _start_metrics_autocapture(self) -> None:
+        # Enabling autocapture never raises into the host application: a bad
+        # config or a platform quirk degrades to no sampling (raise only in debug).
+        try:
+            config = (
+                self._metrics_config if isinstance(self._metrics_config, dict) else {}
+            )
+            interval = config.get(
+                "autocapture_interval", _DEFAULT_SAMPLE_INTERVAL_SECONDS
+            )
+            autocapture = MetricsAutocapture(self.metrics, interval=interval)
+            autocapture.start()
+            self._metrics_autocapture = autocapture
+        except Exception as e:
+            if self.debug:
+                raise e
+            self.log.exception(f"Error starting metrics autocapture: {e}")
+
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
@@ -2653,6 +2694,14 @@ class Client(object):
                 )
             self._flush_or_discard_queues(errors)
 
+        if self._metrics_autocapture is not None:
+            # Stop before the metrics flush and take one last sample, so the
+            # final window carries fresh readings instead of a blind spot.
+            self._run_lifecycle_cleanup(
+                "Failed to stop metrics autocapture on shutdown",
+                self._metrics_autocapture.stop,
+                errors,
+            )
         if self._metrics is not None:
             self._run_lifecycle_cleanup(
                 "Failed to flush metrics on shutdown", self._metrics.flush, errors
