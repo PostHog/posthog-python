@@ -706,13 +706,15 @@ class Client(object):
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
         metrics: Optional[dict] = None,
-        metrics_autocapture: bool = False,
         enable_full_ai_capture=False,
         # Appended rather than grouped with the other `capture_*` options so
         # existing positional arguments keep their slots.
         capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
+        # Keyword-only and last so it never shifts an existing positional slot.
+        *,
+        metrics_autocapture: bool = False,
     ):
         """
         Initialize a new PostHog client instance.
