@@ -1,6 +1,7 @@
 import gzip
 import json
 import math
+import threading
 from unittest import mock
 
 import pytest
@@ -631,6 +632,41 @@ class TestMetricsFailureHandling:
             c.metrics.flush()
 
         assert session.post.call_count == post_calls_after_shutdown
+        assert c.metrics._flush_timer is None
+
+    def test_blocked_sample_after_shutdown_does_not_emit(self):
+        # The shutdown race the reviewer flagged: a sample already in flight and
+        # blocked in a before_send hook (a stand-in for a runtime-metrics
+        # collector that outran the sampler's join timeout) must not emit or arm
+        # a flush timer once shutdown has flushed and closed the window.
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocking_hook(sample):
+            entered.set()
+            release.wait(5)
+            return sample
+
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"before_send": blocking_hook},
+        )
+        # before_send runs before the capture lock, so this thread blocks there
+        # while shutdown flushes and closes the metrics client.
+        sampler = threading.Thread(target=lambda: c.metrics.gauge("late", 1))
+        sampler.start()
+        assert entered.wait(5)
+
+        session = mock_session()
+        with mock.patch("posthog.metrics_capture._get_session", return_value=session):
+            c.shutdown()
+            posts_after_shutdown = session.post.call_count
+            release.set()
+            sampler.join(5)
+
+        assert session.post.call_count == posts_after_shutdown
         assert c.metrics._flush_timer is None
 
     def test_fork_reopens_closed_metrics(self, client):
