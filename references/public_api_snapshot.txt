@@ -1558,6 +1558,7 @@ module posthog.mcp.version
 module posthog.metrics_capture
 module posthog.poller
 module posthog.request
+module posthog.tracing
 module posthog.types
 module posthog.utils
 module posthog.version
