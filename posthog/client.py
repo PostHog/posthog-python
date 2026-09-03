@@ -427,8 +427,8 @@ class _Lane:
                 max_msg_size=self.max_msg_size,
                 capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
-                sdk_info=self.sdk_info,
             )
+            consumer._sdk_info = self.sdk_info
             consumer._set_drain_signal(self._drain_signal)
             self.consumers.append(consumer)
 
@@ -1083,7 +1083,7 @@ class Client(object):
         for lane in self._lanes:
             lane.sdk_info = self._sdk_info
             for consumer in lane.consumers:
-                consumer.sdk_info = self._sdk_info
+                consumer._sdk_info = self._sdk_info
 
     @property
     def queue(self) -> Queue:

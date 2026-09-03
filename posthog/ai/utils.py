@@ -10,10 +10,13 @@ from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-export
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
 
-from ..version import VERSION
+from ..version import VERSION as _POSTHOG_VERSION
 
 
-_AI_LIB_PROPERTIES = {"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION}
+_AI_LIB_PROPERTIES = {
+    "$ai_lib": "posthog-ai",
+    "$ai_lib_version": _POSTHOG_VERSION,
+}
 
 _TOKEN_PROPERTY_KEYS = frozenset(
     {

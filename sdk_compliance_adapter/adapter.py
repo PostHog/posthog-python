@@ -16,7 +16,7 @@ from flask import Flask, jsonify, request
 from posthog import Client
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_v1 import _post_v1 as original_post_v1
-from posthog.request import EVENTS_ENDPOINT
+from posthog.request import EVENTS_ENDPOINT, USER_AGENT
 from posthog.request import batch_post as original_batch_post
 from posthog.version import VERSION
 
@@ -236,6 +236,7 @@ def patched_post_v1(
     request_id: str,
     compression: CaptureCompression = CaptureCompression.NONE,
     timeout: int = 15,
+    sdk_info: str = USER_AGENT,
     session: Any = None,
 ):
     """Patched version of _post_v1 that records requests for /state assertions.
@@ -253,6 +254,7 @@ def patched_post_v1(
             request_id=request_id,
             compression=compression,
             timeout=timeout,
+            sdk_info=sdk_info,
             session=session,
         )
     except Exception as e:
