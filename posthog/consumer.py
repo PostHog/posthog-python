@@ -335,6 +335,11 @@ class Consumer(Thread):
                     batch=batch,
                     historical_migration=self.historical_migration,
                     path=path,
+                    **(
+                        {"_user_agent": self._sdk_info}
+                        if self._sdk_info != _USER_AGENT
+                        else {}
+                    ),
                 )
                 return
             except Exception as e:

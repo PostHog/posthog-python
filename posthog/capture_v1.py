@@ -365,7 +365,7 @@ def _post_v1(
     data = json.dumps(batch_body, cls=DatetimeSerializer)
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
+        "User-Agent": sdk_info,
         "Authorization": f"Bearer {api_key}",
         _HEADER_SDK_INFO: sdk_info,
         _HEADER_ATTEMPT: str(attempt),

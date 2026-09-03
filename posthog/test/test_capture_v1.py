@@ -421,11 +421,12 @@ class TestPostV1(unittest.TestCase):
         request_timestamp = datetime.fromisoformat(headers[_HEADER_REQUEST_TIMESTAMP])
         self.assertEqual(request_timestamp.utcoffset(), timedelta(0))
 
-    def test_custom_sdk_info_header(self) -> None:
+    def test_custom_sdk_info_headers(self) -> None:
         headers = self._post(
             _results_response({}), sdk_info="posthog-python-mcp/0.3.0"
         )["headers"]
         self.assertEqual(headers[_HEADER_SDK_INFO], "posthog-python-mcp/0.3.0")
+        self.assertEqual(headers["User-Agent"], "posthog-python-mcp/0.3.0")
 
     def test_no_api_key_in_body(self) -> None:
         # v1 authenticates via the Bearer header; the key must not leak into the body.

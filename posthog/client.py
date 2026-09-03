@@ -78,10 +78,13 @@ from posthog.poller import Poller
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
+    USER_AGENT as _USER_AGENT,
     APIError,
     QuotaLimitError,
     RequestsConnectionError,
     RequestsTimeout,
+    _get as _get_with_identity,
+    _remote_config as _remote_config_with_identity,
     batch_post,
     determine_server_host,
     flags,
@@ -1076,7 +1079,7 @@ class Client(object):
         self._warn_if_duplicate_async_client()
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
-        """Override the SDK identity stamped on events and capture-v1 requests."""
+        """Override the SDK identity stamped on events and outbound requests."""
         self._library_id = library_id
         self._library_version = library_version
         self._sdk_info = f"{library_id}/{library_version}"
@@ -1084,6 +1087,9 @@ class Client(object):
             lane.sdk_info = self._sdk_info
             for consumer in lane.consumers:
                 consumer._sdk_info = self._sdk_info
+
+    def _request_identity_kwargs(self) -> Dict[str, str]:
+        return {"_user_agent": self._sdk_info} if self._sdk_info != _USER_AGENT else {}
 
     @property
     def queue(self) -> Queue:
@@ -1498,6 +1504,8 @@ class Client(object):
 
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
+        if self._sdk_info != _USER_AGENT:
+            request_data["_user_agent"] = self._sdk_info
 
         resp_data = flags(
             self.api_key,
@@ -2385,6 +2393,7 @@ class Client(object):
                     batch=[msg],
                     historical_migration=self.historical_migration,
                     path=lane.endpoint,
+                    **self._request_identity_kwargs(),
                 )
 
             if lane.run_sync_if_open(send_sync):
@@ -2943,12 +2952,14 @@ class Client(object):
 
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         try:
-            response = get(
+            request_get = _get_with_identity if self._request_identity_kwargs() else get
+            response = request_get(
                 personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
                 etag=request_etag,
+                **self._request_identity_kwargs(),
             )
 
             with self._flag_definition_publication_lock:
@@ -3883,12 +3894,18 @@ class Client(object):
             return None
 
         try:
-            return remote_config(
+            request_remote_config = (
+                _remote_config_with_identity
+                if self._request_identity_kwargs()
+                else remote_config
+            )
+            return request_remote_config(
                 self.personal_api_key,
                 self.api_key,
                 self.host,
                 key,
                 timeout=self.feature_flags_request_timeout_seconds,
+                **self._request_identity_kwargs(),
             )
         except Exception as e:
             self.log.exception(

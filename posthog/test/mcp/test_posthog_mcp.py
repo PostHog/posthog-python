@@ -78,6 +78,18 @@ async def test_mcp_events_use_mcp_library_identity():
     )
 
 
+def test_mcp_library_identity_reaches_capture_v0_header():
+    response = mock.Mock(status_code=200)
+    client = PostHogMCP("phc_test", sync_mode=True)
+
+    with mock.patch("posthog.request._session.post", return_value=response) as post:
+        client.capture("$mcp_custom")
+
+    assert post.call_args.kwargs["headers"]["User-Agent"] == (
+        f"posthog-python-mcp/{MCP_VERSION}"
+    )
+
+
 def test_mcp_library_identity_reaches_capture_v1_header():
     client = PostHogMCP("phc_test", sync_mode=True, capture_mode=CaptureMode.V1)
     with mock.patch("posthog.client._send_v1_batch") as send:
@@ -87,6 +99,53 @@ def test_mcp_library_identity_reaches_capture_v1_header():
     event = send.call_args.args[2][0]
     assert event["properties"]["$lib"] == "posthog-python-mcp"
     assert event["properties"]["$lib_version"] == MCP_VERSION
+
+
+def test_mcp_library_identity_reaches_feature_flag_requests():
+    response = mock.Mock(status_code=200)
+    response.json.return_value = {"flags": {}}
+    client = PostHogMCP("phc_test", send=False)
+
+    with mock.patch(
+        "posthog.request._flags_session.post", return_value=response
+    ) as post:
+        client.evaluate_flags("user_1")
+
+    assert post.call_args.kwargs["headers"]["User-Agent"] == (
+        f"posthog-python-mcp/{MCP_VERSION}"
+    )
+
+
+def test_mcp_library_identity_reaches_feature_flag_definition_requests():
+    response = mock.Mock(status_code=200, headers={})
+    response.json.return_value = {"flags": [], "group_type_mapping": {}, "cohorts": {}}
+    client = PostHogMCP(
+        "phc_test",
+        secret_key="phs_test",
+        send=False,
+        enable_local_evaluation=False,
+    )
+
+    with mock.patch("posthog.request._session.get", return_value=response) as get:
+        client.load_feature_flags()
+
+    assert get.call_args.kwargs["headers"]["User-Agent"] == (
+        f"posthog-python-mcp/{MCP_VERSION}"
+    )
+    client.shutdown()
+
+
+def test_mcp_library_identity_reaches_remote_config_requests():
+    response = mock.Mock(status_code=200, headers={})
+    response.json.return_value = "payload"
+    client = PostHogMCP("phc_test", secret_key="phs_test", send=False)
+
+    with mock.patch("posthog.request._session.get", return_value=response) as get:
+        assert client.get_remote_config_payload("flag-key") == "payload"
+
+    assert get.call_args.kwargs["headers"]["User-Agent"] == (
+        f"posthog-python-mcp/{MCP_VERSION}"
+    )
 
 
 async def test_capture_initialize_and_tools_list():
