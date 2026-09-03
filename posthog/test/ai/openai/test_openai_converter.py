@@ -198,3 +198,83 @@ def test_chat_streaming_audio_and_refusal_deltas():
 
     refusal_block = next(b for b in content if b["type"] == "refusal")
     assert refusal_block["refusal"] == "I can't help with that"
+
+
+@pytest.mark.parametrize(
+    "status,incomplete_reason,expected",
+    [
+        # Terminal statuses stand for themselves
+        ("completed", None, "completed"),
+        ("failed", None, "failed"),
+        ("cancelled", None, "cancelled"),
+        # An incomplete run is named by what cut it short
+        ("incomplete", "max_output_tokens", "max_output_tokens"),
+        ("incomplete", None, "incomplete"),
+        # Lifecycle states of a background run are not stop reasons
+        ("queued", None, None),
+        ("in_progress", None, None),
+    ],
+)
+def test_extract_stop_reason_maps_responses_statuses(
+    status, incomplete_reason, expected
+):
+    import types
+
+    from posthog.ai.openai.openai_converter import extract_openai_stop_reason
+
+    details = (
+        types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
+    )
+    response = types.SimpleNamespace(status=status, incomplete_details=details)
+
+    assert extract_openai_stop_reason(response) == expected
+
+
+def test_extract_stop_reason_keeps_chat_completions_passthrough():
+    import types
+
+    from posthog.ai.openai.openai_converter import extract_openai_stop_reason
+
+    response = types.SimpleNamespace(
+        choices=[types.SimpleNamespace(finish_reason="stop")]
+    )
+
+    assert extract_openai_stop_reason(response) == "stop"
+
+
+def _lifecycle_chunk(chunk_type, status, incomplete_reason=None):
+    import types
+
+    details = (
+        types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
+    )
+    return types.SimpleNamespace(
+        type=chunk_type,
+        response=types.SimpleNamespace(
+            model="gpt-4o",
+            usage=None,
+            output=[],
+            status=status,
+            incomplete_details=details,
+        ),
+    )
+
+
+def test_responses_stream_records_stop_reason_for_every_terminal_event():
+    from posthog.ai.openai._streaming import _ResponsesStreamState
+
+    state = _ResponsesStreamState()
+    state.process_chunk(_lifecycle_chunk("response.in_progress", "in_progress"))
+    assert state.stop_reason is None
+    state.process_chunk(
+        _lifecycle_chunk("response.incomplete", "incomplete", "max_output_tokens")
+    )
+    assert state.stop_reason == "max_output_tokens"
+
+    failed = _ResponsesStreamState()
+    failed.process_chunk(_lifecycle_chunk("response.failed", "failed"))
+    assert failed.stop_reason == "failed"
+
+    completed = _ResponsesStreamState()
+    completed.process_chunk(_lifecycle_chunk("response.completed", "completed"))
+    assert completed.stop_reason == "completed"
