@@ -9,7 +9,9 @@ on whichever major is installed.
 
 import pytest
 
+from posthog.client import Client
 from posthog.mcp import instrument
+from posthog.mcp.version import __version__ as MCP_VERSION
 from posthog.test.mcp._helpers import MCP_MAJOR, FakeClient
 
 
@@ -57,6 +59,23 @@ def test_low_level_server_detected_on_installed_major():
 
     assert compat.is_low_level_server(Server("probe")) is True
     assert compat.is_low_level_server(object()) is False
+
+
+def test_instrument_relabels_the_host_client():
+    from mcp.server.lowlevel import Server
+
+    captured = []
+
+    def before_send(event):
+        captured.append(event)
+        return event
+
+    client = Client("phc_test", send=False, before_send=before_send)
+    instrument(Server("probe-lib-identity"), client)
+    client.capture("after instrumentation")
+
+    assert captured[0]["properties"]["$lib"] == "posthog-python-mcp"
+    assert captured[0]["properties"]["$lib_version"] == MCP_VERSION
 
 
 @pytest.mark.parametrize(

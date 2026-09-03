@@ -10,6 +10,7 @@ from posthog.capture_mode import CaptureMode
 from posthog.client import Client
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
 from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT
+from posthog.version import VERSION
 from posthog.test.test_utils import TEST_API_KEY
 
 
@@ -359,12 +360,31 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         self.assertEqual(client._ai_lane.consumers, [])
         client.join()
 
+    def test_adds_ai_library_identity_and_preserves_provider_and_model(self):
+        client = mock.Mock()
+        _capture_ai_event(
+            client,
+            "$ai_generation",
+            distinct_id="d",
+            properties={"$ai_provider": "openai", "$ai_model": "gpt-4o"},
+        )
+
+        properties = client.capture.call_args.kwargs["properties"]
+        self.assertEqual(properties["$ai_lib"], "posthog-ai")
+        self.assertEqual(properties["$ai_lib_version"], VERSION)
+        self.assertEqual(properties["$ai_provider"], "openai")
+        self.assertEqual(properties["$ai_model"], "gpt-4o")
+
     def test_default_mock_clients_keep_seeing_capture(self):
         # Downstream test suites pass Mock clients into the wrappers; without
         # the opt-in they must keep seeing plain `capture()` calls.
         client = mock.Mock()
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
+        client.capture.assert_called_once_with(
+            event="$ai_generation",
+            distinct_id="d",
+            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
+        )
         client.capture_ai.assert_not_called()
 
     def test_opted_in_prefers_capture_ai(self):
@@ -372,7 +392,9 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         client.enable_full_ai_capture = True
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
         client.capture_ai.assert_called_once_with(
-            event="$ai_generation", distinct_id="d"
+            event="$ai_generation",
+            distinct_id="d",
+            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
         )
         client.capture.assert_not_called()
 
@@ -380,14 +402,20 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         client = mock.Mock(spec=["capture", "enable_full_ai_capture"])
         client.enable_full_ai_capture = True
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
+        client.capture.assert_called_once_with(
+            event="$ai_generation",
+            distinct_id="d",
+            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
+        )
 
     def test_client_multimodal_flag_prefers_capture_ai(self):
         client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
         client.enable_full_ai_capture = True
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
         client.capture_ai.assert_called_once_with(
-            event="$ai_generation", distinct_id="d"
+            event="$ai_generation",
+            distinct_id="d",
+            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
         )
         client.capture.assert_not_called()
 
@@ -395,7 +423,11 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
         client.enable_full_ai_capture = False
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture.assert_called_once_with(event="$ai_generation", distinct_id="d")
+        client.capture.assert_called_once_with(
+            event="$ai_generation",
+            distinct_id="d",
+            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
+        )
 
 
 class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):

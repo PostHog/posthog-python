@@ -16,6 +16,11 @@ analytics = instrument(server, posthog)
 Install is just `pip install posthog`. `instrument()` needs the MCP SDK at runtime,
 but anyone wrapping a server already has it.
 
+MCP analytics events report `$lib: "posthog-python-mcp"`. Because `$lib` is a
+client-level identity, `instrument()` relabels every event sent by the client passed
+to it. Use a client dedicated to MCP analytics if the application also captures
+unrelated events.
+
 ## Stateless / multi-pod servers
 
 A stateless MCP server issues no session id, so `$session_id` fragments across pods

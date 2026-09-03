@@ -24,6 +24,7 @@ from ._context_parameters import (
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._instrumentation import drain_pending_sync, fire_and_forget
+from ._lib_identity import apply_mcp_lib_identity
 from ._sink import McpCaptureOptions, McpEventSink
 from .tools import build_report_missing_descriptor
 from .types import (
@@ -51,6 +52,7 @@ class PostHogMCP(Client):
         **kwargs: Any,
     ) -> None:
         super().__init__(api_key, **kwargs)
+        apply_mcp_lib_identity(self)
         self._mcp_sink = McpEventSink(self)
         self._missing_capability_tool_name = (
             missing_capability_tool_name or _GET_MORE_TOOLS_NAME

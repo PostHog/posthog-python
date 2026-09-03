@@ -348,6 +348,7 @@ def _post_v1(
     request_id: str,
     compression: CaptureCompression = CaptureCompression.NONE,
     timeout: int = 15,
+    sdk_info: str = USER_AGENT,
     session: Optional["requests.Session"] = None,
 ) -> "requests.Response":
     """Perform a single ``POST /i/v1/analytics/events`` attempt.
@@ -366,7 +367,7 @@ def _post_v1(
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
         "Authorization": f"Bearer {api_key}",
-        _HEADER_SDK_INFO: USER_AGENT,
+        _HEADER_SDK_INFO: sdk_info,
         _HEADER_ATTEMPT: str(attempt),
         _HEADER_REQUEST_ID: request_id,
         _HEADER_REQUEST_TIMESTAMP: datetime.now(timezone.utc).isoformat(),
@@ -470,6 +471,7 @@ def _send_v1_batch(
     timeout: int = 15,
     max_retries: int = 3,
     historical_migration: bool = False,
+    sdk_info: str = USER_AGENT,
     session: Optional["requests.Session"] = None,
 ) -> None:
     """Deliver ``batch`` to the v1 endpoint with partial retry.
@@ -521,6 +523,7 @@ def _send_v1_batch(
                 request_id=request_id,
                 compression=compression,
                 timeout=timeout,
+                sdk_info=sdk_info,
                 session=session,
             )
         except Exception as e:

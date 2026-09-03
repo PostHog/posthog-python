@@ -10,6 +10,7 @@ from posthog.capture_mode import CaptureMode
 from posthog.capture_v1 import _backoff, _send_v1_batch
 from posthog.request import (
     EVENTS_ENDPOINT,
+    USER_AGENT,
     APIError,
     DatetimeSerializer,
     batch_post,
@@ -116,6 +117,7 @@ class Consumer(Thread):
         max_msg_size=MAX_MSG_SIZE,
         capture_mode=CaptureMode.V0,
         capture_compression=CaptureCompression.NONE,
+        sdk_info=USER_AGENT,
     ):
         """Create a consumer thread."""
         Thread.__init__(self)
@@ -132,6 +134,7 @@ class Consumer(Thread):
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self.sdk_info = sdk_info
         self._drain_signal: Optional[_DrainSignal] = None
         self._drain_on_stop = False
         # It's important to set running in the constructor: if we are asked to
@@ -300,6 +303,7 @@ class Consumer(Thread):
                 timeout=self.timeout,
                 max_retries=self.retries,
                 historical_migration=self.historical_migration,
+                sdk_info=self.sdk_info,
             )
             return
         self._send(batch, self.endpoint)

@@ -1,6 +1,10 @@
 """Tests for the PostHogMCP custom-dispatcher client (Milestone 3)."""
 
+from unittest import mock
+
+from posthog.capture_mode import CaptureMode
 from posthog.mcp import PostHogMCP
+from posthog.mcp.version import __version__ as MCP_VERSION
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
@@ -48,6 +52,41 @@ async def test_capture_tool_call_error_fans_out_exception():
     assert _events(captured, "$mcp_tool_call")[0]["properties"]["$mcp_is_error"] is True
     exc = _events(captured, "$exception")
     assert exc and exc[0]["properties"]["$exception_list"][0]["value"] == "kaboom"
+
+
+async def test_mcp_events_use_mcp_library_identity():
+    captured = []
+
+    def before_send(event):
+        captured.append(event)
+        return event
+
+    client = PostHogMCP(
+        "phc_test",
+        host="https://us.i.posthog.com",
+        send=False,
+        before_send=before_send,
+    )
+    client.capture_tool_call("broken", is_error=True, error=RuntimeError("kaboom"))
+    await _flush()
+
+    assert {event["event"] for event in captured} == {"$mcp_tool_call", "$exception"}
+    assert all(
+        event["properties"]["$lib"] == "posthog-python-mcp"
+        and event["properties"]["$lib_version"] == MCP_VERSION
+        for event in captured
+    )
+
+
+def test_mcp_library_identity_reaches_capture_v1_header():
+    client = PostHogMCP("phc_test", sync_mode=True, capture_mode=CaptureMode.V1)
+    with mock.patch("posthog.client._send_v1_batch") as send:
+        client.capture("$mcp_custom")
+
+    assert send.call_args.kwargs["sdk_info"] == f"posthog-python-mcp/{MCP_VERSION}"
+    event = send.call_args.args[2][0]
+    assert event["properties"]["$lib"] == "posthog-python-mcp"
+    assert event["properties"]["$lib_version"] == MCP_VERSION
 
 
 async def test_capture_initialize_and_tools_list():

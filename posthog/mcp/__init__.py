@@ -303,6 +303,11 @@ def instrument(
                 "on SDK 2.x, or jlowin's fastmcp.FastMCP) or a low-level mcp.server.Server."
             )
 
+        if client is not None:
+            from ._lib_identity import apply_mcp_lib_identity
+
+            apply_mcp_lib_identity(client)
+
         # Zero-config stateless minting: wrap the server's ASGI-app factories so a
         # stateless/multi-pod deployment keeps one $session_id + the client harness
         # across pods with no extra setup. No-op for stdio / low-level servers.

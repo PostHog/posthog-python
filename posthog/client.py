@@ -374,6 +374,7 @@ class _Lane:
         max_msg_size,
         capture_mode,
         capture_compression,
+        sdk_info,
         eager_start,
     ):
         self.name = name
@@ -391,6 +392,7 @@ class _Lane:
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self.sdk_info = sdk_info
         self._max_queue_size = max_queue_size
         self._thread_count = thread_count
         self._eager_start = eager_start
@@ -425,6 +427,7 @@ class _Lane:
                 max_msg_size=self.max_msg_size,
                 capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
+                sdk_info=self.sdk_info,
             )
             consumer._set_drain_signal(self._drain_signal)
             self.consumers.append(consumer)
@@ -913,6 +916,9 @@ class Client(object):
         # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
         # applied once; V0 is the default and keeps upgrades transparent.
         self.capture_mode = _resolve_capture_mode(capture_mode)
+        self._library_id = "posthog-python"
+        self._library_version = VERSION
+        self._sdk_info = f"{self._library_id}/{self._library_version}"
         # v1-only request compression; falls back to the legacy `gzip` flag when
         # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
         self.capture_compression = _resolve_capture_compression(
@@ -1033,6 +1039,7 @@ class Client(object):
             max_retries=self.max_retries,
             timeout=timeout,
             historical_migration=historical_migration,
+            sdk_info=self._sdk_info,
         )
         self._analytics_lane = _Lane(
             name="analytics",
@@ -1067,6 +1074,16 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+
+    def _set_library_identity(self, library_id: str, library_version: str) -> None:
+        """Override the SDK identity stamped on events and capture-v1 requests."""
+        self._library_id = library_id
+        self._library_version = library_version
+        self._sdk_info = f"{library_id}/{library_version}"
+        for lane in self._lanes:
+            lane.sdk_info = self._sdk_info
+            for consumer in lane.consumers:
+                consumer.sdk_info = self._sdk_info
 
     @property
     def queue(self) -> Queue:
@@ -2279,8 +2296,8 @@ class Client(object):
 
         if not msg.get("properties"):
             msg["properties"] = {}
-        msg["properties"]["$lib"] = "posthog-python"
-        msg["properties"]["$lib_version"] = VERSION
+        msg["properties"]["$lib"] = self._library_id
+        msg["properties"]["$lib_version"] = self._library_version
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
@@ -2356,6 +2373,7 @@ class Client(object):
                         timeout=self.timeout,
                         max_retries=self.max_retries,
                         historical_migration=self.historical_migration,
+                        sdk_info=self._sdk_info,
                     )
                     return
 

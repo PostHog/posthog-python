@@ -10,6 +10,10 @@ from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-export
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
 
+from ..version import VERSION
+
+
+_AI_LIB_PROPERTIES = {"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION}
 
 _TOKEN_PROPERTY_KEYS = frozenset(
     {
@@ -63,7 +67,11 @@ def _ai_lane_enabled(ph_client) -> bool:
 
 
 def _capture_ai_event(ph_client, event: str, **kwargs):
-    """Capture a wrapper-emitted AI event, falling back to `capture()` for duck-typed clients without `capture_ai`."""
+    """Capture a wrapper-emitted AI event with the PostHog AI library identity."""
+    kwargs["properties"] = {
+        **_AI_LIB_PROPERTIES,
+        **(kwargs.get("properties") or {}),
+    }
     if _ai_lane_enabled(ph_client):
         capture_ai = getattr(ph_client, "capture_ai", None)
         if callable(capture_ai):
