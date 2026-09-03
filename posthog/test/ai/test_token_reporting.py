@@ -15,9 +15,11 @@ def mock_client():
         yield mock_client
 
 
-def _event_data(usage_stats: TokenUsage) -> StreamingEventData:
+def _event_data(
+    usage_stats: TokenUsage, provider: str = "gemini"
+) -> StreamingEventData:
     return StreamingEventData(
-        provider="gemini",
+        provider=provider,
         model="gemini-2.0-flash",
         base_url="https://generativelanguage.googleapis.com",
         kwargs={},
@@ -52,6 +54,43 @@ def test_token_counts_trace_back_to_a_provider_report(
 
     props = mock_client.capture.call_args[1]["properties"]
     for key in ("$ai_input_tokens", "$ai_output_tokens"):
+        if key in expected:
+            assert props[key] == expected[key]
+        else:
+            assert key not in props
+
+
+@pytest.mark.parametrize(
+    ("provider", "usage_stats", "expected"),
+    [
+        # A stream interrupted before any usage report has nothing to default:
+        # a fabricated 0 would read as a report of nothing.
+        ("openai", TokenUsage(), {}),
+        ("anthropic", TokenUsage(), {}),
+        # Reported usage keeps the historical zero-defaults.
+        (
+            "openai",
+            TokenUsage(input_tokens=12, output_tokens=7),
+            {"$ai_cache_read_input_tokens": 0, "$ai_reasoning_tokens": 0},
+        ),
+        (
+            "anthropic",
+            TokenUsage(input_tokens=10),
+            {"$ai_cache_read_input_tokens": 0, "$ai_cache_creation_input_tokens": 0},
+        ),
+    ],
+)
+def test_aux_token_fields_trace_back_to_a_provider_report(
+    mock_client, provider, usage_stats, expected
+):
+    capture_streaming_event(mock_client, _event_data(usage_stats, provider=provider))
+
+    props = mock_client.capture.call_args[1]["properties"]
+    for key in (
+        "$ai_cache_read_input_tokens",
+        "$ai_cache_creation_input_tokens",
+        "$ai_reasoning_tokens",
+    ):
         if key in expected:
             assert props[key] == expected[key]
         else:
