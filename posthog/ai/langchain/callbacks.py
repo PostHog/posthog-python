@@ -616,10 +616,9 @@ class CallbackHandler(BaseCallbackHandler):
         output: Union[LLMResult, BaseException],
         parent_run_id: Optional[UUID] = None,
     ):
+        # The served tier comes from the response, because a requested tier can be refused.
         model_params = run.model_params
         if isinstance(output, LLMResult) and isinstance(output.llm_output, dict):
-            # The tier the provider served, which langchain lifts out of the response;
-            # a requested tier can be refused.
             served_tier = output.llm_output.get("service_tier")
             if served_tier is not None:
                 model_params = {**(model_params or {}), "service_tier": served_tier}
