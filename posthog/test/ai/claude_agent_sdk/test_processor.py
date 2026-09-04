@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from posthog.version import VERSION
+
 try:
     from claude_agent_sdk.types import (
         AssistantMessage,
@@ -694,6 +696,8 @@ class TestCapturePolicy:
         )
 
         assert mock_client.capture.call_args.kwargs["properties"] == {
+            "$ai_lib": "posthog-ai",
+            "$ai_lib_version": VERSION,
             "environment": "processor",
             "$ai_trace_id": "trace-id",
         }

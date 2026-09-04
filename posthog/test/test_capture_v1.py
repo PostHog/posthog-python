@@ -26,6 +26,7 @@ from posthog.capture_v1 import (
     _coerce_bool,
     _coerce_str,
 )
+from posthog.request import USER_AGENT
 
 
 class _FakeResponse:
@@ -81,6 +82,7 @@ class _PostV1Stub:
         request_id,
         compression=CaptureCompression.NONE,
         timeout=15,
+        sdk_info=USER_AGENT,
         session=None,
     ):
         self.calls.append(
@@ -88,6 +90,7 @@ class _PostV1Stub:
                 "attempt": attempt,
                 "request_id": request_id,
                 "compression": compression,
+                "sdk_info": sdk_info,
                 "created_at": batch_body["created_at"],
                 "uuids": [e["uuid"] for e in batch_body["batch"]],
             }
@@ -418,6 +421,13 @@ class TestPostV1(unittest.TestCase):
         request_timestamp = datetime.fromisoformat(headers[_HEADER_REQUEST_TIMESTAMP])
         self.assertEqual(request_timestamp.utcoffset(), timedelta(0))
 
+    def test_custom_sdk_info_headers(self) -> None:
+        headers = self._post(
+            _results_response({}), sdk_info="posthog-python-mcp/0.3.0"
+        )["headers"]
+        self.assertEqual(headers[_HEADER_SDK_INFO], "posthog-python-mcp/0.3.0")
+        self.assertEqual(headers["User-Agent"], "posthog-python-mcp/0.3.0")
+
     def test_no_api_key_in_body(self) -> None:
         # v1 authenticates via the Bearer header; the key must not leak into the body.
         data = self._post(_results_response({}))["data"]
@@ -533,6 +543,14 @@ class TestSendV1Batch(unittest.TestCase):
         stub = self._run([_msg("u-1")], [_results_response({"u-1": "ok"})])
         self.assertEqual(len(stub.calls), 1)
         self.sleep.assert_not_called()
+
+    def test_custom_sdk_info_is_forwarded(self) -> None:
+        stub = self._run(
+            [_msg("u-1")],
+            [_results_response({"u-1": "ok"})],
+            sdk_info="posthog-python-mcp/0.3.0",
+        )
+        self.assertEqual(stub.calls[0]["sdk_info"], "posthog-python-mcp/0.3.0")
 
     def test_absent_uuid_treated_as_accepted(self) -> None:
         # Empty results map: the event is neither retried nor errored.

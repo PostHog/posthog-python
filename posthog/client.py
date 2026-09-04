@@ -78,10 +78,13 @@ from posthog.poller import Poller
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
+    USER_AGENT as _USER_AGENT,
     APIError,
     QuotaLimitError,
     RequestsConnectionError,
     RequestsTimeout,
+    _get as _get_with_identity,
+    _remote_config as _remote_config_with_identity,
     batch_post,
     determine_server_host,
     flags,
@@ -374,6 +377,7 @@ class _Lane:
         max_msg_size,
         capture_mode,
         capture_compression,
+        sdk_info,
         eager_start,
     ):
         self.name = name
@@ -391,6 +395,7 @@ class _Lane:
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self.sdk_info = sdk_info
         self._max_queue_size = max_queue_size
         self._thread_count = thread_count
         self._eager_start = eager_start
@@ -426,6 +431,7 @@ class _Lane:
                 capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
             )
+            consumer._sdk_info = self.sdk_info
             consumer._set_drain_signal(self._drain_signal)
             self.consumers.append(consumer)
 
@@ -913,6 +919,9 @@ class Client(object):
         # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
         # applied once; V0 is the default and keeps upgrades transparent.
         self.capture_mode = _resolve_capture_mode(capture_mode)
+        self._library_id = "posthog-python"
+        self._library_version = VERSION
+        self._sdk_info = f"{self._library_id}/{self._library_version}"
         # v1-only request compression; falls back to the legacy `gzip` flag when
         # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
         self.capture_compression = _resolve_capture_compression(
@@ -1033,6 +1042,7 @@ class Client(object):
             max_retries=self.max_retries,
             timeout=timeout,
             historical_migration=historical_migration,
+            sdk_info=self._sdk_info,
         )
         self._analytics_lane = _Lane(
             name="analytics",
@@ -1067,6 +1077,19 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+
+    def _set_library_identity(self, library_id: str, library_version: str) -> None:
+        """Override the SDK identity stamped on events and outbound requests."""
+        self._library_id = library_id
+        self._library_version = library_version
+        self._sdk_info = f"{library_id}/{library_version}"
+        for lane in self._lanes:
+            lane.sdk_info = self._sdk_info
+            for consumer in lane.consumers:
+                consumer._sdk_info = self._sdk_info
+
+    def _request_identity_kwargs(self) -> Dict[str, str]:
+        return {"_user_agent": self._sdk_info} if self._sdk_info != _USER_AGENT else {}
 
     @property
     def queue(self) -> Queue:
@@ -1481,6 +1504,8 @@ class Client(object):
 
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
+        if self._sdk_info != _USER_AGENT:
+            request_data["_user_agent"] = self._sdk_info
 
         resp_data = flags(
             self.api_key,
@@ -2279,8 +2304,8 @@ class Client(object):
 
         if not msg.get("properties"):
             msg["properties"] = {}
-        msg["properties"]["$lib"] = "posthog-python"
-        msg["properties"]["$lib_version"] = VERSION
+        msg["properties"]["$lib"] = self._library_id
+        msg["properties"]["$lib_version"] = self._library_version
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
@@ -2356,6 +2381,7 @@ class Client(object):
                         timeout=self.timeout,
                         max_retries=self.max_retries,
                         historical_migration=self.historical_migration,
+                        sdk_info=self._sdk_info,
                     )
                     return
 
@@ -2367,6 +2393,7 @@ class Client(object):
                     batch=[msg],
                     historical_migration=self.historical_migration,
                     path=lane.endpoint,
+                    **self._request_identity_kwargs(),
                 )
 
             if lane.run_sync_if_open(send_sync):
@@ -2925,12 +2952,14 @@ class Client(object):
 
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         try:
-            response = get(
+            request_get = _get_with_identity if self._request_identity_kwargs() else get
+            response = request_get(
                 personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
                 etag=request_etag,
+                **self._request_identity_kwargs(),
             )
 
             with self._flag_definition_publication_lock:
@@ -3865,12 +3894,18 @@ class Client(object):
             return None
 
         try:
-            return remote_config(
+            request_remote_config = (
+                _remote_config_with_identity
+                if self._request_identity_kwargs()
+                else remote_config
+            )
+            return request_remote_config(
                 self.personal_api_key,
                 self.api_key,
                 self.host,
                 key,
                 timeout=self.feature_flags_request_timeout_seconds,
+                **self._request_identity_kwargs(),
             )
         except Exception as e:
             self.log.exception(
