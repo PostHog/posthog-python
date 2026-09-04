@@ -1,5 +1,11 @@
 # posthog
 
+## 7.45.4 — 2026-09-04
+
+### Patch changes
+
+- [86ad9e7](https://github.com/posthog/posthog-python/commit/86ad9e76c8f7168f5c05b1011828e536b2cdb621) Streaming generations interrupted before the provider reported any usage no longer send zero `$ai_cache_read_input_tokens`, `$ai_cache_creation_input_tokens`, or `$ai_reasoning_tokens`. A fabricated 0 reads as a report of nothing, so cost processing priced an unknown generation as a known $0.00 instead of leaving it unknown. Streams whose usage was reported keep the historical zero defaults. — Thanks @bernatixer!
+
 ## 7.45.3 — 2026-09-01
 
 ### Patch changes
