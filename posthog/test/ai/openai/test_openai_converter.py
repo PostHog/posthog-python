@@ -1,3 +1,5 @@
+import types
+
 import pytest
 
 try:
@@ -7,7 +9,11 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
-from posthog.ai.openai.openai_converter import format_openai_input
+from posthog.ai.openai._streaming import _ResponsesStreamState
+from posthog.ai.openai.openai_converter import (
+    extract_openai_stop_reason,
+    format_openai_input,
+)
 from posthog.test.ai.utils import make_response_usage
 
 pytestmark = pytest.mark.skipif(not OPENAI_AVAILABLE, reason="openai not available")
@@ -198,3 +204,56 @@ def test_chat_streaming_audio_and_refusal_deltas():
 
     refusal_block = next(b for b in content if b["type"] == "refusal")
     assert refusal_block["refusal"] == "I can't help with that"
+
+
+def _response(status, incomplete_reason=None, **extra):
+    details = (
+        types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
+    )
+    return types.SimpleNamespace(status=status, incomplete_details=details, **extra)
+
+
+@pytest.mark.parametrize(
+    "status,incomplete_reason,expected",
+    [
+        # Terminal statuses stand for themselves
+        ("completed", None, "completed"),
+        ("failed", None, "failed"),
+        ("cancelled", None, "cancelled"),
+        # An incomplete run is named by what cut it short
+        ("incomplete", "max_output_tokens", "max_output_tokens"),
+        ("incomplete", None, "incomplete"),
+        # Lifecycle states of a background run are not stop reasons
+        ("queued", None, None),
+        ("in_progress", None, None),
+    ],
+)
+def test_extract_stop_reason_maps_responses_statuses(
+    status, incomplete_reason, expected
+):
+    assert extract_openai_stop_reason(_response(status, incomplete_reason)) == expected
+
+
+@pytest.mark.parametrize(
+    "status,incomplete_reason,expected",
+    [
+        ("completed", None, "completed"),
+        ("incomplete", "max_output_tokens", "max_output_tokens"),
+        ("failed", None, "failed"),
+        ("in_progress", None, None),
+    ],
+)
+def test_responses_stream_records_every_terminal_stop_reason(
+    status, incomplete_reason, expected
+):
+    state = _ResponsesStreamState()
+    state.process_chunk(
+        types.SimpleNamespace(
+            type=f"response.{status}",
+            response=_response(
+                status, incomplete_reason, model="gpt-4o", usage=None, output=[]
+            ),
+        )
+    )
+
+    assert state.stop_reason == expected

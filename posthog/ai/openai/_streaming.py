@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..types import StreamingEventData, TokenUsage
-from ..utils import merge_usage_stats
+from ..utils import merge_usage_stats, _responses_stop_reason
 from .openai_converter import (
     accumulate_openai_tool_calls,
     extract_openai_content_from_chunk,
@@ -35,10 +35,12 @@ class _ResponsesStreamState:
         if content is not None:
             self.output.extend(content)
 
-        if getattr(chunk, "type", None) == "response.completed" and response:
-            status = getattr(response, "status", None)
-            if status is not None:
-                self.stop_reason = status
+        # A stream can end on response.completed, response.incomplete, or
+        # response.failed; any terminal response names the stop reason.
+        if response:
+            stop_reason = _responses_stop_reason(response)
+            if stop_reason is not None:
+                self.stop_reason = stop_reason
 
 
 @dataclass

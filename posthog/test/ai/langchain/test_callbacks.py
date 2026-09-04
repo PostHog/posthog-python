@@ -2839,3 +2839,58 @@ def test_ai_lane_client_routes_through_capture_ai(mock_client):
     events = [c[1]["event"] for c in mock_client.capture_ai.call_args_list]
     assert "$ai_generation" in events
     assert "$ai_trace" in events
+
+
+@pytest.mark.parametrize(
+    "generation_info,response_metadata,expected",
+    [
+        # generation_info finish_reason keeps priority
+        ({"finish_reason": "stop"}, {"status": "completed"}, "stop"),
+        # Responses API: a terminal status carries no finish_reason at all
+        (None, {"status": "completed", "incomplete_details": None}, "completed"),
+        # ... an incomplete run is named by what cut it short
+        (
+            None,
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            "max_output_tokens",
+        ),
+        # a queued background run has no stop reason yet
+        (None, {"status": "queued", "incomplete_details": None}, None),
+        # Anthropic reports through response_metadata.stop_reason
+        (None, {"stop_reason": "end_turn"}, "end_turn"),
+    ],
+)
+def test_stop_reason_resolution(
+    mock_client, generation_info, response_metadata, expected
+):
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "openai", "ls_model_name": "gpt-4o"},
+    )
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(
+                        content="Response", response_metadata=response_metadata
+                    ),
+                    generation_info=generation_info,
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props.get("$ai_stop_reason") == expected
