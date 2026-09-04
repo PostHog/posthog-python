@@ -311,9 +311,7 @@ _TERMINAL_RESPONSE_STATUSES = frozenset(
 
 
 def _read_response_field(source: Any, key: str) -> Any:
-    if isinstance(source, dict):
-        return source.get(key)
-    return getattr(source, key, None)
+    return source.get(key) if isinstance(source, dict) else getattr(source, key, None)
 
 
 def _responses_stop_reason(response: Any) -> Optional[str]:
@@ -324,18 +322,13 @@ def _responses_stop_reason(response: Any) -> Optional[str]:
     and a non-terminal status yields None. Accepts an SDK response object or
     a LangChain `response_metadata` dict.
     """
-    if response is None:
-        return None
     status = _read_response_field(response, "status")
     if not isinstance(status, str) or status not in _TERMINAL_RESPONSE_STATUSES:
         return None
-    if status == "incomplete":
-        details = _read_response_field(response, "incomplete_details")
-        reason = (
-            _read_response_field(details, "reason") if details is not None else None
-        )
-        if isinstance(reason, str) and reason:
-            return reason
+    details = _read_response_field(response, "incomplete_details")
+    reason = _read_response_field(details, "reason")
+    if status == "incomplete" and isinstance(reason, str) and reason:
+        return reason
     return status
 
 

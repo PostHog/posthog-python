@@ -743,34 +743,28 @@ def _extract_stop_reason(generation: Any) -> Optional[str]:
     order. The Responses API reports no finish_reason at all: an incomplete
     run is named by what cut it short, and only terminal statuses count.
     """
-    message = getattr(generation, "message", None)
-    message_metadata = getattr(message, "response_metadata", None)
-    if not isinstance(message_metadata, dict):
-        message_metadata = None
-    generation_info = getattr(generation, "generation_info", None)
-    if not isinstance(generation_info, dict):
-        generation_info = None
-    generation_metadata = (
-        generation_info.get("response_metadata") if generation_info else None
+
+    def as_dict(value: Any) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    message = as_dict(
+        getattr(getattr(generation, "message", None), "response_metadata", None)
     )
-    if not isinstance(generation_metadata, dict):
-        generation_metadata = None
+    info = as_dict(getattr(generation, "generation_info", None))
+    nested = as_dict(info.get("response_metadata"))
 
     for source, key in (
-        (message_metadata, "finish_reason"),
-        (message_metadata, "stop_reason"),
-        (generation_info, "finish_reason"),
-        (generation_metadata, "stop_reason"),
-        (generation_metadata, "finish_reason"),
-        (generation_info, "stop_reason"),
+        (message, "finish_reason"),
+        (message, "stop_reason"),
+        (info, "finish_reason"),
+        (nested, "stop_reason"),
+        (nested, "finish_reason"),
+        (info, "stop_reason"),
     ):
-        value = source.get(key) if source else None
-        if value is not None:
-            return str(value)
+        if source.get(key) is not None:
+            return str(source[key])
 
-    return _responses_stop_reason(message_metadata) or _responses_stop_reason(
-        generation_metadata
-    )
+    return _responses_stop_reason(message) or _responses_stop_reason(nested)
 
 
 def _extract_raw_response(last_response):

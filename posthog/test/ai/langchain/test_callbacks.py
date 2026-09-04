@@ -2893,7 +2893,4 @@ def test_stop_reason_resolution(
     cb._pop_run_and_capture_generation(run_id, None, response)
 
     props = mock_client.capture.call_args.kwargs["properties"]
-    if expected is None:
-        assert "$ai_stop_reason" not in props
-    else:
-        assert props["$ai_stop_reason"] == expected
+    assert props.get("$ai_stop_reason") == expected
