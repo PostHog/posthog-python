@@ -616,6 +616,14 @@ class CallbackHandler(BaseCallbackHandler):
         output: Union[LLMResult, BaseException],
         parent_run_id: Optional[UUID] = None,
     ):
+        model_params = run.model_params
+        if isinstance(output, LLMResult) and isinstance(output.llm_output, dict):
+            # The tier the provider served, which langchain lifts out of the response;
+            # a requested tier can be refused.
+            served_tier = output.llm_output.get("service_tier")
+            if served_tier is not None:
+                model_params = {**(model_params or {}), "service_tier": served_tier}
+
         event_properties = {
             "$ai_trace_id": trace_id,
             "$ai_span_id": run_id,
@@ -623,7 +631,7 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_parent_id": parent_run_id,
             "$ai_provider": run.provider,
             "$ai_model": run.model,
-            "$ai_model_parameters": run.model_params,
+            "$ai_model_parameters": model_params,
             "$ai_input": with_privacy_mode(
                 self._ph_client,
                 self._privacy_mode,

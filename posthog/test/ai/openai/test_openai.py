@@ -2664,3 +2664,57 @@ async def test_async_provider_override_embeddings(mock_client, mock_embedding_re
     props = mock_client.capture.call_args[1]["properties"]
     assert props["$ai_provider"] == "perplexity"
     assert props["$ai_model"] == "text-embedding-3-small"
+
+
+def test_served_service_tier_lands_in_model_parameters(
+    mock_client, mock_openai_response
+):
+    mock_openai_response.service_tier = "flex"
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_model_parameters"]["service_tier"] == "flex"
+
+
+def test_response_without_service_tier_omits_it(mock_client, mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert "service_tier" not in props["$ai_model_parameters"]
+
+
+def test_streaming_state_tracks_served_service_tier():
+    from types import SimpleNamespace
+
+    from posthog.ai.openai._streaming import (
+        _ChatCompletionsStreamState,
+        _ResponsesStreamState,
+    )
+
+    chat_state = _ChatCompletionsStreamState()
+    chat_state.process_chunk(SimpleNamespace(service_tier="flex", choices=[]))
+    assert chat_state.service_tier == "flex"
+
+    responses_state = _ResponsesStreamState()
+    responses_state.process_chunk(
+        SimpleNamespace(response=SimpleNamespace(service_tier="flex"), type="other")
+    )
+    assert responses_state.service_tier == "flex"

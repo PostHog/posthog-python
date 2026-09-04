@@ -142,3 +142,4 @@ class StreamingEventData(TypedDict):
     privacy_mode: bool
     groups: Optional[Dict[str, Any]]
     stop_reason: Optional[str]
+    service_tier: NotRequired[Optional[str]]

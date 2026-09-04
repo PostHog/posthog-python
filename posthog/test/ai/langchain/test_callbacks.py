@@ -2839,3 +2839,28 @@ def test_ai_lane_client_routes_through_capture_ai(mock_client):
     events = [c[1]["event"] for c in mock_client.capture_ai.call_args_list]
     assert "$ai_generation" in events
     assert "$ai_trace" in events
+
+
+def test_served_service_tier_merges_into_model_parameters(mock_client):
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "openai", "ls_model_name": "gpt-5-mini"},
+        invocation_params={"temperature": 0.5},
+    )
+    response = LLMResult(
+        generations=[[ChatGeneration(message=AIMessage(content="Response"))]],
+        llm_output={"service_tier": "flex"},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_model_parameters"]["service_tier"] == "flex"
+    assert props["$ai_model_parameters"]["temperature"] == 0.5
