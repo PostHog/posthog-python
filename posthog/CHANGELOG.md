@@ -1,5 +1,11 @@
 # posthog
 
+## 7.46.0 — 2026-09-04
+
+### Minor changes
+
+- [4ab555d](https://github.com/posthog/posthog-python/commit/4ab555dfc2be55ada15e04d13275927053295d2f) Label MCP events and requests as `posthog-python-mcp`, and AI events as `posthog-ai` — Thanks @marandaneto!
+
 ## 7.45.4 — 2026-09-04
 
 ### Patch changes
