@@ -21,11 +21,14 @@ class _ResponsesStreamState:
     output: List[Any] = field(default_factory=list)
     model: Optional[str] = None
     stop_reason: Optional[str] = None
+    service_tier: Optional[str] = None
 
     def process_chunk(self, chunk: Any) -> None:
         response = getattr(chunk, "response", None)
         if response and self.model is None and hasattr(response, "model"):
             self.model = response.model
+        if response and self.service_tier is None:
+            self.service_tier = getattr(response, "service_tier", None)
 
         chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
         if chunk_usage:
@@ -50,10 +53,13 @@ class _ChatCompletionsStreamState:
     _tool_calls: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     model: Optional[str] = None
     stop_reason: Optional[str] = None
+    service_tier: Optional[str] = None
 
     def process_chunk(self, chunk: Any) -> None:
         if self.model is None and hasattr(chunk, "model"):
             self.model = chunk.model
+        if self.service_tier is None:
+            self.service_tier = getattr(chunk, "service_tier", None)
 
         chunk_usage = extract_openai_usage_from_chunk(chunk, "chat")
         if chunk_usage:
@@ -93,6 +99,7 @@ def _build_streaming_event_data(
     groups: Optional[Dict[str, Any]],
     model_from_response: Optional[str],
     stop_reason: Optional[str],
+    service_tier: Optional[str] = None,
 ) -> StreamingEventData:
     """Build the fields shared by both OpenAI streaming endpoint events."""
 
@@ -111,4 +118,5 @@ def _build_streaming_event_data(
         privacy_mode=privacy_mode,
         groups=groups,
         stop_reason=stop_reason,
+        service_tier=service_tier,
     )

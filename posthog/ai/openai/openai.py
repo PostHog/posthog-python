@@ -214,6 +214,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             groups=posthog_groups,
             model_from_response=state.model,
             stop_reason=state.stop_reason,
+            service_tier=state.service_tier,
         )
         capture_streaming_event(self._client._ph_client, event_data)
 
@@ -433,6 +434,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             groups=posthog_groups,
             model_from_response=state.model,
             stop_reason=state.stop_reason,
+            service_tier=state.service_tier,
         )
         capture_streaming_event(self._client._ph_client, event_data)
 

@@ -246,9 +246,12 @@ def merge_usage_stats(
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
 
 
-def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+def get_model_params(
+    kwargs: Dict[str, Any], served_service_tier: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Extracts model parameters from the kwargs dictionary.
+    Extracts model parameters from the kwargs dictionary. The service tier comes
+    from the response instead, because a requested tier can be refused.
     """
     model_params = {}
     for param in [
@@ -265,6 +268,8 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     ]:
         if param in kwargs and kwargs[param] is not None:
             model_params[param] = kwargs[param]
+    if served_service_tier is not None:
+        model_params["service_tier"] = served_service_tier
     return model_params
 
 
@@ -487,7 +492,10 @@ def call_llm_and_track_usage(
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            tag("$ai_model_parameters", get_model_params(kwargs))
+            tag(
+                "$ai_model_parameters",
+                get_model_params(kwargs, getattr(response, "service_tier", None)),
+            )
             tag(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
@@ -650,7 +658,10 @@ async def call_llm_and_track_usage_async(
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            tag("$ai_model_parameters", get_model_params(kwargs))
+            tag(
+                "$ai_model_parameters",
+                get_model_params(kwargs, getattr(response, "service_tier", None)),
+            )
             tag(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
@@ -797,7 +808,9 @@ def capture_streaming_event(
     event_properties = {
         "$ai_provider": event_data["provider"],
         "$ai_model": event_data["model"],
-        "$ai_model_parameters": get_model_params(event_data["kwargs"]),
+        "$ai_model_parameters": get_model_params(
+            event_data["kwargs"], event_data.get("service_tier")
+        ),
         "$ai_input": with_privacy_mode(
             ph_client,
             event_data["privacy_mode"],
