@@ -1,5 +1,11 @@
 # posthog
 
+## 7.47.0 — 2026-09-04
+
+### Minor changes
+
+- [d4a8f0a](https://github.com/posthog/posthog-python/commit/d4a8f0ad57ed4efc6c77fe6f4416c0d1dd006879) OpenAI generations now record the service tier the provider served (`service_tier` inside `$ai_model_parameters`), on non-streaming, streaming, and LangChain capture paths. LLM analytics uses it to price flex and priority calls at their real rates instead of standard; a requested tier can be refused, so the value always comes from the response. — Thanks @bernatixer!
+
 ## 7.46.0 — 2026-09-04
 
 ### Minor changes
