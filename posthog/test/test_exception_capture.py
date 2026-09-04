@@ -157,6 +157,16 @@ def test_exception_hooks_delegate_and_restore_previous_hooks(monkeypatch):
     capture.close()
 
     assert client.capture_exception.call_count == 2
+    assert client.capture_exception.call_args_list[0].kwargs["_capture_metadata"] == {
+        "level": "fatal",
+        "source": "python.sys_excepthook",
+        "mechanism": {"type": "onuncaughtexception", "handled": False},
+    }
+    assert client.capture_exception.call_args_list[1].kwargs["_capture_metadata"] == {
+        "level": "error",
+        "source": "python.threading_excepthook",
+        "mechanism": {"type": "onuncaughtexception", "handled": False},
+    }
     sys_hook.assert_called_once_with(*exc_info)
     thread_hook.assert_called_once_with(thread_args)
     assert sys.excepthook is sys_hook
@@ -248,7 +258,7 @@ def test_uncaught_thread_exception_preserves_default_diagnostic():
         from posthog.exception_capture import ExceptionCapture
 
         class Client:
-            def capture_exception(self, exception, distinct_id=None):
+            def capture_exception(self, exception, distinct_id=None, _capture_metadata=None):
                 print(f"captured:{exception[0].__name__}")
 
         capture = ExceptionCapture(Client())
@@ -295,10 +305,10 @@ def test_excepthook(tmpdir):
     assert b"ZeroDivisionError" in output
     assert b"LOL" in output
     assert b"DEBUG:posthog:[PostHog] data uploaded successfully" in output
-    assert (
-        b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
-        in output
-    )
+    assert b'"$exception_level": "fatal"' in output
+    assert b'"$exception_source": "python.sys_excepthook"' in output
+    assert b'"type": "onuncaughtexception"' in output
+    assert b'"handled": false' in output
 
 
 class _RootError(Exception):
@@ -315,6 +325,10 @@ class _LeafOne(Exception):
 
 class _LeafTwo(Exception):
     pass
+
+
+class _ExceptionWithMetadata(Exception):
+    exceptions = 1
 
 
 def test_exception_list_canonical_order_explicit_cause():
@@ -337,6 +351,19 @@ def test_exception_list_canonical_order_explicit_cause():
     assert types == ["_WrapperError", "_RootError"]
     assert exceptions[0]["value"] == "wrapper"
     assert exceptions[-1]["value"] == "root"
+    assert exceptions[0]["mechanism"] == {
+        "type": "generic",
+        "handled": True,
+        "synthetic": False,
+        "exception_id": 0,
+    }
+    assert exceptions[1]["mechanism"] == {
+        "type": "chained",
+        "source": "cause",
+        "synthetic": False,
+        "exception_id": 1,
+        "parent_id": 0,
+    }
 
 
 def test_exception_list_canonical_order_implicit_context():
@@ -358,6 +385,20 @@ def test_exception_list_canonical_order_implicit_context():
     assert types == ["_WrapperError", "_RootError"]
     assert exceptions[0]["value"] == "wrapper"
     assert exceptions[-1]["value"] == "root"
+    assert exceptions[1]["mechanism"]["source"] == "context"
+
+
+def test_ordinary_exception_does_not_treat_exceptions_attribute_as_group_members():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    try:
+        raise _ExceptionWithMetadata("ordinary")
+    except _ExceptionWithMetadata:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    assert [exception["type"] for exception in exceptions] == ["_ExceptionWithMetadata"]
 
 
 @pytest.mark.skipif(
@@ -381,3 +422,24 @@ def test_exception_list_canonical_order_exception_group():
     types = [e["type"] for e in exceptions]
     assert types[0] == "ExceptionGroup"
     assert types[1:] == ["_LeafOne", "_LeafTwo"]
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_exception_group_serializes_a_repeated_object_only_once():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    shared = _LeafOne("shared")
+    try:
+        raise ExceptionGroup("group", [shared, shared])  # noqa: F821
+    except BaseException:
+        exc_info = sys.exc_info()
+
+    exceptions = exceptions_from_error_tuple(exc_info)
+
+    assert [exception["value"] for exception in exceptions] == [
+        "group",
+        "shared",
+    ]

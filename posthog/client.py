@@ -57,6 +57,7 @@ from posthog.exception_utils import (
     _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
+    _normalize_exception_level,
     try_attach_code_variables_to_frames,
 )
 from posthog.feature_flag_evaluations import (
@@ -2015,7 +2016,9 @@ class Client(object):
         Args:
             exception: The exception to capture.
             distinct_id: The distinct ID of the user.
-            properties: A dictionary of additional properties.
+            properties: A dictionary of additional properties. Overriding reserved
+                exception properties is deprecated and will stop working in the next
+                major version.
             flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
                 Attaches those exact flag values to the captured `$exception` event.
             send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
@@ -2058,7 +2061,16 @@ class Client(object):
                 return None
 
             # Format stack trace for cymbal
-            all_exceptions_with_trace = exceptions_from_error_tuple(exc_info)
+            capture_metadata_input = dict(kwargs).get("_capture_metadata")
+            capture_metadata = (
+                capture_metadata_input
+                if isinstance(capture_metadata_input, dict)
+                else {}
+            )
+            mechanism = capture_metadata.get("mechanism")
+            all_exceptions_with_trace = exceptions_from_error_tuple(
+                exc_info, mechanism=mechanism if isinstance(mechanism, dict) else None
+            )
 
             # Add in-app property to frames in the exceptions
             event = handle_in_app(
@@ -2072,11 +2084,52 @@ class Client(object):
             )
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
-            properties = {
-                "$exception_list": all_exceptions_with_trace_and_in_app,
-                **_get_current_otel_span_properties(),
-                **properties,
+            reserved_properties = {
+                "$exception_list",
+                "$exception_level",
+                "$exception_source",
+                "$debug_images",
+                "$exception_handled",
+                "$exception_types",
+                "$exception_values",
+                "$exception_sources",
+                "$exception_functions",
+                "$exception_fingerprint_version",
+                "$exception_fingerprint_record",
+                "$exception_issue_id",
+                "$exception_release",
+                "$cymbal_errors",
             }
+            reserved_property_overrides = reserved_properties.intersection(properties)
+            if reserved_property_overrides:
+                try:
+                    warnings.warn(
+                        "Reserved exception properties passed through "
+                        "`capture_exception(properties=...)` currently override "
+                        "SDK-owned metadata, but this behavior is deprecated and will "
+                        "be removed in the next major version: "
+                        + ", ".join(sorted(reserved_property_overrides)),
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                except DeprecationWarning:
+                    # capture_exception must not drop an event when applications
+                    # promote deprecation warnings to errors.
+                    pass
+
+            caller_properties = properties
+            properties = {
+                **_get_current_otel_span_properties(),
+                "$exception_list": all_exceptions_with_trace_and_in_app,
+                "$exception_level": _normalize_exception_level(
+                    capture_metadata.get("level")
+                )
+                or "error",
+            }
+            source = capture_metadata.get("source")
+            if isinstance(source, str) and source:
+                properties["$exception_source"] = source
+            properties.update(caller_properties)
 
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()

@@ -414,7 +414,14 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             exception=exception,
         )
 
-        mock_client.capture_exception.assert_called_once_with(exception)
+        mock_client.capture_exception.assert_called_once_with(
+            exception,
+            _capture_metadata={
+                "level": "error",
+                "source": "celery.task_failure",
+                "mechanism": {"type": "task", "handled": False},
+            },
+        )
         event_names = [call.args[0] for call in mock_client.capture.call_args_list]
         self.assertIn("celery task failure", event_names)
 
@@ -578,7 +585,14 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         )
 
         mock_client.capture.assert_not_called()
-        mock_client.capture_exception.assert_called_once_with(exception)
+        mock_client.capture_exception.assert_called_once_with(
+            exception,
+            _capture_metadata={
+                "level": "error",
+                "source": "celery.task_failure",
+                "mechanism": {"type": "task", "handled": False},
+            },
+        )
 
     def test_after_task_publish_captures_published_event(self):
         mock_client = Mock()
@@ -646,7 +660,14 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         with patch("posthog.capture_exception") as mock_capture_exception:
             integration._capture_exception(exception)
 
-        mock_capture_exception.assert_called_once_with(exception)
+        mock_capture_exception.assert_called_once_with(
+            exception,
+            _capture_metadata={
+                "level": "error",
+                "source": "celery.task_failure",
+                "mechanism": {"type": "task", "handled": False},
+            },
+        )
 
     def test_extract_headers_supports_request_dict_shape(self):
         integration = PosthogCeleryIntegration()

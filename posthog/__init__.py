@@ -714,6 +714,8 @@ def capture_exception(
         exception: The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
         **kwargs: Optional capture arguments including distinct_id, properties,
             timestamp, uuid, groups, flags, send_feature_flags, and disable_geoip.
+            Overriding reserved exception properties through ``properties`` is
+            deprecated and will stop working in the next major version.
 
     Details:
         Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog. This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception, if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context boundary (e.g. by existing a `with posthog.new_context():` block already). If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised and the point at which it is captured (the "traceback"). If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace captured will be the full stack trace at the moment the exception was captured. Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently, which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason. `capture_exception` takes the same set of optional arguments as `capture`.

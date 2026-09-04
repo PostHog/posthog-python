@@ -308,7 +308,14 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         response = middleware(request)
 
         self.assertEqual(response.status_code, 500)
-        mock_client.capture_exception.assert_called_once_with(view_exception)
+        mock_client.capture_exception.assert_called_once_with(
+            view_exception,
+            _capture_metadata={
+                "level": "error",
+                "source": "django.middleware",
+                "mechanism": {"type": "middleware", "handled": False},
+            },
+        )
 
     def test_process_exception_respects_capture_exceptions_false(self):
         """Verify process_exception respects capture_exceptions=False setting"""
@@ -444,7 +451,14 @@ class TestPosthogContextMiddlewareSync(unittest.TestCase):
         if hasattr(middleware, "process_exception"):
             exception = ValueError("View error")
             middleware.process_exception(request, exception)
-            mock_client.capture_exception.assert_called_once_with(exception)
+            mock_client.capture_exception.assert_called_once_with(
+                exception,
+                _capture_metadata={
+                    "level": "error",
+                    "source": "django.middleware",
+                    "mechanism": {"type": "middleware", "handled": False},
+                },
+            )
         else:
             self.fail(
                 "process_exception missing - view exceptions will not be captured!"
