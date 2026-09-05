@@ -705,6 +705,7 @@ class TestFlagCache(unittest.TestCase):
     def test_stale_cache_passes_current_time_and_max_age(self):
         class StrictEntry:
             flag_result = "stale-result"
+            flag_definition_version = 1
 
             def is_stale_but_usable(self, current_time, max_stale_age=3600):
                 assert current_time == 1234

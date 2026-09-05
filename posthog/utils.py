@@ -2,6 +2,7 @@ import json
 import logging
 import numbers
 import re
+import threading
 import time
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
@@ -232,6 +233,16 @@ class FlagCache:
         self.access_times = {}  # distinct_id -> last_access_time
         self.max_size = max_size
         self.default_ttl = default_ttl
+        self._minimum_version = None
+        self._write_lock = threading.Lock()
+
+    def _advance_generation(self, version):
+        # Client generations only move forward. Standalone cache invalidation
+        # retains its existing exact-version deletion semantics.
+        self._minimum_version = version
+
+    def _is_version_current(self, version):
+        return self._minimum_version is None or version >= self._minimum_version
 
     def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
         current_time = time.time()
@@ -244,7 +255,9 @@ class FlagCache:
             return None
 
         entry = user_flags[flag_key]
-        if entry.is_valid(current_time, self.default_ttl, current_flag_version):
+        if self._is_version_current(entry.flag_definition_version) and entry.is_valid(
+            current_time, self.default_ttl, current_flag_version
+        ):
             self.access_times[distinct_id] = current_time
             return entry.flag_result
 
@@ -264,7 +277,9 @@ class FlagCache:
             return None
 
         entry = user_flags[flag_key]
-        if entry.is_stale_but_usable(current_time, max_stale_age):
+        if self._is_version_current(
+            entry.flag_definition_version
+        ) and entry.is_stale_but_usable(current_time, max_stale_age):
             return entry.flag_result
 
         return None
@@ -272,20 +287,30 @@ class FlagCache:
     def set_cached_flag(
         self, distinct_id, flag_key, flag_result, flag_definition_version
     ):
-        current_time = time.time()
+        with self._write_lock:
+            if not self._is_version_current(flag_definition_version):
+                return
+            current_time = time.time()
 
-        # Evict LRU users if we're at capacity
-        if distinct_id not in self.cache and len(self.cache) >= self.max_size:
-            self._evict_lru()
+            # Evict LRU users if we're at capacity
+            if distinct_id not in self.cache and len(self.cache) >= self.max_size:
+                self._evict_lru()
 
-        # Initialize user cache if needed
-        if distinct_id not in self.cache:
-            self.cache[distinct_id] = {}
+            # Initialize user cache if needed
+            if distinct_id not in self.cache:
+                self.cache[distinct_id] = {}
 
-        # Store the flag result
-        entry = FlagCacheEntry(flag_result, flag_definition_version)
-        self.cache[distinct_id][flag_key] = entry
-        self.access_times[distinct_id] = current_time
+            # Prune invalidated flags for reused users, not only on LRU eviction.
+            self.cache[distinct_id] = {
+                key: entry
+                for key, entry in self.cache[distinct_id].items()
+                if self._is_version_current(entry.flag_definition_version)
+            }
+
+            # Store the flag result
+            entry = FlagCacheEntry(flag_result, flag_definition_version)
+            self.cache[distinct_id][flag_key] = entry
+            self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
         users_to_remove = [
@@ -348,6 +373,15 @@ class RedisFlagCache:
         self.stale_ttl = stale_ttl
         self.key_prefix = key_prefix
         self.version_key = f"{key_prefix}version"
+        self._minimum_version = None
+        self._write_lock = threading.Lock()
+
+    def _advance_generation(self, version):
+        # No Redis I/O or write lock here: publication must never wait for Redis.
+        self._minimum_version = version
+
+    def _is_version_current(self, version):
+        return self._minimum_version is None or version >= self._minimum_version
 
     def _get_cache_key(self, distinct_id, flag_key):
         return f"{self.key_prefix}{distinct_id}:{flag_key}"
@@ -397,8 +431,12 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if entry and entry.is_valid(
-                    time.time(), self.default_ttl, current_flag_version
+                if (
+                    entry
+                    and self._is_version_current(entry.flag_definition_version)
+                    and entry.is_valid(
+                        time.time(), self.default_ttl, current_flag_version
+                    )
                 ):
                     return entry.flag_result
 
@@ -417,7 +455,11 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if entry and entry.is_stale_but_usable(time.time(), max_stale_age):
+                if (
+                    entry
+                    and self._is_version_current(entry.flag_definition_version)
+                    and entry.is_stale_but_usable(time.time(), max_stale_age)
+                ):
                     return entry.flag_result
 
             return None
@@ -434,11 +476,15 @@ class RedisFlagCache:
                 flag_result, flag_definition_version
             )
 
-            # Set with TTL for automatic cleanup (use stale_ttl for total lifetime)
-            self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
-
-            # Update the current version
-            self.redis.set(self.version_key, flag_definition_version)
+            # Serialize writes so an old in-flight SETEX cannot overwrite a newer
+            # result. Publication advances the fence without taking this lock.
+            with self._write_lock:
+                if not self._is_version_current(flag_definition_version):
+                    return
+                # Old entries (including writes finishing after publication) are
+                # rejected on reads and expire using the existing Redis TTL.
+                self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
+                self.redis.set(self.version_key, flag_definition_version)
 
         except Exception:
             # Redis error - silently fail, don't break flag evaluation

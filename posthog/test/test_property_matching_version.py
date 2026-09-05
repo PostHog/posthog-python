@@ -179,13 +179,8 @@ def test_version_only_reload_invalidates_results_and_round_trips_provider(
             get.return_value = GetResponse(
                 data=definitions(version), etag=str(version), not_modified=False
             )
-            with mock.patch.object(
-                client.flag_cache,
-                "invalidate_version",
-                wraps=client.flag_cache.invalidate_version,
-            ) as invalidate:
-                client._load_feature_flags()
-                invalidate.assert_called_once_with(previous_generation)
+            client._load_feature_flags()
+            assert client.flag_definition_version == previous_generation + 1
             assert client.flag_cache.get_stale_cached_flag("user", "person") is None
             assert evaluate(client) is expected
             assert (

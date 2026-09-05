@@ -2253,6 +2253,9 @@ class Client(object):
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
         if isinstance(self.flag_cache, RedisFlagCache):
             self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
+        if self.flag_cache:
+            self.flag_cache._write_lock = threading.Lock()
+            self.flag_cache._advance_generation(self.flag_definition_version)
 
         reset_sessions()
 
@@ -2896,9 +2899,10 @@ class Client(object):
                     and old_flags_by_key != (self.feature_flags_by_key or {})
                 )
             ):
-                old_version = self.flag_definition_version
                 self.flag_definition_version += 1
-                self.flag_cache.invalidate_version(old_version)
+                # Only advance an in-memory fence while publishing. Redis I/O
+                # must not delay snapshots, and late writes remain invalid.
+                self.flag_cache._advance_generation(self.flag_definition_version)
 
     def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
         # Capture references together. Publication replaces these collections, so
@@ -3078,7 +3082,10 @@ class Client(object):
                     self._flag_definition_cache_generation = fetch_generation
 
                     if self.flag_cache:
-                        self.flag_cache.clear()
+                        self.flag_definition_version += 1
+                        self.flag_cache._advance_generation(
+                            self.flag_definition_version
+                        )
 
                     if self.debug:
                         raise APIError(status=401, message=detail)
@@ -3095,9 +3102,12 @@ class Client(object):
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
 
-                    # Clear flag cache when quota limited
+                    # Invalidate results without waiting for external cache I/O.
                     if self.flag_cache:
-                        self.flag_cache.clear()
+                        self.flag_definition_version += 1
+                        self.flag_cache._advance_generation(
+                            self.flag_definition_version
+                        )
 
                     if self.debug:
                         raise APIError(
@@ -3403,15 +3413,12 @@ class Client(object):
                 cached_flag_result = FeatureFlagResult.from_value_and_payload(
                     key, flag_value, self._compute_payload_locally(key, flag_value)
                 )
-            with self._flag_definition_publication_lock:
-                if (
-                    self.flag_cache
-                    and cached_flag_result
-                    and local_definition_version == self.flag_definition_version
-                ):
-                    self.flag_cache.set_cached_flag(
-                        distinct_id, key, cached_flag_result, local_definition_version
-                    )
+            if self.flag_cache and cached_flag_result:
+                # The cache rejects invalidated generations, including writes
+                # already in flight when new definitions are published.
+                self.flag_cache.set_cached_flag(
+                    distinct_id, key, cached_flag_result, local_definition_version
+                )
         elif only_evaluate_locally:
             if self.feature_flags is None:
                 self.log.warning(
