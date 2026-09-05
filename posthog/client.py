@@ -898,7 +898,8 @@ class Client(object):
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
-        self._flag_definition_fingerprint = "remote-only"
+        # Without definitions, remote results have only process-local provenance.
+        self._flag_definition_fingerprint = f"remote-only:{uuid4().hex}"
         if self.flag_cache:
             self.flag_cache._advance_generation(
                 self.flag_definition_version, self._flag_definition_fingerprint
@@ -2254,6 +2255,11 @@ class Client(object):
         self._metrics_lock = threading.Lock()
         if self._metrics is not None:
             self._metrics._reinit_after_fork()
+
+        # Unknown definitions cannot establish shared provenance in a new worker.
+        if self._flag_definition_fingerprint.startswith("remote-only:"):
+            self._flag_definition_fingerprint = f"remote-only:{uuid4().hex}"
+            self.flag_definition_version += 1
 
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.

@@ -274,7 +274,8 @@ def test_remote_only_success_remains_available_for_stale_fallback(workers):
     with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
         assert remote_success(writer).get_value() is True
         assert fallback(writer).get_value() is True
-        assert fallback(workers()).get_value() is True
+        # Without verified definitions, a new Client cannot reuse this provenance.
+        assert fallback(workers()) is None
 
 
 @pytest.mark.parametrize("transition", ["hydrate", "empty-hydrate", 401, 402])
@@ -324,3 +325,29 @@ def test_reset_empty_fingerprint_cannot_cache_or_read_results(workers, status):
         cache.get_cached_flag("user", "person", client.flag_definition_version) is None
     )
     assert fallback(client) is None
+
+
+def test_invalidated_remote_only_result_does_not_revive_after_restart(workers):
+    writer = workers()
+    with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
+        assert remote_success(writer).get_value() is True
+        assert fallback(writer).get_value() is True
+    load(writer, definitions(1))
+    assert fallback(writer) is None
+    writer.shutdown()
+    with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
+        assert fallback(workers()) is None
+
+
+def test_fork_renews_remote_only_provenance(workers):
+    client = workers()
+    with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
+        assert remote_success(client).get_value() is True
+        redis = client.flag_cache.redis
+        with mock.patch.object(
+            client, "_initialize_flag_cache", return_value=RedisFlagCache(redis)
+        ):
+            client._reinit_after_fork()
+        assert fallback(client) is None
+        assert remote_success(client).get_value() is True
+        assert fallback(client).get_value() is True
