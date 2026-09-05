@@ -717,6 +717,7 @@ attribute posthog.flag_definition_cache.FlagDefinitionCacheData.cohorts: Require
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.flags: Required[List[Dict[str, Any]]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.group_type_mapping: Required[Dict[str, str]]
 attribute posthog.flag_definition_cache.FlagDefinitionCacheData.minimal_flag_called_events: NotRequired[bool]
+attribute posthog.flag_definition_cache.FlagDefinitionCacheData.property_matching_version: NotRequired[int]
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
@@ -1144,13 +1145,13 @@ function posthog.exception_utils.try_attach_code_variables_to_frames(all_excepti
 function posthog.exception_utils.walk_exception_chain(exc_info)
 function posthog.feature_enabled(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 function posthog.feature_flag_definitions()
-function posthog.feature_flags.evaluate_flag_dependency(property, flags_by_key, evaluation_cache, distinct_id, properties, cohort_properties, device_id=None)
+function posthog.feature_flags.evaluate_flag_dependency(property, flags_by_key, evaluation_cache, distinct_id, properties, cohort_properties, device_id=None, property_matching_version: int = 1)
 function posthog.feature_flags.get_matching_variant(flag, bucketing_value)
-function posthog.feature_flags.is_condition_match(feature_flag, distinct_id, condition, properties, cohort_properties, flags_by_key=None, evaluation_cache=None, *, bucketing_value, device_id=None) -> ConditionMatch
-function posthog.feature_flags.match_cohort(property, property_values, cohort_properties, flags_by_key=None, evaluation_cache=None, distinct_id=None, device_id=None) -> bool
-function posthog.feature_flags.match_feature_flag_properties(flag, distinct_id, properties, *, cohort_properties=None, flags_by_key=None, evaluation_cache=None, device_id=None, bucketing_value=None, group_type_mapping=None, groups=None, group_properties=None) -> FlagValue
-function posthog.feature_flags.match_property(property, property_values) -> bool
-function posthog.feature_flags.match_property_group(property_group, property_values, cohort_properties, flags_by_key=None, evaluation_cache=None, distinct_id=None, device_id=None) -> bool
+function posthog.feature_flags.is_condition_match(feature_flag, distinct_id, condition, properties, cohort_properties, flags_by_key=None, evaluation_cache=None, *, bucketing_value, device_id=None, property_matching_version: int = 1) -> ConditionMatch
+function posthog.feature_flags.match_cohort(property, property_values, cohort_properties, flags_by_key=None, evaluation_cache=None, distinct_id=None, device_id=None, property_matching_version: int = 1) -> bool
+function posthog.feature_flags.match_feature_flag_properties(flag, distinct_id, properties, *, cohort_properties=None, flags_by_key=None, evaluation_cache=None, device_id=None, bucketing_value=None, group_type_mapping=None, groups=None, group_properties=None, property_matching_version: int = 1) -> FlagValue
+function posthog.feature_flags.match_property(property, property_values, property_matching_version: int = 1) -> bool
+function posthog.feature_flags.match_property_group(property_group, property_values, cohort_properties, flags_by_key=None, evaluation_cache=None, distinct_id=None, device_id=None, property_matching_version: int = 1) -> bool
 function posthog.feature_flags.matches_dependency_value(expected_value, actual_value)
 function posthog.feature_flags.parse_datetime(value: str) -> datetime.datetime
 function posthog.feature_flags.parse_semver(value: str) -> tuple
