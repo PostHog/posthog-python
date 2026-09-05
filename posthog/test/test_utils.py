@@ -586,6 +586,8 @@ class TestFlagCache(unittest.TestCase):
             self.flag_result, flag_definition_version=1, timestamp=100
         )
 
+        # Standalone entries have no definition snapshot provenance.
+        assert entry._snapshot_fingerprint is None
         assert entry.is_valid(current_time=109, ttl=10, current_flag_version=1) is True
         assert entry.is_valid(current_time=110, ttl=10, current_flag_version=1) is False
         assert entry.is_valid(current_time=111, ttl=10, current_flag_version=1) is False
@@ -611,6 +613,26 @@ class TestFlagCache(unittest.TestCase):
         result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
         assert result is not None
         assert result.get_value()
+
+    def test_generation_fences_reads_and_writes_and_prunes_reused_users(self):
+        self.cache.set_cached_flag("user", "old", False, 1)
+        self.cache.set_cached_flag("user", "current", "variant", 2)
+        self.cache._advance_generation(2)
+
+        assert self.cache.get_cached_flag("user", "old", 1) is None
+        assert self.cache.get_stale_cached_flag("user", "old") is None
+        assert self.cache.get_cached_flag("user", "current", 2) == "variant"
+        assert self.cache.get_stale_cached_flag("user", "current") == "variant"
+        access_times = self.cache.access_times.copy()
+        self.cache.set_cached_flag("missing-user", "late", True, 1)
+        self.cache.set_cached_flag("user", "current", False, 1)
+        assert "missing-user" not in self.cache.cache
+        assert self.cache.access_times == access_times
+        assert self.cache.get_cached_flag("user", "current", 2) == "variant"
+
+        self.cache.set_cached_flag("user", "future", True, 3)
+        assert set(self.cache.cache["user"]) == {"current", "future"}
+        assert self.cache.get_cached_flag("user", "future", 3) is True
 
     def test_cache_ttl_expiration(self):
         distinct_id = "user123"
@@ -920,6 +942,7 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.cache.get_cached_flag("user123", "beta", 8) is None
         assert self.redis.store["test:flags:version"] == 7
         assert self.redis.setex_calls[0][1] == 60
+        assert "snapshot_fingerprint" not in json.loads(self.redis.setex_calls[0][2])
 
         stale_key = self.cache._get_cache_key("user123", "old-beta")
         self.redis.store[stale_key] = self.cache._serialize_entry(
@@ -946,6 +969,104 @@ class TestRedisFlagCache(unittest.TestCase):
             True, 7, timestamp=time.time() - 3600.5
         )
         assert self.cache.get_stale_cached_flag("user123", "boundary-stale") is None
+
+    def test_snapshot_round_trip_reuses_matching_worker_with_different_generation(self):
+        self.cache._advance_generation(7, "snapshot-a")
+        with mock.patch("posthog.utils.time.time", return_value=100):
+            self.cache.set_cached_flag("user", "beta", False, 7)
+        key, ttl, data = self.redis.setex_calls[-1]
+        assert key == "test:flags:user:beta"
+        assert ttl == 60
+        assert json.loads(data) == {
+            "flag_result": False,
+            "flag_version": 7,
+            "timestamp": 100,
+            "snapshot_fingerprint": "snapshot-a",
+        }
+        assert self.redis.store[self.cache.version_key] == 7
+        reader = utils.RedisFlagCache(
+            self.redis, default_ttl=10, stale_ttl=60, key_prefix="test:flags:"
+        )
+        reader._advance_generation(2, "snapshot-a")
+        with mock.patch("posthog.utils.time.time", return_value=109):
+            assert reader.get_cached_flag("user", "beta", 2) is False
+            assert reader.get_cached_flag("user", "beta", 7) is None
+            assert reader.get_stale_cached_flag("user", "beta") is False
+        with mock.patch("posthog.utils.time.time", return_value=110):
+            assert reader.get_cached_flag("user", "beta", 2) is None
+            assert reader.get_stale_cached_flag("user", "beta") is False
+        with mock.patch("posthog.utils.time.time", return_value=160):
+            assert reader.get_stale_cached_flag("user", "beta") is None
+
+    @parameterized.expand([(None,), ("snapshot-old",), ("",)])
+    def test_snapshot_reads_reject_missing_or_mismatched_fingerprints(
+        self, fingerprint
+    ):
+        self.cache._advance_generation(7, "snapshot-current")
+        key = self.cache._get_cache_key("user", "beta")
+        self.redis.store[key] = self.cache._serialize_entry(
+            True, 7, fingerprint=fingerprint
+        )
+        assert self.cache.get_cached_flag("user", "beta", 7) is None
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
+
+    @parameterized.expand([(6, "snapshot-a"), (8, "snapshot-a"), (7, "")])
+    def test_snapshot_writes_reject_wrong_generation_or_disabled_snapshot(
+        self, version, fingerprint
+    ):
+        self.cache._advance_generation(7, fingerprint)
+        self.cache.set_cached_flag("user", "beta", True, version)
+        assert self.redis.store == {}
+        assert self.redis.setex_calls == []
+
+    def test_disabled_snapshot_rejects_matching_empty_fingerprint(self):
+        self.cache._advance_generation(7, "")
+        key = self.cache._get_cache_key("user", "beta")
+        self.redis.store[key] = self.cache._serialize_entry(True, 7, fingerprint="")
+        assert self.cache.get_cached_flag("user", "beta", 7) is None
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
+
+    def test_generation_without_snapshot_fences_standalone_cache(self):
+        self.cache.set_cached_flag("user", "old", True, 1)
+        self.cache._advance_generation(2)
+        assert self.cache.get_cached_flag("user", "old", 1) is None
+        assert self.cache.get_stale_cached_flag("user", "old") is None
+        before = self.redis.store.copy()
+        self.cache.set_cached_flag("user", "old", False, 1)
+        assert self.redis.store == before
+        for version in (2, 3):
+            self.cache.set_cached_flag("user", "current", "variant", version)
+            assert self.cache.get_cached_flag("user", "current", version) == "variant"
+            assert self.cache.get_stale_cached_flag("user", "current") == "variant"
+
+    def test_generation_advance_during_serialization_discards_late_write(self):
+        self.cache._advance_generation(7, "snapshot-a")
+        serialize = self.cache._serialize_entry
+
+        def refresh_then_serialize(*args, **kwargs):
+            self.cache._advance_generation(8, "snapshot-b")
+            return serialize(*args, **kwargs)
+
+        with mock.patch.object(
+            self.cache, "_serialize_entry", side_effect=refresh_then_serialize
+        ):
+            self.cache.set_cached_flag("user", "beta", True, 7)
+        assert self.redis.store == {}
+        assert self.redis.setex_calls == []
+
+    def test_generation_advance_without_fingerprint_preserves_snapshot_binding(self):
+        self.cache._advance_generation(7, "snapshot-a")
+        self.cache._advance_generation(8)
+        assert self.cache._snapshot == (7, "snapshot-a")
+        assert not self.cache._is_version_current(7)
+        assert self.cache._is_version_current(8)
+
+    @parameterized.expand([(None,), ("not json",)])
+    def test_missing_or_corrupt_entry_is_a_cache_miss(self, data):
+        if data is not None:
+            self.redis.store[self.cache._get_cache_key("user", "beta")] = data
+        assert self.cache.get_cached_flag("user", "beta", 7) is None
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
 
     def test_redis_errors_fall_back_to_miss(self):
         failing_cache = utils.RedisFlagCache(FakeRedis(fail=True))

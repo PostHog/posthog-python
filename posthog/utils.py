@@ -293,12 +293,10 @@ class FlagCache:
                 return
             current_time = time.time()
 
-            # Evict LRU users if we're at capacity
-            if distinct_id not in self.cache and len(self.cache) >= self.max_size:
-                self._evict_lru()
-
-            # Initialize user cache if needed
+            # Initialize new users, evicting LRU users if we're at capacity.
             if distinct_id not in self.cache:
+                if len(self.cache) >= self.max_size:
+                    self._evict_lru()
                 self.cache[distinct_id] = {}
 
             # Prune invalidated flags for reused users, not only on LRU eviction.
@@ -447,24 +445,17 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if (
-                    entry
-                    and self._is_entry_current(entry)
-                    and (
-                        (
-                            self._snapshot is not None
-                            and current_flag_version == self._snapshot[0]
-                            and entry.is_stale_but_usable(time.time(), self.default_ttl)
+                if entry and self._is_entry_current(entry):
+                    if self._snapshot is not None:
+                        valid = current_flag_version == self._snapshot[
+                            0
+                        ] and entry.is_stale_but_usable(time.time(), self.default_ttl)
+                    else:
+                        valid = entry.is_valid(
+                            time.time(), self.default_ttl, current_flag_version
                         )
-                        or (
-                            self._snapshot is None
-                            and entry.is_valid(
-                                time.time(), self.default_ttl, current_flag_version
-                            )
-                        )
-                    )
-                ):
-                    return entry.flag_result
+                    if valid:
+                        return entry.flag_result
 
             return None
         except Exception:
@@ -501,14 +492,13 @@ class RedisFlagCache:
             # Capture provenance before any blocking work. Never stamp an old
             # evaluation with the fingerprint installed by a concurrent refresh.
             snapshot = self._snapshot
-            if snapshot is not None and (
-                flag_definition_version != snapshot[0] or not snapshot[1]
-            ):
-                return
+            fingerprint = None
+            if snapshot is not None:
+                if flag_definition_version != snapshot[0] or not snapshot[1]:
+                    return
+                fingerprint = snapshot[1]
             serialized_entry = self._serialize_entry(
-                flag_result,
-                flag_definition_version,
-                fingerprint=snapshot[1] if snapshot is not None else None,
+                flag_result, flag_definition_version, fingerprint=fingerprint
             )
 
             # Serialize writes so an old in-flight SETEX cannot overwrite a newer
