@@ -1,4 +1,5 @@
 import atexit
+import hashlib as _hashlib
 import inspect
 import json
 import logging
@@ -897,6 +898,11 @@ class Client(object):
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
+        self._flag_definition_fingerprint = "remote-only"
+        if self.flag_cache:
+            self.flag_cache._advance_generation(
+                self.flag_definition_version, self._flag_definition_fingerprint
+            )
         self._flags_etag: Optional[str] = None
         self._flag_definition_fetch_generation = 0
         self._flag_definition_published_generation = 0
@@ -2255,7 +2261,9 @@ class Client(object):
             self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
         if self.flag_cache:
             self.flag_cache._write_lock = threading.Lock()
-            self.flag_cache._advance_generation(self.flag_definition_version)
+            self.flag_cache._advance_generation(
+                self.flag_definition_version, self._flag_definition_fingerprint
+            )
 
         reset_sessions()
 
@@ -2877,12 +2885,32 @@ class Client(object):
                     self._flag_definition_cache_provider_async_runner.close()
                     self._flag_definition_cache_provider_async_runner = None
 
+    @staticmethod
+    def _hash_flag_definitions(data: FlagDefinitionCacheData) -> str:
+        # Hash only evaluation inputs, not transport metadata such as the ETag.
+        serialized = json.dumps(
+            {
+                "flags": data["flags"],
+                "cohorts": data["cohorts"],
+                "group_type_mapping": data["group_type_mapping"],
+                "property_matching_version": data.get("property_matching_version", 1),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        return _hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
     def _update_flag_state(
-        self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
+        self,
+        data: FlagDefinitionCacheData,
+        old_flags_by_key: Optional[dict] = None,
+        *,
+        _fingerprint: Optional[str] = None,
     ) -> None:
-        """Update internal flag state from cache data and invalidate evaluation cache if changed."""
+        """Publish definitions and their result-cache identity together."""
+        fingerprint = _fingerprint or self._hash_flag_definitions(data)
         with self._flag_definition_publication_lock:
-            old_matching_version = self._property_matching_version
             self.feature_flags = data["flags"]
             self.group_type_mapping = data["group_type_mapping"]
             self.cohorts = data["cohorts"]
@@ -2892,17 +2920,15 @@ class Client(object):
                 data.get("minimal_flag_called_events") is True
             )
 
-            if self.flag_cache and (
-                old_matching_version != self._property_matching_version
-                or (
-                    old_flags_by_key is not None
-                    and old_flags_by_key != (self.feature_flags_by_key or {})
-                )
-            ):
-                self.flag_definition_version += 1
-                # Only advance an in-memory fence while publishing. Redis I/O
-                # must not delay snapshots, and late writes remain invalid.
-                self.flag_cache._advance_generation(self.flag_definition_version)
+            if fingerprint != self._flag_definition_fingerprint:
+                self._flag_definition_fingerprint = fingerprint
+                if self.flag_cache:
+                    self.flag_definition_version += 1
+                    # No Redis I/O under this lock. The fingerprint remains valid
+                    # across processes; the counter fences this process's writes.
+                    self.flag_cache._advance_generation(
+                        self.flag_definition_version, fingerprint
+                    )
 
     def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
         # Capture references together. Publication replaces these collections, so
@@ -2988,6 +3014,13 @@ class Client(object):
                 **self._request_identity_kwargs(),
             )
 
+            # Canonical serialization can be expensive; do it before publication.
+            fingerprint = (
+                self._hash_flag_definitions(response.data)
+                if response.data is not None and not response.not_modified
+                else None
+            )
+
             with self._flag_definition_publication_lock:
                 if fetch_generation <= self._flag_definition_published_generation:
                     self.log.debug(
@@ -3023,7 +3056,9 @@ class Client(object):
 
                 old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
                 self._update_flag_state(
-                    response.data, old_flags_by_key=old_flags_by_key
+                    response.data,
+                    old_flags_by_key=old_flags_by_key,
+                    _fingerprint=fingerprint,
                 )
 
                 if self._flag_definition_cache_provider:
@@ -3077,6 +3112,7 @@ class Client(object):
                     self.group_type_mapping = {}
                     self.cohorts = {}
                     self._property_matching_version = 1
+                    self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
@@ -3084,7 +3120,8 @@ class Client(object):
                     if self.flag_cache:
                         self.flag_definition_version += 1
                         self.flag_cache._advance_generation(
-                            self.flag_definition_version
+                            self.flag_definition_version,
+                            self._flag_definition_fingerprint,
                         )
 
                     if self.debug:
@@ -3098,6 +3135,7 @@ class Client(object):
                     self.group_type_mapping = {}
                     self.cohorts = {}
                     self._property_matching_version = 1
+                    self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
@@ -3106,7 +3144,8 @@ class Client(object):
                     if self.flag_cache:
                         self.flag_definition_version += 1
                         self.flag_cache._advance_generation(
-                            self.flag_definition_version
+                            self.flag_definition_version,
+                            self._flag_definition_fingerprint,
                         )
 
                     if self.debug:
@@ -3454,10 +3493,11 @@ class Client(object):
                     flag_details, override_match_value
                 )
 
-                # Cache successful remote evaluation
+                # The request-start generation is an invalidation boundary, not
+                # a claim about the server's definitions. Refresh rejects late writes.
                 if self.flag_cache and flag_result:
                     self.flag_cache.set_cached_flag(
-                        distinct_id, key, flag_result, self.flag_definition_version
+                        distinct_id, key, flag_result, local_definition_version
                     )
 
                 self.log.debug(

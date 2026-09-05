@@ -217,6 +217,7 @@ class FlagCacheEntry:
         self.flag_result = flag_result
         self.flag_definition_version = flag_definition_version
         self.timestamp = timestamp or time.time()
+        self._snapshot_fingerprint: Optional[str] = None
 
     def is_valid(self, current_time, ttl, current_flag_version):
         time_valid = (current_time - self.timestamp) < ttl
@@ -236,7 +237,7 @@ class FlagCache:
         self._minimum_version = None
         self._write_lock = threading.Lock()
 
-    def _advance_generation(self, version):
+    def _advance_generation(self, version, fingerprint=None):
         # Client generations only move forward. Standalone cache invalidation
         # retains its existing exact-version deletion semantics.
         self._minimum_version = version
@@ -373,12 +374,21 @@ class RedisFlagCache:
         self.stale_ttl = stale_ttl
         self.key_prefix = key_prefix
         self.version_key = f"{key_prefix}version"
+        self._snapshot = None
         self._minimum_version = None
         self._write_lock = threading.Lock()
 
-    def _advance_generation(self, version):
+    def _advance_generation(self, version, fingerprint=None):
         # No Redis I/O or write lock here: publication must never wait for Redis.
         self._minimum_version = version
+        if fingerprint is not None:
+            self._snapshot = (version, fingerprint)
+
+    def _is_entry_current(self, entry):
+        snapshot = self._snapshot
+        if snapshot is not None:
+            return bool(snapshot[1]) and entry._snapshot_fingerprint == snapshot[1]
+        return self._is_version_current(entry.flag_definition_version)
 
     def _is_version_current(self, version):
         return self._minimum_version is None or version >= self._minimum_version
@@ -386,7 +396,9 @@ class RedisFlagCache:
     def _get_cache_key(self, distinct_id, flag_key):
         return f"{self.key_prefix}{distinct_id}:{flag_key}"
 
-    def _serialize_entry(self, flag_result, flag_definition_version, timestamp=None):
+    def _serialize_entry(
+        self, flag_result, flag_definition_version, timestamp=None, fingerprint=None
+    ):
         if timestamp is None:
             timestamp = time.time()
 
@@ -398,6 +410,8 @@ class RedisFlagCache:
             "flag_version": flag_definition_version,
             "timestamp": timestamp,
         }
+        if fingerprint is not None:
+            entry["snapshot_fingerprint"] = fingerprint
         if isinstance(flag_result, _FeatureFlagResult):
             # Additive metadata keeps the existing entry shape readable by older SDKs.
             entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
@@ -415,11 +429,13 @@ class RedisFlagCache:
                 ):
                     return None
                 flag_result = _FeatureFlagResult(**flag_result)
-            return FlagCacheEntry(
+            result = FlagCacheEntry(
                 flag_result=flag_result,
                 flag_definition_version=entry["flag_version"],
                 timestamp=entry["timestamp"],
             )
+            result._snapshot_fingerprint = entry.get("snapshot_fingerprint")
+            return result
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # If deserialization fails, treat as cache miss
             return None
@@ -433,9 +449,19 @@ class RedisFlagCache:
                 entry = self._deserialize_entry(data)
                 if (
                     entry
-                    and self._is_version_current(entry.flag_definition_version)
-                    and entry.is_valid(
-                        time.time(), self.default_ttl, current_flag_version
+                    and self._is_entry_current(entry)
+                    and (
+                        (
+                            self._snapshot is not None
+                            and current_flag_version == self._snapshot[0]
+                            and entry.is_stale_but_usable(time.time(), self.default_ttl)
+                        )
+                        or (
+                            self._snapshot is None
+                            and entry.is_valid(
+                                time.time(), self.default_ttl, current_flag_version
+                            )
+                        )
                     )
                 ):
                     return entry.flag_result
@@ -457,7 +483,7 @@ class RedisFlagCache:
                 entry = self._deserialize_entry(data)
                 if (
                     entry
-                    and self._is_version_current(entry.flag_definition_version)
+                    and self._is_entry_current(entry)
                     and entry.is_stale_but_usable(time.time(), max_stale_age)
                 ):
                     return entry.flag_result
@@ -472,8 +498,17 @@ class RedisFlagCache:
     ):
         try:
             cache_key = self._get_cache_key(distinct_id, flag_key)
+            # Capture provenance before any blocking work. Never stamp an old
+            # evaluation with the fingerprint installed by a concurrent refresh.
+            snapshot = self._snapshot
+            if snapshot is not None and (
+                flag_definition_version != snapshot[0] or not snapshot[1]
+            ):
+                return
             serialized_entry = self._serialize_entry(
-                flag_result, flag_definition_version
+                flag_result,
+                flag_definition_version,
+                fingerprint=snapshot[1] if snapshot is not None else None,
             )
 
             # Serialize writes so an old in-flight SETEX cannot overwrite a newer
@@ -481,8 +516,8 @@ class RedisFlagCache:
             with self._write_lock:
                 if not self._is_version_current(flag_definition_version):
                     return
-                # Old entries (including writes finishing after publication) are
-                # rejected on reads and expire using the existing Redis TTL.
+                # Late writes keep their original fingerprint. Other workers
+                # reject them too, even if their local generation counters differ.
                 self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
                 self.redis.set(self.version_key, flag_definition_version)
 

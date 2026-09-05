@@ -97,7 +97,10 @@ def test_bulk_and_refresh_do_not_wait_for_result_write(client):
     assert not errors
     # The old write completed AFTER refresh. Neither ordinary cache lookup nor
     # API-outage fallback may expose it, even when requesting its old version.
-    assert cache.get_cached_flag("user", "person", 0) is None
+    assert (
+        cache.get_cached_flag("user", "person", client.flag_definition_version - 1)
+        is None
+    )
     assert cache.get_stale_cached_flag("user", "person") is None
     with mock.patch.object(
         client,
@@ -149,13 +152,15 @@ def test_new_generation_write_finishes_after_paused_old_write(client):
         except BaseException as error:
             errors.append(error)
 
-    old = threading.Thread(target=write, args=("old", 0))
-    new = threading.Thread(target=write, args=("new", 1))
+    old_version = client.flag_definition_version
+    new_version = old_version + 1
+    old = threading.Thread(target=write, args=("old", old_version))
+    new = threading.Thread(target=write, args=("new", new_version))
     with mock.patch.object(target, attribute, side_effect=pause_first_write):
         try:
             old.start()
             assert entered.wait(2)
-            cache._advance_generation(1)
+            client._update_flag_state(definitions(2))
             new.start()
             assert new_started.wait(2)
         finally:
@@ -165,7 +170,7 @@ def test_new_generation_write_finishes_after_paused_old_write(client):
                 new.join(5)
     assert not old.is_alive() and not new.is_alive()
     assert not errors
-    assert cache.get_cached_flag("user", "person", 1) == "new"
+    assert cache.get_cached_flag("user", "person", new_version) == "new"
     assert cache.get_stale_cached_flag("user", "person") == "new"
 
 
@@ -208,7 +213,12 @@ def test_memory_generation_churn_prunes_removed_flags():
 
 
 def test_standalone_cache_can_reuse_invalidated_version(client):
-    cache = client.flag_cache
+    # Standalone instances have no Client snapshot binding.
+    cache = (
+        RedisFlagCache(FakeRedis())
+        if isinstance(client.flag_cache, RedisFlagCache)
+        else FlagCache()
+    )
     cache.set_cached_flag("user", "flag", True, 1)
     cache.invalidate_version(1)
     assert cache.get_stale_cached_flag("user", "flag") is None
