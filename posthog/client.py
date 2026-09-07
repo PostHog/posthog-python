@@ -2329,6 +2329,9 @@ class Client(object):
                 k: v for k, v in msg["properties"].items() if k in property_allowlist
             }
 
+        if isinstance(msg.get("properties"), dict):
+            msg["properties"] = {k: v for k, v in msg["properties"].items() if v is not None}
+
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
         msg = clean(msg)

@@ -402,6 +402,23 @@ class TestClient(unittest.TestCase):
             assert msg["properties"]["$os"] == mock.ANY
             assert msg["properties"]["$os_version"] == mock.ANY
 
+    def test_capture_sanitizes_none_properties(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event", 
+                distinct_id="distinct_id", 
+                properties={"valid": 123, "invalid": None}
+            )
+            self.assertFalse(self.failed)
+
+            mock_post.assert_called_once()
+            msg = mock_post.call_args[1]["batch"][0]
+            
+            self.assertIn("valid", msg["properties"])
+            self.assertEqual(msg["properties"]["valid"], 123)
+            self.assertNotIn("invalid", msg["properties"])
+
     def test_capture_omits_is_server_when_disabled(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
             client = Client(
