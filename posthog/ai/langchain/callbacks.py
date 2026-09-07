@@ -745,33 +745,20 @@ class CallbackHandler(BaseCallbackHandler):
 
 def _extract_stop_reason(generation: Any) -> Optional[str]:
     """
-    Providers spread the stop reason across `generation_info` and
-    `response_metadata` under two spellings, so read every source in priority
-    order. The Responses API reports no finish_reason at all: an incomplete
-    run is named by what cut it short, and only terminal statuses count.
+    Providers report the stop reason on the message's `response_metadata` or in
+    `generation_info`, under either spelling. The Responses API reports no
+    finish reason at all, so a terminal status stands in for one.
     """
+    metadata = getattr(getattr(generation, "message", None), "response_metadata", None)
+    info = getattr(generation, "generation_info", None)
 
-    def as_dict(value: Any) -> dict:
-        return value if isinstance(value, dict) else {}
+    for source in (metadata, info):
+        for key in ("finish_reason", "stop_reason"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if value is not None:
+                return str(value)
 
-    message = as_dict(
-        getattr(getattr(generation, "message", None), "response_metadata", None)
-    )
-    info = as_dict(getattr(generation, "generation_info", None))
-    nested = as_dict(info.get("response_metadata"))
-
-    for source, key in (
-        (message, "finish_reason"),
-        (message, "stop_reason"),
-        (info, "finish_reason"),
-        (nested, "stop_reason"),
-        (nested, "finish_reason"),
-        (info, "stop_reason"),
-    ):
-        if source.get(key) is not None:
-            return str(source[key])
-
-    return _responses_stop_reason(message) or _responses_stop_reason(nested)
+    return _responses_stop_reason(metadata)
 
 
 def _extract_raw_response(last_response):
