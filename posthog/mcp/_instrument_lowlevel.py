@@ -147,7 +147,6 @@ def _wrap_resource_request(
             session_id,
             event_type=event_type,
             request=request,
-            response=result,
             duration_ms=(time.monotonic() - start) * 1000,
             client_name=client_name,
             client_version=client_version,

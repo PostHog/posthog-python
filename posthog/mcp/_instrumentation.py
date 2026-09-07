@@ -841,7 +841,6 @@ async def record_resource_request(
     *,
     event_type: str,
     request: Dict[str, Any],
-    response: Any = None,
     error: Any = None,
     duration_ms: Optional[float] = None,
     client_name: Optional[str] = None,
@@ -860,7 +859,6 @@ async def record_resource_request(
             if event_type == MCPAnalyticsEventType.MCP_RESOURCES_READ
             else None,
             "parameters": build_captured_mcp_parameters(request),
-            "response": _wrap_response(response) if response is not None else None,
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,

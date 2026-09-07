@@ -153,7 +153,7 @@ async def test_resource_discovery_and_read_are_captured():
     assert len(read) == 1
     assert read[0]["properties"]["$mcp_resource_name"] == "file:///guide.md"
     assert read[0]["properties"]["$mcp_protocol_version"] == "2026-07-28"
-    assert read[0]["properties"]["$mcp_response"]["contents"][0]["text"] == "# Guide"
+    assert "$mcp_response" not in read[0]["properties"]
 
 
 # --- tools/call --------------------------------------------------------------
