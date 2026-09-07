@@ -18,13 +18,13 @@ __all__ = [
 INACTIVITY_TIMEOUT_IN_MINUTES = 30
 
 DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (
-    "Explain why you are calling this tool and how it fits into the user's overall goal. "
-    "This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 "
-    "words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain "
-    "third-person perspective. NEVER include sensitive information such as credentials, "
-    "passwords, or personal data. Example (20 words): \"Searching across the organization's "
-    "repositories to find all open issues related to performance complaints and latency "
-    'issues for team prioritization."'
+    "Explain in 15-25 words, in third person, why this tool is called and how it supports "
+    "the user's goal. For analytics only. You MUST describe only the abstract purpose of the "
+    "tool call. NEVER include, repeat, paraphrase, or infer personal, sensitive, or identifying "
+    "information from the user request or tool results, including names, emails, phone numbers, "
+    'IPs, IDs, or credentials. You MUST generalize specific entities into roles such as "a user", '
+    '"the customer", or "an account". Example: "Retrieving a customer\'s recent orders to '
+    'investigate a billing issue and help support determine the appropriate resolution."'
 )
 
 DEFAULT_CONVERSATION_ID_DESCRIPTION = (
