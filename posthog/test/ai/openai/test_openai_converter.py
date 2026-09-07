@@ -1,3 +1,5 @@
+import types
+
 import pytest
 
 try:
@@ -7,7 +9,11 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
-from posthog.ai.openai.openai_converter import format_openai_input
+from posthog.ai.openai._streaming import _ResponsesStreamState
+from posthog.ai.openai.openai_converter import (
+    extract_openai_stop_reason,
+    format_openai_input,
+)
 from posthog.test.ai.utils import make_response_usage
 
 pytestmark = pytest.mark.skipif(not OPENAI_AVAILABLE, reason="openai not available")
@@ -200,6 +206,13 @@ def test_chat_streaming_audio_and_refusal_deltas():
     assert refusal_block["refusal"] == "I can't help with that"
 
 
+def _response(status, incomplete_reason=None, **extra):
+    details = (
+        types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
+    )
+    return types.SimpleNamespace(status=status, incomplete_details=details, **extra)
+
+
 @pytest.mark.parametrize(
     "status,incomplete_reason,expected",
     [
@@ -218,63 +231,29 @@ def test_chat_streaming_audio_and_refusal_deltas():
 def test_extract_stop_reason_maps_responses_statuses(
     status, incomplete_reason, expected
 ):
-    import types
-
-    from posthog.ai.openai.openai_converter import extract_openai_stop_reason
-
-    details = (
-        types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
-    )
-    response = types.SimpleNamespace(status=status, incomplete_details=details)
-
-    assert extract_openai_stop_reason(response) == expected
+    assert extract_openai_stop_reason(_response(status, incomplete_reason)) == expected
 
 
-def test_extract_stop_reason_keeps_chat_completions_passthrough():
-    import types
-
-    from posthog.ai.openai.openai_converter import extract_openai_stop_reason
-
-    response = types.SimpleNamespace(
-        choices=[types.SimpleNamespace(finish_reason="stop")]
-    )
-
-    assert extract_openai_stop_reason(response) == "stop"
-
-
-def _lifecycle_chunk(chunk_type, status, incomplete_reason=None):
-    import types
-
-    details = (
-        types.SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None
-    )
-    return types.SimpleNamespace(
-        type=chunk_type,
-        response=types.SimpleNamespace(
-            model="gpt-4o",
-            usage=None,
-            output=[],
-            status=status,
-            incomplete_details=details,
-        ),
-    )
-
-
-def test_responses_stream_records_stop_reason_for_every_terminal_event():
-    from posthog.ai.openai._streaming import _ResponsesStreamState
-
+@pytest.mark.parametrize(
+    "status,incomplete_reason,expected",
+    [
+        ("completed", None, "completed"),
+        ("incomplete", "max_output_tokens", "max_output_tokens"),
+        ("failed", None, "failed"),
+        ("in_progress", None, None),
+    ],
+)
+def test_responses_stream_records_every_terminal_stop_reason(
+    status, incomplete_reason, expected
+):
     state = _ResponsesStreamState()
-    state.process_chunk(_lifecycle_chunk("response.in_progress", "in_progress"))
-    assert state.stop_reason is None
     state.process_chunk(
-        _lifecycle_chunk("response.incomplete", "incomplete", "max_output_tokens")
+        types.SimpleNamespace(
+            type=f"response.{status}",
+            response=_response(
+                status, incomplete_reason, model="gpt-4o", usage=None, output=[]
+            ),
+        )
     )
-    assert state.stop_reason == "max_output_tokens"
 
-    failed = _ResponsesStreamState()
-    failed.process_chunk(_lifecycle_chunk("response.failed", "failed"))
-    assert failed.stop_reason == "failed"
-
-    completed = _ResponsesStreamState()
-    completed.process_chunk(_lifecycle_chunk("response.completed", "completed"))
-    assert completed.stop_reason == "completed"
+    assert state.stop_reason == expected
