@@ -11,8 +11,8 @@ import pytest
 
 from posthog.client import Client
 from posthog.mcp import instrument
-from posthog.mcp.version import __version__ as MCP_VERSION
 from posthog.test.mcp._helpers import MCP_MAJOR, FakeClient
+from posthog.version import VERSION
 
 
 async def test_unsupported_server_returns_noop_handle():
@@ -75,7 +75,7 @@ def test_instrument_relabels_the_host_client():
     client.capture("after instrumentation")
 
     assert captured[0]["properties"]["$lib"] == "posthog-python-mcp"
-    assert captured[0]["properties"]["$lib_version"] == MCP_VERSION
+    assert captured[0]["properties"]["$lib_version"] == VERSION
 
 
 @pytest.mark.parametrize(

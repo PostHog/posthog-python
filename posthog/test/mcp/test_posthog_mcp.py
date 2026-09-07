@@ -4,11 +4,11 @@ from unittest import mock
 
 from posthog.capture_mode import CaptureMode
 from posthog.mcp import PostHogMCP
-from posthog.mcp.version import __version__ as MCP_VERSION
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
 )
+from posthog.version import VERSION
 
 
 def make_client():
@@ -73,7 +73,7 @@ async def test_mcp_events_use_mcp_library_identity():
     assert {event["event"] for event in captured} == {"$mcp_tool_call", "$exception"}
     assert all(
         event["properties"]["$lib"] == "posthog-python-mcp"
-        and event["properties"]["$lib_version"] == MCP_VERSION
+        and event["properties"]["$lib_version"] == VERSION
         for event in captured
     )
 
@@ -86,7 +86,7 @@ def test_mcp_library_identity_reaches_capture_v0_header():
         client.capture("$mcp_custom")
 
     assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
 
 
@@ -95,10 +95,10 @@ def test_mcp_library_identity_reaches_capture_v1_header():
     with mock.patch("posthog.client._send_v1_batch") as send:
         client.capture("$mcp_custom")
 
-    assert send.call_args.kwargs["sdk_info"] == f"posthog-python-mcp/{MCP_VERSION}"
+    assert send.call_args.kwargs["sdk_info"] == f"posthog-python-mcp/{VERSION}"
     event = send.call_args.args[2][0]
     assert event["properties"]["$lib"] == "posthog-python-mcp"
-    assert event["properties"]["$lib_version"] == MCP_VERSION
+    assert event["properties"]["$lib_version"] == VERSION
 
 
 def test_mcp_library_identity_reaches_feature_flag_requests():
@@ -112,7 +112,7 @@ def test_mcp_library_identity_reaches_feature_flag_requests():
         client.evaluate_flags("user_1")
 
     assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
 
 
@@ -130,7 +130,7 @@ def test_mcp_library_identity_reaches_feature_flag_definition_requests():
         client.load_feature_flags()
 
     assert get.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
     client.shutdown()
 
@@ -144,7 +144,7 @@ def test_mcp_library_identity_reaches_remote_config_requests():
         assert client.get_remote_config_payload("flag-key") == "payload"
 
     assert get.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
 
 
