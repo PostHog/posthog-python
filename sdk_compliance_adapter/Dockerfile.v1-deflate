@@ -17,6 +17,7 @@ COPY sdk_compliance_adapter/adapter.py /app/adapter.py
 
 # Select the capture-v1 protocol; same adapter code, different runtime mode.
 ENV CAPTURE_MODE=v1
+ENV CAPTURE_COMPRESSION=deflate
 
 # Expose port 8080
 EXPOSE 8080
