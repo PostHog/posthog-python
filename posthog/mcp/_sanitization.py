@@ -192,7 +192,7 @@ def _redact_card_in_match(match: re.Match[str]) -> str:
     return output + text[cursor:]
 
 
-def redact_pii(value: str) -> str:
+def redact_pii(value: Any) -> Any:
     """Redact structured personal identifiers (emails, IP addresses, credit-card
     numbers, US SSNs, and phone numbers) from a free-text string. Intended for the
     agent-narrated $mcp_intent value only — not for structured tool parameters or
