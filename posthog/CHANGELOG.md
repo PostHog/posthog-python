@@ -1,5 +1,11 @@
 # posthog
 
+## 7.47.1 — 2026-09-07
+
+### Patch changes
+
+- [db8ecb8](https://github.com/posthog/posthog-python/commit/db8ecb8b8f790ea96bc8e08c209ad45641ec0365) Report the Python package version in MCP event metadata and request headers so SDK Health can assess the installed package. — Thanks @marandaneto!
+
 ## 7.47.0 — 2026-09-04
 
 ### Minor changes
