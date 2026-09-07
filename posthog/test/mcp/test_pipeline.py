@@ -339,6 +339,14 @@ def test_sanitize_event_does_not_mutate_intent():
     assert event["user_intent"] == original
 
 
+def test_sanitize_event_passes_through_non_string_intent():
+    # user_intent is typed as Any on the custom-event API (Event = Dict[str, Any]),
+    # so a non-string value must not raise; it should pass through unchanged, same
+    # as sanitize_captured_value does for other non-str/list/dict values.
+    result = sanitize_event({"user_intent": 123})
+    assert result["user_intent"] == 123
+
+
 # --- truncation --------------------------------------------------------------
 
 

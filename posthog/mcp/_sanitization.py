@@ -199,7 +199,11 @@ def redact_pii(value: str) -> str:
     responses, where the same shapes are often legitimate data. Horizontal Unicode
     spaces are first normalized to an ASCII space so copy-pasted identifiers still
     match. Returns a new string; leaves the input's identifiers untouched when
-    nothing matches."""
+    nothing matches. Non-string input (e.g. a non-string ``user_intent`` reaching
+    the custom-event API) is returned unchanged, matching the pass-through
+    behavior of ``sanitize_captured_value`` for non-str values."""
+    if not isinstance(value, str):
+        return value
     result = _UNICODE_SPACE_PATTERN.sub(" ", value)
     result = _EMAIL_PATTERN.sub(_REDACTED_VALUE, result)
     result = _IPV4_PATTERN.sub(_REDACTED_VALUE, result)
