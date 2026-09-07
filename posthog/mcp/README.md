@@ -1,7 +1,8 @@
 # PostHog MCP analytics
 
 Product analytics for Model Context Protocol servers. Wrap a Python MCP server so
-every tool call, agent intent, and failure is captured to PostHog as a `$mcp_*` event.
+tool calls, agent intent, resource discovery and reads, and failures are captured
+to PostHog as `$mcp_*` events.
 
 ```python
 from posthog import Posthog

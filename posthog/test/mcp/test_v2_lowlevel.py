@@ -58,12 +58,40 @@ def make_server():
             ]
         )
 
-    return Server(
+    server = Server(
         "test-low-v2",
         version="1.2.3",
         on_call_tool=on_call_tool,
         on_list_tools=on_list_tools,
     )
+
+    async def on_list_resources(ctx, params):
+        return mcp_types.ListResourcesResult(
+            resources=[
+                mcp_types.Resource(
+                    name="Guide", uri="file:///guide.md", mime_type="text/markdown"
+                )
+            ]
+        )
+
+    async def on_read_resource(ctx, params):
+        return mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(
+                    uri=params.uri,
+                    mime_type="text/markdown",
+                    text="# Guide",
+                )
+            ]
+        )
+
+    server.add_request_handler(
+        "resources/list", mcp_types.PaginatedRequestParams, on_list_resources
+    )
+    server.add_request_handler(
+        "resources/read", mcp_types.ReadResourceRequestParams, on_read_resource
+    )
+    return server
 
 
 async def _call_tool(server, name, arguments, ctx=None):
@@ -75,6 +103,11 @@ async def _call_tool(server, name, arguments, ctx=None):
 async def _list_tools(server, ctx=None):
     entry = server.get_request_handler("tools/list")
     return await entry.handler(ctx or fake_ctx(method="tools/list"), None)
+
+
+async def _resource_request(server, method, params=None, ctx=None):
+    entry = server.get_request_handler(method)
+    return await entry.handler(ctx or fake_ctx(method=method), params)
 
 
 # --- tools/list --------------------------------------------------------------
@@ -98,6 +131,29 @@ async def test_list_tools_injects_optional_context_and_captures():
     assert listed
     assert listed[0]["properties"]["$mcp_listed_tool_names"] == ["add"]
     assert listed[0]["properties"]["$mcp_server_name"] == "test-low-v2"
+
+
+async def test_resource_discovery_and_read_are_captured():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client)
+
+    await _resource_request(server, "resources/list")
+    result = await _resource_request(
+        server,
+        "resources/read",
+        mcp_types.ReadResourceRequestParams(uri="file:///guide.md"),
+    )
+    await _flush()
+
+    assert result.contents[0].text == "# Guide"
+    listed = _events(client, "$mcp_resources_list")
+    assert len(listed) == 1
+    read = _events(client, "$mcp_resource_read")
+    assert len(read) == 1
+    assert read[0]["properties"]["$mcp_resource_name"] == "file:///guide.md"
+    assert read[0]["properties"]["$mcp_protocol_version"] == "2026-07-28"
+    assert read[0]["properties"]["$mcp_response"]["contents"][0]["text"] == "# Guide"
 
 
 # --- tools/call --------------------------------------------------------------
@@ -200,13 +256,33 @@ async def test_late_registration_is_wrapped():
         "tools/call", mcp_types.CallToolRequestParams, late_call_tool
     )
 
+    async def late_read_resource(ctx, params):
+        return mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(uri=params.uri, text="late resource")
+            ]
+        )
+
+    server.add_request_handler(
+        "resources/read", mcp_types.ReadResourceRequestParams, late_read_resource
+    )
+
     result = await _call_tool(server, "anything", {"context": "late registration"})
+    resource = await _resource_request(
+        server,
+        "resources/read",
+        mcp_types.ReadResourceRequestParams(uri="file:///late.txt"),
+    )
     await _flush()
 
     assert result.content[0].text == "late ok"
+    assert resource.contents[0].text == "late resource"
     calls = _events(client, "$mcp_tool_call")
     assert len(calls) == 1
     assert calls[0]["properties"]["$mcp_tool_name"] == "anything"
+    reads = _events(client, "$mcp_resource_read")
+    assert len(reads) == 1
+    assert reads[0]["properties"]["$mcp_resource_name"] == "file:///late.txt"
 
 
 async def test_initialize_and_session_reuse_across_calls():

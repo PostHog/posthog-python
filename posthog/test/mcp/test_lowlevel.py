@@ -34,6 +34,35 @@ def make_server():
             return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
         raise ValueError("boom")
 
+    async def list_resources(_request):
+        return mcp_types.ServerResult(
+            mcp_types.ListResourcesResult(
+                resources=[
+                    mcp_types.Resource(
+                        name="Guide",
+                        uri="file:///guide.md",
+                        mimeType="text/markdown",
+                    )
+                ]
+            )
+        )
+
+    async def read_resource(request):
+        return mcp_types.ServerResult(
+            mcp_types.ReadResourceResult(
+                contents=[
+                    mcp_types.TextResourceContents(
+                        uri=request.params.uri,
+                        mimeType="text/markdown",
+                        text="# Guide",
+                    )
+                ]
+            )
+        )
+
+    server.request_handlers[mcp_types.ListResourcesRequest] = list_resources
+    server.request_handlers[mcp_types.ReadResourceRequest] = read_resource
+
     return server
 
 
@@ -60,6 +89,31 @@ async def test_list_tools_injects_optional_context_and_captures():
 
     listed = _events(client, "$mcp_tools_list")
     assert listed and listed[0]["properties"]["$mcp_listed_tool_names"] == ["echo"]
+
+
+async def test_resource_discovery_and_read_are_captured():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client)
+
+    list_handler = server.request_handlers[mcp_types.ListResourcesRequest]
+    await list_handler(mcp_types.ListResourcesRequest())
+    read_handler = server.request_handlers[mcp_types.ReadResourceRequest]
+    result = await read_handler(
+        mcp_types.ReadResourceRequest(
+            params=mcp_types.ReadResourceRequestParams(uri="file:///guide.md")
+        )
+    )
+    await _flush()
+
+    assert result.root.contents[0].text == "# Guide"
+    listed = _events(client, "$mcp_resources_list")
+    assert len(listed) == 1
+    read = _events(client, "$mcp_resource_read")
+    assert len(read) == 1
+    assert read[0]["properties"]["$mcp_resource_name"] == "file:///guide.md"
+    assert read[0]["properties"]["$mcp_is_error"] is False
+    assert read[0]["properties"]["$mcp_response"]["contents"][0]["text"] == "# Guide"
 
 
 async def test_tool_call_success_captures_intent():

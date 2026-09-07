@@ -2,10 +2,9 @@
 # Copyright (c) 2025 MCPcat
 # Licensed under the MIT License: https://github.com/MCPCat/mcpcat-typescript-sdk/blob/main/LICENSE
 
-"""Shared tool-call / tools-list / initialize lifecycle used by both the FastMCP
-and low-level server adapters. The adapters resolve transport-specific details
-(client info, session id, raw result shape) and delegate the analytics flow here
-so both stay in sync."""
+"""Shared MCP request lifecycles used by both the FastMCP and low-level server
+adapters. The adapters resolve transport-specific details (client info, session
+id, raw result shape) and delegate analytics policy here so both stay in sync."""
 
 from __future__ import annotations
 
@@ -834,3 +833,45 @@ async def record_tools_list(
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_tools_list failed (event dropped): {err}")
+
+
+async def record_resource_request(
+    data: MCPAnalyticsData,
+    session_id: str,
+    *,
+    event_type: str,
+    request: Dict[str, Any],
+    response: Any = None,
+    error: Any = None,
+    duration_ms: Optional[float] = None,
+    client_name: Optional[str] = None,
+    client_version: Optional[str] = None,
+    protocol_version: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Record resources/list or resources/read without affecting dispatch."""
+    try:
+        params = request.get("params")
+        uri = params.get("uri") if isinstance(params, dict) else None
+        event: Dict[str, Any] = {
+            "event_type": event_type,
+            "session_id": session_id,
+            "resource_name": uri
+            if event_type == MCPAnalyticsEventType.MCP_RESOURCES_READ
+            else None,
+            "parameters": build_captured_mcp_parameters(request),
+            "response": _wrap_response(response) if response is not None else None,
+            "duration": duration_ms,
+            "client_name": client_name,
+            "client_version": client_version,
+            "protocol_version": protocol_version,
+            "is_error": error is not None,
+            "timestamp": datetime.now(timezone.utc),
+        }
+        if error is not None:
+            event["error"] = capture_exception(error)
+        await _apply_event_properties(data, event, request, extra)
+        stamp_transport_identity(event, extra)
+        fire_and_forget(capture_event(data, event), data)
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the request path
+        log(f"record_resource_request failed (event dropped): {err}")
