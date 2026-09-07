@@ -71,10 +71,10 @@ def rpc(method, params, request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
 
 
-async def modern_call(http, name, arguments, request_id=1):
+async def modern_call(http, name, arguments, request_id=1, model=None):
     body = rpc(
         "tools/call",
-        {"name": name, "arguments": arguments, "_meta": modern_meta()},
+        {"name": name, "arguments": arguments, "_meta": modern_meta(model=model)},
         request_id,
     )
     return await http.post(
@@ -88,11 +88,19 @@ async def modern_call(http, name, arguments, request_id=1):
 async def test_modern_tool_call_captured_with_envelope_identity():
     server = make_server()
     client = FakeClient()
-    instrument(server, client)
+    instrument(server, client, MCPAnalyticsOptions(capture_model=True))
 
     async with wire(server) as http:
         response = await modern_call(
-            http, "add", {"a": 2, "b": 3, "context": "adding on the wire"}
+            http,
+            "add",
+            {
+                "a": 2,
+                "b": 3,
+                "context": "adding on the wire",
+                "llm_model": "claude-opus-4-8",
+            },
+            model="gpt-5.6-sol",
         )
     await _flush()
 
@@ -111,12 +119,19 @@ async def test_modern_tool_call_captured_with_envelope_identity():
     assert props["$mcp_client_name"] == "wire-client"
     assert props["$mcp_client_version"] == "1.2.3"
     assert props["$mcp_protocol_version"] == MODERN_PROTOCOL_VERSION
+    assert props["$mcp_llm_model"] == "gpt-5.6-sol"
+    assert props["$mcp_llm_model_source"] == "client_metadata"
+    assert "llm_model" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
 async def test_modern_tools_list_advertises_injected_params():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(enable_conversation_id=True, capture_model=True),
+    )
 
     async with wire(server) as http:
         body = rpc("tools/list", {"_meta": modern_meta()})
@@ -129,6 +144,8 @@ async def test_modern_tools_list_advertises_injected_params():
     tools = {t["name"]: t for t in response.json()["result"]["tools"]}
     assert "context" in tools["add"]["inputSchema"]["properties"]
     assert "conversation_id" in tools["add"]["inputSchema"]["properties"]
+    assert "llm_model" in tools["add"]["inputSchema"]["properties"]
+    assert "llm_model" in tools["add"]["inputSchema"]["required"]
 
     listed = _events(client, "$mcp_tools_list")
     assert listed and set(listed[0]["properties"]["$mcp_listed_tool_names"]) == {

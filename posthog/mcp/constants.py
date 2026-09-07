@@ -32,6 +32,13 @@ DEFAULT_CONVERSATION_ID_DESCRIPTION = (
     "the first call — never invent one, and do not issue parallel tool calls until you have it."
 )
 
+DEFAULT_MODEL_PARAMETER_DESCRIPTION = (
+    "The exact model identifier you (the assistant) are running as, taken from your "
+    'system prompt or environment (e.g. "claude-opus-4-8", "gpt-5.2"). Used for '
+    'analytics only. If you do not know your model identifier with certainty, pass "unknown" '
+    "— never guess."
+)
+
 POSTHOG_MCP_ANALYTICS_SOURCE = "posthog_mcp_analytics"
 POSTHOG_MCP_LIB_NAME = "posthog-python-mcp"
 
@@ -68,6 +75,8 @@ class PostHogMCPAnalyticsProperty:
     IS_ERROR = "$mcp_is_error"
     INTENT = "$mcp_intent"
     INTENT_SOURCE = "$mcp_intent_source"
+    LLM_MODEL = "$mcp_llm_model"
+    LLM_MODEL_SOURCE = "$mcp_llm_model_source"
     LISTED_TOOL_NAMES = "$mcp_listed_tool_names"
     PARAMETERS = "$mcp_parameters"
     RESOURCE_NAME = "$mcp_resource_name"

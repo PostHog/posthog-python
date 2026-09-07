@@ -95,9 +95,16 @@ def test_normalize_coerces_unknown_objects_to_str():
 
 
 def test_truncate_event_caps_metadata_fields():
-    out = truncate_event({"user_intent": "i" * 5000, "resource_name": "r" * 500})
+    out = truncate_event(
+        {
+            "user_intent": "i" * 5000,
+            "resource_name": "r" * 500,
+            "llm_model": "m" * 500,
+        }
+    )
     assert len(out["user_intent"]) == 2048 + 3
     assert len(out["resource_name"]) == 256 + 3
+    assert len(out["llm_model"]) == 256 + 3
 
 
 def test_truncate_event_caps_exception_value_and_frames():

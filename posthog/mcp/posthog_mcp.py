@@ -25,11 +25,21 @@ from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._instrumentation import drain_pending_sync, fire_and_forget
 from ._lib_identity import apply_mcp_lib_identity
+from ._model_parameters import (
+    add_model_parameter_to_schema,
+    can_inject_model_parameter,
+    get_model_description,
+    is_capture_model_enabled,
+    normalize_model,
+    resolve_model,
+)
 from ._sink import McpCaptureOptions, McpEventSink
 from .tools import build_report_missing_descriptor
 from .types import (
     JsonRecord,
     MCPAnalyticsContextOptions,
+    MCPAnalyticsModelOptions,
+    MCPAnalyticsModelSource,
     PreparedToolCall,
 )
 
@@ -49,6 +59,7 @@ class PostHogMCP(Client):
         api_key: str,
         missing_capability_tool_name: Optional[str] = None,
         mcp_exception_autocapture: bool = True,
+        capture_model: Union[bool, MCPAnalyticsModelOptions] = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(api_key, **kwargs)
@@ -61,6 +72,8 @@ class PostHogMCP(Client):
         # from the inherited Client.enable_exception_autocapture (global uncaught-error
         # hook); this mirrors instrument()'s enable_exception_autocapture, default on.
         self._mcp_exception_autocapture = mcp_exception_autocapture
+        self._capture_model = capture_model
+        self._model_parameter_injected: Dict[str, bool] = {}
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -92,6 +105,8 @@ class PostHogMCP(Client):
         error_type: Optional[str] = None,
         category: Optional[str] = None,
         tool_description: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        llm_model_source: Optional[MCPAnalyticsModelSource] = None,
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -124,6 +139,7 @@ class PostHogMCP(Client):
         event["is_error"] = is_error
         event["error_type"] = error_type
         _apply_intent(event, intent, intent_source)
+        _apply_model(event, llm_model, llm_model_source)
         if is_error:
             event["error"] = capture_exception(
                 error if error is not None else f"Tool {tool_name} returned an error"
@@ -218,6 +234,8 @@ class PostHogMCP(Client):
         self,
         *,
         context: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        llm_model_source: Optional[MCPAnalyticsModelSource] = None,
         parameters: Any = None,
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
@@ -246,6 +264,7 @@ class PostHogMCP(Client):
         event["protocol_version"] = protocol_version
         event["parameters"] = parameters
         _apply_intent(event, context, "context_parameter")
+        _apply_model(event, llm_model, llm_model_source)
         self._emit(event)
 
     # --- prepare helpers -----------------------------------------------------
@@ -260,11 +279,15 @@ class PostHogMCP(Client):
         intent (captured as ``$mcp_intent``), and optionally append the
         ``get_more_tools`` virtual tool (``report_missing=True``). Returns a new
         list; dict tools are copied, tool objects are mutated in place."""
-        if is_context_enabled(context):
-            description = get_context_description(context)
-            prepared = [self._inject_context(tool, description) for tool in tools]
-        else:
-            prepared = list(tools)
+        prepared = []
+        context_description = get_context_description(context)
+        for tool in tools:
+            current = (
+                self._inject_context(tool, context_description)
+                if is_context_enabled(context)
+                else tool
+            )
+            prepared.append(current)
 
         if report_missing and not any(
             _tool_name(t) == self._missing_capability_tool_name for t in prepared
@@ -272,10 +295,16 @@ class PostHogMCP(Client):
             prepared.append(
                 build_report_missing_descriptor(self._missing_capability_tool_name)
             )
+        prepared = self._inject_models(prepared)
         return prepared
 
     def prepare_tool_call(
-        self, name: str, args: Optional[JsonRecord] = None
+        self,
+        name: str,
+        args: Optional[JsonRecord] = None,
+        *,
+        request_meta: Optional[JsonRecord] = None,
+        original_tool: Any = None,
     ) -> PreparedToolCall:
         """Pull the agent's intent off the injected ``context`` argument, strip
         ``context`` from the arguments, and flag the ``get_more_tools`` virtual tool."""
@@ -285,10 +314,26 @@ class PostHogMCP(Client):
             if isinstance(raw_context, str) and raw_context.strip()
             else None
         )
+        analytics_owns_model = False
+        if is_capture_model_enabled(self._capture_model):
+            if original_tool is not None:
+                analytics_owns_model = can_inject_model_parameter(
+                    _tool_schema(original_tool)
+                )
+            else:
+                analytics_owns_model = self._model_parameter_injected.get(name, False)
+        llm_model, llm_model_source = resolve_model(
+            request_meta, args, allow_self_reported=analytics_owns_model
+        )
+        prepared_args = _strip_context(args)
+        if analytics_owns_model:
+            prepared_args = _strip_model(prepared_args)
         return PreparedToolCall(
-            args=_strip_context(args),
+            args=prepared_args,
             intent=intent,
             intent_source="context_parameter" if intent else None,
+            llm_model=llm_model,
+            llm_model_source=llm_model_source,
             is_missing_capability=name == self._missing_capability_tool_name,
         )
 
@@ -356,6 +401,45 @@ class PostHogMCP(Client):
             pass
         return tool
 
+    def _inject_models(self, tools: List[Any]) -> List[Any]:
+        self._model_parameter_injected.clear()
+        if not is_capture_model_enabled(self._capture_model):
+            return tools
+
+        ownership: Dict[str, bool] = {}
+        for tool in tools:
+            name = _tool_name(tool)
+            if name is None:
+                continue
+            can_inject = can_inject_model_parameter(_tool_schema(tool))
+            ownership[name] = ownership.get(name, True) and can_inject
+        self._model_parameter_injected.update(ownership)
+
+        return [
+            self._inject_model(tool)
+            if ownership.get(_tool_name(tool) or "", True)
+            else tool
+            for tool in tools
+        ]
+
+    def _inject_model(self, tool: Any) -> Any:
+        name = _tool_name(tool) or "unknown"
+
+        schema = _tool_schema(tool)
+        new_schema = add_model_parameter_to_schema(
+            schema, name, get_model_description(self._capture_model)
+        )
+        if isinstance(tool, dict):
+            return {**tool, "inputSchema": new_schema}
+        try:
+            if hasattr(tool, "input_schema"):
+                tool.input_schema = new_schema
+            else:
+                tool.inputSchema = new_schema
+        except Exception:  # noqa: BLE001 - read-only descriptors fail closed
+            self._model_parameter_injected[name] = False
+        return tool
+
 
 def _apply_intent(
     event: Dict[str, Any], intent: Optional[str], source: Optional[str]
@@ -367,13 +451,41 @@ def _apply_intent(
     event["user_intent_source"] = source or "context_parameter"
 
 
+def _apply_model(
+    event: Dict[str, Any],
+    model: Optional[str],
+    source: Optional[MCPAnalyticsModelSource],
+) -> None:
+    normalized = normalize_model(model)
+    if not normalized:
+        return
+    event["llm_model"] = normalized
+    event["llm_model_source"] = source or "self_reported"
+
+
 def _strip_context(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
     if not args or "context" not in args:
         return args
     return {k: v for k, v in args.items() if k != "context"}
 
 
+def _strip_model(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
+    if not args or "llm_model" not in args:
+        return args
+    return {k: v for k, v in args.items() if k != "llm_model"}
+
+
 def _tool_name(tool: Any) -> Optional[str]:
     if isinstance(tool, dict):
         return tool.get("name")
     return getattr(tool, "name", None)
+
+
+def _tool_schema(tool: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(tool, dict):
+        schema = tool.get("inputSchema")
+    else:
+        schema = getattr(tool, "input_schema", None)
+        if schema is None:
+            schema = getattr(tool, "inputSchema", None)
+    return schema if isinstance(schema, dict) else None

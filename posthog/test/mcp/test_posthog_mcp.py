@@ -11,8 +11,8 @@ from posthog.test.mcp._helpers import (
 from posthog.version import VERSION
 
 
-def make_client():
-    client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
+def make_client(**kwargs):
+    client = PostHogMCP("phc_test", host="https://us.i.posthog.com", **kwargs)
     captured = []
     # Intercept the inherited Client.capture so nothing is sent over the network.
     client.capture = lambda event, **kwargs: captured.append({"event": event, **kwargs})
@@ -211,3 +211,79 @@ def test_prepare_tool_list_can_be_disabled():
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
     prepared = client.prepare_tool_list(tools, context=False)
     assert "context" not in prepared[0]["inputSchema"]["properties"]
+
+
+async def test_prepare_and_capture_model():
+    client, captured = make_client(capture_model=True)
+    tools = [
+        {
+            "name": "search",
+            "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+    ]
+
+    prepared_tools = client.prepare_tool_list(tools)
+    assert (
+        prepared_tools[0]["inputSchema"]["properties"]["llm_model"]["type"] == "string"
+    )
+    assert "llm_model" in prepared_tools[0]["inputSchema"]["required"]
+
+    call = client.prepare_tool_call(
+        "search",
+        {"q": "docs", "llm_model": "claude-opus-4-8"},
+        request_meta={"x-codex-turn-metadata": {"model": "gpt-5.6-sol"}},
+    )
+    assert call.args == {"q": "docs"}
+    assert call.llm_model == "gpt-5.6-sol"
+    assert call.llm_model_source == "client_metadata"
+
+    client.capture_tool_call(
+        "search",
+        llm_model=call.llm_model,
+        llm_model_source=call.llm_model_source,
+    )
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props["$mcp_llm_model"] == "gpt-5.6-sol"
+    assert props["$mcp_llm_model_source"] == "client_metadata"
+
+
+def test_prepare_tool_call_preserves_application_owned_model_argument():
+    client, _ = make_client(capture_model=True)
+    tool = {
+        "name": "route",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"llm_model": {"type": "string"}},
+            "required": ["llm_model"],
+        },
+    }
+    client.prepare_tool_list([tool])
+
+    call = client.prepare_tool_call(
+        "route", {"llm_model": "application-owned"}, original_tool=tool
+    )
+    assert call.args == {"llm_model": "application-owned"}
+    assert call.llm_model is None
+
+
+def test_prepare_tool_list_fails_closed_for_duplicate_tool_names():
+    client, _ = make_client(capture_model=True)
+    tools = [
+        {"name": "route", "inputSchema": {"type": "object", "properties": {}}},
+        {
+            "name": "route",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"llm_model": {"type": "string"}},
+            },
+        },
+    ]
+
+    prepared = client.prepare_tool_list(tools)
+    assert "llm_model" not in prepared[0]["inputSchema"]["properties"]
+    assert prepared[1]["inputSchema"]["properties"]["llm_model"] == {"type": "string"}
+    call = client.prepare_tool_call("route", {"llm_model": "application-owned"})
+    assert call.args == {"llm_model": "application-owned"}
+    assert call.llm_model is None
