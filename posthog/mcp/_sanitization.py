@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ._event_types import MCPAnalyticsEventType
 
@@ -29,6 +30,37 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.-]{0,63}://[^\s<>\"']+", re.IGNORECASE)
+_SENSITIVE_QUERY_KEY_PATTERN = re.compile(
+    r"^(auth|key|credential|signature|sig|AWSAccessKeyId|GoogleAccessId|"
+    r"Policy|Key-Pair-Id|X-Amz-(Credential|Signature|Security-Token)|"
+    r"X-Goog-(Credential|Signature))$",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_url(match: re.Match[str]) -> str:
+    value = match.group(0)
+    try:
+        url = urlsplit(value)
+        query = parse_qsl(url.query, keep_blank_values=True)
+        sanitized_query = [
+            (key, _REDACTED_VALUE)
+            if _should_redact_key(key) or _SENSITIVE_QUERY_KEY_PATTERN.fullmatch(key)
+            else (key, item)
+            for key, item in query
+        ]
+        netloc = url.netloc
+        if "@" in netloc:
+            netloc = "%5Bredacted%5D@" + netloc.rsplit("@", 1)[1]
+        if netloc == url.netloc and sanitized_query == query:
+            return value
+        return urlunsplit(
+            (url.scheme, netloc, url.path, urlencode(sanitized_query), url.fragment)
+        )
+    except ValueError:
+        return _REDACTED_VALUE
+
 
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict)
@@ -41,6 +73,7 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
         return "[binary data redacted - not supported by PostHog MCP analytics]"
+    value = _URL_PATTERN.sub(_sanitize_url, value)
     return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 

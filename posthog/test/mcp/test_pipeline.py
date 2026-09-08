@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+import pytest
+
 from posthog.mcp.constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
     PostHogMCPAnalyticsEvent,
@@ -73,6 +75,41 @@ def test_sanitize_redacts_sensitive_keys():
 def test_sanitize_redacts_large_base64():
     blob = "A" * 11000
     assert sanitize_captured_value(blob).startswith("[binary data redacted")
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (
+            "https://example.com/guide?token=fakesecret&token=fakeaccess&empty=",
+            "https://example.com/guide?token=%5Bredacted%5D&token=%5Bredacted%5D&empty=",
+        ),
+        (
+            "https://example.com/guide?X-Goog-Credential=fakecredential&X-Goog-Signature=fakesignature",
+            "https://example.com/guide?X-Goog-Credential=%5Bredacted%5D&X-Goog-Signature=%5Bredacted%5D",
+        ),
+        (
+            "https://example.com/guide?sig=fakesignature&Signature=fakesignature&X-Amz-Security-Token=fakesecret",
+            "https://example.com/guide?sig=%5Bredacted%5D&Signature=%5Bredacted%5D&X-Amz-Security-Token=%5Bredacted%5D",
+        ),
+        (
+            "https://fakeuser@example.com/guide",
+            "https://%5Bredacted%5D@example.com/guide",
+        ),
+        (
+            "https://example.com/guide?%61=hello%20world&empty=#part",
+            "https://example.com/guide?%61=hello%20world&empty=#part",
+        ),
+        (
+            "Cannot read https://fakeuser:fakepass@example.com/guide or https://example.com/guide?token=fakesecret",
+            "Cannot read https://%5Bredacted%5D@example.com/guide or https://example.com/guide?token=%5Bredacted%5D",
+        ),
+        ("https://fakeuser:fakepass@[invalid/guide?token=fakesecret", "[redacted]"),
+    ],
+)
+def test_sanitize_url_credentials(value: str, expected: str) -> None:
+    assert sanitize_captured_value(value) == expected
+    assert sanitize_captured_value(expected) == expected
 
 
 def test_sanitize_event_replaces_image_and_audio_blocks():

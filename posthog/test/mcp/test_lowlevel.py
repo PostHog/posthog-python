@@ -102,13 +102,53 @@ async def test_list_tools_injects_optional_context_and_captures():
     [
         ("file:///guide.md", "file:///guide.md", False),
         (
+            "https://fakeuser:fakepass@example.com/guide",
+            "https://%5Bredacted%5D@example.com/guide",
+            False,
+        ),
+        (
+            "https://fakeuser:fakepass@example.com/guide",
+            "https://%5Bredacted%5D@example.com/guide",
+            True,
+        ),
+        (
+            "https://example.com/guide?token=fakesecret&chapter=intro",
+            "https://example.com/guide?token=%5Bredacted%5D&chapter=intro",
+            False,
+        ),
+        (
+            "https://example.com/guide?token=fakesecret&chapter=intro",
+            "https://example.com/guide?token=%5Bredacted%5D&chapter=intro",
+            True,
+        ),
+        (
+            "https://example.com/guide?access_token=fakeaccess&X-Amz-Credential=fakecredential&X-Amz-Signature=fakesignature",
+            "https://example.com/guide?access_token=%5Bredacted%5D&X-Amz-Credential=%5Bredacted%5D&X-Amz-Signature=%5Bredacted%5D",
+            False,
+        ),
+        (
+            "https://example.com/guide?access_token=fakeaccess&X-Amz-Credential=fakecredential&X-Amz-Signature=fakesignature",
+            "https://example.com/guide?access_token=%5Bredacted%5D&X-Amz-Credential=%5Bredacted%5D&X-Amz-Signature=%5Bredacted%5D",
+            True,
+        ),
+        (
+            "ui://guide/page?%74oken=fakesecret&TOKEN=fakeaccess&chapter=intro#section",
+            "ui://guide/page?token=%5Bredacted%5D&TOKEN=%5Bredacted%5D&chapter=intro#section",
+            False,
+        ),
+        (
+            "ui://guide/page?%74oken=fakesecret&TOKEN=fakeaccess&chapter=intro#section",
+            "ui://guide/page?token=%5Bredacted%5D&TOKEN=%5Bredacted%5D&chapter=intro#section",
+            True,
+        ),
+        (
             "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
-            "https://example.com/guide?token=[redacted]",
+            "https://example.com/guide?token=%5Bredacted%5D",
             False,
         ),
         (
             "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
-            "https://example.com/guide?token=[redacted]",
+            "https://example.com/guide?token=%5Bredacted%5D",
             True,
         ),
     ],
@@ -149,7 +189,16 @@ async def test_resource_discovery_and_read_are_captured(
     assert len(exceptions) == int(resource_error)
     if resource_error:
         assert exceptions[0]["properties"]["$mcp_resource_name"] == captured_uri
-    assert "phx_EXAMPLEONLYFAKEVALUE00000000000" not in json.dumps(client.events)
+    for secret in (
+        "phx_EXAMPLEONLYFAKEVALUE00000000000",
+        "fakeuser",
+        "fakepass",
+        "fakesecret",
+        "fakeaccess",
+        "fakecredential",
+        "fakesignature",
+    ):
+        assert secret not in json.dumps(client.events)
 
 
 async def test_tool_call_success_captures_intent():
