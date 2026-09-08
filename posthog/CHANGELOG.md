@@ -1,5 +1,11 @@
 # posthog
 
+## 7.47.3 — 2026-09-08
+
+### Patch changes
+
+- [09a8c4e](https://github.com/posthog/posthog-python/commit/09a8c4e1d94cd6bc48813815551aec17dddade0e) Only terminal Responses API statuses become `$ai_stop_reason`: a queued or in-progress background run no longer records a lifecycle state as its stop reason, and an incomplete run is named by what cut it short (`incomplete_details.reason`, e.g. `max_output_tokens`). Streaming runs that end incomplete or failed now carry a stop reason too, and the LangChain callback reads stop reasons from `response_metadata` as well, covering Responses API and Anthropic runs that previously recorded none. — Thanks @bernatixer!
+
 ## 7.47.2 — 2026-09-08
 
 ### Patch changes
