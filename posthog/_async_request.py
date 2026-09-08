@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import quote, urljoin, urlsplit
 
 from .capture_compression import CaptureCompression
-from .capture_v1 import _send_v1_batch
+from .capture_v1 import _parse_retry_after, _send_v1_batch
 from .request import (
     APIError,
     DatetimeSerializer,
@@ -100,21 +100,11 @@ def _serialize_flags_body(
     }
 
 
-def _parse_retry_after(response: Any) -> Optional[float]:
-    value = response.headers.get("Retry-After")
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _process_response(response: Any) -> None:
     if response.status_code == 200:
         return
 
-    retry_after = _parse_retry_after(response)
+    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
     try:
         payload = response.json()
         detail = payload["detail"]
