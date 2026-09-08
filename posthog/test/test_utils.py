@@ -112,8 +112,8 @@ class TestUtils(unittest.TestCase):
             utc_now = datetime(2026, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
 
             with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
-                mock_datetime.now.side_effect = (
-                    lambda tz=None: local_now if tz is None else utc_now.astimezone(tz)
+                mock_datetime.now.side_effect = lambda tz=None: (
+                    local_now if tz is None else utc_now.astimezone(tz)
                 )
                 normalized = utils.guess_timezone(local_now)
 
