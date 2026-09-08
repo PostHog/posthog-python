@@ -78,6 +78,44 @@ def _build_gemini_client_args(
     return client_args
 
 
+def _build_gemini_client(
+    *,
+    api_key: Optional[str],
+    vertexai: Optional[bool],
+    credentials: Optional[Any],
+    project: Optional[str],
+    location: Optional[str],
+    debug_config: Optional[Any],
+    http_options: Optional[Any],
+) -> Any:
+    """Construct the provider client shared by every surface of one adapter."""
+    return genai.Client(
+        **_build_gemini_client_args(
+            api_key=api_key,
+            vertexai=vertexai,
+            credentials=credentials,
+            project=project,
+            location=location,
+            debug_config=debug_config,
+            http_options=http_options,
+        )
+    )
+
+
+class _GeminiAioNamespace:
+    """
+    Mirrors ``genai.Client().aio``: the async surface of a single client.
+
+    Pairs the tracked async ``models`` adapter with the provider's async
+    ``files`` API so ``client.aio.models`` and ``client.aio.files`` resolve the
+    same way they do on the real SDK.
+    """
+
+    def __init__(self, models: Any, files: Any):
+        self.models = models
+        self.files = files
+
+
 class _GeminiModelsPolicy:
     """Shared telemetry policy for the explicit sync and async Gemini adapters."""
 
@@ -98,6 +136,7 @@ class _GeminiModelsPolicy:
         posthog_properties: Optional[Dict[str, Any]],
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
+        provider_client: Optional[Any] = None,
     ) -> None:
         self._ph_client = _resolve_posthog_client(posthog_client)
         self._default_distinct_id = posthog_distinct_id
@@ -105,16 +144,21 @@ class _GeminiModelsPolicy:
         self._default_privacy_mode = posthog_privacy_mode
         self._default_groups = posthog_groups
 
-        client_args = _build_gemini_client_args(
-            api_key=api_key,
-            vertexai=vertexai,
-            credentials=credentials,
-            project=project,
-            location=location,
-            debug_config=debug_config,
-            http_options=http_options,
+        # Every surface of one PostHog client (sync models, aio models, files)
+        # shares a single provider client rather than opening its own.
+        self._client = (
+            provider_client
+            if provider_client is not None
+            else _build_gemini_client(
+                api_key=api_key,
+                vertexai=vertexai,
+                credentials=credentials,
+                project=project,
+                location=location,
+                debug_config=debug_config,
+                http_options=http_options,
+            )
         )
-        self._client = genai.Client(**client_args)
         self._base_url = _GEMINI_BASE_URL
 
     def _merge_posthog_params(

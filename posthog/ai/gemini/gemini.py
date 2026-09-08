@@ -13,7 +13,13 @@ from ..utils import (
     merge_usage_stats,
     with_privacy_mode as with_privacy_mode,
 )
-from ._shared import _GeminiModelsPolicy, _resolve_posthog_client
+from ._shared import (
+    _GeminiAioNamespace,
+    _GeminiModelsPolicy,
+    _build_gemini_client,
+    _resolve_posthog_client,
+)
+from .gemini_async import AsyncModels
 from .gemini_converter import (
     extract_gemini_content_from_chunk,
     extract_gemini_embedding_token_count as extract_gemini_embedding_token_count,
@@ -39,6 +45,16 @@ class Client:
             contents=["Hello world"],
             posthog_distinct_id="specific_user"  # Override default
         )
+
+    The async surface lives under ``aio``, exactly as it does on genai.Client:
+
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=["Hello world"],
+        )
+
+    ``files`` (and ``aio.files``) pass straight through to the provider. Uploads
+    are not generations, so they emit no PostHog events.
     """
 
     _ph_client: PostHogClient
@@ -78,7 +94,9 @@ class Client:
 
         self._ph_client = _resolve_posthog_client(posthog_client)
 
-        self.models = Models(
+        # Built once here and shared by every surface, so a client that uses both
+        # `models` and `aio.models` still opens a single provider client.
+        self._provider_client = _build_gemini_client(
             api_key=api_key,
             vertexai=vertexai,
             credentials=credentials,
@@ -86,12 +104,29 @@ class Client:
             location=location,
             debug_config=debug_config,
             http_options=http_options,
+        )
+
+        self.models = Models(
+            provider_client=self._provider_client,
             posthog_client=self._ph_client,
             posthog_distinct_id=posthog_distinct_id,
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
             posthog_groups=posthog_groups,
             **kwargs,
+        )
+        self.files = self._provider_client.files
+        self.aio = _GeminiAioNamespace(
+            models=AsyncModels(
+                provider_client=self._provider_client,
+                posthog_client=self._ph_client,
+                posthog_distinct_id=posthog_distinct_id,
+                posthog_properties=posthog_properties,
+                posthog_privacy_mode=posthog_privacy_mode,
+                posthog_groups=posthog_groups,
+                **kwargs,
+            ),
+            files=self._provider_client.aio.files,
         )
 
 
@@ -116,6 +151,7 @@ class Models(_GeminiModelsPolicy):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        provider_client: Optional[Any] = None,
         **kwargs,
     ):
         """
@@ -132,6 +168,8 @@ class Models(_GeminiModelsPolicy):
             posthog_properties: Default properties for all calls
             posthog_privacy_mode: Default privacy mode for all calls
             posthog_groups: Default groups for all calls
+            provider_client: An already-built genai.Client to reuse instead of
+                constructing one from the connection arguments above
             **kwargs: Additional arguments (for future compatibility)
         """
 
@@ -148,6 +186,7 @@ class Models(_GeminiModelsPolicy):
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
             posthog_groups=posthog_groups,
+            provider_client=provider_client,
         )
 
     def generate_content(
