@@ -24,6 +24,8 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 - `POST /capture` - Capture an event
 - `POST /flush` - Flush pending events
 - `GET /state` - Return internal state
+- `POST /get_feature_flag` - Evaluate a flag locally or remotely
+- `POST /reload_feature_flag_definitions` - Fresh, bounded definitions readiness barrier
 - `POST /reset` - Reset SDK state
 
 ### Key Implementation Details
@@ -33,6 +35,31 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 **State Management**: Thread-safe state tracking for events captured vs sent, retry attempts, and errors.
 
 **UUID Tracking**: Extracts and tracks UUIDs from batches to verify deduplication.
+
+### Local feature flag evaluation
+
+Both capture adapters advertise `feature_flags_local_evaluation_v1` for harness
+**1.1.0**. The capability versions the adapter protocol and tests both legacy and
+explicit property matching; it does not change the SDK's default matching mode.
+
+- `/init` maps optional `personal_api_key` to the SDK's `secret_key`. Ordinary
+  capture/remote tests do not need it. Background polling is disabled in the
+  adapter; explicit reloads still use the real SDK definitions loader.
+- `/reload_feature_flag_definitions` takes `timeout_ms` (default 5000, range
+  1–30000). It waits for a fresh successful publication, not merely an existing
+  snapshot. Failed fetches and authorization/quota resets return `ready: false`.
+  A timeout returns HTTP 504; the SDK's in-flight request may finish later on its
+  original Client, and another reload on that Client is rejected while it runs.
+- `/get_feature_flag` with `only_evaluate_locally: true` uses the SDK's local-only
+  result API without emitting flag-called events. A conclusive false has
+  `locally_evaluated: true`; an inconclusive result has `value: null`,
+  `success: false`, and `locally_evaluated: false`, never remote fallback.
+- `force_remote: true` conflicts with local-only mode. When definitions are
+  enabled, forced remote calls use a separate definitions-free SDK Client so
+  they cannot accidentally resolve from local rules. Legacy remote responses
+  and flag-called events are preserved. Reset disposes both Clients.
+
+The adapter is sequential (it does not advertise parallel-test support).
 
 ## Documentation
 

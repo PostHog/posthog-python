@@ -78,25 +78,26 @@ class SDKState:
         self.last_error: Optional[str] = None
         self.requests_made: List[RequestInfo] = []
         self.client: Optional[Client] = None
+        self.remote_client: Client | None = None
+        self.reload_thread: threading.Thread | None = None
         self.retry_attempts: Dict[str, int] = {}  # Track retry attempts by batch ID
 
     def reset(self):
         """Reset all state"""
-        client_to_shutdown = None
         with self.lock:
-            client_to_shutdown = self.client
+            clients_to_shutdown = (self.client, self.remote_client)
             self.client = None
+            self.remote_client = None
+            # A timed-out load only owns its old Client, never a replacement.
+            self.reload_thread = None
 
-        if client_to_shutdown:
-            # Flush and shutdown the existing client outside state.lock.
-            # The patched transport records successful flush requests through
-            # SDKState.record_request(), which also needs state.lock. Holding the
-            # lock while shutdown() waits for the queue to drain can deadlock when
-            # a pending background event is being flushed during test reset.
-            try:
-                client_to_shutdown.shutdown()
-            except Exception as e:
-                logger.warning(f"Error shutting down client: {e}")
+        for client in clients_to_shutdown:
+            if client:
+                # Flush outside state.lock: transport instrumentation needs it.
+                try:
+                    client.shutdown()
+                except Exception as e:
+                    logger.warning(f"Error shutting down client: {e}")
 
         with self.lock:
             self.pending_events = 0
@@ -309,6 +310,7 @@ def health():
         if is_v1()
         else ["capture_v0", "capture_ai_v0", "encoding_gzip"]
     )
+    capabilities.append("feature_flags_local_evaluation_v1")
     return jsonify(
         {
             "sdk_name": "posthog-python",
@@ -352,21 +354,29 @@ def init():
         # One adapter process speaks one capture protocol, selected by CAPTURE_MODE.
         capture_mode = "v1" if is_v1() else "v0"
 
-        # Create client
-        client = Client(
-            project_api_key=api_key,
-            host=host,
-            flush_at=flush_at,
-            flush_interval=flush_interval,
-            gzip=enable_compression,
-            max_retries=max_retries,
-            debug=False,
-            disable_geoip=disable_geoip,
-            historical_migration=historical_migration,
-            capture_mode=capture_mode,
-        )
-
+        # Explicit reloads exercise the real loader without background polling
+        # racing the harness's per-test definition snapshots.
+        client_options = {
+            "project_api_key": api_key,
+            "host": host,
+            "flush_at": flush_at,
+            "flush_interval": flush_interval,
+            "gzip": enable_compression,
+            "max_retries": max_retries,
+            "debug": False,
+            "disable_geoip": disable_geoip,
+            "historical_migration": historical_migration,
+            "capture_mode": capture_mode,
+            "enable_local_evaluation": False,
+        }
+        personal_api_key = data.get("personal_api_key")
+        client = Client(**client_options, secret_key=personal_api_key)
         state.client = client
+        if personal_api_key:
+            # The SDK has no force-remote switch once definitions are loaded.
+            # A definitions-free Client preserves the real remote API and its
+            # event side effects without mutating the local Client's snapshot.
+            state.remote_client = Client(**client_options)
 
         logger.info(
             f"Initialized SDK with api_key={api_key[:10]}..., host={host}, "
@@ -562,6 +572,70 @@ def get_state():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/reload_feature_flag_definitions", methods=["POST"])
+def reload_feature_flag_definitions():
+    """Bound a fresh SDK load and acknowledge only its successful publication."""
+    data = request.json or {}
+    timeout_ms = data.get("timeout_ms", 5000)
+    if type(timeout_ms) is not int or not 1 <= timeout_ms <= 30000:
+        return jsonify(success=False, ready=False, error="Invalid timeout_ms"), 400
+
+    errors = []
+    with state.lock:
+        client = state.client
+        if client is None or not client.personal_api_key:
+            return jsonify(
+                success=False, ready=False, error="A personal_api_key is required"
+            ), 400
+        if state.reload_thread and state.reload_thread.is_alive():
+            return jsonify(
+                success=False,
+                ready=False,
+                error="A definitions reload is still running",
+            ), 409
+        previous_generation = client._flag_definition_published_generation
+
+        def load():
+            try:
+                client.load_feature_flags()
+            except Exception as error:
+                logger.exception("Error reloading feature flag definitions")
+                errors.append(str(error))
+
+        worker = threading.Thread(target=load, daemon=True)
+        state.reload_thread = worker
+        worker.start()
+
+    # The SDK's definitions transport timeout is longer than the adapter's
+    # deadline. Do not block this endpoint on it or start overlapping reloads.
+    worker.join(timeout_ms / 1000)
+    if worker.is_alive():
+        return jsonify(
+            success=False, ready=False, error="Definitions reload timed out"
+        ), 504
+    if errors:
+        return jsonify(success=False, ready=False, error=errors[0]), 502
+    with state.lock:
+        if state.client is not client:
+            return jsonify(
+                success=False, ready=False, error="SDK reset during reload"
+            ), 409
+    # load_feature_flags returns None even on failure. Its publication generation
+    # advances on successful GET/304 and auth/quota resets; the latter clear the
+    # fingerprint. Checking both avoids acknowledging stale or reset definitions.
+    with client._flag_definition_publication_lock:
+        ready = (
+            client._flag_definition_published_generation > previous_generation
+            and bool(client._flag_definition_fingerprint)
+            and client.feature_flags is not None
+        )
+    if not ready:
+        return jsonify(
+            success=False, ready=False, error="Fresh definitions were not loaded"
+        ), 502
+    return jsonify(success=True, ready=True)
+
+
 @app.route("/get_feature_flag", methods=["POST"])
 def get_feature_flag():
     """Evaluate a feature flag"""
@@ -577,14 +651,40 @@ def get_feature_flag():
         groups = data.get("groups")
         group_properties = data.get("group_properties")
         disable_geoip = data.get("disable_geoip")
-        force_remote = data.get("force_remote", True)
+        only_evaluate_locally = data.get("only_evaluate_locally", False)
+        force_remote = data.get("force_remote", not only_evaluate_locally)
 
+        if only_evaluate_locally and force_remote:
+            return jsonify(
+                {"error": "only_evaluate_locally conflicts with force_remote"}
+            ), 400
         if not key:
             return jsonify({"error": "key is required"}), 400
         if not distinct_id:
             return jsonify({"error": "distinct_id is required"}), 400
 
-        value = state.client.get_feature_flag(
+        if only_evaluate_locally:
+            result = state.client.get_feature_flag_result(
+                key,
+                distinct_id,
+                person_properties=person_properties,
+                groups=groups,
+                group_properties=group_properties,
+                disable_geoip=disable_geoip,
+                only_evaluate_locally=True,
+                send_feature_flag_events=False,
+            )
+            # The real local-only SDK API returns None for inconclusive results;
+            # a conclusive false is a FeatureFlagResult, not a cache miss.
+            conclusive = result is not None
+            return jsonify(
+                success=conclusive,
+                value=result.get_value() if result is not None else None,
+                locally_evaluated=conclusive,
+            )
+
+        client = (state.remote_client or state.client) if force_remote else state.client
+        value = client.get_feature_flag(
             key,
             distinct_id,
             person_properties=person_properties,
@@ -598,7 +698,7 @@ def get_feature_flag():
         # the adapter action returns. Otherwise the harness may reset mock-server
         # state for the next test while the background consumer is still flushing,
         # leaking the previous test's event into the next test.
-        state.client.flush()
+        client.flush()
 
         logger.info(f"Feature flag {key} for {distinct_id}: {value}")
 
