@@ -1,5 +1,11 @@
 # posthog
 
+## 7.47.2 — 2026-09-08
+
+### Patch changes
+
+- [80c541d](https://github.com/posthog/posthog-python/commit/80c541d17eff6f08a35c11e217aa6a9b625f18e7) Honor HTTP-date Retry-After headers in asynchronous requests while preserving the existing retry backoff and delay cap. — Thanks @Bortlesboat!
+
 ## 7.47.1 — 2026-09-07
 
 ### Patch changes
