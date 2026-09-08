@@ -17,7 +17,7 @@ from posthog.ai.types import (
     FormattedTextContent,
     TokenUsage,
 )
-from posthog.ai.utils import serialize_raw_usage
+from posthog.ai.utils import _responses_stop_reason, serialize_raw_usage
 
 
 def _item_attr(item: Any, name: str, default: Any = None) -> Any:
@@ -445,7 +445,7 @@ def extract_openai_stop_reason(response: Any) -> Optional[str]:
         return getattr(response.choices[0], "finish_reason", None)
     # Responses API
     if hasattr(response, "status"):
-        return getattr(response, "status", None)
+        return _responses_stop_reason(response)
     return None
 
 

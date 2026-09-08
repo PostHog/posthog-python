@@ -48,6 +48,7 @@ from posthog.ai.utils import (
     _extract_cache_creation_ttl_breakdown,
     finalize_ai_content,
     get_model_params,
+    _responses_stop_reason,
     with_privacy_mode,
 )
 from posthog.client import Client
@@ -716,14 +717,11 @@ class CallbackHandler(BaseCallbackHandler):
                 finalize_ai_content(completions, self._ph_client),
             )
 
-            # Extract stop reason from generation info
+            # Extract the stop reason from the generation and its metadata
             if output.generations and output.generations[-1]:
-                last_gen = output.generations[-1][-1]
-                gen_info = getattr(last_gen, "generation_info", None)
-                if isinstance(gen_info, dict):
-                    finish_reason = gen_info.get("finish_reason")
-                    if finish_reason is not None:
-                        event_properties["$ai_stop_reason"] = finish_reason
+                stop_reason = _extract_stop_reason(output.generations[-1][-1])
+                if stop_reason is not None:
+                    event_properties["$ai_stop_reason"] = stop_reason
 
         _capture_ai_event(
             self._ph_client,
@@ -743,6 +741,24 @@ class CallbackHandler(BaseCallbackHandler):
         log.debug(
             f"Event: {event_name}, run_id: {str(run_id)[:5]}, parent_run_id: {str(parent_run_id)[:5]}, kwargs: {kwargs}"
         )
+
+
+def _extract_stop_reason(generation: Any) -> Optional[str]:
+    """
+    Providers report the stop reason on the message's `response_metadata` or in
+    `generation_info`, under either spelling. The Responses API reports no
+    finish reason at all, so a terminal status stands in for one.
+    """
+    metadata = getattr(getattr(generation, "message", None), "response_metadata", None)
+    info = getattr(generation, "generation_info", None)
+
+    for source in (metadata, info):
+        for key in ("finish_reason", "stop_reason"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if value is not None:
+                return str(value)
+
+    return _responses_stop_reason(metadata)
 
 
 def _extract_raw_response(last_response):
