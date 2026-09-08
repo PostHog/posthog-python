@@ -1,5 +1,9 @@
 """End-to-end tests for the low-level mcp.server.Server adapter (Milestone 3)."""
 
+import json
+
+import pytest
+
 import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
 
@@ -11,7 +15,7 @@ from posthog.test.mcp._helpers import (
 )
 
 
-def make_server():
+def make_server(*, resource_error: bool = False) -> Server:
     server = Server("test-lowlevel")
 
     @server.list_tools()
@@ -48,6 +52,8 @@ def make_server():
         )
 
     async def read_resource(request):
+        if resource_error:
+            raise ValueError(f"Cannot read {request.params.uri}")
         return mcp_types.ServerResult(
             mcp_types.ReadResourceResult(
                 contents=[
@@ -91,29 +97,59 @@ async def test_list_tools_injects_optional_context_and_captures():
     assert listed and listed[0]["properties"]["$mcp_listed_tool_names"] == ["echo"]
 
 
-async def test_resource_discovery_and_read_are_captured():
-    server = make_server()
+@pytest.mark.parametrize(
+    "uri, captured_uri, resource_error",
+    [
+        ("file:///guide.md", "file:///guide.md", False),
+        (
+            "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
+            "https://example.com/guide?token=[redacted]",
+            False,
+        ),
+        (
+            "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
+            "https://example.com/guide?token=[redacted]",
+            True,
+        ),
+    ],
+)
+async def test_resource_discovery_and_read_are_captured(
+    uri: str, captured_uri: str, resource_error: bool
+) -> None:
+    server = make_server(resource_error=resource_error)
     client = FakeClient()
     instrument(server, client)
 
-    list_handler = server.request_handlers[mcp_types.ListResourcesRequest]
-    await list_handler(mcp_types.ListResourcesRequest())
-    read_handler = server.request_handlers[mcp_types.ReadResourceRequest]
-    result = await read_handler(
-        mcp_types.ReadResourceRequest(
-            params=mcp_types.ReadResourceRequestParams(uri="file:///guide.md")
-        )
+    await server.request_handlers[mcp_types.ListResourcesRequest](
+        mcp_types.ListResourcesRequest()
     )
+    request = mcp_types.ReadResourceRequest(
+        params=mcp_types.ReadResourceRequestParams(uri=uri)
+    )
+    read = server.request_handlers[mcp_types.ReadResourceRequest](request)
+    if resource_error:
+        with pytest.raises(ValueError) as caught:
+            await read
+        assert str(caught.value) == f"Cannot read {uri}"
+    else:
+        result = await read
+        assert result.root.contents[0].text == "# Guide"
+        assert str(result.root.contents[0].uri) == uri
     await _flush()
 
-    assert result.root.contents[0].text == "# Guide"
-    listed = _events(client, "$mcp_resources_list")
-    assert len(listed) == 1
-    read = _events(client, "$mcp_resource_read")
-    assert len(read) == 1
-    assert read[0]["properties"]["$mcp_resource_name"] == "file:///guide.md"
-    assert read[0]["properties"]["$mcp_is_error"] is False
-    assert "$mcp_response" not in read[0]["properties"]
+    assert len(_events(client, "$mcp_resources_list")) == 1
+    reads = _events(client, "$mcp_resource_read")
+    assert len(reads) == 1
+    props = reads[0]["properties"]
+    assert props["$mcp_resource_name"] == captured_uri
+    assert props["$mcp_parameters"]["request"]["params"]["uri"] == captured_uri
+    assert props["$mcp_is_error"] is resource_error
+    assert "$mcp_response" not in props
+    exceptions = _events(client, "$exception")
+    assert len(exceptions) == int(resource_error)
+    if resource_error:
+        assert exceptions[0]["properties"]["$mcp_resource_name"] == captured_uri
+    assert "phx_EXAMPLEONLYFAKEVALUE00000000000" not in json.dumps(client.events)
 
 
 async def test_tool_call_success_captures_intent():

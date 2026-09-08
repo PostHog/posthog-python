@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from ._event_types import MCPAnalyticsEventType
+
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
@@ -104,6 +106,10 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     if result.get("parameters") is not None:
         result["parameters"] = sanitize_captured_value(result["parameters"])
+
+    if result.get("event_type") == MCPAnalyticsEventType.MCP_RESOURCES_READ:
+        if result.get("resource_name") is not None:
+            result["resource_name"] = sanitize_captured_value(result["resource_name"])
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud. Redact it like any other value.

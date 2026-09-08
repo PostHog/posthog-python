@@ -7,6 +7,8 @@ string) behind ``add_request_handler``/``get_request_handler``. Handlers take
 converting to ``is_error`` results.
 """
 
+import json
+
 import pytest
 
 import mcp.types as mcp_types
@@ -22,7 +24,7 @@ from posthog.test.mcp._helpers import (
 from posthog.test.mcp._helpers_v2 import fake_ctx
 
 
-def make_server():
+def make_server(*, resource_error: bool = False) -> Server:
     async def on_call_tool(ctx, params):
         if params.name == "boom":
             raise ValueError("explode")
@@ -75,6 +77,8 @@ def make_server():
         )
 
     async def on_read_resource(ctx, params):
+        if resource_error:
+            raise ValueError(f"Cannot read {params.uri}")
         return mcp_types.ReadResourceResult(
             contents=[
                 mcp_types.TextResourceContents(
@@ -133,27 +137,57 @@ async def test_list_tools_injects_optional_context_and_captures():
     assert listed[0]["properties"]["$mcp_server_name"] == "test-low-v2"
 
 
-async def test_resource_discovery_and_read_are_captured():
-    server = make_server()
+@pytest.mark.parametrize(
+    "uri, captured_uri, resource_error",
+    [
+        ("file:///guide.md", "file:///guide.md", False),
+        (
+            "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
+            "https://example.com/guide?token=[redacted]",
+            False,
+        ),
+        (
+            "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
+            "https://example.com/guide?token=[redacted]",
+            True,
+        ),
+    ],
+)
+async def test_resource_discovery_and_read_are_captured(
+    uri: str, captured_uri: str, resource_error: bool
+) -> None:
+    server = make_server(resource_error=resource_error)
     client = FakeClient()
     instrument(server, client)
 
     await _resource_request(server, "resources/list")
-    result = await _resource_request(
-        server,
-        "resources/read",
-        mcp_types.ReadResourceRequestParams(uri="file:///guide.md"),
+    read = _resource_request(
+        server, "resources/read", mcp_types.ReadResourceRequestParams(uri=uri)
     )
+    if resource_error:
+        with pytest.raises(ValueError) as caught:
+            await read
+        assert str(caught.value) == f"Cannot read {uri}"
+    else:
+        result = await read
+        assert result.contents[0].text == "# Guide"
+        assert str(result.contents[0].uri) == uri
     await _flush()
 
-    assert result.contents[0].text == "# Guide"
-    listed = _events(client, "$mcp_resources_list")
-    assert len(listed) == 1
-    read = _events(client, "$mcp_resource_read")
-    assert len(read) == 1
-    assert read[0]["properties"]["$mcp_resource_name"] == "file:///guide.md"
-    assert read[0]["properties"]["$mcp_protocol_version"] == "2026-07-28"
-    assert "$mcp_response" not in read[0]["properties"]
+    assert len(_events(client, "$mcp_resources_list")) == 1
+    reads = _events(client, "$mcp_resource_read")
+    assert len(reads) == 1
+    props = reads[0]["properties"]
+    assert props["$mcp_resource_name"] == captured_uri
+    assert props["$mcp_parameters"]["request"]["params"]["uri"] == captured_uri
+    assert props["$mcp_is_error"] is resource_error
+    assert "$mcp_response" not in props
+    exceptions = _events(client, "$exception")
+    assert len(exceptions) == int(resource_error)
+    if resource_error:
+        assert exceptions[0]["properties"]["$mcp_resource_name"] == captured_uri
+    assert "phx_EXAMPLEONLYFAKEVALUE00000000000" not in json.dumps(client.events)
+    assert props["$mcp_protocol_version"] == "2026-07-28"
 
 
 # --- tools/call --------------------------------------------------------------

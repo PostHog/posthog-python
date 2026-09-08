@@ -4,6 +4,11 @@ Product analytics for Model Context Protocol servers. Wrap a Python MCP server s
 tool calls, agent intent, resource discovery and reads, and failures are captured
 to PostHog as `$mcp_*` events.
 
+Resource bodies are not captured. Resource addresses use the same credential
+redaction as request parameters, including on failed reads. Requests and responses
+keep their original addresses. Use `before_send` to remove any additional
+application-specific sensitive data.
+
 ```python
 from posthog import Posthog
 from posthog.mcp import instrument
