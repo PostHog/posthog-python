@@ -41,21 +41,10 @@ def add_model_parameter_to_schema(
     never overwrite or later strip a value that belongs to the tool itself.
     """
     schema = input_schema
-    if (
-        schema
-        and isinstance(schema.get("properties"), dict)
-        and "llm_model" in schema["properties"]
-    ):
+    if not can_inject_model_parameter(schema):
         log(
-            f"WARN: Tool \"{tool_name}\" already has 'llm_model' parameter. "
-            "Skipping model injection."
-        )
-        return schema
-
-    if schema and any(schema.get(key) for key in ("$ref", "oneOf", "allOf", "anyOf")):
-        log(
-            f'WARN: Tool "{tool_name}" has complex schema '
-            "($ref/oneOf/allOf/anyOf). Skipping model injection."
+            f'WARN: Tool "{tool_name}" has an application-owned llm_model or '
+            "complex schema ($ref/oneOf/allOf/anyOf). Skipping model injection."
         )
         return schema
 
@@ -65,9 +54,6 @@ def add_model_parameter_to_schema(
     schema = copy.deepcopy(schema)
     if not isinstance(schema.get("properties"), dict):
         schema["properties"] = {}
-    if schema.get("additionalProperties") is False:
-        schema.pop("additionalProperties", None)
-
     schema["properties"]["llm_model"] = {
         "type": "string",
         "description": description_override or DEFAULT_MODEL_PARAMETER_DESCRIPTION,

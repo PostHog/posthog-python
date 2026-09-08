@@ -1,6 +1,10 @@
 """Tests for the PostHogMCP custom-dispatcher client (Milestone 3)."""
 
+from types import SimpleNamespace
 from unittest import mock
+
+import pytest
+from mcp.types import Tool
 
 from posthog.capture_mode import CaptureMode
 from posthog.mcp import PostHogMCP
@@ -213,8 +217,12 @@ def test_prepare_tool_list_can_be_disabled():
     assert "context" not in prepared[0]["inputSchema"]["properties"]
 
 
-async def test_prepare_and_capture_model():
-    client, captured = make_client(capture_model=True)
+@pytest.mark.parametrize(
+    "options", [{"capture_model": True}, {"capture_model": False}, {}]
+)
+async def test_prepare_and_capture_model(options: dict[str, bool]) -> None:
+    client, captured = make_client(**options)
+    enabled = options.get("capture_model", False)
     tools = [
         {
             "name": "search",
@@ -223,19 +231,20 @@ async def test_prepare_and_capture_model():
     ]
 
     prepared_tools = client.prepare_tool_list(tools)
-    assert (
-        prepared_tools[0]["inputSchema"]["properties"]["llm_model"]["type"] == "string"
-    )
-    assert "llm_model" in prepared_tools[0]["inputSchema"]["required"]
+    schema = prepared_tools[0]["inputSchema"]
+    assert ("llm_model" in schema["properties"]) == enabled
+    assert ("llm_model" in schema.get("required", [])) == enabled
 
     call = client.prepare_tool_call(
         "search",
         {"q": "docs", "llm_model": "claude-opus-4-8"},
         request_meta={"x-codex-turn-metadata": {"model": "gpt-5.6-sol"}},
     )
-    assert call.args == {"q": "docs"}
-    assert call.llm_model == "gpt-5.6-sol"
-    assert call.llm_model_source == "client_metadata"
+    assert call.args == (
+        {"q": "docs"} if enabled else {"q": "docs", "llm_model": "claude-opus-4-8"}
+    )
+    assert call.llm_model == ("gpt-5.6-sol" if enabled else None)
+    assert call.llm_model_source == ("client_metadata" if enabled else None)
 
     client.capture_tool_call(
         "search",
@@ -245,8 +254,41 @@ async def test_prepare_and_capture_model():
     await _flush()
 
     props = _events(captured, "$mcp_tool_call")[0]["properties"]
-    assert props["$mcp_llm_model"] == "gpt-5.6-sol"
-    assert props["$mcp_llm_model_source"] == "client_metadata"
+    assert props.get("$mcp_llm_model") == ("gpt-5.6-sol" if enabled else None)
+    assert props.get("$mcp_llm_model_source") == (
+        "client_metadata" if enabled else None
+    )
+
+
+@pytest.mark.parametrize("sdk_tool", [False, True])
+@pytest.mark.parametrize("pass_original_tool", [False, True])
+def test_prepare_model_preserves_object_tool_ownership(
+    sdk_tool: bool, pass_original_tool: bool
+) -> None:
+    client, _ = make_client(capture_model=True)
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    tool = (
+        Tool(name="search", inputSchema=schema)
+        if sdk_tool
+        else SimpleNamespace(name="search", input_schema=schema)
+    )
+    schema_attribute = (
+        "input_schema" if hasattr(tool, "input_schema") else "inputSchema"
+    )
+    for _ in range(2):
+        prepared = client.prepare_tool_list([tool], context=False)
+        assert "llm_model" in getattr(prepared[0], schema_attribute)["properties"]
+        call = client.prepare_tool_call(
+            "search",
+            {"q": "docs", "llm_model": "example-model"},
+            original_tool=tool if pass_original_tool else None,
+        )
+        assert call.args == {"q": "docs"}
+        assert (call.llm_model, call.llm_model_source) == (
+            "example-model",
+            "self_reported",
+        )
+        assert "llm_model" not in getattr(tool, schema_attribute)["properties"]
 
 
 def test_prepare_tool_call_preserves_application_owned_model_argument():

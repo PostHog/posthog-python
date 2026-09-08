@@ -11,6 +11,7 @@ methods directly. MCP events flow through the same sanitize -> truncate ->
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -278,7 +279,8 @@ class PostHogMCP(Client):
         """Inject the ``context`` argument into every tool so agents state their
         intent (captured as ``$mcp_intent``), and optionally append the
         ``get_more_tools`` virtual tool (``report_missing=True``). Returns a new
-        list; dict tools are copied, tool objects are mutated in place."""
+        list; dict tools are copied, context injection mutates tool objects in
+        place, and model injection copies them to preserve field ownership."""
         prepared = []
         context_description = get_context_description(context)
         for tool in tools:
@@ -307,7 +309,9 @@ class PostHogMCP(Client):
         original_tool: Any = None,
     ) -> PreparedToolCall:
         """Pull the agent's intent off the injected ``context`` argument, strip
-        ``context`` from the arguments, and flag the ``get_more_tools`` virtual tool."""
+        ``context`` from the arguments, and flag the ``get_more_tools`` virtual tool.
+        When model capture is enabled, resolve its value and source and strip
+        the SDK-owned ``llm_model`` argument before dispatch."""
         raw_context = (args or {}).get("context")
         intent = (
             raw_context.strip()
@@ -315,6 +319,8 @@ class PostHogMCP(Client):
             else None
         )
         analytics_owns_model = False
+        llm_model: Optional[str] = None
+        llm_model_source: Optional[MCPAnalyticsModelSource] = None
         if is_capture_model_enabled(self._capture_model):
             if original_tool is not None:
                 analytics_owns_model = can_inject_model_parameter(
@@ -322,9 +328,9 @@ class PostHogMCP(Client):
                 )
             else:
                 analytics_owns_model = self._model_parameter_injected.get(name, False)
-        llm_model, llm_model_source = resolve_model(
-            request_meta, args, allow_self_reported=analytics_owns_model
-        )
+            llm_model, llm_model_source = resolve_model(
+                request_meta, args, allow_self_reported=analytics_owns_model
+            )
         prepared_args = _strip_context(args)
         if analytics_owns_model:
             prepared_args = _strip_model(prepared_args)
@@ -402,8 +408,8 @@ class PostHogMCP(Client):
         return tool
 
     def _inject_models(self, tools: List[Any]) -> List[Any]:
-        self._model_parameter_injected.clear()
         if not is_capture_model_enabled(self._capture_model):
+            self._model_parameter_injected = {}
             return tools
 
         ownership: Dict[str, bool] = {}
@@ -413,16 +419,16 @@ class PostHogMCP(Client):
                 continue
             can_inject = can_inject_model_parameter(_tool_schema(tool))
             ownership[name] = ownership.get(name, True) and can_inject
-        self._model_parameter_injected.update(ownership)
-
-        return [
-            self._inject_model(tool)
+        prepared = [
+            self._inject_model(tool, ownership)
             if ownership.get(_tool_name(tool) or "", True)
             else tool
             for tool in tools
         ]
+        self._model_parameter_injected = ownership
+        return prepared
 
-    def _inject_model(self, tool: Any) -> Any:
+    def _inject_model(self, tool: Any, ownership: Dict[str, bool]) -> Any:
         name = _tool_name(tool) or "unknown"
 
         schema = _tool_schema(tool)
@@ -432,12 +438,17 @@ class PostHogMCP(Client):
         if isinstance(tool, dict):
             return {**tool, "inputSchema": new_schema}
         try:
-            if hasattr(tool, "input_schema"):
-                tool.input_schema = new_schema
+            prepared = copy.copy(tool)
+            if prepared is tool:
+                ownership[name] = False
+                return tool
+            if hasattr(prepared, "input_schema"):
+                prepared.input_schema = new_schema
             else:
-                tool.inputSchema = new_schema
+                prepared.inputSchema = new_schema
+            return prepared
         except Exception:  # noqa: BLE001 - read-only descriptors fail closed
-            self._model_parameter_injected[name] = False
+            ownership[name] = False
         return tool
 
 

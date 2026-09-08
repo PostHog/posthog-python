@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from posthog.mcp._model_parameters import (
     add_model_parameter_to_schema,
@@ -31,7 +32,15 @@ def test_add_model_parameter_to_schema(schema):
         "description": DEFAULT_MODEL_PARAMETER_DESCRIPTION,
     }
     assert "llm_model" in result["required"]
-    assert result.get("additionalProperties") is not False
+    assert result.get("additionalProperties") == (schema or {}).get(
+        "additionalProperties"
+    )
+    if schema and schema.get("additionalProperties") is False:
+        validator = Draft202012Validator(result)
+        assert validator.is_valid({"query": "docs", "llm_model": "example-model"})
+        assert not validator.is_valid(
+            {"query": "docs", "llm_model": "example-model", "undeclared": True}
+        )
 
 
 @pytest.mark.parametrize(
