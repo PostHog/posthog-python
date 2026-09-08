@@ -27,6 +27,75 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# PII redaction for the agent-narrated intent string only. $mcp_intent is free
+# text the calling LLM writes into the injected `context` argument, so it can
+# carry personal data the model read aloud despite being told not to. We redact
+# well-defined *structured identifiers* — the kind regex can match with high
+# precision. Person names and postal addresses are deliberately out of scope:
+# they need an NER model that a client SDK cannot ship, and naive patterns would
+# over-redact ordinary prose. Patterns are ordered so an earlier pass never eats
+# digits a later pass needs (email before phone, IPs before phone, cards before
+# the generic phone pass). See `redact_pii`.
+#
+# The `\d`/`\w`-based patterns are compiled with re.ASCII to match the JS
+# semantics they are ported from: JS `\d`/`\w`/`\b` are ASCII-only, whereas
+# Python's default is Unicode and would over-match (e.g. Unicode digits).
+#
+# Horizontal Unicode spaces (NBSP, narrow NBSP, ideographic space, ...) are what
+# appear when text is copied from web pages or PDFs. `redact_pii` normalizes them
+# to an ASCII space first so the separator-based card/phone/SSN candidates match
+# them instead of leaking the identifier they group.
+_UNICODE_SPACE_PATTERN = re.compile("[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
+# Quantifiers are bounded to RFC-ish limits (local-part <=64, domain <=255,
+# TLD <=24) rather than open-ended `+`. Unbounded `+` here is quadratic: on a
+# long run of local-part chars with no valid `.tld`, `sub` rescans from every
+# start position. $mcp_intent is attacker-influenceable free text seen before
+# truncation, so an open-ended pattern is a reachable event-loop stall.
+_EMAIL_PATTERN = re.compile(
+    r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}"
+)
+_IPV4_PATTERN = re.compile(
+    r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b",
+    re.ASCII,
+)
+# Four forms: full 8-group, `::`-terminated (`2001:db8::`), a middle `::`
+# (`2001:db8::8a2e:1`), and a leading `::` (`::1`). The compressed branches use a
+# `(?<![\w:])` boundary so a hex-looking C++ scope like `std::bad` — whose left
+# side is not a valid hex group — is not mistaken for an address, while a
+# genuinely address-shaped `dead::beef` still matches.
+_IPV6_PATTERN = re.compile(
+    r"\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b"
+    r"|(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,7}:(?![\w:])"
+    r"|(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,5}(?![\w])"
+    r"|(?<![\w:])::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})(?![\w])",
+    re.ASCII,
+)
+# A separator (space, dot, or dash) is required between the 3-2-4 groups so bare
+# 9-digit IDs are never mistaken for an SSN.
+_US_SSN_PATTERN = re.compile(r"\b\d{3}[ .-]\d{2}[ .-]\d{4}\b", re.ASCII)
+# A run of >=13 digits optionally grouped by a single space, dot, dash, or
+# slash. This only marks the numeric region; `_redact_card_in_match` then looks
+# for the actual card as a run of whole separator-delimited groups that passes
+# Luhn, so an adjacent field such as an expiry (`4111 1111 1111 1111 12/30`) is
+# not absorbed into a failing check that would leak the card.
+_CREDIT_CARD_CANDIDATE_PATTERN = re.compile(r"\b\d(?:[ ./-]?\d){12,}\b", re.ASCII)
+# Matches each separator-delimited digit group inside a card candidate.
+_DIGIT_GROUP_PATTERN = re.compile(r"\d+", re.ASCII)
+# Phone matching is structural rather than "any 10-15 digits", so dates
+# (`2024-01-15 12:30`) and dotted versions are not mistaken for numbers. Two
+# forms: a North-American 3-3-4 grouping, and an international number that must
+# start with `+` and a country code. The area code is either `(415)` (the
+# separator after it is optional, so `(415)555-0142` matches) or a bare `415`
+# that must be followed by a separator (space, dot, dash, or slash) — so a bare
+# digit run is never taken for a phone number.
+_PHONE_NANP_PATTERN = re.compile(
+    r"(?<![\w+])(?:\+?1[ ./-]?)?(?:\(\d{3}\)[ ./-]?|\d{3}[ ./-])\d{3}[ ./-]\d{4}(?![\w])",
+    re.ASCII,
+)
+_PHONE_INTL_PATTERN = re.compile(
+    r"(?<!\w)\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}(?![\w])", re.ASCII
+)
+
 
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict)
@@ -73,6 +142,79 @@ def _is_secret(word: str) -> bool:
         return False
 
 
+def _passes_luhn(digits: str) -> bool:
+    total = 0
+    double = False
+    for index in range(len(digits) - 1, -1, -1):
+        digit = ord(digits[index]) - 48
+        if digit < 0 or digit > 9:
+            return False
+        if double:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+        double = not double
+    return total % 10 == 0
+
+
+def _redact_card_in_match(match: re.Match[str]) -> str:
+    """Within a card candidate, redact every actual card — each run of whole
+    separator-delimited digit groups whose joined digits are 13-19 long and pass
+    Luhn — leaving any adjacent field (an expiry, a following ID) in place. For
+    each starting group it takes the longest such run, redacts it, then resumes
+    scanning after it so a second card in the same span (e.g. two numbers listed
+    together) is caught too. Checking group-aligned runs rather than arbitrary
+    digit windows keeps the false-positive rate at Luhn's own ~1-in-10, instead of
+    letting a chance-valid sub-window of an ordinary long ID trigger redaction."""
+    text = match.group(0)
+    groups = [
+        (m.group(0), m.start(), m.end()) for m in _DIGIT_GROUP_PATTERN.finditer(text)
+    ]
+    output = ""
+    cursor = 0
+    first = 0
+    while first < len(groups):
+        digits = ""
+        matched_last = -1
+        for last in range(first, len(groups)):
+            digits += groups[last][0]
+            if len(digits) > 19:
+                break
+            if len(digits) >= 13 and _passes_luhn(digits):
+                matched_last = last
+        if matched_last >= 0:
+            output += text[cursor : groups[first][1]] + _REDACTED_VALUE
+            cursor = groups[matched_last][2]
+            first = matched_last + 1
+        else:
+            first += 1
+    return output + text[cursor:]
+
+
+def redact_pii(value: Any) -> Any:
+    """Redact structured personal identifiers (emails, IP addresses, credit-card
+    numbers, US SSNs, and phone numbers) from a free-text string. Intended for the
+    agent-narrated $mcp_intent value only — not for structured tool parameters or
+    responses, where the same shapes are often legitimate data. Horizontal Unicode
+    spaces are first normalized to an ASCII space so copy-pasted identifiers still
+    match. Returns a new string; leaves the input's identifiers untouched when
+    nothing matches. Non-string input (e.g. a non-string ``user_intent`` reaching
+    the custom-event API) is returned unchanged, matching the pass-through
+    behavior of ``sanitize_captured_value`` for non-str values."""
+    if not isinstance(value, str):
+        return value
+    result = _UNICODE_SPACE_PATTERN.sub(" ", value)
+    result = _EMAIL_PATTERN.sub(_REDACTED_VALUE, result)
+    result = _IPV4_PATTERN.sub(_REDACTED_VALUE, result)
+    result = _IPV6_PATTERN.sub(_REDACTED_VALUE, result)
+    result = _CREDIT_CARD_CANDIDATE_PATTERN.sub(_redact_card_in_match, result)
+    result = _US_SSN_PATTERN.sub(_REDACTED_VALUE, result)
+    result = _PHONE_NANP_PATTERN.sub(_REDACTED_VALUE, result)
+    result = _PHONE_INTL_PATTERN.sub(_REDACTED_VALUE, result)
+    return result
+
+
 def sanitize_captured_value(value: Any) -> Any:
     if value is None:
         return value
@@ -106,9 +248,15 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
         result["parameters"] = sanitize_captured_value(result["parameters"])
 
     # The intent comes straight from an agent-narrated `context` string, so it
-    # can contain a secret the LLM read aloud. Redact it like any other value.
+    # can contain a secret the LLM read aloud or personal data it narrated about
+    # the user. Redact it like any other captured value, then strip structured
+    # PII (emails, phone numbers, IPs, cards, SSNs) rather than shipping it raw
+    # as $mcp_intent. PII redaction is scoped to the intent only — structured
+    # tool parameters and responses often hold the same shapes as legitimate data.
     if result.get("user_intent") is not None:
-        result["user_intent"] = sanitize_captured_value(result["user_intent"])
+        result["user_intent"] = redact_pii(
+            sanitize_captured_value(result["user_intent"])
+        )
 
     # An exception message is free text a server wrote, and it reaches PostHog
     # on the $exception sibling and — since it is also surfaced as
