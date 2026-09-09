@@ -25,6 +25,7 @@ _V2_ONLY = [
     "test_v2_mcpserver.py",
     "test_v2_lowlevel.py",
     "test_v2_wire_dual_era.py",
+    "test_fastmcp_v4.py",
 ]
 
 collect_ignore = _V2_ONLY if MCP_MAJOR < 2 else _V1_ONLY

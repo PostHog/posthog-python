@@ -89,16 +89,21 @@ def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
     _patch_add_request_handler(low_level, data, wrap_call=False, high_level=server)
 
 
-def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
+def instrument_lowlevel_v2(
+    server: Any, data: MCPAnalyticsData, *, strip_injected_for: Any = None
+) -> None:
     """Instrument a raw v2 low-level ``Server``. ``context`` is injected as an
     *optional* schema property and NOT stripped — the schema doubles as the
     call's validation surface, and a typical ``(ctx, params)`` handler ignores
-    extra argument keys."""
+    extra argument keys. For standalone FastMCP, ``strip_injected_for`` supplies
+    the tool schemas so injected arguments are removed before validation."""
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
-    _wrap_v2_call_tool(server, data)
+    _wrap_v2_call_tool(server, data, strip_injected_for=strip_injected_for)
     _wrap_v2_list_tools(server, data, context_required=False)
-    _patch_add_request_handler(server, data, wrap_call=True)
+    _patch_add_request_handler(
+        server, data, wrap_call=True, strip_injected_for=strip_injected_for
+    )
 
 
 # --- registry plumbing ---------------------------------------------------------
@@ -110,7 +115,12 @@ def _replace_handler(server: Any, method: str, wrapped: Any, params_type: Any) -
 
 
 def _patch_add_request_handler(
-    server: Any, data: MCPAnalyticsData, *, wrap_call: bool, high_level: Any = None
+    server: Any,
+    data: MCPAnalyticsData,
+    *,
+    wrap_call: bool,
+    high_level: Any = None,
+    strip_injected_for: Any = None,
 ) -> None:
     """Wrap ``add_request_handler`` so handlers registered *after* instrument()
     for the instrumented methods get wrapped too. Registrations for other
@@ -124,7 +134,7 @@ def _patch_add_request_handler(
         if getattr(handler, _WRAPPED_FLAG, False):
             return
         if method == _CALL_METHOD and wrap_call:
-            _wrap_v2_call_tool(server, data)
+            _wrap_v2_call_tool(server, data, strip_injected_for=strip_injected_for)
         elif method == _LIST_METHOD:
             _wrap_v2_list_tools(
                 server,
@@ -394,7 +404,17 @@ def _deliver_conversation_id(
 # --- low-level: tools/call ------------------------------------------------------
 
 
-def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
+async def _standalone_tool_schema(server: Any, name: str) -> Any:
+    try:
+        tool = await server.get_tool(name)
+        return getattr(tool, "parameters", None)
+    except Exception:  # noqa: BLE001 - schema lookup must not prevent dispatch
+        return None
+
+
+def _wrap_v2_call_tool(
+    server: Any, data: MCPAnalyticsData, *, strip_injected_for: Any = None
+) -> None:
     entry = server.get_request_handler(_CALL_METHOD)
     if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
         return
@@ -403,6 +423,27 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     async def handler(ctx: Any, params: Any) -> Any:
         name = params.name
         arguments = dict(params.arguments or {})
+        analytics_owns_model = data.tool_model_parameter_injected.get(name, False)
+        if strip_injected_for is not None:
+            schema = await _standalone_tool_schema(strip_injected_for, name)
+            analytics_owns_model = (
+                isinstance(schema, dict)
+                and is_capture_model_enabled(data.options.capture_model)
+                and can_inject_model_parameter(schema)
+            )
+            injected = {"context"}
+            if data.options.enable_conversation_id:
+                injected.add("conversation_id")
+            if analytics_owns_model:
+                injected.add("llm_model")
+            call_arguments = {
+                key: value
+                for key, value in arguments.items()
+                if not isinstance(schema, dict)
+                or key not in injected
+                or schema_has_param(schema, key)
+            }
+            params = params.model_copy(update={"arguments": call_arguments})
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
@@ -411,9 +452,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             name=name,
             arguments=arguments,
             request_meta=request_meta_from_context(ctx),
-            allow_self_reported_model=data.tool_model_parameter_injected.get(
-                name, False
-            ),
+            allow_self_reported_model=analytics_owns_model,
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,

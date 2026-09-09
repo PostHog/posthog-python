@@ -164,10 +164,10 @@ def is_tool_result_error(result: Any) -> bool:
     (wire JSON unchanged); check both shapes."""
     if isinstance(result, dict):
         return result.get("isError") is True or result.get("is_error") is True
-    return (
-        getattr(result, "isError", None) is True
-        or getattr(result, "is_error", None) is True
-    )
+    is_error = getattr(result, "is_error", None)
+    if is_error is not None:
+        return is_error is True
+    return getattr(result, "isError", None) is True
 
 
 def build_tool_call_request(

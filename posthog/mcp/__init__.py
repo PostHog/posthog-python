@@ -288,9 +288,16 @@ def instrument(
 
             instrument_mcpserver_v2(server, data)
         elif is_fastmcp_v2(server):
-            from ._instrument_lowlevel import instrument_fastmcp_v2
+            if uses_v2_handler_registry(server._mcp_server):
+                from ._instrument_v2 import instrument_lowlevel_v2
 
-            instrument_fastmcp_v2(server, data)
+                instrument_lowlevel_v2(
+                    server._mcp_server, data, strip_injected_for=server
+                )
+            else:
+                from ._instrument_lowlevel import instrument_fastmcp_v2
+
+                instrument_fastmcp_v2(server, data)
         elif is_low_level_server(server):
             if uses_v2_handler_registry(server):
                 from ._instrument_v2 import instrument_lowlevel_v2
