@@ -111,9 +111,6 @@ class MCPAnalyticsOptions:
     enable_exception_autocapture: bool = True
     # Inject a required `context` parameter on every tool to capture user intent.
     context: Union[bool, MCPAnalyticsContextOptions] = True
-    # Capture the model from recognized client metadata, falling back to an
-    # SDK-injected llm_model argument. Off by default.
-    capture_model: Union[bool, MCPAnalyticsModelOptions] = False
     # Identify the calling user — a callable (request, extra) -> UserIdentity|None
     # (sync or async), or a static UserIdentity.
     identify: Optional[Union[IdentifyFn, UserIdentity]] = None
@@ -123,6 +120,9 @@ class MCPAnalyticsOptions:
     before_send: Optional[BeforeSendFn] = None
     # Extra properties merged onto every auto-captured event.
     event_properties: Optional[EventPropertiesFn] = None
+    # Capture the model from recognized client metadata, falling back to an
+    # SDK-injected llm_model argument. Off by default.
+    capture_model: Union[bool, MCPAnalyticsModelOptions] = False
 
 
 @dataclass
@@ -142,9 +142,9 @@ class PreparedToolCall:
     args: Optional[JsonRecord] = None
     intent: Optional[str] = None
     intent_source: Optional[str] = None
+    is_missing_capability: bool = False
     llm_model: Optional[str] = None
     llm_model_source: Optional[MCPAnalyticsModelSource] = None
-    is_missing_capability: bool = False
 
 
 @dataclass
