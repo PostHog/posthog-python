@@ -166,6 +166,8 @@ Standalone `fastmcp` 4 uses the MCP SDK v2 handler registry. `instrument()` dete
 that registry automatically and captures tool calls over stdio and streamable HTTP,
 including the stateless protocol. Mounted tools retain their own arguments; analytics
 parameters are removed before dispatch only when the tool does not declare them.
+Instrumenting both the wrapper and its underlying server works in either order.
+For versioned tools, argument ownership follows the version requested by the client.
 The same installation code continues to support standalone FastMCP 2.x/3.x on MCP SDK v1.
 
 Two gaps worth knowing: jlowin's `fastmcp` 2.x/3.x doesn't expose the attribute the

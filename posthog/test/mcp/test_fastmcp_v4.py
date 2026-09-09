@@ -38,7 +38,7 @@ async def rpc(http, protocol, method, params):
     params = dict(params)
     headers = legacy_headers()
     if protocol == MODERN_PROTOCOL_VERSION:
-        params["_meta"] = modern_meta()
+        params["_meta"] = {**modern_meta(), **params.get("_meta", {})}
         headers = modern_headers(method, params.get("name"))
     else:
         headers["mcp-protocol-version"] = protocol
@@ -68,12 +68,18 @@ async def initialize(http, protocol):
 
 
 @pytest.mark.parametrize("protocol", [LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION])
-async def test_capture_success_failure_and_sink_outage(protocol):
+@pytest.mark.parametrize("order", ["wrapper_first", "lowlevel_first", "wrapper_twice"])
+async def test_capture_success_failure_and_sink_outage(protocol, order):
     server = FastMCP("example-server")
     sink = FakeClient()
     options = MCPAnalyticsOptions(enable_conversation_id=True, capture_model=True)
-    instrument(server, sink, options)
-    instrument(server, sink, options)
+    targets = {
+        "wrapper_first": [server, server._mcp_server],
+        "lowlevel_first": [server._mcp_server, server],
+        "wrapper_twice": [server, server],
+    }
+    for target in targets[order]:
+        instrument(target, sink, options)
     received = []
 
     @server.tool()
@@ -171,3 +177,33 @@ async def test_preserve_application_parameters(list_first, mounted):
     calls = events_named(sink, "$mcp_tool_call")
     assert len(calls) == 1
     assert "$mcp_llm_model" not in calls[0]["properties"]
+
+
+async def test_preserve_parameters_of_requested_tool_version():
+    server = FastMCP("example-versioned-tools")
+
+    @server.tool(name="echo", version="1")
+    def older(text: str, context: str) -> str:
+        return f"{text}|{context}"
+
+    @server.tool(name="echo", version="2")
+    def newer(text: str) -> str:
+        return text
+
+    sink = FakeClient()
+    instrument(server, sink)
+    async with wire(server) as http:
+        result = await rpc(
+            http,
+            MODERN_PROTOCOL_VERSION,
+            "tools/call",
+            {
+                "name": "echo",
+                "arguments": {"text": "example", "context": "application-context"},
+                "_meta": {"fastmcp": {"version": "1"}},
+            },
+        )
+        assert not result.get("isError", False), result
+        assert result["content"][0]["text"] == "example|application-context"
+        await flush_background()
+    assert len(events_named(sink, "$mcp_tool_call")) == 1

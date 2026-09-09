@@ -31,6 +31,7 @@ v2 models expose snake_case attributes (``is_error``, ``input_schema``,
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any, Dict, Optional, Tuple
 
 import mcp.types as mcp_types
@@ -89,21 +90,17 @@ def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
     _patch_add_request_handler(low_level, data, wrap_call=False, high_level=server)
 
 
-def instrument_lowlevel_v2(
-    server: Any, data: MCPAnalyticsData, *, strip_injected_for: Any = None
-) -> None:
+def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
     """Instrument a raw v2 low-level ``Server``. ``context`` is injected as an
     *optional* schema property and NOT stripped — the schema doubles as the
     call's validation surface, and a typical ``(ctx, params)`` handler ignores
-    extra argument keys. For standalone FastMCP, ``strip_injected_for`` supplies
+    extra argument keys. For standalone FastMCP, the shared tracking state supplies
     the tool schemas so injected arguments are removed before validation."""
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
-    _wrap_v2_call_tool(server, data, strip_injected_for=strip_injected_for)
+    _wrap_v2_call_tool(server, data)
     _wrap_v2_list_tools(server, data, context_required=False)
-    _patch_add_request_handler(
-        server, data, wrap_call=True, strip_injected_for=strip_injected_for
-    )
+    _patch_add_request_handler(server, data, wrap_call=True)
 
 
 # --- registry plumbing ---------------------------------------------------------
@@ -115,12 +112,7 @@ def _replace_handler(server: Any, method: str, wrapped: Any, params_type: Any) -
 
 
 def _patch_add_request_handler(
-    server: Any,
-    data: MCPAnalyticsData,
-    *,
-    wrap_call: bool,
-    high_level: Any = None,
-    strip_injected_for: Any = None,
+    server: Any, data: MCPAnalyticsData, *, wrap_call: bool, high_level: Any = None
 ) -> None:
     """Wrap ``add_request_handler`` so handlers registered *after* instrument()
     for the instrumented methods get wrapped too. Registrations for other
@@ -134,7 +126,7 @@ def _patch_add_request_handler(
         if getattr(handler, _WRAPPED_FLAG, False):
             return
         if method == _CALL_METHOD and wrap_call:
-            _wrap_v2_call_tool(server, data, strip_injected_for=strip_injected_for)
+            _wrap_v2_call_tool(server, data)
         elif method == _LIST_METHOD:
             _wrap_v2_list_tools(
                 server,
@@ -404,17 +396,24 @@ def _deliver_conversation_id(
 # --- low-level: tools/call ------------------------------------------------------
 
 
-async def _standalone_tool_schema(server: Any, name: str) -> Any:
+async def _standalone_tool_schema(server: Any, name: str, ctx: Any) -> Any:
     try:
-        tool = await server.get_tool(name)
+        # Standalone FastMCP is optional even when the official MCP SDK is installed.
+        from fastmcp.server.dependencies import extract_version_spec
+        from fastmcp.utilities.versions import VersionSpec
+
+        params = getattr(ctx, "params", None)
+        meta = params.get("_meta") if isinstance(params, Mapping) else None
+        version = extract_version_spec(meta)
+        tool = await server.get_tool(
+            name, version=VersionSpec(eq=version) if version else None
+        )
         return getattr(tool, "parameters", None)
     except Exception:  # noqa: BLE001 - schema lookup must not prevent dispatch
         return None
 
 
-def _wrap_v2_call_tool(
-    server: Any, data: MCPAnalyticsData, *, strip_injected_for: Any = None
-) -> None:
+def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     entry = server.get_request_handler(_CALL_METHOD)
     if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
         return
@@ -424,8 +423,9 @@ def _wrap_v2_call_tool(
         name = params.name
         arguments = dict(params.arguments or {})
         analytics_owns_model = data.tool_model_parameter_injected.get(name, False)
-        if strip_injected_for is not None:
-            schema = await _standalone_tool_schema(strip_injected_for, name)
+        standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
+        if standalone is not None:
+            schema = await _standalone_tool_schema(standalone, name, ctx)
             analytics_owns_model = (
                 isinstance(schema, dict)
                 and is_capture_model_enabled(data.options.capture_model)

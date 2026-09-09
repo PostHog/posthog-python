@@ -84,6 +84,8 @@ class MCPAnalyticsData:
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
     server_name: Optional[str] = None
     server_version: Optional[str] = None
+    # A strong wrapper reference would retain the low-level WeakKeyDictionary key.
+    standalone_fastmcp: Optional["weakref.ReferenceType[Any]"] = None
     session_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def mark_session_initialized(self, session_id: str) -> None:
