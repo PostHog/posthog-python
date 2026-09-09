@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from ._async_request import async_batch_post, async_send_v1_batch
+from ._event_properties import _clean_event_properties
 from .capture_compression import CaptureCompression
 from .capture_mode import CaptureMode
 from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
@@ -49,7 +50,9 @@ async def _invoke_callback(callback, *args):
 
 
 async def _serialized_event_size(event: dict[str, Any]) -> int:
-    serialized = await asyncio.to_thread(json.dumps, event, cls=DatetimeSerializer)
+    serialized = await asyncio.to_thread(
+        lambda: json.dumps(_clean_event_properties(event), cls=DatetimeSerializer)
+    )
     return len(serialized.encode())
 
 
