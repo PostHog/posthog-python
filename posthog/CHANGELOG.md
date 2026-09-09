@@ -1,5 +1,14 @@
 # posthog
 
+## 7.48.0 — 2026-09-09
+
+### Minor changes
+
+- [b8f8253](https://github.com/posthog/posthog-python/commit/b8f8253a1111488a52bd9de402f22306cc02cfaf) Capture MCP model identifiers from client metadata or an SDK-owned self-report field.
+  Model capture remains opt-in and preserves application-owned fields across repeated tool listings.
+  
+  MCP context and conversation-ID injection now preserve `additionalProperties: false` in tool schemas, including when model capture is disabled. Servers that validate these schemas now reject undeclared arguments that earlier SDK versions allowed. Declared analytics fields remain valid. — Thanks @lucasheriques!
+
 ## 7.47.3 — 2026-09-08
 
 ### Patch changes
