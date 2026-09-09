@@ -1,5 +1,26 @@
 # posthog
 
+## 7.48.0 — 2026-09-09
+
+### Minor changes
+
+- [b8f8253](https://github.com/posthog/posthog-python/commit/b8f8253a1111488a52bd9de402f22306cc02cfaf) Capture MCP model identifiers from client metadata or an SDK-owned self-report field.
+  Model capture remains opt-in and preserves application-owned fields across repeated tool listings.
+  
+  MCP context and conversation-ID injection now preserve `additionalProperties: false` in tool schemas, including when model capture is disabled. Servers that validate these schemas now reject undeclared arguments that earlier SDK versions allowed. Declared analytics fields remain valid. — Thanks @lucasheriques!
+
+## 7.47.3 — 2026-09-08
+
+### Patch changes
+
+- [09a8c4e](https://github.com/posthog/posthog-python/commit/09a8c4e1d94cd6bc48813815551aec17dddade0e) Only terminal Responses API statuses become `$ai_stop_reason`: a queued or in-progress background run no longer records a lifecycle state as its stop reason, and an incomplete run is named by what cut it short (`incomplete_details.reason`, e.g. `max_output_tokens`). Streaming runs that end incomplete or failed now carry a stop reason too, and the LangChain callback reads stop reasons from `response_metadata` as well, covering Responses API and Anthropic runs that previously recorded none. — Thanks @bernatixer!
+
+## 7.47.2 — 2026-09-08
+
+### Patch changes
+
+- [80c541d](https://github.com/posthog/posthog-python/commit/80c541d17eff6f08a35c11e217aa6a9b625f18e7) Honor HTTP-date Retry-After headers in asynchronous requests while preserving the existing retry backoff and delay cap. — Thanks @Bortlesboat!
+
 ## 7.47.1 — 2026-09-07
 
 ### Patch changes

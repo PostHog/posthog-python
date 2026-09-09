@@ -28,6 +28,12 @@ from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._model_parameters import (
+    add_model_parameter_to_schema,
+    get_model_description,
+    is_capture_model_enabled,
+    resolve_model,
+)
 from ._output_instructions import add_instructions_to_output_schema
 from .logger import log, warn
 from .request_headers import get_request
@@ -390,6 +396,8 @@ class ToolCallLifecycle:
     data: MCPAnalyticsData
     name: str
     arguments: Optional[Dict[str, Any]]
+    request_meta: Optional[Dict[str, Any]]
+    allow_self_reported_model: bool
     request: Dict[str, Any]
     extra: Dict[str, Any]
     mcp_session_id: Optional[str]
@@ -431,6 +439,8 @@ class ToolCallLifecycle:
             tool_name=self.missing_name,
             context=(self.arguments or {}).get("context"),
             arguments=self.arguments,
+            request_meta=self.request_meta,
+            allow_self_reported_model=True,
             client_name=self.client_name,
             client_version=self.client_version,
             protocol_version=self.protocol_version,
@@ -447,6 +457,8 @@ class ToolCallLifecycle:
             session_id,
             name=self.name,
             arguments=self.arguments,
+            request_meta=self.request_meta,
+            allow_self_reported_model=self.allow_self_reported_model,
             error=error,
             duration_ms=duration_ms,
             client_name=self.client_name,
@@ -468,6 +480,8 @@ class ToolCallLifecycle:
             session_id,
             name=self.name,
             arguments=self.arguments,
+            request_meta=self.request_meta,
+            allow_self_reported_model=self.allow_self_reported_model,
             result=result,
             duration_ms=duration_ms,
             client_name=self.client_name,
@@ -483,6 +497,8 @@ def start_tool_call_lifecycle(
     *,
     name: str,
     arguments: Optional[Dict[str, Any]],
+    request_meta: Optional[Dict[str, Any]],
+    allow_self_reported_model: bool,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
     client_name: Optional[str],
@@ -499,6 +515,8 @@ def start_tool_call_lifecycle(
         data=data,
         name=name,
         arguments=arguments,
+        request_meta=request_meta,
+        allow_self_reported_model=allow_self_reported_model,
         request=build_tool_call_request(name, arguments),
         extra=extra,
         mcp_session_id=mcp_session_id,
@@ -518,6 +536,8 @@ async def record_tool_call(
     *,
     name: str,
     arguments: Optional[Dict[str, Any]],
+    request_meta: Optional[Dict[str, Any]] = None,
+    allow_self_reported_model: bool = False,
     result: Any = None,
     error: Any = None,
     duration_ms: Optional[float] = None,
@@ -537,7 +557,9 @@ async def record_tool_call(
             "resource_name": name,
             "tool_description": data.tool_descriptions.get(name),
             "tool_category": data.tool_categories.get(name),
-            "parameters": build_captured_mcp_parameters(request),
+            "parameters": build_captured_mcp_parameters(
+                request, strip_llm_model=allow_self_reported_model
+            ),
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,
@@ -546,6 +568,15 @@ async def record_tool_call(
             "is_error": False,
         }
         set_event_intent(event, await resolve_tool_call_intent(data, request, extra))
+        if is_capture_model_enabled(data.options.capture_model):
+            model, source = resolve_model(
+                request_meta,
+                arguments,
+                allow_self_reported=allow_self_reported_model,
+            )
+            if model:
+                event["llm_model"] = model
+                event["llm_model_source"] = source
 
         if error is not None:
             event["is_error"] = True
@@ -573,7 +604,7 @@ def extract_tools(result: Any) -> list:
     return list(getattr(root, "tools", []) or [])
 
 
-def append_get_more_tools(result: Any, name: str) -> None:
+def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> None:
     """Append the get_more_tools virtual tool to the real ListToolsResult.tools list."""
     import mcp.types as mcp_types
 
@@ -589,6 +620,13 @@ def append_get_more_tools(result: Any, name: str) -> None:
     root = getattr(result, "root", result)
     tools_list = getattr(root, "tools", None)
     if isinstance(tools_list, list):
+        mutate_tool_schema(
+            data,
+            tool,
+            schema_attribute="inputSchema",
+            owns_context=True,
+            context_required=True,
+        )
         tools_list.append(tool)
 
 
@@ -629,19 +667,38 @@ def mutate_tool_schema(
     ownership decision. Those are the parts that differ across MCP generations;
     context/conversation mutation and output-channel bookkeeping do not.
     """
-    if tool.name == GET_MORE_TOOLS_NAME:
-        return
     schema = getattr(tool, schema_attribute, None)
     original_schema = schema
-    if is_context_enabled(data.options.context) and not owns_context:
+    if (
+        tool.name != GET_MORE_TOOLS_NAME
+        and is_context_enabled(data.options.context)
+        and not owns_context
+    ):
         schema = add_context_parameter_to_schema(
             schema,
             tool.name,
             get_context_description(data.options.context),
             required=context_required,
         )
-    if data.options.enable_conversation_id and not schema_has_param(
-        schema, "conversation_id"
+    if is_capture_model_enabled(data.options.capture_model):
+        model_was_injected = data.tool_model_parameter_injected.get(tool.name, False)
+        app_owns_model = (
+            schema_has_param(schema, "llm_model") and not model_was_injected
+        )
+        if not app_owns_model and not schema_has_param(schema, "llm_model"):
+            schema = add_model_parameter_to_schema(
+                schema,
+                tool.name,
+                get_model_description(data.options.capture_model),
+                required=context_required,
+            )
+        data.tool_model_parameter_injected[tool.name] = (
+            not app_owns_model and schema_has_param(schema, "llm_model")
+        )
+    if (
+        tool.name != GET_MORE_TOOLS_NAME
+        and data.options.enable_conversation_id
+        and not schema_has_param(schema, "conversation_id")
     ):
         schema = add_conversation_id_to_schema(schema, tool.name)
     if schema is not original_schema:
@@ -769,6 +826,8 @@ async def record_missing_capability(
     tool_name: str,
     context: Optional[str],
     arguments: Optional[Dict[str, Any]],
+    request_meta: Optional[Dict[str, Any]] = None,
+    allow_self_reported_model: bool = False,
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
     protocol_version: Optional[str] = None,
@@ -782,7 +841,9 @@ async def record_missing_capability(
             "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
             "session_id": session_id,
             "resource_name": tool_name,
-            "parameters": build_captured_mcp_parameters(request),
+            "parameters": build_captured_mcp_parameters(
+                request, strip_llm_model=allow_self_reported_model
+            ),
             "client_name": client_name,
             "client_version": client_version,
             "protocol_version": protocol_version,
@@ -790,6 +851,15 @@ async def record_missing_capability(
         if isinstance(context, str) and context.strip():
             event["user_intent"] = context.strip()
             event["user_intent_source"] = "context_parameter"
+        if is_capture_model_enabled(data.options.capture_model):
+            model, source = resolve_model(
+                request_meta,
+                arguments,
+                allow_self_reported=allow_self_reported_model,
+            )
+            if model:
+                event["llm_model"] = model
+                event["llm_model_source"] = source
         await _apply_event_properties(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)

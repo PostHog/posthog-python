@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.47.1"
+version = "7.48.0"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -75,6 +75,7 @@ test = [
     "pytest",
     "pytest-timeout",
     "pytest-asyncio",
+    "jsonschema>=4.0",
     "django>=5.2.15,<6.0",
     "openai-agents>=0.18",
     "anthropic>=0.72",

@@ -125,11 +125,11 @@ def test_add_conversation_id_skips_complex_schema():
     assert add_conversation_id_to_schema(schema, "t") is schema
 
 
-def test_add_conversation_id_strips_additional_properties_false():
+def test_add_conversation_id_preserves_additional_properties_false():
     out = add_conversation_id_to_schema(
         {"type": "object", "properties": {}, "additionalProperties": False}, "t"
     )
-    assert "additionalProperties" not in out
+    assert out["additionalProperties"] is False
     assert "conversation_id" in out["properties"]
 
 

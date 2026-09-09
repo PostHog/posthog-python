@@ -50,6 +50,11 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
 )
 from ._internal import MCPAnalyticsData
+from ._model_parameters import (
+    can_inject_model_parameter,
+    is_capture_model_enabled,
+    request_meta_from_context,
+)
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
 from .request_headers import get_request_headers
@@ -235,6 +240,18 @@ def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
     return param in _tool_own_properties_v2(high_level, name)
 
 
+def _analytics_owns_model_v2(
+    high_level: Any, data: MCPAnalyticsData, name: str
+) -> bool:
+    if not is_capture_model_enabled(data.options.capture_model):
+        return False
+    try:
+        tool = high_level._tool_manager.get_tool(name)
+        return can_inject_model_parameter(getattr(tool, "parameters", None))
+    except Exception:  # noqa: BLE001 - model analytics must never break dispatch
+        return data.tool_model_parameter_injected.get(name, False)
+
+
 # --- high-level: ToolManager.call_tool seam --------------------------------------
 
 
@@ -262,6 +279,8 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(ctx),
+            allow_self_reported_model=_analytics_owns_model_v2(server, data, name),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -294,6 +313,8 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 and "conversation_id" not in own_properties
             ):
                 strip_keys.add("conversation_id")
+            if _analytics_owns_model_v2(server, data, name):
+                strip_keys.add("llm_model")
             if strip_keys:
                 call_arguments = {
                     k: v for k, v in arguments.items() if k not in strip_keys
@@ -402,6 +423,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(ctx),
+            allow_self_reported_model=data.tool_model_parameter_injected.get(
+                name, False
+            ),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -581,7 +606,7 @@ def _wrap_v2_list_tools(
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
             if not any(t.name == missing_name for t in tools):
-                _append_get_more_tools_v2(result, missing_name)
+                _append_get_more_tools_v2(result, missing_name, data)
                 names.append(missing_name)
 
         await lifecycle.record_result(
@@ -597,13 +622,20 @@ def _wrap_v2_list_tools(
     _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
 
 
-def _append_get_more_tools_v2(result: Any, name: str) -> None:
+def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) -> None:
     descriptor = build_report_missing_descriptor(name)
     tool = mcp_types.Tool(
         name=descriptor["name"],
         description=descriptor["description"],
         input_schema=descriptor["inputSchema"],
         annotations=descriptor["annotations"],
+    )
+    mutate_tool_schema(
+        data,
+        tool,
+        schema_attribute="input_schema",
+        owns_context=True,
+        context_required=True,
     )
     tools_list = getattr(result, "tools", None)
     if isinstance(tools_list, list):

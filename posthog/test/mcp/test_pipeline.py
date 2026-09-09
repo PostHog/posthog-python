@@ -15,6 +15,7 @@ from posthog.mcp._ids import deterministic_prefixed_id, new_prefixed_id
 from posthog.mcp._posthog_events import build_posthog_capture_events
 from posthog.mcp._sanitization import (
     build_captured_mcp_parameters,
+    redact_pii,
     sanitize_captured_value,
     sanitize_event,
 )
@@ -145,6 +146,242 @@ def test_sanitize_does_not_mutate_input():
     assert event["parameters"]["token"] == "phx_aaaaaaaaaaaaaaaaaaaaaaaa"
 
 
+# --- intent PII redaction ----------------------------------------------------
+
+_NBSP = "\u00a0"
+_NNBSP = "\u202f"
+
+
+@pytest.mark.parametrize(
+    "label, text, expected",
+    [
+        (
+            "an email address",
+            "Looking up orders for jane.doe@acme.co.uk before refunding.",
+            "Looking up orders for [redacted] before refunding.",
+        ),
+        (
+            "an email with a maximal 64-char local part",
+            f"from {'a' * 64}@example.com now",
+            "from [redacted] now",
+        ),
+        (
+            "an IPv4 address",
+            "Blocking traffic from 203.0.113.42 after abuse.",
+            "Blocking traffic from [redacted] after abuse.",
+        ),
+        (
+            "an IPv6 address with a middle ::",
+            "Tracing request from 2001:db8::ff00:42:8329 across the mesh.",
+            "Tracing request from [redacted] across the mesh.",
+        ),
+        (
+            "an IPv6 address ending in ::",
+            "Routing host 2001:db8:: for now.",
+            "Routing host [redacted] for now.",
+        ),
+        (
+            "an IPv6 loopback ::1",
+            "Health check from ::1 passed.",
+            "Health check from [redacted] passed.",
+        ),
+        (
+            "a NANP phone with dashes",
+            "Reference ticket for number 415-555-0142 escalation.",
+            "Reference ticket for number [redacted] escalation.",
+        ),
+        (
+            "a NANP phone with slashes",
+            "Call the customer on 415/555/0142 today.",
+            "Call the customer on [redacted] today.",
+        ),
+        (
+            "a NANP phone with parens and +1",
+            "Calling back on +1 (415) 555-0142 about the outage.",
+            "Calling back on [redacted] about the outage.",
+        ),
+        (
+            "a NANP phone with a parenthesized area code and no following separator",
+            "Reaching them at (415)555-0142 today.",
+            "Reaching them at [redacted] today.",
+        ),
+        (
+            "an international phone with a + country code",
+            "Ring +44 (0) 20 7946 0958 please.",
+            "Ring [redacted] please.",
+        ),
+        (
+            "a phone grouped with NBSP spaces",
+            f"Calling the customer on 415{_NNBSP}555{_NNBSP}0132 today.",
+            "Calling the customer on [redacted] today.",
+        ),
+        (
+            "a Luhn-valid card with spaces",
+            "Charging the saved card 4111 1111 1111 1111 for the renewal.",
+            "Charging the saved card [redacted] for the renewal.",
+        ),
+        (
+            "a card grouped with dots",
+            "Charging card 4111.1111.1111.1111 today.",
+            "Charging card [redacted] today.",
+        ),
+        (
+            "a card grouped with slashes",
+            "Charging card 4111/1111/1111/1111 today.",
+            "Charging card [redacted] today.",
+        ),
+        (
+            "a card grouped with NBSP spaces",
+            f"Charging card 4111{_NBSP}1111{_NBSP}1111{_NBSP}1111 now.",
+            "Charging card [redacted] now.",
+        ),
+        (
+            "a card without absorbing an adjacent expiry field",
+            "Charging card 4111 1111 1111 1111 12/30 for renewal.",
+            "Charging card [redacted] 12/30 for renewal.",
+        ),
+        (
+            "every card when two appear in one span",
+            "Moving funds 4111 1111 1111 1111 5555 5555 5555 4444 now.",
+            "Moving funds [redacted] [redacted] now.",
+        ),
+        (
+            "an SSN with dashes",
+            "Verifying SSN 123-45-6789 for the claim.",
+            "Verifying SSN [redacted] for the claim.",
+        ),
+        (
+            "an SSN with spaces",
+            "Verifying SSN 123 45 6789 for the claim.",
+            "Verifying SSN [redacted] for the claim.",
+        ),
+        (
+            "an SSN with dots",
+            "Verifying SSN 123.45.6789 for the claim.",
+            "Verifying SSN [redacted] for the claim.",
+        ),
+    ],
+)
+def test_redact_pii_redacts(label, text, expected):
+    assert redact_pii(text) == expected
+
+
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        (
+            "a bare numeric identifier without grouping",
+            "Fetching record 4155550142 from the ledger service.",
+        ),
+        (
+            "a bare 9-digit number that is not an SSN",
+            "Looking up record 123456789 in the ledger.",
+        ),
+        (
+            "a Luhn-invalid long digit run",
+            "Correlating with order 1234567890123456 in the warehouse.",
+        ),
+        (
+            "a date and time that resembles a phone number",
+            "Deploying at 2024-01-15 12:30 UTC after review.",
+        ),
+        (
+            "a dotted version/build number",
+            "Upgrading to build 2024.11.05.1830 for the team.",
+        ),
+        (
+            "a C++ scope expression that resembles IPv6",
+            "Calling std::bad and std::vector helpers for the team.",
+        ),
+        (
+            "ordinary prose with versions, dates, and code separators",
+            "Upgrading to v1.2.3 on 2024-01-15 by refactoring std::vector usage.",
+        ),
+        (
+            "prose with no personal data",
+            "Searching the organization repositories to prioritize open performance issues.",
+        ),
+    ],
+)
+def test_redact_pii_leaves_untouched(label, text):
+    assert redact_pii(text) == text
+
+
+def test_redact_pii_redacts_multiple_identifiers():
+    assert (
+        redact_pii(
+            "Emailing bob@example.com and calling +1-202-555-0170 about the issue."
+        )
+        == "Emailing [redacted] and calling [redacted] about the issue."
+    )
+
+
+def test_redact_pii_is_not_quadratic_on_pathological_input():
+    # A 100k-char run with an `@` but no valid TLD is the worst case for an
+    # unbounded email pattern. With bounded quantifiers this stays linear; a
+    # regression to `+` would blow up the runtime instead.
+    import time
+
+    pathological = f"{'a' * 50_000}@{'a' * 50_000}"
+    start = time.monotonic()
+    assert redact_pii(pathological) == pathological
+    assert time.monotonic() - start < 1.0
+
+
+def test_sanitize_event_redacts_pii_from_intent():
+    event = {
+        "user_intent": "Looking up orders for jane.doe@acme.com and calling +1 (415) 555-0142 about a refund.",
+    }
+    result = sanitize_event(event)
+    assert (
+        result["user_intent"]
+        == "Looking up orders for [redacted] and calling [redacted] about a refund."
+    )
+
+
+def test_sanitize_event_composes_pii_and_token_redaction_on_intent():
+    event = {
+        "user_intent": "Rotating token phc_123456789012345678901234567890 for user carol@example.org."
+    }
+    result = sanitize_event(event)
+    assert result["user_intent"] == "Rotating token [redacted] for user [redacted]."
+
+
+def test_sanitize_event_does_not_redact_pii_shapes_from_structured_data():
+    event = {
+        "user_intent": "Enriching the profile for dave@example.com from the CRM.",
+        "parameters": {"email": "dave@example.com", "ip": "203.0.113.42"},
+        "response": {
+            "content": [
+                {"type": "text", "text": "Matched dave@example.com at 203.0.113.42."}
+            ]
+        },
+    }
+    result = sanitize_event(event)
+    assert result["user_intent"] == "Enriching the profile for [redacted] from the CRM."
+    # Structured tool data keeps the same shapes: they are often legitimate here.
+    assert result["parameters"] == {"email": "dave@example.com", "ip": "203.0.113.42"}
+    assert (
+        result["response"]["content"][0]["text"]
+        == "Matched dave@example.com at 203.0.113.42."
+    )
+
+
+def test_sanitize_event_does_not_mutate_intent():
+    original = "Paging on-call about ticket from user@example.com right now."
+    event = {"user_intent": original}
+    sanitize_event(event)
+    assert event["user_intent"] == original
+
+
+def test_sanitize_event_passes_through_non_string_intent():
+    # user_intent is typed as Any on the custom-event API (Event = Dict[str, Any]),
+    # so a non-string value must not raise; it should pass through unchanged, same
+    # as sanitize_captured_value does for other non-str/list/dict values.
+    result = sanitize_event({"user_intent": 123})
+    assert result["user_intent"] == 123
+
+
 # --- truncation --------------------------------------------------------------
 
 
@@ -204,6 +441,8 @@ def test_build_tool_call_event_properties():
         "protocol_version": "2025-06-18",
         "user_intent": "find churn cohort",
         "user_intent_source": "context_parameter",
+        "llm_model": "gpt-5.6-sol",
+        "llm_model_source": "client_metadata",
         "is_error": False,
         "timestamp": datetime.now(timezone.utc),
     }
@@ -217,6 +456,8 @@ def test_build_tool_call_event_properties():
     assert props[PostHogMCPAnalyticsProperty.PROTOCOL_VERSION] == "2025-06-18"
     assert props[PostHogMCPAnalyticsProperty.INTENT] == "find churn cohort"
     assert props[PostHogMCPAnalyticsProperty.INTENT_SOURCE] == "context_parameter"
+    assert props[PostHogMCPAnalyticsProperty.LLM_MODEL] == "gpt-5.6-sol"
+    assert props[PostHogMCPAnalyticsProperty.LLM_MODEL_SOURCE] == "client_metadata"
     assert props[PostHogMCPAnalyticsProperty.SESSION_ID] == "ses_abc"
     # anonymous (no identity) => person processing disabled
     assert props["$process_person_profile"] is False
@@ -362,6 +603,25 @@ def test_build_captured_mcp_parameters_strips_context():
     )  # the injected analytics param never lands in $mcp_parameters
     assert args["q"] == "x"
     assert captured["request"]["method"] == "tools/call"
+
+
+@pytest.mark.parametrize(
+    ("strip_llm_model", "expected_model"),
+    [(True, None), (False, "application-owned-model")],
+)
+def test_build_captured_mcp_parameters_only_strips_sdk_owned_model(
+    strip_llm_model, expected_model
+):
+    request = {
+        "method": "tools/call",
+        "params": {
+            "name": "route",
+            "arguments": {"llm_model": "application-owned-model"},
+        },
+    }
+
+    captured = build_captured_mcp_parameters(request, strip_llm_model=strip_llm_model)
+    assert captured["request"]["params"]["arguments"].get("llm_model") == expected_model
 
 
 async def test_process_mcp_event_basic():

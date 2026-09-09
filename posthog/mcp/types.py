@@ -17,13 +17,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, Optional, TypedDict, Union
+from typing import Any, Awaitable, Callable, Dict, Literal, Optional, TypedDict, Union
 
 from .logger import LoggerFn
 
 __all__ = [
     "MCPAnalyticsOptions",
     "MCPAnalyticsContextOptions",
+    "MCPAnalyticsModelOptions",
+    "MCPAnalyticsModelSource",
     "UserIdentity",
     "CaptureEventData",
     "PreparedToolCall",
@@ -35,6 +37,7 @@ JsonRecord = Dict[str, Any]
 ErrorProperties = Dict[str, Any]
 
 MCPAnalyticsIntentSource = str  # "context_parameter" | "inferred"
+MCPAnalyticsModelSource = Literal["client_metadata", "self_reported"]
 
 # Internal MCP event as it flows through the SDK before capture. Modeled as a
 # plain dict (constructed and read with ``.get()`` throughout) to mirror the TS
@@ -43,7 +46,8 @@ MCPAnalyticsIntentSource = str  # "context_parameter" | "inferred"
 # duration, error, error_type, event_name, event_type, groups, id, identify_actor_data,
 # identify_actor_given_id, is_error, listed_tool_names, parameters, properties,
 # resource_name, response, server_name, server_version, session_id, timestamp,
-# tool_category, tool_description, user_intent, user_intent_source.
+# tool_category, tool_description, user_intent, user_intent_source, llm_model,
+# llm_model_source.
 Event = Dict[str, Any]
 McpEvent = Dict[str, Any]
 
@@ -81,6 +85,13 @@ class MCPAnalyticsContextOptions:
     description: Optional[str] = None
 
 
+@dataclass
+class MCPAnalyticsModelOptions:
+    """Configure the model field injected into tool input schemas."""
+
+    description: Optional[str] = None
+
+
 # request is a JSON-RPC-shaped dict; extra carries session_id / headers.
 IdentifyFn = Callable[
     ..., Any
@@ -109,6 +120,9 @@ class MCPAnalyticsOptions:
     before_send: Optional[BeforeSendFn] = None
     # Extra properties merged onto every auto-captured event.
     event_properties: Optional[EventPropertiesFn] = None
+    # Capture the model from recognized client metadata, falling back to an
+    # SDK-injected llm_model argument. Off by default.
+    capture_model: Union[bool, MCPAnalyticsModelOptions] = False
 
 
 @dataclass
@@ -129,6 +143,8 @@ class PreparedToolCall:
     intent: Optional[str] = None
     intent_source: Optional[str] = None
     is_missing_capability: bool = False
+    llm_model: Optional[str] = None
+    llm_model_source: Optional[MCPAnalyticsModelSource] = None
 
 
 @dataclass

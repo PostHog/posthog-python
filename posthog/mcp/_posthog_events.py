@@ -143,6 +143,10 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.INTENT] = event["user_intent"]
     if event.get("user_intent_source"):
         properties[_P.INTENT_SOURCE] = event["user_intent_source"]
+    if event.get("llm_model"):
+        properties[_P.LLM_MODEL] = event["llm_model"]
+    if event.get("llm_model_source"):
+        properties[_P.LLM_MODEL_SOURCE] = event["llm_model_source"]
     if event.get("is_error") is not None:
         properties[_P.IS_ERROR] = event["is_error"]
     if event.get("is_error"):

@@ -57,8 +57,6 @@ def add_conversation_id_to_schema(
     schema = copy.deepcopy(schema)
     if not isinstance(schema.get("properties"), dict):
         schema["properties"] = {}
-    if schema.get("additionalProperties") is False:
-        schema.pop("additionalProperties", None)
     schema["properties"][CONVERSATION_ID_PARAM_NAME] = {
         "type": "string",
         "description": DEFAULT_CONVERSATION_ID_DESCRIPTION,
