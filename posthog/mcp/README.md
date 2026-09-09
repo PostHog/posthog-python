@@ -5,7 +5,9 @@ tool calls, agent intent, resource discovery and reads, and failures are capture
 to PostHog as `$mcp_*` events.
 
 Resource bodies are not captured. Captured URLs redact usernames, passwords, and
-known credential query parameters, including signed URL credentials. This also
+known credential query parameters, including signed URL credentials. URLs longer
+than 8,192 characters or with more than 128 query fields are redacted entirely
+to bound parsing work. This also
 applies when a failed read repeats the URL in its error message. Other query
 parameters and fragments can still contain application-specific sensitive data.
 Requests and responses keep their original addresses. Use `before_send` to remove

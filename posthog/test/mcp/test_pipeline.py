@@ -113,6 +113,36 @@ def test_sanitize_url_credentials(value: str, expected: str) -> None:
     assert sanitize_captured_value(expected) == expected
 
 
+@pytest.mark.parametrize(
+    "uri, oversized",
+    [
+        pytest.param("https://example.com/" + "a/" * 4086, False, id="length-limit"),
+        pytest.param(
+            "https://example.com/" + "a/" * 4086 + "a", True, id="length-over-limit"
+        ),
+        pytest.param(
+            "https://example.com/?" + "&".join(["page=1"] * 128),
+            False,
+            id="field-limit",
+        ),
+        pytest.param(
+            "https://example.com/?" + "&".join(["page=1"] * 129),
+            True,
+            id="fields-over-limit",
+        ),
+        pytest.param(
+            "https://example.com/?" + "&" * 128 + "token=fakesecret",
+            True,
+            id="empty-fields",
+        ),
+    ],
+)
+def test_sanitize_url_bounds(uri: str, oversized: bool) -> None:
+    expected = "[redacted]" if oversized else uri
+    assert sanitize_captured_value(uri) == expected
+    assert sanitize_captured_value(f"Cannot read {uri}") == f"Cannot read {expected}"
+
+
 def test_sanitize_event_replaces_image_and_audio_blocks():
     event = {
         "response": {

@@ -31,6 +31,8 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 )
 
 _URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.-]{0,63}://[^\s<>\"']+", re.IGNORECASE)
+_MAX_URL_LENGTH = 8192
+_MAX_URL_QUERY_FIELDS = 128
 _SENSITIVE_QUERY_KEY_PATTERN = re.compile(
     r"^(auth|key|credential|signature|sig|AWSAccessKeyId|GoogleAccessId|"
     r"Policy|Key-Pair-Id|X-Amz-(Credential|Signature|Security-Token)|"
@@ -40,10 +42,14 @@ _SENSITIVE_QUERY_KEY_PATTERN = re.compile(
 
 
 def _sanitize_url(match: re.Match[str]) -> str:
+    if match.end() - match.start() > _MAX_URL_LENGTH:
+        return _REDACTED_VALUE
     value = match.group(0)
     try:
         url = urlsplit(value)
-        query = parse_qsl(url.query, keep_blank_values=True)
+        query = parse_qsl(
+            url.query, keep_blank_values=True, max_num_fields=_MAX_URL_QUERY_FIELDS
+        )
         sanitized_query = [
             (key, _REDACTED_VALUE)
             if _should_redact_key(key) or _SENSITIVE_QUERY_KEY_PATTERN.fullmatch(key)
