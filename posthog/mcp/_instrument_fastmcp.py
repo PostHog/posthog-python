@@ -39,6 +39,11 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
 )
 from ._internal import MCPAnalyticsData
+from ._model_parameters import (
+    can_inject_model_parameter,
+    is_capture_model_enabled,
+    request_meta_from_context,
+)
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
 from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
@@ -90,6 +95,8 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(_tool_call_request_context(context)),
+            allow_self_reported_model=_analytics_owns_model(server, data, name),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -119,6 +126,8 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 server, name, "conversation_id"
             ):
                 strip_keys.add("conversation_id")
+            if _analytics_owns_model(server, data, name):
+                strip_keys.add("llm_model")
             if strip_keys:
                 call_arguments = {
                     k: v for k, v in arguments.items() if k not in strip_keys
@@ -251,7 +260,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
             if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name)
+                append_get_more_tools(result, missing_name, data)
                 names.append(missing_name)
 
         await lifecycle.record_result(
@@ -308,6 +317,16 @@ def _tool_owns_param(server: Any, name: str, param: str) -> bool:
 
 def _tool_owns_context(server: Any, name: str) -> bool:
     return _tool_owns_param(server, name, "context")
+
+
+def _analytics_owns_model(server: Any, data: MCPAnalyticsData, name: str) -> bool:
+    if not is_capture_model_enabled(data.options.capture_model):
+        return False
+    try:
+        tool = server._tool_manager.get_tool(name)
+        return can_inject_model_parameter(getattr(tool, "parameters", None))
+    except Exception:  # noqa: BLE001 - model analytics must never break dispatch
+        return data.tool_model_parameter_injected.get(name, False)
 
 
 def _tool_call_request_context(context: Any) -> Any:

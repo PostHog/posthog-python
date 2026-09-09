@@ -34,6 +34,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
 )
 from ._internal import MCPAnalyticsData
+from ._model_parameters import request_meta_from_context
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
 from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
@@ -97,6 +98,10 @@ def _wrap_call_tool(
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(_request_context(server)),
+            allow_self_reported_model=data.tool_model_parameter_injected.get(
+                name, False
+            ),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -127,7 +132,10 @@ def _wrap_call_tool(
         # tools/list and across stateless per-request server instances.
         if strip_injected and req.params.arguments:
             owned = await _tool_owned_injected_keys(high_level, name)
-            for key in ("context", "conversation_id"):
+            injected_keys = ["context", "conversation_id"]
+            if data.tool_model_parameter_injected.get(name, False):
+                injected_keys.append("llm_model")
+            for key in injected_keys:
                 if key not in owned:
                     req.params.arguments.pop(key, None)
 
@@ -289,7 +297,7 @@ def _wrap_list_tools(
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
             if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name)
+                append_get_more_tools(result, missing_name, data)
                 names.append(missing_name)
 
         await lifecycle.record_result(

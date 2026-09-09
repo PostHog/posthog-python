@@ -406,6 +406,8 @@ def test_build_tool_call_event_properties():
         "protocol_version": "2025-06-18",
         "user_intent": "find churn cohort",
         "user_intent_source": "context_parameter",
+        "llm_model": "gpt-5.6-sol",
+        "llm_model_source": "client_metadata",
         "is_error": False,
         "timestamp": datetime.now(timezone.utc),
     }
@@ -419,6 +421,8 @@ def test_build_tool_call_event_properties():
     assert props[PostHogMCPAnalyticsProperty.PROTOCOL_VERSION] == "2025-06-18"
     assert props[PostHogMCPAnalyticsProperty.INTENT] == "find churn cohort"
     assert props[PostHogMCPAnalyticsProperty.INTENT_SOURCE] == "context_parameter"
+    assert props[PostHogMCPAnalyticsProperty.LLM_MODEL] == "gpt-5.6-sol"
+    assert props[PostHogMCPAnalyticsProperty.LLM_MODEL_SOURCE] == "client_metadata"
     assert props[PostHogMCPAnalyticsProperty.SESSION_ID] == "ses_abc"
     # anonymous (no identity) => person processing disabled
     assert props["$process_person_profile"] is False
@@ -564,6 +568,25 @@ def test_build_captured_mcp_parameters_strips_context():
     )  # the injected analytics param never lands in $mcp_parameters
     assert args["q"] == "x"
     assert captured["request"]["method"] == "tools/call"
+
+
+@pytest.mark.parametrize(
+    ("strip_llm_model", "expected_model"),
+    [(True, None), (False, "application-owned-model")],
+)
+def test_build_captured_mcp_parameters_only_strips_sdk_owned_model(
+    strip_llm_model, expected_model
+):
+    request = {
+        "method": "tools/call",
+        "params": {
+            "name": "route",
+            "arguments": {"llm_model": "application-owned-model"},
+        },
+    }
+
+    captured = build_captured_mcp_parameters(request, strip_llm_model=strip_llm_model)
+    assert captured["request"]["params"]["arguments"].get("llm_model") == expected_model
 
 
 async def test_process_mcp_event_basic():

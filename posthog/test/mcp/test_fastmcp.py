@@ -1,6 +1,7 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,23 @@ async def test_context_injection_can_be_disabled():
     assert "context" not in add_tool.inputSchema.get("properties", {})
 
 
+async def test_list_tools_injects_model_into_real_and_virtual_tools():
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(capture_model=True, report_missing=True),
+    )
+
+    result = await _list_tools(server)
+    tools = {tool.name: tool for tool in result.root.tools}
+
+    for name in ("add", "boom", "get_more_tools"):
+        assert "llm_model" in tools[name].inputSchema["properties"]
+        assert "llm_model" in tools[name].inputSchema["required"]
+
+
 # --- tools/call --------------------------------------------------------------
 
 
@@ -106,6 +124,30 @@ async def test_tool_call_captures_intent_and_strips_context():
     assert "$mcp_duration_ms" in props
     # context is stripped from captured parameters too
     assert "context" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
+
+
+async def test_tool_call_captures_client_model_without_prior_listing():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(capture_model=True))
+
+    context = SimpleNamespace(
+        request_context=SimpleNamespace(
+            meta={"x-codex-turn-metadata": {"model": "gpt-5.6-sol"}}
+        )
+    )
+    result = await server._tool_manager.call_tool(
+        "add",
+        {"a": 2, "b": 3, "llm_model": "claude-opus-4-8"},
+        context=context,
+    )
+    await _flush()
+
+    assert result == 5
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert props["$mcp_llm_model"] == "gpt-5.6-sol"
+    assert props["$mcp_llm_model_source"] == "client_metadata"
+    assert "llm_model" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
 async def test_analytics_flush_drains_its_own_captures():

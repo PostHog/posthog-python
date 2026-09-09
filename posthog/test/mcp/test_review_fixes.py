@@ -436,12 +436,20 @@ async def test_lowlevel_strict_input_schema_survives_a_tool_cache_rebuild():
         return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
 
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(enable_conversation_id=True, capture_model=True),
+    )
 
     call = server.request_handlers[mcp_types.CallToolRequest]
     await server.request_handlers[mcp_types.ListToolsRequest](_list_request())
 
-    first = await call(_call_request("echo", {"msg": "a", "context": "first"}))
+    first = await call(
+        _call_request(
+            "echo", {"msg": "a", "context": "first", "llm_model": "example-model"}
+        )
+    )
     assert first.root.isError is False
 
     # Force a cache rebuild the way a real client does: an unknown tool name.
@@ -449,3 +457,6 @@ async def test_lowlevel_strict_input_schema_survives_a_tool_cache_rebuild():
 
     after = await call(_call_request("echo", {"msg": "b", "context": "second"}))
     assert after.root.isError is False, after.root.content[0].text
+
+    invalid = await call(_call_request("echo", {"msg": "c", "undeclared": True}))
+    assert invalid.root.isError is True

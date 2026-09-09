@@ -21,6 +21,75 @@ Request headers use the same identity and package version, so SDK Health can com
 Because `$lib` is a client-level identity, `instrument()` relabels every event sent by the client passed to it.
 Use a client dedicated to MCP analytics if the application also captures unrelated events.
 
+## Capture the calling model
+
+Model capture is off by default. Enable it for an instrumented MCP Python SDK 1.x or
+2.x server:
+
+```python
+from posthog.mcp import MCPAnalyticsOptions, instrument
+
+analytics = instrument(
+    server,
+    posthog,
+    MCPAnalyticsOptions(capture_model=True),
+)
+```
+
+The SDK records the best model identifier visible to the server as
+`$mcp_llm_model`. Recognized client metadata wins and sets
+`$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
+string to each compatible tool schema as a fallback, recorded with source
+`self_reported`. It is required for custom dispatchers and the official high-level
+MCP SDK adapters. Raw low-level servers and standalone `fastmcp.FastMCP` advertise
+it as optional; the standalone adapter strips it before input validation, so
+requiring it would reject calls. Existing schema strictness is preserved when
+analytics fields are added.
+
+The recognized metadata path is Codex's `x-codex-turn-metadata.model` field in
+request `_meta`. Other clients, including Claude Code, use the self-report path
+until they expose a stable model field. Missing, blank, and `unknown` values are
+not recorded.
+
+MCP does not standardize or attest model identity. Both sources are unverified.
+Use them to compare tool behavior across models, not for billing or access
+control.
+
+Model self-reporting only runs when PostHog can prove it owns the injected field.
+If a tool already declares `llm_model`, or uses a root `$ref`, `oneOf`, `allOf`, or
+`anyOf` schema, PostHog leaves the schema and argument untouched. Client metadata
+can still be captured in those cases.
+
+For a custom dispatcher, use the same option on `PostHogMCP` and pass request
+metadata through explicitly:
+
+```python
+from posthog.mcp import PostHogMCP
+
+posthog = PostHogMCP("phc_...", capture_model=True)
+tools = posthog.prepare_tool_list(server_tools)
+original_tool = next(tool for tool in server_tools if tool["name"] == tool_name)
+call = posthog.prepare_tool_call(
+    tool_name,
+    raw_args,
+    request_meta=request.get("params", {}).get("_meta"),
+    original_tool=original_tool,
+)
+result = dispatch(tool_name, call.args)
+posthog.capture_tool_call(
+    tool_name,
+    llm_model=call.llm_model,
+    llm_model_source=call.llm_model_source,
+)
+```
+
+Passing `original_tool` keeps ownership accurate when `tools/list` and
+`tools/call` reach different server replicas. A persistent single-process
+dispatcher can omit it after calling `prepare_tool_list()`.
+Model injection copies tool objects instead of changing their original schemas.
+Always advertise the returned list and pass the original application tool to
+`prepare_tool_call()`. Repeatedly preparing the original list preserves ownership.
+
 ## Stateless / multi-pod servers
 
 A stateless MCP server issues no session id, so `$session_id` fragments across pods

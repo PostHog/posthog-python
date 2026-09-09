@@ -73,6 +73,8 @@ from .tools import get_more_tools_result
 from .types import (
     CaptureEventData,
     MCPAnalyticsContextOptions,
+    MCPAnalyticsModelOptions,
+    MCPAnalyticsModelSource,
     MCPAnalyticsOptions,
     PreparedToolCall,
     UserIdentity,
@@ -85,6 +87,8 @@ __all__ = [
     "PostHogMCP",
     "MCPAnalyticsOptions",
     "MCPAnalyticsContextOptions",
+    "MCPAnalyticsModelOptions",
+    "MCPAnalyticsModelSource",
     "UserIdentity",
     "CaptureEventData",
     "PreparedToolCall",

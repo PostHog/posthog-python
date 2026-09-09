@@ -70,6 +70,9 @@ class MCPAnalyticsData:
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
+    # True only when PostHog added llm_model to this tool's advertised schema.
+    # Missing/False fails closed so an application-owned field is never read or stripped.
+    tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)
     # Which tools got `_mcp_instructions` declared on their advertised output
     # schema at tools/list. Only those may be mirrored into on a call — writing
     # an undeclared key fails the customer's whole result under
