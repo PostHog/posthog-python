@@ -39,7 +39,7 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 ### Local feature flag evaluation
 
 Both capture adapters advertise `feature_flags_local_evaluation_v1` for harness
-**1.1.0**. The capability versions the adapter protocol and tests both legacy and
+**1.1.1**. The capability versions the adapter protocol and tests both legacy and
 explicit property matching; it does not change the SDK's default matching mode.
 
 - `/init` maps optional `personal_api_key` to the SDK's `secret_key`. Ordinary
