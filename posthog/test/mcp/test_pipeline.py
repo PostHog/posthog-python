@@ -151,6 +151,19 @@ def test_sanitize_redacts_large_base64():
         ),
         ("https://example.com/#/docs?page=2", "https://example.com/#/docs?page=2"),
         ("https://example.com/#/callback", "https://example.com/#/callback"),
+        # A route can hold a `=` of its own: what makes it a route is the path
+        # shape, not the absence of one.
+        (
+            "https://example.com/#/docs/id=1?token=fakesecret",
+            "https://example.com/#/docs/id=1?token=%5Bredacted%5D",
+        ),
+        ("https://example.com/#/docs/id=1", "https://example.com/#/docs/id=1"),
+        # No `?`, so this is a field list whose key happens to start with a `/`;
+        # re-serializing the redacted field percent-encodes that `/`.
+        (
+            "https://example.com/#/token=fakesecret",
+            "https://example.com/#%2Ftoken=%5Bredacted%5D",
+        ),
         # ... but a `?` that follows a `=` is inside a field's value, not a route.
         (
             "https://example.com/#access_token=fakesecret&next=https://other.test/?page=1",

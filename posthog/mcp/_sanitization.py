@@ -60,13 +60,13 @@ _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
-# A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
+# A query key is sensitive when ANY `-`/`_`/`.`/`/`-delimited segment matches, which
 # covers the compound names credentials actually travel under: `private_token`,
 # `oauth_signature`, `id_token`, `subscription-key`, `X-Amz-Security-Token`.
 # Over-redacting a benign `sort_key` is the accepted trade for an analytics payload.
 _SENSITIVE_QUERY_SEGMENT_PATTERN = re.compile(
-    r"(^|[-_.])(auth|token|secret|password|passwd|pwd|credential|signature|sig|"
-    r"key|hmac|sas|bearer|jwt|session|sessionid)([-_.]|$)",
+    r"(^|[-_./])(auth|token|secret|password|passwd|pwd|credential|signature|sig|"
+    r"key|hmac|sas|bearer|jwt|session|sessionid)([-_./]|$)",
     re.IGNORECASE,
 )
 # Matched whole rather than per segment: `code` (an OAuth authorization code) as a
@@ -213,12 +213,16 @@ def _split_fragment_route(fragment: str) -> Tuple[str, str, str]:
     `/callback?token` that matches nothing. The three parts concatenate back to
     the fragment, so the route keeps its own text while the fields are re-encoded."""
     route, separator, fields = fragment.partition("?")
-    # A route comes first or not at all. Once a `=` has appeared the fragment is
-    # already a field list, and the `?` belongs to one of its values
-    # (`#access_token=x&next=https://other.test/?page=1`).
-    if "=" in route:
+    # A route ends at the first `?`, and there is one when the fragment either
+    # reads as a path (`#/docs/id=1?token=...`) or has nothing field-shaped in
+    # front of that `?` (`#/callback?token=...`). Otherwise the `?` belongs to a
+    # field's value (`#access_token=x&next=https://other.test/?page=1`), and the
+    # fragment is a field list — or plain text when it holds no fields at all.
+    if separator and (fragment.startswith("/") or "=" not in route):
+        return route, separator, fields
+    if "=" in fragment:
         return "", "", fragment
-    return route, separator, fields
+    return fragment, "", ""
 
 
 def _redact_userinfo(netloc: str) -> str:
