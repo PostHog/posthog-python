@@ -202,14 +202,17 @@ async def test_list_tools_injects_optional_context_and_captures():
             "ui://guide/page?token=%5Bredacted%5D&TOKEN=%5Bredacted%5D&chapter=intro#section",
             True,
         ),
+        # The PostHog-token pass runs before the URL is parsed, so the token is
+        # already `[redacted]` by then and the URL rewrite finds nothing left to
+        # change — the value keeps that literal form instead of being re-encoded.
         (
             "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
-            "https://example.com/guide?token=%5Bredacted%5D",
+            "https://example.com/guide?token=[redacted]",
             False,
         ),
         (
             "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
-            "https://example.com/guide?token=%5Bredacted%5D",
+            "https://example.com/guide?token=[redacted]",
             True,
         ),
     ],

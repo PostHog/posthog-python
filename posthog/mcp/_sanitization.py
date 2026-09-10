@@ -76,15 +76,20 @@ def _should_redact_query_key(key: str) -> bool:
 
 
 def _sanitize_urls(text: str, *, nested: bool = True) -> str:
+    # A string that IS one URL — a `$mcp_resource_name`, a `params.uri`, a query
+    # field's value — has no prose around it, so nothing at its end is punctuation
+    # closing a sentence: `?password=hunter2!!!` ends in the password itself.
+    if _URL_PATTERN.fullmatch(text):
+        return _sanitize_url(text, nested=nested, in_prose=False)
     return _URL_PATTERN.sub(
-        lambda match: _sanitize_url(match.group(0), nested=nested), text
+        lambda match: _sanitize_url(match.group(0), nested=nested, in_prose=True), text
     )
 
 
-def _sanitize_url(value: str, *, nested: bool) -> str:
+def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
     if len(value) > _MAX_URL_LENGTH:
         return _REDACTED_VALUE
-    url_text = value.rstrip(_URL_TRAILING_PUNCTUATION)
+    url_text = value.rstrip(_URL_TRAILING_PUNCTUATION) if in_prose else value
     suffix = value[len(url_text) :]
     try:
         url = urlsplit(url_text)
@@ -103,6 +108,16 @@ def _sanitize_url(value: str, *, nested: bool) -> str:
             fragment,
         ):
             return value
+        # The split-off punctuation can be the tail of the credential rather than
+        # the sentence's: `?password=hunter2!!!` would come back as
+        # `?password=[redacted]!!!`. So when the last field of the part the URL
+        # ends in was rewritten, its punctuation goes with it. Losing a comma from
+        # the surrounding prose is the accepted cost.
+        tail, sanitized_tail = (
+            (fragment, sanitized_fragment) if url.fragment else (query, sanitized_query)
+        )
+        if tail and sanitized_tail[-1] != tail[-1]:
+            suffix = ""
         # Only the part that changed is re-serialized, so an untouched query or
         # fragment keeps its original encoding.
         return (
@@ -150,11 +165,11 @@ def _sanitize_url_fields(text: str, *, nested: bool) -> Tuple[_UrlFields, _UrlFi
 def _sanitize_url_field_value(key: str, value: str, *, nested: bool) -> str:
     if _should_redact_query_key(key):
         return _REDACTED_VALUE
-    # A retained value can carry a URL of its own (a gateway's `?url=`). Sanitize
-    # that one too, one level deep — a URL nested inside it is already covered by
-    # the credentials rules applied here.
-    if nested and "://" in value:
-        return _sanitize_urls(value, nested=False)
+    # A retained value can carry a URL of its own (a gateway's `?url=`). The budget
+    # for that is one level: sanitize the first, and drop any value still carrying
+    # a URL past it rather than trusting what we did not look inside.
+    if "://" in value:
+        return _sanitize_urls(value, nested=False) if nested else _REDACTED_VALUE
     return value
 
 
@@ -239,8 +254,11 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
         return "[binary data redacted - not supported by PostHog MCP analytics]"
-    value = _sanitize_urls(value)
-    return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+    # PostHog tokens before URLs: rewriting a query percent-encodes `/`, and a
+    # `?ref=/phx_...` token would then sit behind `%2F` where the pattern's `\bph`
+    # boundary no longer matches it.
+    value = _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value)
+    return _redact_secret_tokens(_sanitize_urls(value))
 
 
 def _redact_secret_tokens(value: str) -> str:

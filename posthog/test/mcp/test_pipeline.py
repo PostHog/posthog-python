@@ -119,13 +119,28 @@ def test_sanitize_redacts_large_base64():
             "https://example.com/x?jwt=fakejwt&sessionid=fakesession&code=fakecode&country_code=BR",
             "https://example.com/x?jwt=%5Bredacted%5D&sessionid=%5Bredacted%5D&code=%5Bredacted%5D&country_code=BR",
         ),
+        # A redacted LAST field takes the split-off punctuation with it: the
+        # punctuation may be the credential's own tail (`?password=hunter2!!!`).
         (
             "See https://example.com/x?sig=fakesignature, then retry.",
-            "See https://example.com/x?sig=%5Bredacted%5D, then retry.",
+            "See https://example.com/x?sig=%5Bredacted%5D then retry.",
         ),
         (
             "Failed (https://example.com/x?sig=fakesignature).",
-            "Failed (https://example.com/x?sig=%5Bredacted%5D).",
+            "Failed (https://example.com/x?sig=%5Bredacted%5D",
+        ),
+        (
+            "See https://example.com/x?password=fakepass!, then retry.",
+            "See https://example.com/x?password=%5Bredacted%5D then retry.",
+        ),
+        # ... but only the last field: anything after it proves where the URL ended.
+        (
+            "See https://example.com/x?sig=fakesignature&page=2, then retry.",
+            "See https://example.com/x?sig=%5Bredacted%5D&page=2, then retry.",
+        ),
+        (
+            "See https://example.com/x?sig=fakesignature#intro, then retry.",
+            "See https://example.com/x?sig=%5Bredacted%5D#intro, then retry.",
         ),
         ("Failed (https://example.com/x?a=b).", "Failed (https://example.com/x?a=b)."),
         (
@@ -160,9 +175,31 @@ def test_sanitize_redacts_large_base64():
             "https://fakeuser:fake'pass@example.com/doc",
             "https://%5Bredacted%5D@example.com/doc",
         ),
+        # A string that is nothing but a URL has no prose, so its tail belongs to
+        # the URL: `!!!` is part of the password, `.` is part of the path.
+        (
+            "https://example.com/login?password=fakepass!!!",
+            "https://example.com/login?password=%5Bredacted%5D",
+        ),
+        ("https://example.com/x?a=b.", "https://example.com/x?a=b."),
+        # One level of nesting is sanitized; a value still carrying a URL past that
+        # is dropped rather than trusted.
+        (
+            "https://gateway.example.com/fetch?url=https%3A%2F%2Fgateway2.example.com%2Ffetch"
+            "%3Furl%3Dhttps%253A%252F%252Finternal.test%252Fdoc%253Ftoken%253Dfakesecret",
+            "https://gateway.example.com/fetch?url=https%3A%2F%2Fgateway2.example.com%2Ffetch"
+            "%3Furl%3D%255Bredacted%255D",
+        ),
+        # PostHog tokens are redacted before the URL is rewritten: percent-encoding
+        # the `/` would put `%2F` where the token pattern's `\bph` boundary needs a
+        # word boundary.
+        (
+            "https://example.com/?ref=/phx_EXAMPLEONLYFAKEVALUE00000000000&token=fakesecret",
+            "https://example.com/?ref=%2F%5Bredacted%5D&token=%5Bredacted%5D",
+        ),
         (
             "Read 'https://example.com/x?sig=fakesignature' first.",
-            "Read 'https://example.com/x?sig=%5Bredacted%5D' first.",
+            "Read 'https://example.com/x?sig=%5Bredacted%5D first.",
         ),
     ],
 )
