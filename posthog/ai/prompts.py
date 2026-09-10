@@ -412,11 +412,13 @@ class Prompts:
             # label param and served latest versions. Caching those under the
             # label would be the silent wrong-version failure labels exist to
             # prevent, so fail loudly instead.
-            raise Exception(
+            compat_error = Exception(
                 f'[PostHog Prompts] The server returned prompts, but none resolve label "{label}". '
                 "It may not support fetching prompts by label on the list endpoint yet. "
                 "Upgrade PostHog, or fetch prompts one by one with get()."
             )
+            self._maybe_capture_error(compat_error, name="*", version=None, label=label)
+            raise compat_error
 
         if skipped:
             log.warning(
