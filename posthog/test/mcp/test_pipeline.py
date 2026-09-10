@@ -152,6 +152,18 @@ def test_sanitize_redacts_large_base64():
             "https://%5Bredacted%5D@en.wikipedia.org/wiki/Foo_(bar).",
         ),
         ("file:///guide.md", "file:///guide.md"),
+        (
+            "https://example.com/o'reilly?token=fakesecret",
+            "https://example.com/o'reilly?token=%5Bredacted%5D",
+        ),
+        (
+            "https://fakeuser:fake'pass@example.com/doc",
+            "https://%5Bredacted%5D@example.com/doc",
+        ),
+        (
+            "Read 'https://example.com/x?sig=fakesignature' first.",
+            "Read 'https://example.com/x?sig=%5Bredacted%5D' first.",
+        ),
     ],
 )
 def test_sanitize_url_credentials(value: str, expected: str) -> None:

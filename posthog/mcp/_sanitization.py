@@ -32,14 +32,18 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 # so `resource_https://user:pw@host` (an `_` before the scheme) would match
 # nothing and stay unredacted. Without it the leftmost match wins — `foo.https://x`
 # is read as scheme `foo.https`, which redacts the same credentials either way.
-_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}://[^\s<>\"']+", re.IGNORECASE)
-# Prose puts URLs in sentences ("see https://x?sig=a, then retry") and in
-# parentheses, and the terminal class above swallows the punctuation. It is split
-# off before parsing and re-appended to whatever comes back. A character set
-# stripped with `rstrip` rather than an anchored `[...]+$` pattern: backtracking
-# that pattern over an interior run of punctuation is quadratic, and the URL
-# comes from an attacker-influenceable request.
-_URL_TRAILING_PUNCTUATION = ".,;:!?)]}"
+# `'` is a valid URI sub-delimiter, so it stays IN the match (`/o'reilly?token=x`
+# must not be cut short of its query); `"`, `<` and `>` cannot appear unencoded in
+# a URI, so they still terminate it.
+_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}://[^\s<>\"]+", re.IGNORECASE)
+# Prose puts URLs in sentences ("see https://x?sig=a, then retry"), in parentheses
+# and in single quotes, and the terminal class above swallows the punctuation that
+# closes them. It is split off before parsing and re-appended to whatever comes
+# back — including the `'` the pattern now keeps, since only a trailing one closes
+# a quote. A character set stripped with `rstrip` rather than an anchored
+# `[...]+$` pattern: backtracking that pattern over an interior run of punctuation
+# is quadratic, and the URL comes from an attacker-influenceable request.
+_URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
