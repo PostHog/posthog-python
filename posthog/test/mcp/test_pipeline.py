@@ -196,6 +196,21 @@ def test_sanitize_redacts_large_base64():
         ),
         ("Note:https://example.com/doc", "Note:https://example.com/doc"),
         (
+            "a:b:https://fakeuser:fakepass@example.com/doc",
+            "a:b:https://%5Bredacted%5D@example.com/doc",
+        ),
+        # ... but a URI whose own query carries a URL is not a prefix: parsing it
+        # whole is what redacts its password, and the nested pass handles the
+        # retained `url=` value.
+        (
+            "file:/guide?password=fakepass&url=https://example.com",
+            "file:///guide?password=%5Bredacted%5D&url=https%3A%2F%2Fexample.com",
+        ),
+        # Same shape, and the entropy pass then drops the rewritten authority-less
+        # string whole (as above); the credential and the inner userinfo are gone
+        # either way.
+        ("resource:g?token=fakesecret+https://fakeuser:fakepass@b", "[redacted]"),
+        (
             "https://example.com/o'reilly?token=fakesecret",
             "https://example.com/o'reilly?token=%5Bredacted%5D",
         ),

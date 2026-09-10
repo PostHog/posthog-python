@@ -56,6 +56,9 @@ _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 # deliberately keeps those, and the field count is already bounded when parsing.
 _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
+# A prose prefix is a run of colon-suffixed words: `URL:`, `a:b:`. Anything else
+# in front of an authority (a `?`, `/`, `=`) belongs to an outer URI, not to prose.
+_PROSE_PREFIX_PATTERN = re.compile(r"(?:[a-z][a-z0-9+.-]{0,63}:)+", re.IGNORECASE)
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
@@ -104,9 +107,16 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
     # A colon-suffixed word in front of a real URL (`Failed URL:https://...`) is
     # absorbed by the authority-less pattern, and parsing the whole thing puts the
     # address — userinfo included — in the path, where nothing redacts it. The
-    # address starts where the authority does; anything before that is prose.
+    # address starts where the authority does. This only holds when what precedes
+    # it really is prose: an outer URI whose query carries a URL
+    # (`file:/guide?password=x&url=https://...`) is no prefix at all, and parsing
+    # it whole is what redacts its own credentials.
     authority = _URL_AUTHORITY_SEARCH.search(value)
-    if authority and authority.start() > 0:
+    if (
+        authority
+        and authority.start() > 0
+        and _PROSE_PREFIX_PATTERN.fullmatch(value[: authority.start()])
+    ):
         return value[: authority.start()] + _sanitize_url(
             value[authority.start() :], nested=nested, in_prose=in_prose
         )
