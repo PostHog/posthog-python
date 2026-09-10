@@ -836,6 +836,7 @@ def test_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
     assert props["$ai_output_tokens"] == 50
     assert props["$ai_cache_read_input_tokens"] == 30
     assert props["$ai_reasoning_tokens"] == 10
+    assert props["$ai_cache_reporting_exclusive"] is False
 
 
 def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
@@ -899,6 +900,7 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     assert props["$ai_output_tokens"] == 10
     assert props["$ai_cache_read_input_tokens"] == 30
     assert props["$ai_reasoning_tokens"] == 5
+    assert props["$ai_cache_reporting_exclusive"] is False
 
     # Verify raw usage is captured in streaming mode (merged from chunks)
     assert "$ai_usage" in props
@@ -1310,7 +1312,31 @@ def test_embed_content_without_token_counts(
     )
 
     props = mock_client.capture.call_args[1]["properties"]
-    assert props["$ai_input_tokens"] == 0
+    # No embedding carried a token count, so the property is omitted, not 0.
+    assert "$ai_input_tokens" not in props
+
+
+def test_streaming_without_usage_omits_token_counts(
+    mock_client, mock_google_genai_client
+):
+    """A stream that never reported usage omits the counts instead of sending 0."""
+    chunk = MagicMock()
+    chunk.text = "Hello"
+    chunk.usage_metadata = None
+
+    mock_google_genai_client.models.generate_content_stream.return_value = iter([chunk])
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.generate_content_stream(
+        model="gemini-2.0-flash",
+        contents=["Write a short story"],
+        posthog_distinct_id="test-id",
+    )
+    list(response)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert "$ai_input_tokens" not in props
+    assert "$ai_output_tokens" not in props
 
 
 def test_embed_content_privacy_mode(
@@ -1582,7 +1608,7 @@ def test_ai_lane_client_routes_through_capture_ai(
 ):
     mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
 
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     client = Client(api_key="test-key", posthog_client=mock_client)
     client.models.generate_content(
         model="gemini-2.0-flash",
@@ -1591,5 +1617,5 @@ def test_ai_lane_client_routes_through_capture_ai(
     )
 
     mock_client.capture.assert_not_called()
-    assert mock_client._capture_ai.call_count == 1
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"

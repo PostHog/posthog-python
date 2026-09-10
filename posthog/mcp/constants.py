@@ -18,13 +18,13 @@ __all__ = [
 INACTIVITY_TIMEOUT_IN_MINUTES = 30
 
 DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (
-    "Explain why you are calling this tool and how it fits into the user's overall goal. "
-    "This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 "
-    "words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain "
-    "third-person perspective. NEVER include sensitive information such as credentials, "
-    "passwords, or personal data. Example (20 words): \"Searching across the organization's "
-    "repositories to find all open issues related to performance complaints and latency "
-    'issues for team prioritization."'
+    "Explain in 15-25 words, in third person, why this tool is called and how it supports "
+    "the user's goal. For analytics only. You MUST describe only the abstract purpose of the "
+    "tool call. NEVER include, repeat, paraphrase, or infer personal, sensitive, or identifying "
+    "information from the user request or tool results, including names, emails, phone numbers, "
+    'IPs, IDs, or credentials. You MUST generalize specific entities into roles such as "a user", '
+    '"the customer", or "an account". Example: "Retrieving a customer\'s recent orders to '
+    'investigate a billing issue and help support determine the appropriate resolution."'
 )
 
 DEFAULT_CONVERSATION_ID_DESCRIPTION = (
@@ -32,7 +32,15 @@ DEFAULT_CONVERSATION_ID_DESCRIPTION = (
     "the first call — never invent one, and do not issue parallel tool calls until you have it."
 )
 
+DEFAULT_MODEL_PARAMETER_DESCRIPTION = (
+    "The exact model identifier you (the assistant) are running as, taken from your "
+    'system prompt or environment (e.g. "claude-opus-4-8", "gpt-5.2"). Used for '
+    'analytics only. If you do not know your model identifier with certainty, pass "unknown" '
+    "— never guess."
+)
+
 POSTHOG_MCP_ANALYTICS_SOURCE = "posthog_mcp_analytics"
+POSTHOG_MCP_LIB_NAME = "posthog-python-mcp"
 
 
 class PostHogMCPAnalyticsEvent:
@@ -56,13 +64,19 @@ class PostHogMCPAnalyticsProperty:
     """PostHog property wire-keys emitted on MCP events."""
 
     CLIENT_NAME = "$mcp_client_name"
+    CLIENT_USER_AGENT = "$mcp_client_user_agent"
     CLIENT_VERSION = "$mcp_client_version"
+    VENDOR_CLIENT = "$mcp_vendor_client"
     PROTOCOL_VERSION = "$mcp_protocol_version"
     CONVERSATION_ID = "$mcp_conversation_id"
     DURATION_MS = "$mcp_duration_ms"
+    ERROR_MESSAGE = "$mcp_error_message"
+    ERROR_TYPE = "$mcp_error_type"
     IS_ERROR = "$mcp_is_error"
     INTENT = "$mcp_intent"
     INTENT_SOURCE = "$mcp_intent_source"
+    LLM_MODEL = "$mcp_llm_model"
+    LLM_MODEL_SOURCE = "$mcp_llm_model_source"
     LISTED_TOOL_NAMES = "$mcp_listed_tool_names"
     PARAMETERS = "$mcp_parameters"
     RESOURCE_NAME = "$mcp_resource_name"

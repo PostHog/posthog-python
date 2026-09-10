@@ -48,6 +48,7 @@ from posthog.ai.utils import (
     _extract_cache_creation_ttl_breakdown,
     finalize_ai_content,
     get_model_params,
+    _responses_stop_reason,
     with_privacy_mode,
 )
 from posthog.client import Client
@@ -616,6 +617,14 @@ class CallbackHandler(BaseCallbackHandler):
         output: Union[LLMResult, BaseException],
         parent_run_id: Optional[UUID] = None,
     ):
+        # The served tier comes from the response, because a requested tier can be refused.
+        model_params = run.model_params
+        served_tier = None
+        if isinstance(output, LLMResult) and isinstance(output.llm_output, dict):
+            served_tier = output.llm_output.get("service_tier")
+            if served_tier is not None:
+                model_params = {**(model_params or {}), "service_tier": served_tier}
+
         event_properties = {
             "$ai_trace_id": trace_id,
             "$ai_span_id": run_id,
@@ -623,7 +632,9 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_parent_id": parent_run_id,
             "$ai_provider": run.provider,
             "$ai_model": run.model,
-            "$ai_model_parameters": run.model_params,
+            "$ai_model_parameters": model_params,
+            # The explicit served-tier signal cost processing prices from.
+            **({"$ai_service_tier": served_tier} if served_tier is not None else {}),
             "$ai_input": with_privacy_mode(
                 self._ph_client,
                 self._privacy_mode,
@@ -664,11 +675,16 @@ class CallbackHandler(BaseCallbackHandler):
         else:
             # Add usage
             usage = _parse_usage(output, run.provider, run.model)
-            event_properties["$ai_input_tokens"] = usage.input_tokens
-            event_properties["$ai_output_tokens"] = usage.output_tokens
-            event_properties["$ai_cache_creation_input_tokens"] = (
-                usage.cache_write_tokens
-            )
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            if usage.input_tokens is not None:
+                event_properties["$ai_input_tokens"] = usage.input_tokens
+            if usage.output_tokens is not None:
+                event_properties["$ai_output_tokens"] = usage.output_tokens
+            if usage.cache_write_tokens is not None:
+                event_properties["$ai_cache_creation_input_tokens"] = (
+                    usage.cache_write_tokens
+                )
             if (
                 usage.cache_write_5m_tokens is not None
                 and usage.cache_write_1h_tokens is not None
@@ -679,8 +695,12 @@ class CallbackHandler(BaseCallbackHandler):
                 event_properties["$ai_cache_creation_1h_input_tokens"] = (
                     usage.cache_write_1h_tokens
                 )
-            event_properties["$ai_cache_read_input_tokens"] = usage.cache_read_tokens
-            event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
+            if usage.cache_read_tokens is not None:
+                event_properties["$ai_cache_read_input_tokens"] = (
+                    usage.cache_read_tokens
+                )
+            if usage.reasoning_tokens is not None:
+                event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
 
             # Generation results
             generation_result = output.generations[-1]
@@ -700,14 +720,11 @@ class CallbackHandler(BaseCallbackHandler):
                 finalize_ai_content(completions, self._ph_client),
             )
 
-            # Extract stop reason from generation info
+            # Extract the stop reason from the generation and its metadata
             if output.generations and output.generations[-1]:
-                last_gen = output.generations[-1][-1]
-                gen_info = getattr(last_gen, "generation_info", None)
-                if isinstance(gen_info, dict):
-                    finish_reason = gen_info.get("finish_reason")
-                    if finish_reason is not None:
-                        event_properties["$ai_stop_reason"] = finish_reason
+                stop_reason = _extract_stop_reason(output.generations[-1][-1])
+                if stop_reason is not None:
+                    event_properties["$ai_stop_reason"] = stop_reason
 
         _capture_ai_event(
             self._ph_client,
@@ -727,6 +744,24 @@ class CallbackHandler(BaseCallbackHandler):
         log.debug(
             f"Event: {event_name}, run_id: {str(run_id)[:5]}, parent_run_id: {str(parent_run_id)[:5]}, kwargs: {kwargs}"
         )
+
+
+def _extract_stop_reason(generation: Any) -> Optional[str]:
+    """
+    Providers report the stop reason on the message's `response_metadata` or in
+    `generation_info`, under either spelling. The Responses API reports no
+    finish reason at all, so a terminal status stands in for one.
+    """
+    metadata = getattr(getattr(generation, "message", None), "response_metadata", None)
+    info = getattr(generation, "generation_info", None)
+
+    for source in (metadata, info):
+        for key in ("finish_reason", "stop_reason"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if value is not None:
+                return str(value)
+
+    return _responses_stop_reason(metadata)
 
 
 def _extract_raw_response(last_response):
@@ -875,7 +910,7 @@ def _parse_usage_model(
     }
     normalized_usage = ModelUsage(
         **{
-            dataclass_key: parsed_usage.get(mapped_key) or 0
+            dataclass_key: parsed_usage.get(mapped_key)
             for mapped_key, dataclass_key in field_mapping.items()
         },
         cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),

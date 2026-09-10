@@ -115,3 +115,39 @@ async def test_jlowin_report_missing_advertises_get_more_tools():
     await _flush()
     assert out.root.isError is False
     assert _events(client, "$mcp_missing_capability")
+
+
+async def test_strict_input_validation_still_accepts_calls():
+    """This adapter strips the injected parameters before the SDK validates, so
+    the advertised schema must not mark them required — otherwise every call
+    under `strict_input_validation=True` fails on a parameter the SDK never
+    sees."""
+    import mcp.types as t
+
+    server = FastMCP("strict", strict_input_validation=True)
+
+    @server.tool()
+    def echo(msg: str) -> str:
+        return msg
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+
+    low = server._mcp_server
+    await low.request_handlers[t.ListToolsRequest](
+        t.ListToolsRequest(method="tools/list")
+    )
+    result = await low.request_handlers[t.CallToolRequest](
+        t.CallToolRequest(
+            method="tools/call",
+            params=t.CallToolRequestParams(
+                name="echo", arguments={"msg": "hi", "context": "strict validation"}
+            ),
+        )
+    )
+    await _flush()
+
+    assert result.root.isError is False, result.root.content[0].text
+    assert _events(client, "$mcp_tool_call")[0]["properties"]["$mcp_intent"] == (
+        "strict validation"
+    )

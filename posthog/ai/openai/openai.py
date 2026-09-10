@@ -1,8 +1,8 @@
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING as _TYPE_CHECKING, Any, Dict, Optional
 
-from posthog.ai.types import TokenUsage
+from posthog.ai.types import TokenUsage as TokenUsage
 
 try:
     import openai
@@ -13,22 +13,30 @@ except ImportError:
 
 from posthog.ai.utils import (
     call_llm_and_track_usage,
-    _capture_ai_event,
-    extract_available_tool_calls,
-    finalize_ai_content,
-    merge_usage_stats,
-    with_privacy_mode,
+    extract_available_tool_calls as extract_available_tool_calls,
+    finalize_ai_content as finalize_ai_content,
+    merge_usage_stats as merge_usage_stats,
+    with_privacy_mode as with_privacy_mode,
 )
 from posthog.ai.openai.openai_converter import (
-    extract_openai_usage_from_chunk,
-    extract_openai_content_from_chunk,
-    extract_openai_tool_calls_from_chunk,
-    accumulate_openai_tool_calls,
+    accumulate_openai_tool_calls as accumulate_openai_tool_calls,
+    extract_openai_content_from_chunk as extract_openai_content_from_chunk,
+    extract_openai_tool_calls_from_chunk as extract_openai_tool_calls_from_chunk,
+    extract_openai_usage_from_chunk as extract_openai_usage_from_chunk,
+    format_openai_streaming_input as _format_openai_streaming_input,
+    format_openai_streaming_output as _format_openai_streaming_output,
 )
 from posthog.client import Client as PostHogClient
 from posthog import setup
-from posthog.ai.openai.wrapper_utils import (
+from posthog.ai.openai._streaming import (
+    _ChatCompletionsStreamState,
+    _ResponsesStreamState,
+    _build_streaming_event_data,
+)
+from ._embeddings import _capture_embedding_event
+from .wrapper_utils import (
     _OpenAIWrapperResource,
+    _wrap_openai_resources,
     merge_provider_override,
 )
 
@@ -39,6 +47,12 @@ class OpenAI(openai.OpenAI):
     """
 
     _ph_client: PostHogClient
+
+    if _TYPE_CHECKING:
+        chat: "WrappedChat"
+        embeddings: "WrappedEmbeddings"
+        beta: "WrappedBeta"
+        responses: "WrappedResponses"
 
     def __init__(self, posthog_client: Optional[PostHogClient] = None, **kwargs):
         """
@@ -52,24 +66,7 @@ class OpenAI(openai.OpenAI):
         super().__init__(**kwargs)
         self._ph_client = posthog_client or setup()
 
-        # Store original objects after parent initialization (only if they exist)
-        self._original_chat = getattr(self, "chat", None)
-        self._original_embeddings = getattr(self, "embeddings", None)
-        self._original_beta = getattr(self, "beta", None)
-        self._original_responses = getattr(self, "responses", None)
-
-        # Replace with wrapped versions (only if originals exist)
-        if self._original_chat is not None:
-            self.chat = WrappedChat(self, self._original_chat)
-
-        if self._original_embeddings is not None:
-            self.embeddings = WrappedEmbeddings(self, self._original_embeddings)
-
-        if self._original_beta is not None:
-            self.beta = WrappedBeta(self, self._original_beta)
-
-        if self._original_responses is not None:
-            self.responses = WrappedResponses(self, self._original_responses)
+        _wrap_openai_resources(self, _SYNC_RESOURCE_WRAPPERS)
 
 
 def _parse_and_track(
@@ -168,55 +165,15 @@ class WrappedResponses(_OpenAIWrapperResource):
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: TokenUsage = TokenUsage()
-        final_content: List[Any] = []
-        model_from_response: Optional[str] = None
-        stop_reason: Optional[str] = None
+        state = _ResponsesStreamState()
         response = self._original.create(**kwargs)
 
         def generator():
-            nonlocal usage_stats
-            nonlocal final_content
-            nonlocal model_from_response
-            nonlocal stop_reason
-
             try:
                 for chunk in response:
-                    # Extract model from response object in chunk (for stored prompts)
-                    if hasattr(chunk, "response") and chunk.response:
-                        if model_from_response is None and hasattr(
-                            chunk.response, "model"
-                        ):
-                            model_from_response = chunk.response.model
-
-                    # Extract usage stats from chunk
-                    chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
-
-                    if chunk_usage:
-                        merge_usage_stats(usage_stats, chunk_usage)
-
-                    content = extract_openai_content_from_chunk(chunk, "responses")
-
-                    if content is not None:
-                        final_content.extend(content)
-
-                    # Capture stop reason from response.completed event
-                    if (
-                        hasattr(chunk, "type")
-                        and chunk.type == "response.completed"
-                        and hasattr(chunk, "response")
-                        and chunk.response
-                    ):
-                        chunk_status = getattr(chunk.response, "status", None)
-                        if chunk_status is not None:
-                            stop_reason = chunk_status
-
+                    state.process_chunk(chunk)
                     yield chunk
-
             finally:
-                end_time = time.time()
-                latency = end_time - start_time
-                output = final_content
                 self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -224,12 +181,8 @@ class WrappedResponses(_OpenAIWrapperResource):
                     posthog_privacy_mode,
                     posthog_groups,
                     kwargs,
-                    usage_stats,
-                    latency,
-                    output,
-                    None,  # Responses API doesn't have tools
-                    model_from_response,
-                    stop_reason=stop_reason,
+                    state,
+                    time.time() - start_time,
                 )
 
         return generator()
@@ -242,43 +195,27 @@ class WrappedResponses(_OpenAIWrapperResource):
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: TokenUsage,
+        state: _ResponsesStreamState,
         latency: float,
-        output: Any,
-        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
-        model_from_response: Optional[str] = None,
-        stop_reason: Optional[str] = None,
     ):
-        from posthog.ai.types import StreamingEventData
-        from posthog.ai.openai.openai_converter import (
-            format_openai_streaming_input,
-            format_openai_streaming_output,
-        )
         from posthog.ai.utils import capture_streaming_event
 
-        formatted_input = format_openai_streaming_input(kwargs, "responses")
-
-        # Use model from kwargs, fallback to model from response
-        model = kwargs.get("model") or model_from_response or "unknown"
-
-        event_data = StreamingEventData(
-            provider="openai",
-            model=model,
-            base_url=str(self._client.base_url),
+        event_data = _build_streaming_event_data(
+            base_url=self._client.base_url,
             kwargs=kwargs,
-            formatted_input=formatted_input,
-            formatted_output=format_openai_streaming_output(output, "responses"),
-            usage_stats=usage_stats,
+            formatted_input=_format_openai_streaming_input(kwargs, "responses"),
+            formatted_output=_format_openai_streaming_output(state.output, "responses"),
+            usage_stats=state.usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
             properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
-            stop_reason=stop_reason,
+            model_from_response=state.model,
+            stop_reason=state.stop_reason,
+            service_tier=state.service_tier,
         )
-
-        # Use the common capture function
         capture_streaming_event(self._client._ph_client, event_data)
 
     def parse(
@@ -443,69 +380,18 @@ class WrappedCompletions(_OpenAIWrapperResource):
         **kwargs: Any,
     ):
         start_time = time.time()
-        usage_stats: TokenUsage = TokenUsage()
-        accumulated_content: List[Any] = []
-        accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
-        model_from_response: Optional[str] = None
-        stop_reason: Optional[str] = None
+        state = _ChatCompletionsStreamState()
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
         response = self._original.create(**kwargs)
 
         def generator():
-            nonlocal usage_stats
-            nonlocal accumulated_content
-            nonlocal accumulated_tool_calls
-            nonlocal model_from_response
-            nonlocal stop_reason
-
             try:
                 for chunk in response:
-                    # Extract model from chunk (Chat Completions chunks have model field)
-                    if model_from_response is None and hasattr(chunk, "model"):
-                        model_from_response = chunk.model
-
-                    # Extract usage stats from chunk
-                    chunk_usage = extract_openai_usage_from_chunk(chunk, "chat")
-
-                    if chunk_usage:
-                        merge_usage_stats(usage_stats, chunk_usage)
-
-                    # Extract content from chunk
-                    content = extract_openai_content_from_chunk(chunk, "chat")
-
-                    if content is not None:
-                        accumulated_content.append(content)
-
-                    # Extract and accumulate tool calls from chunk
-                    chunk_tool_calls = extract_openai_tool_calls_from_chunk(chunk)
-                    if chunk_tool_calls:
-                        accumulate_openai_tool_calls(
-                            accumulated_tool_calls, chunk_tool_calls
-                        )
-
-                    # Capture stop reason from chunk
-                    if (
-                        hasattr(chunk, "choices")
-                        and chunk.choices
-                        and getattr(chunk.choices[0], "finish_reason", None) is not None
-                    ):
-                        stop_reason = chunk.choices[0].finish_reason
-
+                    state.process_chunk(chunk)
                     yield chunk
-
             finally:
-                end_time = time.time()
-                latency = end_time - start_time
-
-                # Convert accumulated tool calls dict to list
-                tool_calls_list = (
-                    list(accumulated_tool_calls.values())
-                    if accumulated_tool_calls
-                    else None
-                )
-
                 self._capture_streaming_event(
                     posthog_distinct_id,
                     posthog_trace_id,
@@ -513,13 +399,8 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     posthog_privacy_mode,
                     posthog_groups,
                     kwargs,
-                    usage_stats,
-                    latency,
-                    accumulated_content,
-                    tool_calls_list,
-                    extract_available_tool_calls("openai", kwargs),
-                    model_from_response,
-                    stop_reason=stop_reason,
+                    state,
+                    time.time() - start_time,
                 )
 
         return generator()
@@ -532,44 +413,29 @@ class WrappedCompletions(_OpenAIWrapperResource):
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
-        usage_stats: TokenUsage,
+        state: _ChatCompletionsStreamState,
         latency: float,
-        output: Any,
-        tool_calls: Optional[List[Dict[str, Any]]] = None,
-        available_tool_calls: Optional[List[Dict[str, Any]]] = None,
-        model_from_response: Optional[str] = None,
-        stop_reason: Optional[str] = None,
     ):
-        from posthog.ai.types import StreamingEventData
-        from posthog.ai.openai.openai_converter import (
-            format_openai_streaming_input,
-            format_openai_streaming_output,
-        )
         from posthog.ai.utils import capture_streaming_event
 
-        formatted_input = format_openai_streaming_input(kwargs, "chat")
-
-        # Use model from kwargs, fallback to model from response
-        model = kwargs.get("model") or model_from_response or "unknown"
-
-        event_data = StreamingEventData(
-            provider="openai",
-            model=model,
-            base_url=str(self._client.base_url),
+        event_data = _build_streaming_event_data(
+            base_url=self._client.base_url,
             kwargs=kwargs,
-            formatted_input=formatted_input,
-            formatted_output=format_openai_streaming_output(output, "chat", tool_calls),
-            usage_stats=usage_stats,
+            formatted_input=_format_openai_streaming_input(kwargs, "chat"),
+            formatted_output=_format_openai_streaming_output(
+                state.output, "chat", state.tool_calls
+            ),
+            usage_stats=state.usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
             trace_id=posthog_trace_id,
             properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
-            stop_reason=stop_reason,
+            model_from_response=state.model,
+            stop_reason=state.stop_reason,
+            service_tier=state.service_tier,
         )
-
-        # Use the common capture function
         capture_streaming_event(self._client._ph_client, event_data)
 
 
@@ -617,46 +483,18 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         response = self._original.create(**kwargs)
         end_time = time.time()
 
-        # Extract usage statistics if available
-        usage_stats = {}
-        if hasattr(response, "usage") and response.usage:
-            usage_stats = {
-                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                "total_tokens": getattr(response.usage, "total_tokens", 0),
-            }
-
-        latency = end_time - start_time
-
-        # Build the event properties
-        event_properties = {
-            "$ai_provider": "openai",
-            "$ai_model": kwargs.get("model"),
-            "$ai_input": with_privacy_mode(
-                self._client._ph_client,
-                posthog_privacy_mode,
-                finalize_ai_content(kwargs.get("input"), self._client._ph_client),
-            ),
-            "$ai_http_status": 200,
-            "$ai_input_tokens": usage_stats.get("prompt_tokens", 0),
-            "$ai_latency": latency,
-            "$ai_trace_id": posthog_trace_id,
-            "$ai_base_url": str(self._client.base_url),
-            **(posthog_properties or {}),
-        }
-
-        if posthog_distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
-        # Send capture event for embeddings
-        if hasattr(self._client._ph_client, "capture"):
-            _capture_ai_event(
-                self._client._ph_client,
-                "$ai_embedding",
-                distinct_id=posthog_distinct_id or posthog_trace_id,
-                properties=event_properties,
-                groups=posthog_groups,
-            )
-
+        _capture_embedding_event(
+            posthog_client=self._client._ph_client,
+            base_url=self._client.base_url,
+            response=response,
+            request_kwargs=kwargs,
+            latency=end_time - start_time,
+            distinct_id=posthog_distinct_id,
+            trace_id=posthog_trace_id,
+            properties=posthog_properties,
+            privacy_mode=posthog_privacy_mode,
+            groups=posthog_groups,
+        )
         return response
 
 
@@ -720,3 +558,11 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
             posthog_provider_override,
             **kwargs,
         )
+
+
+_SYNC_RESOURCE_WRAPPERS = {
+    "chat": WrappedChat,
+    "embeddings": WrappedEmbeddings,
+    "beta": WrappedBeta,
+    "responses": WrappedResponses,
+}

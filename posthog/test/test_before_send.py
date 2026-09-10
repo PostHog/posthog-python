@@ -67,6 +67,53 @@ class TestClient(unittest.TestCase):
             self.assertEqual(len(processed_events), 1)
             self.assertEqual(processed_events[0]["event"], "test_event")
 
+    def test_before_send_callback_replacing_uuid_changes_the_returned_uuid(self):
+        """capture()'s return value must match the uuid on the wire event."""
+        replacement_uuid = "12345678-1234-5678-1234-567812345678"
+
+        def replace_uuid(event):
+            event["uuid"] = replacement_uuid
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=replace_uuid,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("test_event", distinct_id="user1")
+
+            self.assertEqual(msg_uuid, replacement_uuid)
+
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["uuid"], replacement_uuid)
+
+    def test_before_send_callback_removing_uuid_regenerates_it(self):
+        """If before_send drops the uuid, a fresh one is generated and returned."""
+
+        def remove_uuid(event):
+            del event["uuid"]
+            return event
+
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(
+                FAKE_TEST_API_KEY,
+                on_error=self.set_fail,
+                before_send=remove_uuid,
+                sync_mode=True,
+            )
+            msg_uuid = client.capture("test_event", distinct_id="user1")
+
+            self.assertIsNotNone(msg_uuid)
+
+            mock_post.assert_called_once()
+            batch_data = mock_post.call_args[1]["batch"]
+            enqueued_msg = batch_data[0]
+            self.assertEqual(enqueued_msg["uuid"], msg_uuid)
+
     def test_before_send_callback_drops_event(self):
         """Test that before_send callback can drop events by returning None."""
 
@@ -98,9 +145,11 @@ class TestClient(unittest.TestCase):
             self.assertEqual(enqueued_msg["event"], "keep_me")
 
     def test_before_send_callback_handles_exceptions(self):
-        """Test that exceptions in before_send don't crash the client."""
+        """Test that exceptions in before_send drop the event without crashing."""
 
         def buggy_before_send(event):
+            event["properties"]["partially_mutated"] = True
+            event["uuid"] = "invalid"
             raise ValueError("Oops!")
 
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -110,16 +159,49 @@ class TestClient(unittest.TestCase):
                 before_send=buggy_before_send,
                 sync_mode=True,
             )
-            msg_uuid = client.capture("robust_event", distinct_id="user1")
+            with (
+                mock.patch.object(
+                    client,
+                    "_normalize_event_uuid",
+                    wraps=client._normalize_event_uuid,
+                ) as normalize_uuid,
+                self.assertLogs("posthog", level="ERROR") as logs,
+            ):
+                msg_uuid = client.capture("robust_event", distinct_id="user1")
 
-            # Event should still be sent despite the exception
-            self.assertIsNotNone(msg_uuid)
+            self.assertIsNone(msg_uuid)
+            mock_post.assert_not_called()
+            normalize_uuid.assert_called_once()
+            self.assertIn("Error in before_send callback: Oops!", logs.output[0])
 
-            # Check the enqueued message
-            mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
-            enqueued_msg = batch_data[0]
-            self.assertEqual(enqueued_msg["event"], "robust_event")
+    def test_before_send_callback_exception_does_not_enqueue_mutated_event(self):
+        def buggy_before_send(event):
+            event["properties"]["partially_mutated"] = True
+            raise ValueError("Oops!")
+
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.set_fail,
+            before_send=buggy_before_send,
+            flush_at=1,
+        )
+        try:
+            with (
+                mock.patch("posthog.consumer.batch_post") as mock_post,
+                mock.patch.object(
+                    client._analytics_lane,
+                    "enqueue",
+                    wraps=client._analytics_lane.enqueue,
+                ) as enqueue,
+                self.assertLogs("posthog", level="ERROR"),
+            ):
+                msg_uuid = client.capture("robust_event", distinct_id="user1")
+
+            self.assertIsNone(msg_uuid)
+            enqueue.assert_not_called()
+            mock_post.assert_not_called()
+        finally:
+            client.shutdown()
 
     def test_before_send_callback_output_is_recleaned(self):
         marker = object()
@@ -139,7 +221,7 @@ class TestClient(unittest.TestCase):
         sent_event = mock_post.call_args.kwargs["batch"][0]
         self.assertIsNone(sent_event["properties"]["marker"])
 
-    def test_before_send_callback_non_dict_output_uses_original_event(self):
+    def test_before_send_callback_non_dict_output_drops_event(self):
         with (
             mock.patch("posthog.client.batch_post") as mock_post,
             mock.patch("posthog.client.Client.log.exception") as mock_log,
@@ -149,10 +231,9 @@ class TestClient(unittest.TestCase):
                 before_send=lambda _event: "invalid",
                 sync_mode=True,
             )
-            self.assertIsNotNone(client.capture("original", distinct_id="user1"))
+            self.assertIsNone(client.capture("original", distinct_id="user1"))
 
-        sent_event = mock_post.call_args.kwargs["batch"][0]
-        self.assertEqual(sent_event["event"], "original")
+        mock_post.assert_not_called()
         self.assertIn(
             "before_send must return a dict or None", mock_log.call_args.args[0]
         )

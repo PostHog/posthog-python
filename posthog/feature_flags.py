@@ -1,13 +1,16 @@
 import calendar
 import datetime
 import hashlib
+import json
 import logging
+import math
 import re
 import warnings
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from posthog import utils
+from posthog import utils as utils
 from posthog.types import FlagValue
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
@@ -426,8 +429,10 @@ def match_feature_flag_properties(
                 and match_result == ConditionMatch.OUT_OF_ROLLOUT_BOUND
             ):
                 # The condition's property filters (if any) matched and only the rollout check
-                # failed, so re-evaluating later groups can't change the outcome. Return a
-                # deterministic False, mirroring the server-side engine.
+                # failed, so re-evaluating later groups can't change the outcome. If an earlier
+                # condition was inconclusive, stop here but preserve that result for fallback.
+                if is_inconclusive:
+                    break
                 return False
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
@@ -505,11 +510,91 @@ def is_condition_match(
 # branch in match_property. Distinct from the unknown-operator rejection at the top
 # of the function so the dispatch-completeness test can tell the two apart.
 _UNHANDLED_OPERATOR_MESSAGE = "has no match_property branch"
+_ASCII_LOWER_TRANSLATION = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
+
+def _format_json_float(value: float) -> str:
+    if not math.isfinite(value):
+        raise InconclusiveMatchError(
+            "Non-finite property values cannot be represented by the flags service"
+        )
+
+    representation = repr(value)
+    if "e" not in representation:
+        return representation
+
+    mantissa, exponent_text = representation.split("e")
+    exponent = int(exponent_text)
+    if -6 < exponent < 0:
+        return format(Decimal(representation), "f")
+
+    sign = "+" if exponent >= 0 else ""
+    return f"{mantissa}e{sign}{exponent}"
+
+
+def _json_value_to_string(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _format_json_float(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_json_value_to_string(item) for item in value) + "]"
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise InconclusiveMatchError(
+                "Property object keys must be strings for local evaluation"
+            )
+        items = (
+            f"{json.dumps(key, ensure_ascii=False)}:{_json_value_to_string(value[key])}"
+            for key in sorted(value)
+        )
+        return "{" + ",".join(items) + "}"
+
+    raise InconclusiveMatchError(
+        f"Property value of type {type(value).__name__} is not JSON-compatible"
+    )
+
+
+def _value_to_string(value) -> str:
+    if isinstance(value, str):
+        return value
+    return _json_value_to_string(value)
+
+
+def _ascii_lower(value) -> str:
+    return _value_to_string(value).translate(_ASCII_LOWER_TRANSLATION)
+
+
+def _is_truthy_or_falsy_property_value(value) -> bool:
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, str):
+        return value.lower() in ("true", "false")
+    if isinstance(value, list):
+        return all(_is_truthy_or_falsy_property_value(item) for item in value)
+    return False
+
+
+def _is_truthy_property_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() == "true"
+    if isinstance(value, list):
+        return all(_is_truthy_property_value(item) for item in value)
+    return False
 
 
 def match_property(property, property_values) -> bool:
     # only looks for matches where key exists in override_property_values
-    # doesn't support operator is_not_set
     key = property.get("key")
     operator = property.get("operator") or "exact"
     value = property.get("value")
@@ -522,48 +607,59 @@ def match_property(property, property_values) -> bool:
             "can't match properties without a given property value"
         )
 
-    if operator == "is_not_set":
-        raise InconclusiveMatchError("can't match properties with operator is_not_set")
+    if operator in ("is_set", "is_not_set"):
+        return operator == "is_set"
 
     override_value = property_values[key]
 
-    if (operator not in NONE_VALUES_ALLOWED_OPERATORS) and override_value is None:
+    if (
+        operator not in NONE_VALUES_ALLOWED_OPERATORS
+        and operator != "exact"
+        and override_value is None
+    ):
         return False
 
     if operator in ("exact", "is_not"):
 
         def compute_exact_match(value, override_value):
+            override_string = _value_to_string(override_value).lower()
+            if _is_truthy_or_falsy_property_value(value):
+                return _is_truthy_property_value(value) == _is_truthy_property_value(
+                    override_value
+                )
+
             if isinstance(value, list):
-                return str(override_value).casefold() in [
-                    str(val).casefold() for val in value
+                return override_string in [
+                    _value_to_string(candidate).lower() for candidate in value
                 ]
-            return utils.str_iequals(value, override_value)
+            return _value_to_string(value).lower() == override_string
 
         if operator == "exact":
             return compute_exact_match(value, override_value)
         else:
             return not compute_exact_match(value, override_value)
 
-    if operator == "is_set":
-        return key in property_values
+    if operator in (
+        "icontains",
+        "not_icontains",
+        "starts_with",
+        "not_starts_with",
+        "ends_with",
+        "not_ends_with",
+    ):
+        property_string = _ascii_lower(override_value)
+        filter_string = _ascii_lower(value)
 
-    if operator == "icontains":
-        return utils.str_icontains(override_value, value)
+        if operator in ("icontains", "not_icontains"):
+            matched = filter_string in property_string
+        elif operator in ("starts_with", "not_starts_with"):
+            matched = property_string.startswith(filter_string)
+        else:
+            matched = property_string.endswith(filter_string)
 
-    if operator == "not_icontains":
-        return not utils.str_icontains(override_value, value)
-
-    if operator == "starts_with":
-        return utils.str_istartswith(override_value, value)
-
-    if operator == "not_starts_with":
-        return not utils.str_istartswith(override_value, value)
-
-    if operator == "ends_with":
-        return utils.str_iendswith(override_value, value)
-
-    if operator == "not_ends_with":
-        return not utils.str_iendswith(override_value, value)
+        if operator.startswith("not_"):
+            return not matched
+        return matched
 
     if operator == "regex":
         return (
@@ -735,7 +831,7 @@ def match_cohort(
         )
 
     property_group = cohort_properties[cohort_id]
-    return match_property_group(
+    matches = match_property_group(
         property_group,
         property_values,
         cohort_properties,
@@ -744,6 +840,13 @@ def match_cohort(
         distinct_id,
         device_id=device_id,
     )
+
+    operator = property.get("operator") or "exact"
+    if operator in ("exact", "in"):
+        return matches
+    if operator == "not_in":
+        return not matches
+    raise InconclusiveMatchError(f"Unsupported cohort operator: {operator}")
 
 
 def match_property_group(
@@ -755,22 +858,33 @@ def match_property_group(
     distinct_id=None,
     device_id=None,
 ) -> bool:
-    if not property_group:
+    # The backend serializes its canonical empty PropertyGroup as {}.
+    if property_group == {}:
         return True
+    if not isinstance(property_group, dict):
+        raise RequiresServerEvaluation("Cohort property group must be an object")
 
     property_group_type = property_group.get("type")
+    if property_group_type not in ("AND", "OR"):
+        raise RequiresServerEvaluation("Cohort property group type must be AND or OR")
+    is_and = property_group_type == "AND"
     properties = property_group.get("values")
-
-    if not properties or len(properties) == 0:
-        # empty groups are no-ops, always match
+    if not isinstance(properties, list):
+        raise RequiresServerEvaluation("Cohort property group values must be a list")
+    if not properties:
         return True
 
+    decisive_result = None
     error_matching_locally = False
 
-    if "values" in properties[0]:
-        # a nested property group
-        for prop in properties:
-            try:
+    for prop in properties:
+        try:
+            if not isinstance(prop, dict):
+                raise RequiresServerEvaluation(
+                    "Cohort property group entry must be an object"
+                )
+
+            if prop == {} or "values" in prop or prop.get("type") in ("AND", "OR"):
                 matches = match_property_group(
                     prop,
                     property_values,
@@ -780,81 +894,55 @@ def match_property_group(
                     distinct_id,
                     device_id=device_id,
                 )
-                if property_group_type == "AND":
-                    if not matches:
-                        return False
-                else:
-                    # OR group
-                    if matches:
-                        return True
-            except RequiresServerEvaluation:
-                # Immediately propagate - this condition requires server-side data
-                raise
-            except InconclusiveMatchError as e:
-                log.debug(f"Failed to compute property {prop} locally: {e}")
-                error_matching_locally = True
-
-        if error_matching_locally:
-            raise InconclusiveMatchError(
-                "Can't match cohort without a given cohort property value"
-            )
-        # if we get here, all matched in AND case, or none matched in OR case
-        return property_group_type == "AND"
-
-    else:
-        for prop in properties:
-            try:
-                if prop.get("type") == "cohort":
-                    matches = match_cohort(
-                        prop,
-                        property_values,
-                        cohort_properties,
-                        flags_by_key,
-                        evaluation_cache,
-                        distinct_id,
-                        device_id=device_id,
-                    )
-                elif prop.get("type") == "flag":
-                    matches = evaluate_flag_dependency(
-                        prop,
-                        flags_by_key,
-                        evaluation_cache,
-                        distinct_id,
-                        property_values,
-                        cohort_properties,
-                        device_id=device_id,
-                    )
-                else:
-                    matches = match_property(prop, property_values)
-
+                negation = False
+            elif prop.get("type") == "cohort":
+                matches = match_cohort(
+                    prop,
+                    property_values,
+                    cohort_properties,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
+                    device_id=device_id,
+                )
+                negation = prop.get("negation", False)
+            elif prop.get("type") == "flag":
+                matches = evaluate_flag_dependency(
+                    prop,
+                    flags_by_key,
+                    evaluation_cache,
+                    distinct_id,
+                    property_values,
+                    cohort_properties,
+                    device_id=device_id,
+                )
+                negation = prop.get("negation", False)
+            else:
+                matches = match_property(prop, property_values)
                 negation = prop.get("negation", False)
 
-                if property_group_type == "AND":
-                    # if negated property, do the inverse
-                    if not matches and not negation:
-                        return False
-                    if matches and negation:
-                        return False
-                else:
-                    # OR group
-                    if matches and not negation:
-                        return True
-                    if not matches and negation:
-                        return True
-            except RequiresServerEvaluation:
-                # Immediately propagate - this condition requires server-side data
-                raise
-            except InconclusiveMatchError as e:
-                log.debug(f"Failed to compute property {prop} locally: {e}")
-                error_matching_locally = True
+            effective_match = matches != bool(negation)
+            if is_and and not effective_match:
+                decisive_result = False
+            elif not is_and and effective_match:
+                decisive_result = True
+        except RequiresServerEvaluation:
+            # Static/missing cohorts and malformed definitions always require server evaluation,
+            # even when another branch would otherwise resolve the group locally.
+            raise
+        except InconclusiveMatchError as e:
+            log.debug(f"Failed to compute property {prop} locally: {e}")
+            error_matching_locally = True
 
-        if error_matching_locally:
-            raise InconclusiveMatchError(
-                "can't match cohort without a given cohort property value"
-            )
+    if decisive_result is not None:
+        return decisive_result
+    if error_matching_locally:
+        raise InconclusiveMatchError(
+            "Can't match cohort without a given cohort property value"
+        )
 
-        # if we get here, all matched in AND case, or none matched in OR case
-        return property_group_type == "AND"
+    # AND: every entry matched. OR: none matched.
+    return is_and
 
 
 def parse_datetime(value: str) -> datetime.datetime:

@@ -16,7 +16,10 @@ from posthog.feature_flags import (
     PROPERTY_OPERATORS,
     _UNHANDLED_OPERATOR_MESSAGE,
     InconclusiveMatchError,
+    RequiresServerEvaluation,
+    match_cohort,
     match_property,
+    match_property_group,
     parse_datetime,
     relative_date_parse_for_feature_flag_matching,
 )
@@ -35,6 +38,82 @@ pytestmark = [
         r"ignore:send_feature_flag_events is deprecated in get_feature_flag_payload:DeprecationWarning"
     ),
 ]
+
+
+class TestCohortMatching(unittest.TestCase):
+    def setUp(self):
+        self.cohorts = {
+            "1": {
+                "type": "AND",
+                "values": [
+                    {
+                        "key": "country",
+                        "value": "US",
+                        "operator": "exact",
+                        "type": "person",
+                    }
+                ],
+            }
+        }
+
+    def test_cohort_membership_operators(self):
+        for operator in (None, "exact", "in"):
+            with self.subTest(operator=operator):
+                prop = {"value": 1, "operator": operator, "type": "cohort"}
+                self.assertTrue(match_cohort(prop, {"country": "US"}, self.cohorts))
+                self.assertFalse(match_cohort(prop, {"country": "UK"}, self.cohorts))
+
+        not_in = {"value": 1, "operator": "not_in", "type": "cohort"}
+        self.assertFalse(match_cohort(not_in, {"country": "US"}, self.cohorts))
+        self.assertTrue(match_cohort(not_in, {"country": "UK"}, self.cohorts))
+
+    def test_only_canonical_empty_groups_match(self):
+        self.assertTrue(match_property_group({}, {}, {}))
+        self.assertTrue(match_property_group({"type": "AND", "values": []}, {}, {}))
+        self.assertTrue(
+            match_property_group(
+                {"type": "AND", "values": [{"type": "AND", "values": []}, {}]},
+                {},
+                {},
+            )
+        )
+
+        malformed_groups = [
+            None,
+            "invalid",
+            {"type": "AND"},
+            {"type": "AND", "values": {}},
+            {"values": []},
+            {"type": "INVALID", "values": []},
+        ]
+        for group in malformed_groups:
+            with self.subTest(group=group):
+                with self.assertRaises(RequiresServerEvaluation):
+                    match_property_group(group, {}, {})
+
+    def test_missing_nested_cohort_always_requires_server_evaluation(self):
+        matching_leaf = {
+            "key": "country",
+            "value": "US",
+            "operator": "exact",
+            "type": "person",
+        }
+        missing_cohort = {"key": "id", "value": 999, "type": "cohort"}
+
+        cases = [
+            ("OR", "US", [matching_leaf, missing_cohort]),
+            ("OR", "US", [missing_cohort, matching_leaf]),
+            ("AND", "UK", [matching_leaf, missing_cohort]),
+            ("AND", "UK", [missing_cohort, matching_leaf]),
+        ]
+        for group_type, country, values in cases:
+            with self.subTest(group_type=group_type, values=values):
+                with self.assertRaises(RequiresServerEvaluation):
+                    match_property_group(
+                        {"type": group_type, "values": values},
+                        {"country": country},
+                        {},
+                    )
 
 
 class TestLocalEvaluation(unittest.TestCase):
@@ -138,7 +217,7 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(person_properties, {"region": "USA"})
         self.assertEqual(patch_flags.call_count, 0)
 
-    def test_case_insensitive_matching(self):
+    def test_exact_matching_uses_unicode_lowercase(self):
         self.client.feature_flags = [
             {
                 "id": 1,
@@ -180,6 +259,16 @@ class TestLocalEvaluation(unittest.TestCase):
                 "person-flag",
                 "some-distinct-id",
                 person_properties={"location": "straße"},
+                only_evaluate_locally=True,
+            )
+        )
+
+        self.assertFalse(
+            self.client.get_feature_flag(
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"location": "strasse"},
+                only_evaluate_locally=True,
             )
         )
 
@@ -187,19 +276,17 @@ class TestLocalEvaluation(unittest.TestCase):
             self.client.get_feature_flag(
                 "person-flag",
                 "some-distinct-id",
-                person_properties={"location": "strasse"},
+                person_properties={"star": "ſun"},
+                only_evaluate_locally=True,
             )
         )
 
-        self.assertTrue(
+        self.assertFalse(
             self.client.get_feature_flag(
-                "person-flag", "some-distinct-id", person_properties={"star": "ſun"}
-            )
-        )
-
-        self.assertTrue(
-            self.client.get_feature_flag(
-                "person-flag", "some-distinct-id", person_properties={"star": "sun"}
+                "person-flag",
+                "some-distinct-id",
+                person_properties={"star": "sun"},
+                only_evaluate_locally=True,
             )
         )
 
@@ -282,6 +369,51 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertFalse(
             self.client.get_feature_flag("early-exit-flag", "some-distinct-id")
         )
+
+    @mock.patch("posthog.client.flags")
+    def test_early_exit_preserves_fallback_after_inconclusive_presence_condition(
+        self, patch_flags
+    ):
+        patch_flags.return_value = {
+            "featureFlags": {"early-exit-presence-flag": "server-fallback"}
+        }
+
+        for operator in ("is_set", "is_not_set"):
+            with self.subTest(operator=operator):
+                self.client.feature_flags = [
+                    {
+                        "id": 1,
+                        "name": "Early Exit Presence Feature",
+                        "key": "early-exit-presence-flag",
+                        "active": True,
+                        "filters": {
+                            "early_exit": True,
+                            "groups": [
+                                {
+                                    "properties": [
+                                        {
+                                            "key": "plan",
+                                            "operator": operator,
+                                            "value": "",
+                                            "type": "person",
+                                        }
+                                    ],
+                                    "rollout_percentage": 100,
+                                },
+                                {"properties": [], "rollout_percentage": 0},
+                            ],
+                        },
+                    }
+                ]
+
+                self.assertEqual(
+                    "server-fallback",
+                    self.client.get_feature_flag(
+                        "early-exit-presence-flag", "some-distinct-id"
+                    ),
+                )
+
+        self.assertEqual(patch_flags.call_count, 2)
 
     def test_early_exit_does_not_trigger_on_property_mismatch(self):
         # First group fails on its property (region mismatch), not rollout — so even with
@@ -1360,9 +1492,11 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_capture.call_count, 0)
 
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_local_evaluation_None_values(self, patch_get, patch_flags):
+    def test_feature_flags_local_evaluation_None_values(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 id: 1,
@@ -1419,7 +1553,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1435,9 +1569,11 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(feature_flag_match, True)
 
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_local_evaluation_for_cohorts(self, patch_get, patch_flags):
+    def test_feature_flags_local_evaluation_for_cohorts(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 "id": 2,
@@ -1499,7 +1635,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1509,7 +1645,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # even though 'other' property is not present, the cohort should still match since it's an OR condition
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1518,14 +1654,14 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_local_evaluation_for_negated_cohorts(
-        self, patch_get, patch_flags
-    ):
+    def test_feature_flags_local_evaluation_for_negated_cohorts(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 "id": 2,
@@ -1588,7 +1724,7 @@ class TestLocalEvaluation(unittest.TestCase):
 
         self.assertEqual(feature_flag_match, False)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1598,7 +1734,7 @@ class TestLocalEvaluation(unittest.TestCase):
         # even though 'other' property is not present, the cohort should still match since it's an OR condition
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         feature_flag_match = client.get_feature_flag(
             "beta-feature",
@@ -1607,7 +1743,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         # since 'other' is negated, we return False. Since 'nation' is not present, we can't tell whether the flag should be true or false, so fall back to /flags
         self.assertEqual(patch_flags.call_count, 1)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         patch_flags.reset_mock()
 
@@ -1618,17 +1754,17 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(feature_flag_match, True)
         self.assertEqual(patch_flags.call_count, 0)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
     @mock.patch("posthog.feature_flags.log")
     @mock.patch("posthog.client.flags")
-    @mock.patch("posthog.client.get")
-    def test_feature_flags_with_flag_dependencies(
-        self, patch_get, patch_flags, mock_log
-    ):
+    def test_feature_flags_with_flag_dependencies(self, patch_flags, mock_log):
         # Mock remote flags call to return empty for this flag (fallback returns None)
         patch_flags.return_value = {"featureFlags": {}}
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        load_patch = mock.patch.object(client, "_load_feature_flags")
+        patch_load = load_patch.start()
+        self.addCleanup(load_patch.stop)
         client.feature_flags = [
             {
                 "id": 1,
@@ -1671,7 +1807,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertIsNone(feature_flag_match)
         self.assertEqual(patch_flags.call_count, 1)
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
         # Test with email that doesn't match (should also fall back to remote due to missing dependency)
         feature_flag_match = client.get_feature_flag(
@@ -1681,7 +1817,7 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertIsNone(feature_flag_match)
         self.assertEqual(patch_flags.call_count, 2)  # Called twice now
-        self.assertEqual(patch_get.call_count, 0)
+        patch_load.assert_not_called()
 
     @mock.patch("posthog.client.flags")
     @mock.patch("posthog.client.get")
@@ -4966,6 +5102,115 @@ class TestMatchProperties(unittest.TestCase):
         with self.assertRaises(InconclusiveMatchError):
             match_property(property_c, {"key2": "value"})
 
+    @parameterized.expand(
+        [
+            ("non_ascii_case_variant", "Ä", "ä", True),
+            ("float_stringification", "323.0", 323.0, True),
+            ("casefold_expansion", "ß", "ss", False),
+            ("single_final_sigma", "Σ", "ς", False),
+            ("word_final_sigma", "ΟΔΟΣ", "οδος", True),
+            ("word_medial_sigma", "ΟΔΟΣ", "οδοσ", False),
+            ("dotted_capital_i", "İ", "i\u0307", True),
+            ("plain_i", "İ", "i", False),
+        ]
+    )
+    def test_match_properties_exact_uses_unicode_lowercase(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    def test_match_properties_exact_array_uses_unicode_lowercase(self):
+        exact_array = self.property("key", ["free", "Ä"], "exact")
+        is_not_array = self.property("key", ["free", "Ä"], "is_not")
+        self.assertTrue(match_property(exact_array, {"key": "ä"}))
+        self.assertFalse(match_property(is_not_array, {"key": "ä"}))
+        self.assertFalse(match_property(exact_array, {"key": "paid"}))
+        self.assertTrue(match_property(is_not_array, {"key": "paid"}))
+
+    @parameterized.expand(
+        [
+            ("false_matches_non_truthy_string", False, "banana", True),
+            ("false_string_matches_zero", "false", 0, True),
+            ("false_array_matches_null", ["false"], None, True),
+            ("mixed_boolean_array_rejects_true", ["true", "false"], "true", False),
+            ("mixed_boolean_array_matches_non_truthy", ["true", "false"], "pro", True),
+            ("empty_array_matches_true", [], True, True),
+            ("empty_array_matches_empty_array", [], [], True),
+            ("empty_array_rejects_false", [], False, False),
+            ("ordinary_array_uses_any", ["FREE", "PRO"], "pro", True),
+        ]
+    )
+    def test_match_properties_exact_uses_backend_boolean_precedence(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    @parameterized.expand(
+        [
+            ("compact_array", "[1,2]", [1, 2], True),
+            ("python_array_spelling", "[1, 2]", [1, 2], False),
+            (
+                "sorted_object",
+                '{"a":1,"b":2}',
+                {"b": 2, "a": 1},
+                True,
+            ),
+            (
+                "recursive_sorting",
+                '{"a":"x","z":[{"a":2,"b":1}]}',
+                {"z": [{"b": 1, "a": 2}], "a": "x"},
+                True,
+            ),
+        ]
+    )
+    def test_match_properties_exact_uses_backend_json_stringification(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    @parameterized.expand(
+        [
+            ("integral_float", "323.0", 323.0, True),
+            ("negative_zero", "-0.0", -0.0, True),
+            ("small_exponent", "1e-7", 1e-7, True),
+            ("large_exponent", "1e+16", 1e16, True),
+            ("fixed_small_decimal", "0.00001", 1e-5, True),
+            ("fixed_small_decimal_fraction", "0.000099", 9.9e-5, True),
+            ("python_padded_exponent", "1e-07", 1e-7, False),
+        ]
+    )
+    def test_match_properties_exact_uses_backend_float_stringification(
+        self, _name, filter_value, property_value, expected
+    ):
+        exact = self.property("key", filter_value, "exact")
+        is_not = self.property("key", filter_value, "is_not")
+        self.assertEqual(expected, match_property(exact, {"key": property_value}))
+        self.assertEqual(not expected, match_property(is_not, {"key": property_value}))
+
+    @parameterized.expand(
+        [
+            ("nan", "value", float("nan")),
+            ("positive_infinity", "value", float("inf")),
+            ("negative_infinity", "value", float("-inf")),
+            ("boolean_filter_with_nan", False, float("nan")),
+        ]
+    )
+    def test_match_properties_exact_non_json_numbers_are_inconclusive(
+        self, _name, filter_value, property_value
+    ):
+        exact = self.property("key", filter_value, "exact")
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(exact, {"key": property_value})
+
     def test_match_properties_not_in(self):
         property_a = self.property(key="key", value="value", operator="is_not")
         self.assertTrue(match_property(property_a, {"key": "value2"}))
@@ -4989,16 +5234,33 @@ class TestMatchProperties(unittest.TestCase):
             match_property(property_a, {"key2": "value"})
             match_property(property_c, {"key2": "value1"})  # overrides don't have 'key'
 
-    def test_match_properties_is_set(self):
-        property_a = self.property(key="key", value="is_set", operator="is_set")
-        self.assertTrue(match_property(property_a, {"key": "value"}))
-        self.assertTrue(match_property(property_a, {"key": "value2"}))
-        self.assertTrue(match_property(property_a, {"key": ""}))
-        self.assertFalse(match_property(property_a, {"key": None}))
+    @parameterized.expand(
+        [
+            ("is_set_none", "is_set", None, True),
+            ("is_set_false", "is_set", False, True),
+            ("is_set_zero", "is_set", 0, True),
+            ("is_set_empty_string", "is_set", "", True),
+            ("is_set_empty_list", "is_set", [], True),
+            ("is_set_empty_dict", "is_set", {}, True),
+            ("is_not_set_none", "is_not_set", None, False),
+            ("is_not_set_false", "is_not_set", False, False),
+            ("is_not_set_zero", "is_not_set", 0, False),
+            ("is_not_set_empty_string", "is_not_set", "", False),
+            ("is_not_set_empty_list", "is_not_set", [], False),
+            ("is_not_set_empty_dict", "is_not_set", {}, False),
+        ]
+    )
+    def test_match_properties_presence_operator_with_present_key(
+        self, _name, operator, value, expected
+    ):
+        prop = self.property(key="key", value=operator, operator=operator)
+        self.assertEqual(expected, match_property(prop, {"key": value}))
 
+    @parameterized.expand([("is_set", "is_set"), ("is_not_set", "is_not_set")])
+    def test_match_properties_presence_operator_with_omitted_key(self, _name, operator):
+        prop = self.property(key="key", value=operator, operator=operator)
         with self.assertRaises(InconclusiveMatchError):
-            match_property(property_a, {"key2": "value"})
-            match_property(property_a, {})
+            match_property(prop, {})
 
     def test_match_properties_icontains(self):
         property_a = self.property(key="key", value="valUe", operator="icontains")
@@ -5056,6 +5318,34 @@ class TestMatchProperties(unittest.TestCase):
         for missing_properties in ({"other_key": "value"}, {}):
             with self.assertRaises(InconclusiveMatchError):
                 match_property(prop, missing_properties)
+
+    @parameterized.expand(
+        [
+            ("icontains", "prefixÄsuffix"),
+            ("starts_with", "Äsuffix"),
+            ("ends_with", "prefixÄ"),
+        ]
+    )
+    def test_string_operators_use_ascii_only_case_folding(self, operator, value):
+        positive = self.property("key", "ä", operator)
+        negative = self.property("key", "ä", f"not_{operator}")
+        self.assertFalse(match_property(positive, {"key": value}))
+        self.assertTrue(match_property(negative, {"key": value}))
+
+    @parameterized.expand(
+        [
+            ("icontains_integral_float", "icontains", ".0", 323.0),
+            ("starts_with_integral_float", "starts_with", "323", 323.0),
+            ("ends_with_integral_float", "ends_with", ".0", 323.0),
+            ("small_exponent", "ends_with", "e-7", 1e-7),
+            ("fixed_small_decimal", "starts_with", "0.00001", 1e-5),
+        ]
+    )
+    def test_string_operators_preserve_float_stringification(
+        self, _name, operator, value, property_value
+    ):
+        prop = self.property("key", value, operator)
+        self.assertTrue(match_property(prop, {"key": property_value}))
 
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")
@@ -5369,11 +5659,11 @@ class TestMatchProperties(unittest.TestCase):
 
     def test_none_property_value_with_all_operators(self):
         property_a = self.property(key="key", value="none", operator="is_not")
-        self.assertFalse(match_property(property_a, {"key": None}))
+        self.assertTrue(match_property(property_a, {"key": None}))
         self.assertTrue(match_property(property_a, {"key": "non"}))
 
-        property_b = self.property(key="key", value=None, operator="is_set")
-        self.assertFalse(match_property(property_b, {"key": None}))
+        exact_null = self.property(key="key", value="null", operator="exact")
+        self.assertTrue(match_property(exact_null, {"key": None}))
 
         property_c = self.property(key="key", value="no", operator="icontains")
         self.assertFalse(match_property(property_c, {"key": None}))

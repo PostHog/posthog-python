@@ -1,5 +1,6 @@
 import base64
 import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -422,6 +423,38 @@ class TestPostHogTracingProcessor:
         assert call_kwargs["properties"]["$ai_input_tokens"] == 10
         assert call_kwargs["properties"]["$ai_output_tokens"] == 20
 
+    def test_client_privacy_mode_redacts_content(self, mock_client, mock_span):
+        mock_client.privacy_mode = True
+        processor = PostHogTracingProcessor(client=mock_client)
+        mock_span.span_data = GenerationSpanData(
+            input=[{"role": "user", "content": "Secret message"}],
+            output=[{"role": "assistant", "content": "Secret response"}],
+            model="gpt-4o",
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        properties = mock_client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] is None
+        assert properties["$ai_output_choices"] is None
+
+    def test_client_without_privacy_mode_captures_content(self, mock_span):
+        client = SimpleNamespace(capture=MagicMock())
+        processor = PostHogTracingProcessor(client=client)
+        mock_span.span_data = GenerationSpanData(
+            input=[{"role": "user", "content": "Visible message"}],
+            model="gpt-4o",
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        properties = client.capture.call_args.kwargs["properties"]
+        assert properties["$ai_input"] == [
+            {"role": "user", "content": "Visible message"}
+        ]
+
     def test_generation_span_image_input_is_redacted(
         self, processor, mock_client, mock_span
     ):
@@ -455,7 +488,7 @@ class TestPostHogTracingProcessor:
         self, processor, mock_client, mock_span
     ):
         """Test that raw bytes content becomes a base64 string under multimodal passthrough."""
-        mock_client._enable_multimodal_capture = True
+        mock_client.enable_full_ai_capture = True
         raw = b"\x00\x01\x02\x03"
         span_data = GenerationSpanData(
             input=[{"role": "user", "content": raw}],
@@ -467,7 +500,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client._capture_ai.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         captured_input = call_kwargs["properties"]["$ai_input"]
         assert captured_input[0]["content"] == base64.b64encode(raw).decode()
 
@@ -773,7 +806,7 @@ class TestPostHogTracingProcessor:
         self, processor, mock_client, mock_span
     ):
         """Under multimodal passthrough the raw audio is kept intact."""
-        mock_client._enable_multimodal_capture = True
+        mock_client.enable_full_ai_capture = True
         b64 = base64.b64encode(b"\x00" * 1000).decode()
         span_data = TranscriptionSpanData(
             input=b64,
@@ -786,7 +819,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client._capture_ai.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_input"] == b64
 
     def test_latency_calculation(self, processor, mock_client, mock_span):
@@ -849,7 +882,7 @@ class TestPostHogTracingProcessor:
         mock_client.flush.assert_called_once()
 
     def test_generation_span_with_no_usage(self, processor, mock_client, mock_span):
-        """Test GenerationSpanData with no usage data defaults to zero tokens."""
+        """Test GenerationSpanData with no usage data omits the token counts."""
         span_data = GenerationSpanData(model="gpt-4o")
         mock_span.span_data = span_data
 
@@ -857,9 +890,9 @@ class TestPostHogTracingProcessor:
         processor.on_span_end(mock_span)
 
         call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$ai_input_tokens"] == 0
-        assert call_kwargs["properties"]["$ai_output_tokens"] == 0
-        assert call_kwargs["properties"]["$ai_total_tokens"] == 0
+        assert "$ai_input_tokens" not in call_kwargs["properties"]
+        assert "$ai_output_tokens" not in call_kwargs["properties"]
+        assert "$ai_total_tokens" not in call_kwargs["properties"]
 
     def test_generation_span_with_partial_usage(
         self, processor, mock_client, mock_span
@@ -876,7 +909,9 @@ class TestPostHogTracingProcessor:
 
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$ai_input_tokens"] == 42
-        assert call_kwargs["properties"]["$ai_output_tokens"] == 0
+        # The output side was never reported, so it is omitted rather than 0;
+        # the total is the sum of the reported sides.
+        assert "$ai_output_tokens" not in call_kwargs["properties"]
         assert call_kwargs["properties"]["$ai_total_tokens"] == 42
 
     def test_error_type_categorization_by_type_field_only(
@@ -1000,12 +1035,33 @@ class TestInstrumentHelper:
             assert processor._properties == {"env": "test"}
 
 
+class TestCapturePolicy:
+    def test_processor_groups_are_forwarded(self, mock_client):
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            groups={"company": "acme"},
+        )
+
+        processor._capture_event("$ai_trace", {})
+
+        assert mock_client.capture.call_args.kwargs["groups"] == {"company": "acme"}
+
+    def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
+        mock_client.capture.side_effect = RuntimeError("capture failed")
+        processor = PostHogTracingProcessor(client=mock_client)
+
+        with caplog.at_level(logging.DEBUG, logger="posthog"):
+            processor._capture_event("$ai_trace", {})
+
+        assert "Failed to capture PostHog event: capture failed" in caplog.text
+
+
 def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_trace):
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     processor = PostHogTracingProcessor(client=mock_client, distinct_id="test-user")
     processor.on_trace_start(mock_trace)
     processor.on_trace_end(mock_trace)
 
     mock_client.capture.assert_not_called()
-    mock_client._capture_ai.assert_called_once()
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_trace"
+    mock_client.capture_ai.assert_called_once()
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_trace"

@@ -10,6 +10,7 @@ from posthog.capture_mode import CaptureMode
 from posthog.capture_v1 import _backoff, _send_v1_batch
 from posthog.request import (
     EVENTS_ENDPOINT,
+    USER_AGENT as _USER_AGENT,
     APIError,
     DatetimeSerializer,
     batch_post,
@@ -132,6 +133,7 @@ class Consumer(Thread):
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self._sdk_info = _USER_AGENT
         self._drain_signal: Optional[_DrainSignal] = None
         self._drain_on_stop = False
         # It's important to set running in the constructor: if we are asked to
@@ -300,6 +302,7 @@ class Consumer(Thread):
                 timeout=self.timeout,
                 max_retries=self.retries,
                 historical_migration=self.historical_migration,
+                sdk_info=self._sdk_info,
             )
             return
         self._send(batch, self.endpoint)
@@ -332,6 +335,11 @@ class Consumer(Thread):
                     batch=batch,
                     historical_migration=self.historical_migration,
                     path=path,
+                    **(
+                        {"_user_agent": self._sdk_info}
+                        if self._sdk_info != _USER_AGENT
+                        else {}
+                    ),
                 )
                 return
             except Exception as e:

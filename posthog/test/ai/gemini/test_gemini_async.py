@@ -954,7 +954,8 @@ async def test_async_embed_content_without_token_counts(
     )
 
     props = mock_client.capture.call_args[1]["properties"]
-    assert props["$ai_input_tokens"] == 0
+    # No embedding carried a token count, so the property is omitted, not 0.
+    assert "$ai_input_tokens" not in props
 
 
 async def test_async_embed_content_privacy_mode(

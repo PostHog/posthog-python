@@ -1602,8 +1602,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 1000
     assert generation_props["$ai_output_tokens"] == 50
     assert generation_props["$ai_cache_creation_input_tokens"] == 800
-    assert generation_props["$ai_cache_read_input_tokens"] == 0
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    # Not reported by the fixture, so omitted rather than fabricated as 0.
+    assert "$ai_cache_read_input_tokens" not in generation_props
+    assert "$ai_reasoning_tokens" not in generation_props
 
     # Reset mock for second call
     mock_client.reset_mock()
@@ -1637,9 +1638,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
         generation_props["$ai_input_tokens"] == 1200
     )  # No provider metadata, no subtraction
     assert generation_props["$ai_output_tokens"] == 30
-    assert generation_props["$ai_cache_creation_input_tokens"] == 0
+    assert "$ai_cache_creation_input_tokens" not in generation_props
     assert generation_props["$ai_cache_read_input_tokens"] == 800
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    assert "$ai_reasoning_tokens" not in generation_props
 
 
 def test_anthropic_provider_subtracts_cache_tokens(mock_client):
@@ -1941,8 +1942,10 @@ def test_openai_cache_read_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 150  # No subtraction for OpenAI
     assert generation_props["$ai_output_tokens"] == 40
     assert generation_props["$ai_cache_read_input_tokens"] == 100
+    # cache_creation is reported as an explicit 0 by the fixture, so it stays 0;
+    # reasoning was never reported, so it is omitted.
     assert generation_props["$ai_cache_creation_input_tokens"] == 0
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    assert "$ai_reasoning_tokens" not in generation_props
 
 
 def test_openai_cache_creation_tokens(mock_client):
@@ -1983,8 +1986,10 @@ def test_openai_cache_creation_tokens(mock_client):
     assert generation_props["$ai_input_tokens"] == 2000
     assert generation_props["$ai_output_tokens"] == 25
     assert generation_props["$ai_cache_creation_input_tokens"] == 1500
+    # cache_read is reported as an explicit 0 by the fixture, so it stays 0;
+    # reasoning was never reported, so it is omitted.
     assert generation_props["$ai_cache_read_input_tokens"] == 0
-    assert generation_props["$ai_reasoning_tokens"] == 0
+    assert "$ai_reasoning_tokens" not in generation_props
 
 
 def test_combined_reasoning_and_cache_tokens(mock_client):
@@ -2315,7 +2320,7 @@ def test_no_cache_read_tokens_no_subtraction(mock_client):
     # Input tokens should remain unchanged at 100
     assert generation_props["$ai_input_tokens"] == 100
     assert generation_props["$ai_output_tokens"] == 30
-    assert generation_props["$ai_cache_read_input_tokens"] == 0
+    assert "$ai_cache_read_input_tokens" not in generation_props
 
 
 def test_zero_input_tokens_with_cache_read(mock_client):
@@ -2396,7 +2401,7 @@ def test_non_anthropic_cache_write_tokens_not_subtracted_from_input(mock_client)
     assert generation_props["$ai_input_tokens"] == 1000
     assert generation_props["$ai_output_tokens"] == 20
     assert generation_props["$ai_cache_creation_input_tokens"] == 800
-    assert generation_props["$ai_cache_read_input_tokens"] == 0
+    assert "$ai_cache_read_input_tokens" not in generation_props
 
 
 def test_agent_action_and_finish_imports():
@@ -2825,12 +2830,93 @@ def test_exception_autocapture_none_return_no_exception_id():
 def test_ai_lane_client_routes_through_capture_ai(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Who won the world series?")])
     model = FakeMessagesListChatModel(responses=[AIMessage(content="The Dodgers.")])
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     callbacks = [CallbackHandler(mock_client)]
 
     (prompt | model).invoke({}, config={"callbacks": callbacks})
 
     mock_client.capture.assert_not_called()
-    events = [c[1]["event"] for c in mock_client._capture_ai.call_args_list]
+    events = [c[1]["event"] for c in mock_client.capture_ai.call_args_list]
     assert "$ai_generation" in events
     assert "$ai_trace" in events
+
+
+def test_served_service_tier_merges_into_model_parameters(mock_client):
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "openai", "ls_model_name": "gpt-5-mini"},
+        invocation_params={"temperature": 0.5},
+    )
+    response = LLMResult(
+        generations=[[ChatGeneration(message=AIMessage(content="Response"))]],
+        llm_output={"service_tier": "flex"},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_model_parameters"]["service_tier"] == "flex"
+    assert props["$ai_model_parameters"]["temperature"] == 0.5
+    assert props["$ai_service_tier"] == "flex"
+
+
+@pytest.mark.parametrize(
+    "generation_info,response_metadata,expected",
+    [
+        # generation_info finish_reason keeps priority
+        ({"finish_reason": "stop"}, {"status": "completed"}, "stop"),
+        # Responses API: a terminal status carries no finish_reason at all
+        (None, {"status": "completed", "incomplete_details": None}, "completed"),
+        # ... an incomplete run is named by what cut it short
+        (
+            None,
+            {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            "max_output_tokens",
+        ),
+        # a queued background run has no stop reason yet
+        (None, {"status": "queued", "incomplete_details": None}, None),
+        # Anthropic reports through response_metadata.stop_reason
+        (None, {"stop_reason": "end_turn"}, "end_turn"),
+    ],
+)
+def test_stop_reason_resolution(
+    mock_client, generation_info, response_metadata, expected
+):
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "openai", "ls_model_name": "gpt-4o"},
+    )
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(
+                        content="Response", response_metadata=response_metadata
+                    ),
+                    generation_info=generation_info,
+                )
+            ]
+        ],
+        llm_output={},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props.get("$ai_stop_reason") == expected

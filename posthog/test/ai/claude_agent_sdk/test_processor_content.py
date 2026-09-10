@@ -73,7 +73,7 @@ def test_empty_string_tool_content_not_none(mod):
 def test_passthrough_tool_result_media_not_truncated(mod):
     # A client opted into multimodal capture must not get its tool-result media
     # cut at max_string_len — a 5000-char slice through base64 corrupts it.
-    client = types.SimpleNamespace(_enable_multimodal_capture=True)
+    client = types.SimpleNamespace(enable_full_ai_capture=True)
     long_b64 = "A" * 6000
     block = FakeToolResultBlock(
         content=[

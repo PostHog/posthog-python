@@ -1,5 +1,189 @@
 # posthog
 
+## 7.50.0 — 2026-09-10
+
+### Minor changes
+
+- [7db5105](https://github.com/posthog/posthog-python/commit/7db51053d3c4006cf21dd118d3947c6b9e77322c) `Prompts.get_all(label="production")` fetches every prompt that carries a label in one request and stores them in the prompt cache, so later `get(name, label=...)` calls are cache hits. Apps with many prompts no longer need one request per prompt per cache cycle. Against a PostHog server that does not support labels on the prompt list endpoint yet, the call fails with a clear error instead of caching wrong versions. — Thanks @jurajmajerik!
+
+## 7.49.0 — 2026-09-10
+
+### Minor changes
+
+- [e85647b](https://github.com/posthog/posthog-python/commit/e85647b351192c93a58f7687b2f42e51d04e5f17) OpenAI and LangChain generations now also emit the served service tier as the explicit `$ai_service_tier` event property, next to the copy inside `$ai_model_parameters`. Cost processing prices tiered calls only from the explicit property, whose writers assert response-derived values. — Thanks @bernatixer!
+
+## 7.48.0 — 2026-09-09
+
+### Minor changes
+
+- [b8f8253](https://github.com/posthog/posthog-python/commit/b8f8253a1111488a52bd9de402f22306cc02cfaf) Capture MCP model identifiers from client metadata or an SDK-owned self-report field.
+  Model capture remains opt-in and preserves application-owned fields across repeated tool listings.
+  
+  MCP context and conversation-ID injection now preserve `additionalProperties: false` in tool schemas, including when model capture is disabled. Servers that validate these schemas now reject undeclared arguments that earlier SDK versions allowed. Declared analytics fields remain valid. — Thanks @lucasheriques!
+
+## 7.47.3 — 2026-09-08
+
+### Patch changes
+
+- [09a8c4e](https://github.com/posthog/posthog-python/commit/09a8c4e1d94cd6bc48813815551aec17dddade0e) Only terminal Responses API statuses become `$ai_stop_reason`: a queued or in-progress background run no longer records a lifecycle state as its stop reason, and an incomplete run is named by what cut it short (`incomplete_details.reason`, e.g. `max_output_tokens`). Streaming runs that end incomplete or failed now carry a stop reason too, and the LangChain callback reads stop reasons from `response_metadata` as well, covering Responses API and Anthropic runs that previously recorded none. — Thanks @bernatixer!
+
+## 7.47.2 — 2026-09-08
+
+### Patch changes
+
+- [80c541d](https://github.com/posthog/posthog-python/commit/80c541d17eff6f08a35c11e217aa6a9b625f18e7) Honor HTTP-date Retry-After headers in asynchronous requests while preserving the existing retry backoff and delay cap. — Thanks @Bortlesboat!
+
+## 7.47.1 — 2026-09-07
+
+### Patch changes
+
+- [db8ecb8](https://github.com/posthog/posthog-python/commit/db8ecb8b8f790ea96bc8e08c209ad45641ec0365) Report the Python package version in MCP event metadata and request headers so SDK Health can assess the installed package. — Thanks @marandaneto!
+
+## 7.47.0 — 2026-09-04
+
+### Minor changes
+
+- [d4a8f0a](https://github.com/posthog/posthog-python/commit/d4a8f0ad57ed4efc6c77fe6f4416c0d1dd006879) OpenAI generations now record the service tier the provider served (`service_tier` inside `$ai_model_parameters`), on non-streaming, streaming, and LangChain capture paths. LLM analytics uses it to price flex and priority calls at their real rates instead of standard; a requested tier can be refused, so the value always comes from the response. — Thanks @bernatixer!
+
+## 7.46.0 — 2026-09-04
+
+### Minor changes
+
+- [4ab555d](https://github.com/posthog/posthog-python/commit/4ab555dfc2be55ada15e04d13275927053295d2f) Label MCP events and requests as `posthog-python-mcp`, and AI events as `posthog-ai` — Thanks @marandaneto!
+
+## 7.45.4 — 2026-09-04
+
+### Patch changes
+
+- [86ad9e7](https://github.com/posthog/posthog-python/commit/86ad9e76c8f7168f5c05b1011828e536b2cdb621) Streaming generations interrupted before the provider reported any usage no longer send zero `$ai_cache_read_input_tokens`, `$ai_cache_creation_input_tokens`, or `$ai_reasoning_tokens`. A fabricated 0 reads as a report of nothing, so cost processing priced an unknown generation as a known $0.00 instead of leaving it unknown. Streams whose usage was reported keep the historical zero defaults. — Thanks @bernatixer!
+
+## 7.45.3 — 2026-09-01
+
+### Patch changes
+
+- [caf9030](https://github.com/posthog/posthog-python/commit/caf9030b465d39ce94c1ecee59f8f08f838e9e1f) MCP tool failures now report the exception the tool actually raised on `$mcp_error_message` and `$mcp_error_type`, stepping past the SDK's dispatch `ToolError` wrapper. mcp 2.1 masks the original message out of that wrapper, which left the failures view with only `Error executing tool <name>`. The `$exception` sibling still carries the full chain. — Thanks @bernatixer!
+
+## 7.45.2 — 2026-09-01
+
+### Patch changes
+
+- [9444ec5](https://github.com/posthog/posthog-python/commit/9444ec5618bb7414adf5787252ff36697b6d456b) Omit `$ai_input_tokens` and `$ai_output_tokens` when the provider never reported usage, instead of sending `0`, so an interrupted stream no longer looks like a free call. A zero reported by the provider is still sent, and zero keeps meaning a real report of nothing. Covers the OpenAI, Anthropic, Gemini, LangChain, OpenAI Agents and Claude Agent SDK integrations. — Thanks @bernatixer!
+
+## 7.45.1 — 2026-08-31
+
+### Patch changes
+
+- [131cc1a](https://github.com/posthog/posthog-python/commit/131cc1a9b8f836f62495abaa394a1f302f8e5287) Match local feature flag string operators using the flags service's boolean coercion, JSON stringification, and casing rules. — Thanks @marandaneto!
+
+## 7.45.0 — 2026-08-31
+
+### Minor changes
+
+- [f50f333](https://github.com/posthog/posthog-python/commit/f50f33396f42af49217f6604c90f85b1a1fe73dd) Add non-blocking feature flag evaluation and remote config APIs to AsyncPosthog — Thanks @marandaneto!
+- [f50f333](https://github.com/posthog/posthog-python/commit/f50f33396f42af49217f6604c90f85b1a1fe73dd) Add an asyncio-native client for buffered and immediate event capture — Thanks @marandaneto!
+
+## 7.44.2 — 2026-08-27
+
+### Patch changes
+
+- [fc7e043](https://github.com/posthog/posthog-python/commit/fc7e0432bbee915c834c2779310ab1232ffe6302) Honor `default_cache_ttl_seconds=0` in AI prompts so callers can disable default prompt caching. — Thanks @ckarnell for your first contribution 🎉!
+
+## 7.44.1 — 2026-08-26
+
+### Patch changes
+
+- [0e70f0c](https://github.com/posthog/posthog-python/commit/0e70f0caf37f3aaa31ecbc7779843b98abfef2ba) Align local `is_set` and `is_not_set` evaluation with partial property context. — Thanks @marandaneto!
+
+## 7.44.0 — 2026-08-25
+
+### Minor changes
+
+- [9a1d137](https://github.com/posthog/posthog-python/commit/9a1d1378388ac69eb439ac1381eeecc440beea1f) Add an opt-in `capture_trace_context` client option. When enabled, and a valid OpenTelemetry span is active at capture time, its trace and span IDs are attached to events captured with `capture()` and `capture_ai()` as `$trace_id` and `$span_id`, so they can be correlated with backend traces. Disabled by default, and explicit `$trace_id`/`$span_id` properties take precedence. — Thanks @DanielVisca!
+
+## 7.43.1 — 2026-08-25
+
+### Patch changes
+
+- [8046114](https://github.com/posthog/posthog-python/commit/804611456f79d77ffcb5af1e9099a0a67056a373) Return an empty feature flag snapshot without evaluation when feature flag keys are explicitly empty. — Thanks @marandaneto!
+
+## 7.43.0 — 2026-08-24
+
+### Minor changes
+
+- [35220f3](https://github.com/posthog/posthog-python/commit/35220f3b11c070d3b85fbbd9d73b7a2c2bec060c) Fall back to remote evaluation when a requested flag is missing from local definitions. This changes the previous behavior where the key was omitted without a request. — Thanks @marandaneto!
+
+## 7.42.1 — 2026-08-23
+
+### Patch changes
+
+- [c55c9b2](https://github.com/posthog/posthog-python/commit/c55c9b22ffb6ae2db2c4a1e30813d2f89b50e297) MCP analytics now surfaces the previously-silent case where the stateless session mint middleware (`PostHogMcpStatelessSessionMiddleware`) never attached — the trap where an ASGI app is built or mounted before `instrument()` runs, so autowiring can't retrofit it and every session falls back to a fragmented per-process id. `instrument()` warns when `streamable_http_app()` was already called before it ran, and a one-time warning fires the first time a tool call arrives over streamable HTTP and the session still has to come from process memory. Both go to the `posthog.mcp` standard-library logger as well as the `MCPAnalyticsOptions(logger=...)` sink, so they are visible without opting in — silence them with `logging.getLogger("posthog.mcp").setLevel(logging.ERROR)`. Neither fires for stdio, a correctly-wired server, a conversation-anchored session, or the SSE transport (which the mint cannot fix). Documented in the new `posthog/mcp/README.md`. — Thanks @posthog[bot]!
+
+## 7.42.0 — 2026-08-21
+
+### Minor changes
+
+- [f483bab](https://github.com/posthog/posthog-python/commit/f483bab632a7970660d59aef58afa5bbfb576072) feat(mcp): capture `$mcp_client_user_agent` and `$mcp_vendor_client` so MCP usage can be attributed to a product surface. `clientInfo.name` only says which client *library* is calling — Anthropic reports `claude-code` from the CLI, the Agent SDK, the VS Code extension and the desktop app alike — so `$mcp_client_name` collapses every surface into one bucket and the harness breakdown reads 100% "Other" for Python-backed servers. The distinguishing detail lives in the User-Agent parenthetical (`claude-code/2.1.0 (cli)` vs `(sdk-ts)`) and in vendor headers like `x-anthropic-client`. Both are captured raw and classified at query time, so labels can improve without an SDK release. HTTP transports only: stdio and in-memory servers carry no headers and their events are unchanged. Custom dispatchers pass their own via new `client_user_agent` / `vendor_client` arguments on every `PostHogMCP.capture_*` method. Parity with `@posthog/mcp`. — Thanks @gesh!
+
+## 7.41.0 — 2026-08-21
+
+### Minor changes
+
+- [2863909](https://github.com/posthog/posthog-python/commit/28639097d8a11a32863b6d4bd32a153c8c4567ae) feat(mcp): emit `$mcp_error_message` and `$mcp_error_type` on failed MCP events. The reason a tool call failed previously lived only on the sibling `$exception` event, so PostHog's failures view — which reads the scalars off the primary event — showed empty error rows for every Python-backed MCP server, and switching off `enable_exception_autocapture` removed the reason entirely. Both values are read from the same `$exception_list` the sibling carries, so the two surfaces can never disagree, and the message inherits the existing 2048-character cap. `PostHogMCP.capture_tool_call()` and `capture_tools_list()` take a new optional `error_type` for custom dispatchers that want a coarse category (`"validation"`, `"timeout"`) instead of the thrown class name. Exception messages are also redacted before they leave — previously nothing sanitized the error payload, so the `$exception` sibling had been shipping them raw. Credential-looking words go through the SDK's own detector (entropy, known key formats, PEM markers), per word, so a message like `auth failed for sk-...` keeps its diagnostic text and loses only the key. Parity with `@posthog/mcp`, which sanitizes exception values the same way. — Thanks @gesh!
+
+## 7.40.0 — 2026-08-21
+
+### Minor changes
+
+- [b0ab12c](https://github.com/posthog/posthog-python/commit/b0ab12c93fa72098d8e9989dfb30de58671b88ed) feat(mcp): support MCP Python SDK v2 and bring `posthog.mcp` to parity with the TypeScript SDK (`@posthog/mcp`). **Most of this reaches SDK 1.x servers too** — the parity work is not v2-only.
+  
+  **MCP SDK v2 / spec 2026-07-28.** `instrument()` now wraps `mcp.server.mcpserver.MCPServer` (the renamed FastMCP) and the v2 low-level `Server` (constructor-injected handlers, string-keyed registry, late `add_request_handler` registrations included), capturing tool calls, tools/list, errors, intent, client identity, and `$mcp_protocol_version` on both protocol eras — the legacy handshake and the stateless 2026-07-28 envelope, decided per request. Previously `instrument()` raised `ImportError` on `mcp>=2` and took the host application down with it; it now degrades to a logged no-op on any unsupported or unrecognized SDK.
+  
+  **Cross-SDK parity (SDK 1.x and 2.x alike).** Conversation-anchored sessions land as the cross-pod correlation the stateless era needs: with `enable_conversation_id`, `$session_id` derives deterministically from the agent-echoed `conversation_id` (new export `derive_session_id_from_conversation`, byte-compatible with `@posthog/mcp`). Only a handle the SDK could have minted (a uuidv7) anchors a session, so two callers inventing the same id can no longer be merged. The handle is delivered over both channels a tool result has — a `content` text block carrying it as plain JSON data on the minting response (an imperative server sentence inside a tool result is prompt-injection-shaped, and a client that strips it silently breaks the feature), and an `_mcp_instructions` key declared on the tool's output schema and mirrored into `structuredContent` on every response. That second channel is what makes the feature work at all for tools with structured output: clients that read `structuredContent` never render `content`, so the agent had no handle to echo (0% echo rate measured against Claude Code before the mirror). The prompt-back now rides errored results too, so a failure on a conversation's first call doesn't split the retry into a new session. The session is resolved only once the handle's fate is known, so the call that mints a handle joins the same session as the calls that echo it — while a handle that could not be delivered anchors nothing, rather than stranding events in a conversation nobody holds. Host callbacks (`identify`, `intent_fallback`, `event_properties`) receive the SDK's own per-request context as `extra["ctx"]` identically on both majors, with a new exported `get_request_headers(extra)` to read HTTP headers off it — the underlying shape differs per major, and a hand-rolled read that works on one silently returns nothing on the other, sending every event out anonymous.
+  
+  **Fixes affecting existing SDK 1.x users.** Analytics could break a tool call in three ways, each now fixed and regression-tested: the SDK's tool cache is rebuilt from an internal listing pass we skipped injecting on, so after any call to an unlisted tool name a strict schema rejected either the analytics parameters we advertise (`Input validation error`) or the conversation key we write (`Output validation error`); the conversation handle was written into the caller's result object in place, so a tool returning a shared or cached result served one conversation's handle to every later caller; and on jlowin's FastMCP the advertised schema marked `context` required while the adapter strips it before validation, failing every call under `strict_input_validation=True`. Two behavioural changes come with the parity work: an invented (non-uuidv7) `conversation_id` echo is replaced with a fresh handle rather than trusted, and minted prompt-backs are now appended to errored results. — Thanks @gesh!
+
+## 7.39.2 — 2026-08-20
+
+### Patch changes
+
+- [1adf542](https://github.com/posthog/posthog-python/commit/1adf542b84000fd296c2da05fe43e548bd146d1b) Drop events when before_send callbacks raise exceptions — Thanks @marandaneto!
+
+## 7.39.1 — 2026-08-14
+
+### Patch changes
+
+- [6fc55b6](https://github.com/posthog/posthog-python/commit/6fc55b6b75b208ef7910b2dcb8a62fcdeda61b46) Normalize SDK event timestamps to UTC, including datetime values and parseable ISO timestamp strings, and correct UTC serialization for exception frame timestamps — Thanks @marandaneto!
+
+## 7.39.0 — 2026-08-13
+
+### Minor changes
+
+- [178ef43](https://github.com/posthog/posthog-python/commit/178ef43f8311aee8fd068e1f64d6d1cdd5832281) Public beta `capture_ai`: AI events on the dedicated AI endpoint with the event UUID returned; new `enable_full_ai_capture` flag (old private flags kept as deprecated aliases). — Thanks @carlos-marchal-ph!
+
+## 7.38.6 — 2026-08-12
+
+### Patch changes
+
+- [9beed86](https://github.com/posthog/posthog-python/commit/9beed863426e50a4da1e95b4df645849b96960d5) fix: preserve event delivery when gevent monkey-patches `queue.Queue`, including in preloaded gunicorn workers — Thanks @marandaneto!
+
+## 7.38.5 — 2026-08-12
+
+### Patch changes
+
+- [9c4fd84](https://github.com/posthog/posthog-python/commit/9c4fd8401d054137e646b93c91266e6bafa672f7) Fix async OpenAI streaming captures to include token usage and other generation properties emitted by synchronous streams. — Thanks @ckarnell for your first contribution 🎉!
+
+## 7.38.4 — 2026-08-10
+
+### Patch changes
+
+- [f38790c](https://github.com/posthog/posthog-python/commit/f38790c867f7a504babaa22711d80f92cf9e212b) Fix local evaluation for negated, missing, and malformed cohort definitions — Thanks @marandaneto!
+
+## 7.38.3 — 2026-08-07
+
+### Patch changes
+
+- [bd5cff4](https://github.com/posthog/posthog-python/commit/bd5cff4b557cfa9be092158c7c020744834ac3e3) fix: declare Gemini's cache accounting model on generations with cache reads, so ingestion prices cached tokens from `$ai_cache_reporting_exclusive` instead of inferring it from the token counts. — Thanks @fivestarspicy!
+
 ## 7.38.2 — 2026-08-07
 
 ### Patch changes

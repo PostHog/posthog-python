@@ -21,8 +21,12 @@ from agents.tracing.span_data import (
 
 from posthog import setup
 from posthog.ai.media import ensure_serializable as _ensure_serializable
-from posthog.ai.sanitization import _multimodal_capture_enabled, _placeholder
-from posthog.ai.utils import _capture_ai_event, finalize_ai_content
+from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
+from posthog.ai.utils import (
+    _capture_processor_event,
+    finalize_ai_content,
+    with_privacy_mode as _with_privacy_mode,
+)
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
@@ -119,11 +123,7 @@ class PostHogTracingProcessor(TracingProcessor):
 
     def _with_privacy_mode(self, value: Any) -> Any:
         """Apply privacy mode redaction if enabled."""
-        if self._privacy_mode or (
-            hasattr(self._client, "privacy_mode") and self._client.privacy_mode
-        ):
-            return None
-        return value
+        return _with_privacy_mode(self._client, self._privacy_mode, value)
 
     def _evict_stale_entries(self) -> None:
         """Evict oldest entries if dicts exceed max size to prevent unbounded growth."""
@@ -159,34 +159,15 @@ class PostHogTracingProcessor(TracingProcessor):
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
     ) -> None:
-        """Capture an event to PostHog with error handling.
-
-        Args:
-            distinct_id: The resolved distinct ID. When the user didn't provide
-                one, callers should pass ``user_distinct_id or fallback_id``
-                (matching the langchain/openai pattern) and separately set
-                ``$process_person_profile`` in properties.
-        """
-        try:
-            if not hasattr(self._client, "capture") or not callable(
-                self._client.capture
-            ):
-                return
-
-            final_properties = {
-                **properties,
-                **self._properties,
-            }
-
-            _capture_ai_event(
-                self._client,
-                event,
-                distinct_id=distinct_id or "unknown",
-                properties=final_properties,
-                groups=self._groups,
-            )
-        except Exception as e:
-            log.debug(f"Failed to capture PostHog event: {e}")
+        """Capture an event without allowing telemetry failures to escape."""
+        _capture_processor_event(
+            self._client,
+            event,
+            properties,
+            default_properties=self._properties,
+            distinct_id=distinct_id,
+            groups=self._groups,
+        )
 
     def on_trace_start(self, trace: Trace) -> None:
         """Called when a new trace begins. Stores metadata for spans; the $ai_trace event is emitted in on_trace_end."""
@@ -497,10 +478,14 @@ class PostHogTracingProcessor(TracingProcessor):
         """Handle LLM generation spans - maps to $ai_generation event."""
         # Extract token usage
         usage = span_data.usage or {}
-        input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
-        output_tokens = (
-            usage.get("output_tokens") or usage.get("completion_tokens") or 0
-        )
+        # None when the span never reported a count: absent means unknown,
+        # 0 is a report of nothing.
+        input_tokens = usage.get("input_tokens")
+        if input_tokens is None:
+            input_tokens = usage.get("prompt_tokens")
+        output_tokens = usage.get("output_tokens")
+        if output_tokens is None:
+            output_tokens = usage.get("completion_tokens")
 
         # Extract model config parameters
         model_config = span_data.model_config or {}
@@ -529,9 +514,18 @@ class PostHogTracingProcessor(TracingProcessor):
                     _ensure_serializable(span_data.output), self._client
                 )
             ),
-            "$ai_input_tokens": input_tokens,
-            "$ai_output_tokens": output_tokens,
-            "$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0),
+            **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
+            **(
+                {"$ai_output_tokens": output_tokens}
+                if output_tokens is not None
+                else {}
+            ),
+            # Sum of the reported sides; omitted when neither side was reported.
+            **(
+                {"$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0)}
+                if input_tokens is not None or output_tokens is not None
+                else {}
+            ),
         }
 
         # Add optional token fields if present
@@ -680,11 +674,10 @@ class PostHogTracingProcessor(TracingProcessor):
         # Try to extract usage from response
         usage = getattr(response, "usage", None) if response else None
         total_cost_usd = getattr(usage, "cost", None) if usage else None
-        input_tokens = 0
-        output_tokens = 0
-        if usage:
-            input_tokens = getattr(usage, "input_tokens", 0) or 0
-            output_tokens = getattr(usage, "output_tokens", 0) or 0
+        # None when the response never reported a count: absent means unknown,
+        # 0 is a report of nothing.
+        input_tokens = getattr(usage, "input_tokens", None) if usage else None
+        output_tokens = getattr(usage, "output_tokens", None) if usage else None
 
         # Try to extract model from response
         model = getattr(response, "model", None) if response else None
@@ -698,9 +691,18 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_input": self._with_privacy_mode(
                 finalize_ai_content(_ensure_serializable(span_data.input), self._client)
             ),
-            "$ai_input_tokens": input_tokens,
-            "$ai_output_tokens": output_tokens,
-            "$ai_total_tokens": input_tokens + output_tokens,
+            **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
+            **(
+                {"$ai_output_tokens": output_tokens}
+                if output_tokens is not None
+                else {}
+            ),
+            # Sum of the reported sides; omitted when neither side was reported.
+            **(
+                {"$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0)}
+                if input_tokens is not None or output_tokens is not None
+                else {}
+            ),
         }
 
         if total_cost_usd is not None:
@@ -801,7 +803,7 @@ class PostHogTracingProcessor(TracingProcessor):
             if span_type == "transcription":
                 audio_input: Any = (
                     span_data.input
-                    if _multimodal_capture_enabled(self._client)
+                    if _full_ai_capture_enabled(self._client)
                     else _placeholder(
                         getattr(span_data, "input_format", None) or "audio"
                     )

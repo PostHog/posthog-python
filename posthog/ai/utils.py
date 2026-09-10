@@ -1,14 +1,22 @@
+import logging
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from posthog import get_tags, identify_context, new_context, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
-from posthog.ai.sanitization import _multimodal_capture_enabled, redact_media
+from posthog.ai.sanitization import _full_ai_capture_enabled, redact_media
 from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-exported for back-compat
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
 from posthog.client import Client as PostHogClient
 
+from ..version import VERSION as _POSTHOG_VERSION
+
+
+_AI_LIB_PROPERTIES = {
+    "$ai_lib": "posthog-ai",
+    "$ai_lib_version": _POSTHOG_VERSION,
+}
 
 _TOKEN_PROPERTY_KEYS = frozenset(
     {
@@ -57,24 +65,47 @@ def _get_tokens_source(
 
 
 def _ai_lane_enabled(ph_client) -> bool:
-    """The client's private, unstable AI-lane opt-in; multimodal implies it."""
-    # `is True` tolerates unspecced Mock clients whose auto-generated attrs are truthy.
-    opted_in = getattr(ph_client, "_use_ai_lane", False) is True
-    return opted_in or _multimodal_capture_enabled(ph_client)
+    """The client's full-AI-capture opt-in routes wrapper events onto the AI lane."""
+    return _full_ai_capture_enabled(ph_client)
 
 
 def _capture_ai_event(ph_client, event: str, **kwargs):
-    """Capture a wrapper-emitted AI event.
-
-    When the client opted into the AI lane, the event rides it via
-    `_capture_ai`. Otherwise — including duck-typed client-likes without the
-    lane — events keep the plain `capture()` path they have today.
-    """
+    """Capture a wrapper-emitted AI event with the PostHog AI library identity."""
+    kwargs["properties"] = {
+        **_AI_LIB_PROPERTIES,
+        **(kwargs.get("properties") or {}),
+    }
     if _ai_lane_enabled(ph_client):
-        capture_ai = getattr(ph_client, "_capture_ai", None)
+        capture_ai = getattr(ph_client, "capture_ai", None)
         if callable(capture_ai):
             return capture_ai(event=event, **kwargs)
     return ph_client.capture(event=event, **kwargs)
+
+
+def _capture_processor_event(
+    ph_client: Any,
+    event: str,
+    properties: Dict[str, Any],
+    *,
+    default_properties: Optional[Dict[str, Any]] = None,
+    distinct_id: Optional[str] = None,
+    groups: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Apply the shared capture policy used by AI SDK processors."""
+    try:
+        capture = getattr(ph_client, "capture", None)
+        if not callable(capture):
+            return
+
+        _capture_ai_event(
+            ph_client,
+            event,
+            distinct_id=distinct_id or "unknown",
+            properties={**properties, **(default_properties or {})},
+            groups=groups,
+        )
+    except Exception as exc:
+        logging.getLogger("posthog").debug("Failed to capture PostHog event: %s", exc)
 
 
 def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
@@ -172,6 +203,12 @@ def merge_usage_stats(
             current = target.get("web_search_count") or 0
             target["web_search_count"] = max(current, source_web_search)
 
+        # Carried across, never accumulated: this describes the provider's accounting
+        # model, so it is the same on every chunk.
+        source_exclusive = source.get("cache_reporting_exclusive")
+        if source_exclusive is not None:
+            target["cache_reporting_exclusive"] = source_exclusive
+
         # Merge raw_usage to avoid losing data from earlier events
         # For Anthropic streaming: message_start has input tokens, message_delta has output
         # Note: raw_usage is already serialized by converters, so it's a dict
@@ -199,6 +236,8 @@ def merge_usage_stats(
             target["reasoning_tokens"] = source["reasoning_tokens"]
         if source.get("web_search_count") is not None:
             target["web_search_count"] = source["web_search_count"]
+        if source.get("cache_reporting_exclusive") is not None:
+            target["cache_reporting_exclusive"] = source["cache_reporting_exclusive"]
         # Note: raw_usage is already serialized by converters, so it's a dict
         if source.get("raw_usage") is not None:
             target["raw_usage"] = source["raw_usage"]
@@ -207,9 +246,12 @@ def merge_usage_stats(
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
 
 
-def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+def get_model_params(
+    kwargs: Dict[str, Any], served_service_tier: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Extracts model parameters from the kwargs dictionary.
+    Extracts model parameters from the kwargs dictionary. The service tier comes
+    from the response instead, because a requested tier can be refused.
     """
     model_params = {}
     for param in [
@@ -226,6 +268,8 @@ def get_model_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     ]:
         if param in kwargs and kwargs[param] is not None:
             model_params[param] = kwargs[param]
+    if served_service_tier is not None:
+        model_params["service_tier"] = served_service_tier
     return model_params
 
 
@@ -253,7 +297,7 @@ def get_usage(response, provider: str) -> TokenUsage:
 
         return extract_gemini_usage_from_response(response)
 
-    return TokenUsage(input_tokens=0, output_tokens=0)
+    return TokenUsage()
 
 
 def format_response(response, provider: str):
@@ -273,6 +317,35 @@ def format_response(response, provider: str):
 
         return format_gemini_response(response)
     return []
+
+
+# A Responses API run is only finished on these statuses; `queued` and
+# `in_progress` are lifecycle states a background run passes through.
+_TERMINAL_RESPONSE_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "incomplete"}
+)
+
+
+def _read_response_field(source: Any, key: str) -> Any:
+    return source.get(key) if isinstance(source, dict) else getattr(source, key, None)
+
+
+def _responses_stop_reason(response: Any) -> Optional[str]:
+    """
+    Map a Responses API outcome to a `$ai_stop_reason`: an incomplete run is
+    named by what cut it short (`incomplete_details.reason`, e.g.
+    `max_output_tokens`), the other terminal statuses stand for themselves,
+    and a non-terminal status yields None. Accepts an SDK response object or
+    a LangChain `response_metadata` dict.
+    """
+    status = _read_response_field(response, "status")
+    if not isinstance(status, str) or status not in _TERMINAL_RESPONSE_STATUSES:
+        return None
+    details = _read_response_field(response, "incomplete_details")
+    reason = _read_response_field(details, "reason")
+    if status == "incomplete" and isinstance(reason, str) and reason:
+        return reason
+    return status
 
 
 def extract_stop_reason(response: Any, provider: str) -> Optional[str]:
@@ -448,7 +521,11 @@ def call_llm_and_track_usage(
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            tag("$ai_model_parameters", get_model_params(kwargs))
+            served_service_tier = getattr(response, "service_tier", None)
+            tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
+            if served_service_tier is not None:
+                # The explicit served-tier signal cost processing prices from.
+                tag("$ai_service_tier", served_service_tier)
             tag(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
@@ -462,8 +539,14 @@ def call_llm_and_track_usage(
                 ),
             )
             tag("$ai_http_status", http_status)
-            tag("$ai_input_tokens", usage.get("input_tokens", 0))
-            tag("$ai_output_tokens", usage.get("output_tokens", 0))
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            input_tokens = usage.get("input_tokens")
+            if input_tokens is not None:
+                tag("$ai_input_tokens", input_tokens)
+            output_tokens = usage.get("output_tokens")
+            if output_tokens is not None:
+                tag("$ai_output_tokens", output_tokens)
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
             tag("$ai_base_url", str(base_url))
@@ -481,6 +564,10 @@ def call_llm_and_track_usage(
             cache_creation = usage.get("cache_creation_input_tokens")
             if cache_creation is not None and cache_creation > 0:
                 tag("$ai_cache_creation_input_tokens", cache_creation)
+
+            cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
+            if cache_reporting_exclusive is not None:
+                tag("$ai_cache_reporting_exclusive", cache_reporting_exclusive)
 
             reasoning = usage.get("reasoning_tokens")
             if reasoning is not None and reasoning > 0:
@@ -601,7 +688,11 @@ async def call_llm_and_track_usage_async(
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            tag("$ai_model_parameters", get_model_params(kwargs))
+            served_service_tier = getattr(response, "service_tier", None)
+            tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
+            if served_service_tier is not None:
+                # The explicit served-tier signal cost processing prices from.
+                tag("$ai_service_tier", served_service_tier)
             tag(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
@@ -615,8 +706,14 @@ async def call_llm_and_track_usage_async(
                 ),
             )
             tag("$ai_http_status", http_status)
-            tag("$ai_input_tokens", usage.get("input_tokens", 0))
-            tag("$ai_output_tokens", usage.get("output_tokens", 0))
+            # Omitted when the provider never reported a count: absent means
+            # unknown, 0 is a report of nothing.
+            input_tokens = usage.get("input_tokens")
+            if input_tokens is not None:
+                tag("$ai_input_tokens", input_tokens)
+            output_tokens = usage.get("output_tokens")
+            if output_tokens is not None:
+                tag("$ai_output_tokens", output_tokens)
             tag("$ai_latency", latency)
             tag("$ai_trace_id", posthog_trace_id)
             tag("$ai_base_url", str(base_url))
@@ -634,6 +731,10 @@ async def call_llm_and_track_usage_async(
             cache_creation = usage.get("cache_creation_input_tokens")
             if cache_creation is not None and cache_creation > 0:
                 tag("$ai_cache_creation_input_tokens", cache_creation)
+
+            cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
+            if cache_reporting_exclusive is not None:
+                tag("$ai_cache_reporting_exclusive", cache_reporting_exclusive)
 
             reasoning = usage.get("reasoning_tokens")
             if reasoning is not None and reasoning > 0:
@@ -700,7 +801,7 @@ def finalize_ai_content(value: Any, ph_client: Any = None) -> Any:
 
 
 def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
-    if ph_client.privacy_mode or privacy_mode:
+    if getattr(ph_client, "privacy_mode", False) or privacy_mode:
         return None
     return value
 
@@ -729,11 +830,23 @@ def capture_streaming_event(
     """
     trace_id = event_data.get("trace_id") or str(uuid.uuid4())
 
+    # Omitted when the provider never reported a count: absent means unknown,
+    # 0 is a report of nothing. An interrupted stream often reports neither.
+    input_tokens = event_data["usage_stats"].get("input_tokens")
+    output_tokens = event_data["usage_stats"].get("output_tokens")
+
     # Build base event properties
     event_properties = {
         "$ai_provider": event_data["provider"],
         "$ai_model": event_data["model"],
-        "$ai_model_parameters": get_model_params(event_data["kwargs"]),
+        "$ai_model_parameters": get_model_params(
+            event_data["kwargs"], event_data.get("service_tier")
+        ),
+        **(
+            {"$ai_service_tier": event_data["service_tier"]}
+            if event_data.get("service_tier") is not None
+            else {}
+        ),
         "$ai_input": with_privacy_mode(
             ph_client,
             event_data["privacy_mode"],
@@ -745,8 +858,8 @@ def capture_streaming_event(
             finalize_ai_content(event_data["formatted_output"], ph_client),
         ),
         "$ai_http_status": 200,
-        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
-        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
+        **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
+        **({"$ai_output_tokens": output_tokens} if output_tokens is not None else {}),
         "$ai_latency": event_data["latency"],
         "$ai_trace_id": trace_id,
         "$ai_base_url": str(event_data["base_url"]),
@@ -772,17 +885,20 @@ def capture_streaming_event(
     if available_tools:
         event_properties["$ai_tools"] = available_tools
 
-    # Add optional token fields
+    # Add optional token fields. The zero-defaults below only apply when the
+    # provider reported usage at all: a stream interrupted before any report
+    # has nothing to default, and a fabricated 0 would read as a report of
+    # nothing where absence means unknown.
+    usage_was_reported = input_tokens is not None or output_tokens is not None
+
     # For Anthropic, always include cache fields even if 0 (backward compatibility)
-    # For others, only include if present and non-zero
-    if event_data["provider"] == "anthropic":
+    if event_data["provider"] == "anthropic" and usage_was_reported:
         # Anthropic always includes cache fields
         cache_read = event_data["usage_stats"].get("cache_read_input_tokens", 0)
         cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
         event_properties["$ai_cache_read_input_tokens"] = cache_read
         event_properties["$ai_cache_creation_input_tokens"] = cache_creation
     else:
-        # Other providers only include if non-zero
         optional_token_fields = [
             "cache_read_input_tokens",
             "cache_creation_input_tokens",
@@ -791,8 +907,31 @@ def capture_streaming_event(
 
         for field in optional_token_fields:
             value = event_data["usage_stats"].get(field)
-            if value is not None and isinstance(value, int) and value > 0:
-                event_properties[f"$ai_{field}"] = value
+            property_name = f"$ai_{field}"
+
+            # OpenAI async streams historically included these fields even when 0.
+            # Keep those defaults in the shared path so they are not mistaken for
+            # caller-supplied token passthrough properties.
+            if (
+                event_data["provider"] == "openai"
+                and usage_was_reported
+                and field
+                in {
+                    "cache_read_input_tokens",
+                    "reasoning_tokens",
+                }
+            ):
+                event_properties.setdefault(
+                    property_name, event_data["usage_stats"].get(field, 0)
+                )
+            elif value is not None and isinstance(value, int) and value > 0:
+                event_properties[property_name] = value
+
+    cache_reporting_exclusive = event_data["usage_stats"].get(
+        "cache_reporting_exclusive"
+    )
+    if cache_reporting_exclusive is not None:
+        event_properties["$ai_cache_reporting_exclusive"] = cache_reporting_exclusive
 
     # Add web search count if present (all providers)
     web_search_count = event_data["usage_stats"].get("web_search_count")

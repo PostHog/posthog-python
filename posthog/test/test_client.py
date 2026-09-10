@@ -9,7 +9,7 @@ import time
 import unittest
 import warnings
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 from uuid import UUID, uuid4
 
@@ -624,6 +624,104 @@ class TestClient(unittest.TestCase):
         else:
             self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
             self.assertEqual(event["properties"]["$span_id"], expected_span_id)
+
+    @parameterized.expand(
+        [
+            (
+                "capture_active_context",
+                "capture",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "capture_explicit_properties_win",
+                "capture",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("capture_invalid_context", "capture", 0, 0, {}, None, None),
+            (
+                "capture_ai_active_context",
+                "capture_ai",
+                0x123,
+                0x456,
+                {},
+                "00000000000000000000000000000123",
+                "0000000000000456",
+            ),
+            (
+                "capture_ai_explicit_properties_win",
+                "capture_ai",
+                0x123,
+                0x456,
+                {"$trace_id": "custom-trace", "$span_id": "custom-span"},
+                "custom-trace",
+                "custom-span",
+            ),
+            ("capture_ai_invalid_context", "capture_ai", 0, 0, {}, None, None),
+        ]
+    )
+    def test_capture_uses_current_otel_span_context_when_enabled(
+        self,
+        _,
+        entrypoint,
+        context_trace_id,
+        context_span_id,
+        properties,
+        expected_trace_id,
+        expected_span_id,
+    ):
+        span_context = SpanContext(
+            trace_id=context_trace_id,
+            span_id=context_span_id,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(
+                FAKE_TEST_API_KEY, sync_mode=True, capture_trace_context=True
+            )
+            capture = getattr(client, entrypoint)
+            capture("$ai_event", distinct_id="distinct_id", properties=properties)
+
+        event = mock_post.call_args.kwargs["batch"][0]
+        if expected_trace_id is None:
+            self.assertNotIn("$trace_id", event["properties"])
+            self.assertNotIn("$span_id", event["properties"])
+        else:
+            self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
+            self.assertEqual(event["properties"]["$span_id"], expected_span_id)
+
+    @parameterized.expand([("capture",), ("capture_ai",)])
+    def test_capture_does_not_attach_otel_span_context_by_default(self, entrypoint):
+        span_context = SpanContext(
+            trace_id=0x123,
+            span_id=0x456,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            capture = getattr(client, entrypoint)
+            capture("$ai_event", distinct_id="distinct_id")
+
+        event = mock_post.call_args.kwargs["batch"][0]
+        self.assertNotIn("$trace_id", event["properties"])
+        self.assertNotIn("$span_id", event["properties"])
 
     def test_basic_capture_exception_with_distinct_id(self):
         with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
@@ -1670,6 +1768,70 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["uuid"], "00000000-0000-4000-8000-000000000001")
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertTrue("$groups" not in msg["properties"])
+
+    def test_capture_converts_aware_timestamp_to_utc_without_changing_instant(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp=datetime(
+                    2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))
+                ),
+            )
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+
+    def test_capture_converts_parseable_timestamp_string_to_utc(self):
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp="2014-09-03T05:30:00+05:30",
+            )
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+
+    @parameterized.expand(["2026-06-27", "not-an-iso-timestamp"])
+    def test_capture_replaces_invalid_timestamp_with_current_utc_time(self, timestamp):
+        now = datetime(2026, 6, 27, 12, 30, tzinfo=timezone.utc)
+        with (
+            mock.patch("posthog.client.batch_post") as mock_post,
+            mock.patch("posthog.client.datetime", wraps=datetime) as mock_datetime,
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            mock_datetime.now.return_value = now
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            result = client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                timestamp=timestamp,
+            )
+
+        self.assertIsNotNone(result)
+        msg = mock_post.call_args[1]["batch"][0]
+        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00+00:00")
+        mock_warning.assert_called_once_with(
+            "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+        )
+
+    def test_capture_does_not_normalize_datetime_properties(self):
+        property_value = datetime(
+            2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))
+        )
+        with mock.patch("posthog.client.batch_post") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture(
+                "python test event",
+                distinct_id="distinct_id",
+                properties={"caller_datetime": property_value},
+            )
+
+            msg = mock_post.call_args[1]["batch"][0]
+            self.assertIs(msg["properties"]["caller_datetime"], property_value)
 
     def test_groups_capture(self):
         with mock.patch("posthog.client.batch_post") as mock_post:
@@ -4610,7 +4772,7 @@ class TestClientSyncCaptureMode(unittest.TestCase):
     def test_v1_sync_ai_named_event_through_capture_uses_v1(self):
         # `capture()` never special-cases AI events: an `$ai_*`-named event
         # follows `capture_mode` and rides the v1 submitter like any analytics
-        # event. Only `_capture_ai()` reaches the AI lane.
+        # event. Only `capture_ai()` reaches the AI lane.
         with (
             mock.patch("posthog.client.batch_post") as mock_post,
             mock.patch("posthog.client._send_v1_batch") as mock_v1,

@@ -36,11 +36,15 @@ _TRUNCATION_SUFFIX = "..."
 
 _METADATA_FIELDS = (
     ("user_intent", _MAX_USER_INTENT_LENGTH),
+    ("llm_model", _MAX_METADATA_LENGTH),
     ("resource_name", _MAX_RESOURCE_NAME_LENGTH),
     ("server_name", _MAX_METADATA_LENGTH),
     ("server_version", _MAX_METADATA_LENGTH),
     ("client_name", _MAX_METADATA_LENGTH),
     ("client_version", _MAX_METADATA_LENGTH),
+    ("error_type", _MAX_METADATA_LENGTH),
+    ("client_user_agent", _MAX_METADATA_LENGTH),
+    ("vendor_client", _MAX_METADATA_LENGTH),
 )
 
 _NORMALIZED_FIELDS = ("parameters", "response", "identify_actor_data", "error")

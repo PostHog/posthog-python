@@ -1,4 +1,6 @@
+import datetime
 import unittest
+from typing import get_type_hints
 from unittest import mock
 
 from parameterized import parameterized
@@ -167,6 +169,11 @@ class TestModuleLevelWrappers(unittest.TestCase):
         posthog.group_identify("company", "company_123")
         call_kwargs = self.mock_client.group_identify.call_args[1]
         self.assertIsNone(call_kwargs["distinct_id"])
+
+    @parameterized.expand([("group_identify",), ("alias",)])
+    def test_timestamp_annotation_accepts_datetime_and_string(self, function_name):
+        timestamp_type = get_type_hints(getattr(posthog, function_name))["timestamp"]
+        self.assertEqual(timestamp_type, datetime.datetime | str | None)
 
     @parameterized.expand(
         [

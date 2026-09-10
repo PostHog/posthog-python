@@ -3,6 +3,7 @@ schema/loop-back, session-id rollover, and the identity cache. These complement 
 end-to-end adapter tests by exercising edge branches directly."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from posthog.mcp._conversation_id import (
     add_conversation_id_to_schema,
@@ -11,6 +12,7 @@ from posthog.mcp._conversation_id import (
     inject_prompt_back,
     resolve_conversation_id,
 )
+from posthog.mcp._instrumentation import mutate_tool_schema
 from posthog.mcp._intent import _get_context_argument, resolve_tool_call_intent
 from posthog.mcp._internal import (
     IdentityCache,
@@ -100,16 +102,34 @@ def test_add_conversation_id_skips_when_already_present():
     assert add_conversation_id_to_schema(schema, "t") is schema
 
 
+def test_schema_pipeline_does_not_warn_for_owned_conversation_id(monkeypatch):
+    warnings = []
+    monkeypatch.setattr("posthog.mcp._conversation_id.log", warnings.append)
+    schema = {"type": "object", "properties": {"conversation_id": {"type": "string"}}}
+    tool = SimpleNamespace(name="t", input_schema=schema)
+
+    mutate_tool_schema(
+        _data(context=False, enable_conversation_id=True),
+        tool,
+        schema_attribute="input_schema",
+        owns_context=False,
+        context_required=False,
+    )
+
+    assert tool.input_schema is schema
+    assert warnings == []
+
+
 def test_add_conversation_id_skips_complex_schema():
     schema = {"oneOf": [{"type": "object"}]}
     assert add_conversation_id_to_schema(schema, "t") is schema
 
 
-def test_add_conversation_id_strips_additional_properties_false():
+def test_add_conversation_id_preserves_additional_properties_false():
     out = add_conversation_id_to_schema(
         {"type": "object", "properties": {}, "additionalProperties": False}, "t"
     )
-    assert "additionalProperties" not in out
+    assert out["additionalProperties"] is False
     assert "conversation_id" in out["properties"]
 
 
@@ -136,10 +156,21 @@ def test_resolve_conversation_id_skips_missing_capability_tool():
     )
 
 
-def test_resolve_conversation_id_uses_supplied():
+def test_resolve_conversation_id_uses_supplied_when_mintable_shape():
+    # Only an echo of a handle we could have minted (a uuidv7) is accepted —
+    # the handle becomes $session_id, so an invented value ("conv-1") must not
+    # anchor two unrelated callers to one session (parity with posthog-js).
+    handle = "0198d3a7-1111-7222-8333-444455556666"
     assert resolve_conversation_id(
+        True, {"conversation_id": handle}, "t", "get_more_tools"
+    ) == (handle, False)
+
+
+def test_resolve_conversation_id_replaces_invented_values():
+    cid, minted = resolve_conversation_id(
         True, {"conversation_id": "conv-1"}, "t", "get_more_tools"
-    ) == ("conv-1", False)
+    )
+    assert minted is True and cid != "conv-1"
 
 
 def test_resolve_conversation_id_mints_when_absent():
@@ -149,7 +180,9 @@ def test_resolve_conversation_id_mints_when_absent():
 
 def test_can_inject_prompt_back():
     assert can_inject_prompt_back({"content": []}) is True
-    assert can_inject_prompt_back({"content": [], "isError": True}) is False
+    # Errored results carry the prompt-back on purpose: a first-call failure is
+    # exactly when the agent needs the handle (parity with posthog-js).
+    assert can_inject_prompt_back({"content": [], "isError": True}) is True
     assert can_inject_prompt_back({"content": "not a list"}) is False
     assert can_inject_prompt_back("not a dict") is False
 
@@ -160,7 +193,7 @@ def test_inject_prompt_back_appends_block():
 
 
 def test_inject_prompt_back_noop_when_not_injectable():
-    result = {"isError": True, "content": []}
+    result = {"content": "not a list"}
     assert inject_prompt_back(result, "conv-9") is result
 
 

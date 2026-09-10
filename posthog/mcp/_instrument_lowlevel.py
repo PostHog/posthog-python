@@ -20,36 +20,28 @@ from typing import Any, Optional, Tuple
 
 import mcp.types as mcp_types
 
-from ._context_parameters import (
-    add_context_parameter_to_schema,
-    get_context_description,
-    is_context_enabled,
-)
-from ._conversation_id import (
-    add_conversation_id_to_schema,
-    build_prompt_back,
-    resolve_conversation_id,
-)
+from ._context_parameters import schema_has_param
+from ._conversation_id import build_prompt_back
+from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
-    build_tool_call_request,
+    collect_listed_tools,
     extract_tools,
+    mutate_tool_schema,
     prepare_request,
-    read_tool_category,
-    record_missing_capability,
-    record_tool_call,
-    record_tools_list,
+    record_resource_request,
     request_to_dict,
+    resource_listing_response,
     resolve_session_and_client,
+    start_tool_call_lifecycle,
+    start_tools_list_lifecycle,
 )
 from ._internal import MCPAnalyticsData
+from ._model_parameters import request_meta_from_context
+from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
-from .tools import (
-    GET_MORE_TOOLS_NAME as _GET_MORE_TOOLS_NAME,
-    get_more_tools_result_text,
-    resolve_missing_capability_tool_name,
-)
+from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -62,6 +54,7 @@ def instrument_low_level(server: Any, data: MCPAnalyticsData) -> None:
     data.server_version = getattr(server, "version", None)
     _wrap_call_tool(server, data, strip_injected=False)
     _wrap_list_tools(server, data, context_required=False)
+    _wrap_resource_requests(server, data)
 
 
 def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
@@ -79,7 +72,100 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
         low_level, "version", None
     )
     _wrap_call_tool(low_level, data, strip_injected=True, high_level=server)
-    _wrap_list_tools(low_level, data, context_required=True)
+    # `context` is advertised but NOT marked required here. This adapter strips
+    # the injected parameters before the SDK's own input validation runs, so a
+    # schema that requires `context` contradicts the arguments the SDK actually
+    # sees: under `FastMCP(strict_input_validation=True)` every call fails with
+    # "'context' is a required property".
+    _wrap_list_tools(low_level, data, context_required=False)
+    _wrap_resource_requests(low_level, data)
+
+
+def _wrap_resource_requests(server: Any, data: MCPAnalyticsData) -> None:
+    for request_type, event_type in (
+        (mcp_types.ListResourcesRequest, MCPAnalyticsEventType.MCP_RESOURCES_LIST),
+        # Templates are listings too: the captured request method separates
+        # `resources/templates/list` from `resources/list` on the same event.
+        (
+            mcp_types.ListResourceTemplatesRequest,
+            MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+        ),
+        (mcp_types.ReadResourceRequest, MCPAnalyticsEventType.MCP_RESOURCES_READ),
+    ):
+        _wrap_resource_request(server, data, request_type, event_type)
+
+
+def _wrap_resource_request(
+    server: Any,
+    data: MCPAnalyticsData,
+    request_type: Any,
+    event_type: str,
+) -> None:
+    handlers = server.request_handlers
+    original = handlers.get(request_type)
+    if original is None or getattr(original, _WRAPPED_FLAG, False):
+        return
+
+    async def handler(req: Any) -> Any:
+        client_name, client_version = _client_info(server)
+        protocol_version = _protocol_version(server)
+        mcp_session_id = _mcp_session_id(server)
+        token, client_name, client_version, protocol_version = (
+            resolve_session_and_client(
+                mcp_session_id, client_name, client_version, protocol_version
+            )
+        )
+        request = request_to_dict(req)
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
+        try:
+            session_id = await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+            )
+        except Exception as error:  # noqa: BLE001 - analytics must not break resources
+            log(f"Warning: could not prepare resource analytics: {error}")
+            return await original(req)
+
+        start = time.monotonic()
+        try:
+            result = await original(req)
+        except Exception as error:
+            await record_resource_request(
+                data,
+                session_id,
+                event_type=event_type,
+                request=request,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            raise
+
+        await record_resource_request(
+            data,
+            session_id,
+            event_type=event_type,
+            request=request,
+            response=resource_listing_response(event_type, result),
+            duration_ms=(time.monotonic() - start) * 1000,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            extra=extra,
+        )
+        return result
+
+    setattr(handler, _WRAPPED_FLAG, True)
+    handlers[request_type] = handler
 
 
 def _wrap_call_tool(
@@ -101,33 +187,24 @@ def _wrap_call_tool(
                 mcp_session_id, client_name, client_version, protocol_version
             )
         )
-        request = build_tool_call_request(name, arguments)
-        extra = {"session_id": mcp_session_id}
-
-        session_id = await prepare_request(
+        lifecycle = start_tool_call_lifecycle(
             data,
+            name=name,
+            arguments=arguments,
+            request_meta=request_meta_from_context(_request_context(server)),
+            allow_self_reported_model=data.tool_model_parameter_injected.get(
+                name, False
+            ),
             mcp_session_id=mcp_session_id,
+            token=token,
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
+            extra={"session_id": mcp_session_id, "ctx": _request_context(server)},
         )
 
-        missing_name = resolve_missing_capability_tool_name(data.options)
-        if data.options.report_missing and name == missing_name:
-            await record_missing_capability(
-                data,
-                session_id,
-                tool_name=missing_name,
-                context=arguments.get("context"),
-                arguments=arguments,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                extra=extra,
-            )
+        if lifecycle.is_missing_capability:
+            await lifecycle.record_missing_capability()
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
                     content=[
@@ -139,10 +216,6 @@ def _wrap_call_tool(
                 )
             )
 
-        conversation_id, minted = resolve_conversation_id(
-            data.options.enable_conversation_id, arguments, name, missing_name
-        )
-
         # On raw low-level servers `context`/`conversation_id` are injected as
         # *optional* schema properties and left in place (a (name, arguments)
         # handler ignores extra keys). FastMCP 2.0 validates against the function
@@ -152,9 +225,16 @@ def _wrap_call_tool(
         # tools/list and across stateless per-request server instances.
         if strip_injected and req.params.arguments:
             owned = await _tool_owned_injected_keys(high_level, name)
-            for key in ("context", "conversation_id"):
+            injected_keys = ["context", "conversation_id"]
+            if data.tool_model_parameter_injected.get(name, False):
+                injected_keys.append("llm_model")
+            for key in injected_keys:
                 if key not in owned:
                     req.params.arguments.pop(key, None)
+
+        # Settle the shared session before the tool body runs, so an in-tool
+        # `analytics.capture()` is attributed to this caller and not the last one.
+        await lifecycle.prime_session()
 
         start = time.monotonic()
         try:
@@ -165,19 +245,7 @@ def _wrap_call_tool(
             # request_handlers can raise — capture before re-raising so the failed
             # call isn't silently dropped. A minted (undelivered) conversation_id is
             # not stamped, matching the FastMCP path.
-            await record_tool_call(
-                data,
-                session_id,
-                name=name,
-                arguments=arguments,
-                error=error,
-                duration_ms=(time.monotonic() - start) * 1000,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                conversation_id=None if minted else conversation_id,
-                extra=extra,
-            )
+            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -185,38 +253,73 @@ def _wrap_call_tool(
         # CallToolResult(isError=True); record_tool_call detects that from the result.
         call_result = getattr(result, "root", result)
 
-        # Inject the prompt-back before capture; only stamp a minted conversation_id
-        # when it was actually delivered (not on isError / non-list results), so we
-        # don't record an orphan id the agent never received.
-        delivered_conversation_id = conversation_id
-        if minted and conversation_id:
-            content = getattr(call_result, "content", None)
-            if not getattr(call_result, "isError", False) and isinstance(content, list):
-                content.append(
-                    mcp_types.TextContent(
-                        type="text", text=build_prompt_back(conversation_id)["text"]
-                    )
+        # Deliver the handle before capture, over both channels a result has:
+        # mirrored into structuredContent on every response (for tools whose
+        # output schema we declared the key on — clients that read
+        # structuredContent never see the text block), and the prompt-back text
+        # block on the minting response only. Only stamp a minted conversation_id
+        # when it actually reached the agent, so we don't record an orphan id.
+        # Errored results carry it on purpose: a first-call failure is exactly
+        # when the agent needs the handle, or the retry starts a fresh conversation.
+        delivered = False
+        if lifecycle.conversation_id:
+            if data.tool_output_instructions.get(name):
+                call_result, delivered = mirror_instructions_into_structured_content(
+                    call_result, lifecycle.conversation_id
                 )
-            else:
-                delivered_conversation_id = None
+            if lifecycle.minted_conversation_id:
+                content = getattr(call_result, "content", None)
+                if isinstance(content, list):
+                    block = mcp_types.TextContent(
+                        type="text",
+                        text=build_prompt_back(lifecycle.conversation_id)["text"],
+                    )
+                    # Copy rather than append in place — a shared or cached result
+                    # object would accumulate a block per conversation and leak
+                    # earlier callers' handles to later ones.
+                    copy_model = getattr(call_result, "model_copy", None)
+                    if callable(copy_model):
+                        call_result = copy_model(update={"content": [*content, block]})
+                    else:
+                        content.append(block)
+                    delivered = True
+            # Hand back whatever copy we made, rewrapped as the SDK expects.
+            if call_result is not getattr(result, "root", result):
+                result = (
+                    mcp_types.ServerResult(call_result)
+                    if hasattr(result, "root")
+                    else call_result
+                )
 
-        await record_tool_call(
-            data,
-            session_id,
-            name=name,
-            arguments=arguments,
-            result=call_result,
-            duration_ms=duration_ms,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            conversation_id=delivered_conversation_id,
-            extra=extra,
+        await lifecycle.record_result(
+            call_result,
+            duration_ms,
+            conversation_id_delivered=delivered,
         )
         return result
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.CallToolRequest] = handler
+
+
+def _inject_tool_schemas(
+    data: MCPAnalyticsData, tools: list, *, context_required: bool
+) -> None:
+    """Advertise the analytics parameters on a listing's tools, in place.
+
+    Runs on both the client-facing listing and the SDK's internal cache-
+    population pass, so the schema the SDK validates against always matches the
+    one we advertised — see the note in ``handler``.
+    """
+    for tool in tools:
+        schema = getattr(tool, "inputSchema", None)
+        mutate_tool_schema(
+            data,
+            tool,
+            schema_attribute="inputSchema",
+            owns_context=schema_has_param(schema, "context"),
+            context_required=context_required,
+        )
 
 
 def _wrap_list_tools(
@@ -228,10 +331,19 @@ def _wrap_list_tools(
         return
 
     async def handler(req: Any) -> Any:
-        # The server calls the handler with None to populate its tool cache;
-        # don't capture or inject on that internal pass.
+        # The server calls the handler with None to populate its tool cache.
+        # Skip analytics there — but still inject, because that cache is the
+        # schema the SDK validates calls against. This adapter advertises
+        # `context`/`conversation_id` without stripping them, so a cache built
+        # from un-injected schemas rejects the very arguments we told the agent
+        # to send ("Additional properties are not allowed") on any tool with
+        # `additionalProperties: false`.
         if req is None:
-            return await original(req)
+            result = await original(req)
+            _inject_tool_schemas(
+                data, extract_tools(result), context_required=context_required
+            )
+            return result
 
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
@@ -242,109 +354,56 @@ def _wrap_list_tools(
             )
         )
         request = request_to_dict(req)
-        extra = {"session_id": mcp_session_id}
+        # `ctx` is the SDK's own per-request context, handed to host callbacks
+        # unchanged and identically on both SDK majors (read headers off it with
+        # the exported `get_request_headers`). Never captured — the event
+        # pipeline keeps only a scalar projection of `extra`.
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
         # Resolve session, emit $mcp_initialize (once per session) and identify here
         # too — a client may list tools without ever calling one.
-        session_id = await prepare_request(
+        lifecycle = await start_tools_list_lifecycle(
             data,
+            request=request,
+            extra=extra,
             mcp_session_id=mcp_session_id,
+            token=token,
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
-            request=request,
-            extra=extra,
-            token=token,
         )
 
         start = time.monotonic()
         try:
             result = await original(req)
         except Exception as error:
-            await record_tools_list(
-                data,
-                session_id,
-                names=[],
-                request=request,
-                duration_ms=(time.monotonic() - start) * 1000,
-                is_error=True,
-                error=error,
-                client_name=client_name,
-                client_version=client_version,
-                protocol_version=protocol_version,
-                extra=extra,
-            )
+            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
         duration_ms = (time.monotonic() - start) * 1000
         tools = extract_tools(result)
 
-        names = []
-        for tool in tools:
-            names.append(tool.name)
-            if getattr(tool, "description", None):
-                data.tool_descriptions[tool.name] = tool.description
-            category = read_tool_category(tool)
-            if category:
-                data.tool_categories[tool.name] = category
+        # Zero advertised tools is treated as an errored tools/list before the
+        # virtual missing-capability tool is appended.
+        names, empty = collect_listed_tools(data, tools)
 
-        # Zero advertised tools is treated as an errored tools/list (parity with the
-        # TS SDK) — captured before we append our own get_more_tools virtual tool.
-        empty = len(tools) == 0
-
-        context_enabled = is_context_enabled(data.options.context)
-        description = get_context_description(data.options.context)
-        for tool in tools:
-            if tool.name == _GET_MORE_TOOLS_NAME:
-                continue
-            schema = getattr(tool, "inputSchema", None)
-            # required follows the path: raw low-level validates the call against
-            # this same schema (optional), FastMCP 2.0 strips it first (required-advisory).
-            if context_enabled and not _schema_has_param(schema, "context"):
-                schema = add_context_parameter_to_schema(
-                    schema, tool.name, description, required=context_required
-                )
-            if data.options.enable_conversation_id and not _schema_has_param(
-                schema, "conversation_id"
-            ):
-                schema = add_conversation_id_to_schema(schema, tool.name)
-            if schema is not getattr(tool, "inputSchema", None):
-                try:
-                    tool.inputSchema = schema
-                except Exception:  # noqa: BLE001
-                    log(f"WARN: could not set inputSchema on tool {tool.name}")
+        _inject_tool_schemas(data, tools, context_required=context_required)
 
         if data.options.report_missing:
             missing_name = resolve_missing_capability_tool_name(data.options)
             if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name)
+                append_get_more_tools(result, missing_name, data)
                 names.append(missing_name)
 
-        await record_tools_list(
-            data,
-            session_id,
+        await lifecycle.record_result(
             names=names,
-            request=request,
             response=_to_jsonable(result),
             duration_ms=duration_ms,
-            is_error=empty,
-            error="tools/list returned no tools" if empty else None,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
-            extra=extra,
+            is_empty=empty,
         )
 
         return result
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.ListToolsRequest] = handler
-
-
-def _schema_has_param(schema: Any, name: str) -> bool:
-    return (
-        isinstance(schema, dict)
-        and isinstance(schema.get("properties"), dict)
-        and name in schema["properties"]
-    )
 
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:

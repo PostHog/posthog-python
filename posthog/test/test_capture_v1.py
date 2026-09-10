@@ -1,7 +1,7 @@
 import json
 import unittest
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import zstandard
@@ -13,6 +13,7 @@ from posthog.capture_v1 import (
     _CAPTURE_V1_PATH,
     _HEADER_ATTEMPT,
     _HEADER_REQUEST_ID,
+    _HEADER_REQUEST_TIMESTAMP,
     _HEADER_SDK_INFO,
     _MAX_BACKOFF_SECONDS,
     CaptureV1Error,
@@ -25,6 +26,7 @@ from posthog.capture_v1 import (
     _coerce_bool,
     _coerce_str,
 )
+from posthog.request import USER_AGENT
 
 
 class _FakeResponse:
@@ -80,6 +82,7 @@ class _PostV1Stub:
         request_id,
         compression=CaptureCompression.NONE,
         timeout=15,
+        sdk_info=USER_AGENT,
         session=None,
     ):
         self.calls.append(
@@ -87,6 +90,7 @@ class _PostV1Stub:
                 "attempt": attempt,
                 "request_id": request_id,
                 "compression": compression,
+                "sdk_info": sdk_info,
                 "created_at": batch_body["created_at"],
                 "uuids": [e["uuid"] for e in batch_body["batch"]],
             }
@@ -336,6 +340,25 @@ class TestToV1Event(unittest.TestCase):
         parsed = datetime.fromisoformat(event["timestamp"])
         self.assertIsNotNone(parsed.tzinfo)
 
+    def test_timestamp_aware_datetime_converted_to_exact_utc_instant(self) -> None:
+        event = _to_v1_event(
+            _legacy_msg(
+                timestamp=datetime(
+                    2026,
+                    6,
+                    27,
+                    17,
+                    45,
+                    tzinfo=timezone(timedelta(hours=5, minutes=45)),
+                )
+            )
+        )
+        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00+00:00")
+
+    def test_timestamp_parseable_string_converted_to_exact_utc_instant(self) -> None:
+        event = _to_v1_event(_legacy_msg(timestamp="2026-06-27T17:45:00+05:45"))
+        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00+00:00")
+
     def test_timestamp_none_defaults_to_utc_now(self) -> None:
         event = _to_v1_event(_legacy_msg(timestamp=None))
         parsed = datetime.fromisoformat(event["timestamp"])
@@ -395,6 +418,15 @@ class TestPostV1(unittest.TestCase):
         self.assertEqual(headers[_HEADER_REQUEST_ID], "req-123")
         self.assertTrue(headers[_HEADER_SDK_INFO].startswith("posthog-python/"))
         self.assertEqual(headers["Content-Type"], "application/json")
+        request_timestamp = datetime.fromisoformat(headers[_HEADER_REQUEST_TIMESTAMP])
+        self.assertEqual(request_timestamp.utcoffset(), timedelta(0))
+
+    def test_custom_sdk_info_headers(self) -> None:
+        headers = self._post(
+            _results_response({}), sdk_info="posthog-python-mcp/0.3.0"
+        )["headers"]
+        self.assertEqual(headers[_HEADER_SDK_INFO], "posthog-python-mcp/0.3.0")
+        self.assertEqual(headers["User-Agent"], "posthog-python-mcp/0.3.0")
 
     def test_no_api_key_in_body(self) -> None:
         # v1 authenticates via the Bearer header; the key must not leak into the body.
@@ -511,6 +543,14 @@ class TestSendV1Batch(unittest.TestCase):
         stub = self._run([_msg("u-1")], [_results_response({"u-1": "ok"})])
         self.assertEqual(len(stub.calls), 1)
         self.sleep.assert_not_called()
+
+    def test_custom_sdk_info_is_forwarded(self) -> None:
+        stub = self._run(
+            [_msg("u-1")],
+            [_results_response({"u-1": "ok"})],
+            sdk_info="posthog-python-mcp/0.3.0",
+        )
+        self.assertEqual(stub.calls[0]["sdk_info"], "posthog-python-mcp/0.3.0")
 
     def test_absent_uuid_treated_as_accepted(self) -> None:
         # Empty results map: the event is neither retried nor errored.

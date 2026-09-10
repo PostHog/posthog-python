@@ -131,14 +131,26 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.CLIENT_NAME] = event["client_name"]
     if event.get("client_version"):
         properties[_P.CLIENT_VERSION] = event["client_version"]
+    # HTTP transports only, and only for the request that carried the header —
+    # stdio and in-memory servers simply never set these.
+    if event.get("client_user_agent"):
+        properties[_P.CLIENT_USER_AGENT] = event["client_user_agent"]
+    if event.get("vendor_client"):
+        properties[_P.VENDOR_CLIENT] = event["vendor_client"]
     if event.get("protocol_version"):
         properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
     if event.get("user_intent"):
         properties[_P.INTENT] = event["user_intent"]
     if event.get("user_intent_source"):
         properties[_P.INTENT_SOURCE] = event["user_intent_source"]
+    if event.get("llm_model"):
+        properties[_P.LLM_MODEL] = event["llm_model"]
+    if event.get("llm_model_source"):
+        properties[_P.LLM_MODEL_SOURCE] = event["llm_model_source"]
     if event.get("is_error") is not None:
         properties[_P.IS_ERROR] = event["is_error"]
+    if event.get("is_error"):
+        _add_error_details(event, properties)
     if event.get("parameters") is not None:
         properties[_P.PARAMETERS] = event["parameters"]
     if event.get("response") is not None:
@@ -147,6 +159,89 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
     if identify_actor_data and len(identify_actor_data) > 0:
         # Person properties from identify().properties go straight to $set.
         properties["$set"] = {**identify_actor_data}
+
+
+# The dispatch wrappers that say nothing the event does not already say: the
+# exception names each one surfaces as, and the message it stamps. The message is
+# what makes a match specific — `MCPError` is the shared base class mcp 2.x
+# re-raises a failed read as, and the resource path stacks two wrappers. mcp 1.x's
+# own `ResourceError` is deliberately absent: it keeps the handler's message in
+# its text, so reporting it loses nothing.
+_DISPATCH_WRAPPERS = (
+    (("ToolError", "UnexpectedToolError"), "Error executing tool"),
+    (("MCPError", "UnexpectedResourceError"), "Error reading resource"),
+)
+
+# Where the SDKs define their dispatch wrappers: mcp.server.fastmcp.exceptions
+# (mcp 1.x), mcp.server.mcpserver.exceptions and mcp.shared.exceptions (mcp 2.x),
+# fastmcp.exceptions (standalone fastmcp). An application's own exception carries
+# its own module, so a matching name alone must not unwrap it.
+_SDK_MODULE_PREFIXES = ("mcp.", "fastmcp.")
+
+
+def _is_dispatch_wrapper(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if not str(entry.get("module") or "").startswith(_SDK_MODULE_PREFIXES):
+        return False
+    value = str(entry.get("value", ""))
+    return any(
+        entry.get("type") in names and value.startswith(message)
+        for names, message in _DISPATCH_WRAPPERS
+    )
+
+
+def _primary_exception(error: Any) -> Dict[str, Any]:
+    """Pick the ``$exception_list`` entry that carries the failure reason.
+
+    The MCP SDK's tool dispatch re-raises whatever a tool raised as a
+    ``ToolError`` whose message starts ``Error executing tool <name>``, and
+    mcp >= 2.1 masks the original text out of that message entirely, keeping
+    it only on ``__cause__`` — the next entry of the chain here. Resource
+    dispatch does the same on mcp 2.x, with two stacked wrappers and the uri in
+    place of the tool name. The wrapper says nothing the event's tool or resource
+    name does not already say, so the scalars step past every consecutive wrapper
+    (a tool invoking a failing tool is wrapped once per dispatch) to the first
+    real exception.
+    """
+    if not isinstance(error, dict):
+        return {}
+    exception_list = error.get("$exception_list")
+    if not isinstance(exception_list, list) or not exception_list:
+        return {}
+    index = 0
+    while (
+        index + 1 < len(exception_list)
+        and isinstance(exception_list[index + 1], dict)
+        and _is_dispatch_wrapper(exception_list[index])
+    ):
+        index += 1
+    entry = exception_list[index]
+    return entry if isinstance(entry, dict) else {}
+
+
+def _add_error_details(event: Event, properties: Dict[str, Any]) -> None:
+    """Surface the failure reason on the primary event itself.
+
+    Without these the dashboard has to join to the ``$exception`` sibling to
+    know *why* a call failed — and that sibling can be switched off with
+    ``enable_exception_autocapture``, or never emitted when no error value was
+    passed. Both values are read off the ``$exception_list`` the sibling would
+    carry — the sibling keeps the full chain while the scalars carry the entry
+    ``_primary_exception`` picks; the message is already bounded to
+    ``_MAX_ERROR_MESSAGE_LENGTH`` because truncation runs before this mapping.
+    """
+    first = _primary_exception(event.get("error"))
+
+    # An explicit coarse category (e.g. "validation", "timeout") beats the
+    # thrown type; a custom dispatcher can pass one that means something to the
+    # product, where the class name rarely does.
+    error_type = event.get("error_type") or first.get("type")
+    if error_type:
+        properties[_P.ERROR_TYPE] = error_type
+    message = first.get("value")
+    if message:
+        properties[_P.ERROR_MESSAGE] = message
 
 
 def _add_custom_properties(event: Event, properties: Dict[str, Any]) -> None:

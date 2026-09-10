@@ -345,7 +345,7 @@ class TestSanitization(unittest.TestCase):
 
 
 class TestClientMultimodalPassthrough(unittest.TestCase):
-    """Multimodal passthrough is gated on the client's _enable_multimodal_capture."""
+    """Multimodal passthrough is gated on the client's enable_full_ai_capture."""
 
     def setUp(self):
         self.image = "data:image/jpeg;base64," + "A" * 64
@@ -357,7 +357,7 @@ class TestClientMultimodalPassthrough(unittest.TestCase):
         ]
 
     def _client(self, enabled):
-        return types.SimpleNamespace(_enable_multimodal_capture=enabled)
+        return types.SimpleNamespace(enable_full_ai_capture=enabled)
 
     def test_flag_preserves_media_across_entry_points(self):
         client = self._client(True)
@@ -429,7 +429,7 @@ class TestClientMultimodalPassthrough(unittest.TestCase):
 
 class TestAudioRedaction(unittest.TestCase):
     def _client(self, enabled):
-        return types.SimpleNamespace(_enable_multimodal_capture=enabled)
+        return types.SimpleNamespace(enable_full_ai_capture=enabled)
 
     def test_openai_audio_redacted_by_default(self):
         input_data = [
@@ -594,7 +594,7 @@ class TestMediaRedactor:
         assert out["inline_data"]["data"] == "[base64 video redacted]"
 
     def test_bytes_base64d_in_passthrough(self):
-        client = types.SimpleNamespace(_enable_multimodal_capture=True)
+        client = types.SimpleNamespace(enable_full_ai_capture=True)
         raw = b"\x00\x01\x02"
         out = redact_media(
             {"inline_data": {"mime_type": "video/mp4", "data": raw}}, ph_client=client
@@ -602,7 +602,7 @@ class TestMediaRedactor:
         assert out["inline_data"]["data"] == base64.b64encode(raw).decode()
 
     def test_passthrough_leaves_strings(self):
-        client = types.SimpleNamespace(_enable_multimodal_capture=True)
+        client = types.SimpleNamespace(enable_full_ai_capture=True)
         val = {"inline_data": {"mime_type": "image/png", "data": PNG_B64}}
         assert redact_media(val, ph_client=client) == val
 

@@ -252,13 +252,16 @@ def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     Returns:
         TokenUsage with standardized usage
     """
-    if not hasattr(response, "usage"):
-        return TokenUsage(input_tokens=0, output_tokens=0)
+    if getattr(response, "usage", None) is None:
+        return TokenUsage()
 
-    result = TokenUsage(
-        input_tokens=getattr(response.usage, "input_tokens", 0),
-        output_tokens=getattr(response.usage, "output_tokens", 0),
-    )
+    result = TokenUsage()
+    input_tokens = getattr(response.usage, "input_tokens", None)
+    if input_tokens is not None:
+        result["input_tokens"] = input_tokens
+    output_tokens = getattr(response.usage, "output_tokens", None)
+    if output_tokens is not None:
+        result["output_tokens"] = output_tokens
 
     if hasattr(response.usage, "cache_read_input_tokens"):
         cache_read = response.usage.cache_read_input_tokens

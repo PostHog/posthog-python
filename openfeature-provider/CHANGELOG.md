@@ -4,6 +4,180 @@ All notable changes to `openfeature-provider-posthog` are documented here. This
 file is maintained by [Sampo](https://github.com/bruits/sampo) from changesets in
 `.sampo/changesets/` that target `pypi/openfeature-provider-posthog`.
 
+## 0.1.70 — 2026-09-10
+
+### Patch changes
+
+- Updated dependencies: posthog@7.50.0
+
+## 0.1.69 — 2026-09-10
+
+### Patch changes
+
+- Updated dependencies: posthog@7.49.0
+
+## 0.1.68 — 2026-09-09
+
+### Patch changes
+
+- Updated dependencies: posthog@7.48.0
+
+## 0.1.67 — 2026-09-08
+
+### Patch changes
+
+- Updated dependencies: posthog@7.47.3
+
+## 0.1.66 — 2026-09-08
+
+### Patch changes
+
+- Updated dependencies: posthog@7.47.2
+
+## 0.1.65 — 2026-09-07
+
+### Patch changes
+
+- Updated dependencies: posthog@7.47.1
+
+## 0.1.64 — 2026-09-04
+
+### Patch changes
+
+- Updated dependencies: posthog@7.47.0
+
+## 0.1.63 — 2026-09-04
+
+### Patch changes
+
+- Updated dependencies: posthog@7.46.0
+
+## 0.1.62 — 2026-09-04
+
+### Patch changes
+
+- Updated dependencies: posthog@7.45.4
+
+## 0.1.61 — 2026-09-01
+
+### Patch changes
+
+- Updated dependencies: posthog@7.45.3
+
+## 0.1.60 — 2026-09-01
+
+### Patch changes
+
+- Updated dependencies: posthog@7.45.2
+
+## 0.1.59 — 2026-08-31
+
+### Patch changes
+
+- Updated dependencies: posthog@7.45.1
+
+## 0.1.58 — 2026-08-31
+
+### Patch changes
+
+- Updated dependencies: posthog@7.45.0
+
+## 0.1.57 — 2026-08-27
+
+### Patch changes
+
+- Updated dependencies: posthog@7.44.2
+
+## 0.1.56 — 2026-08-26
+
+### Patch changes
+
+- Updated dependencies: posthog@7.44.1
+
+## 0.1.55 — 2026-08-25
+
+### Patch changes
+
+- Updated dependencies: posthog@7.44.0
+
+## 0.1.54 — 2026-08-25
+
+### Patch changes
+
+- Updated dependencies: posthog@7.43.1
+
+## 0.1.53 — 2026-08-24
+
+### Patch changes
+
+- Updated dependencies: posthog@7.43.0
+
+## 0.1.52 — 2026-08-23
+
+### Patch changes
+
+- Updated dependencies: posthog@7.42.1
+
+## 0.1.51 — 2026-08-21
+
+### Patch changes
+
+- Updated dependencies: posthog@7.42.0
+
+## 0.1.50 — 2026-08-21
+
+### Patch changes
+
+- Updated dependencies: posthog@7.41.0
+
+## 0.1.49 — 2026-08-21
+
+### Patch changes
+
+- Updated dependencies: posthog@7.40.0
+
+## 0.1.48 — 2026-08-20
+
+### Patch changes
+
+- Updated dependencies: posthog@7.39.2
+
+## 0.1.47 — 2026-08-14
+
+### Patch changes
+
+- Updated dependencies: posthog@7.39.1
+
+## 0.1.46 — 2026-08-13
+
+### Patch changes
+
+- Updated dependencies: posthog@7.39.0
+
+## 0.1.45 — 2026-08-12
+
+### Patch changes
+
+- Updated dependencies: posthog@7.38.6
+
+## 0.1.44 — 2026-08-12
+
+### Patch changes
+
+- Updated dependencies: posthog@7.38.5
+
+## 0.1.43 — 2026-08-10
+
+### Patch changes
+
+- Updated dependencies: posthog@7.38.4
+
+## 0.1.42 — 2026-08-07
+
+### Patch changes
+
+- Updated dependencies: posthog@7.38.3
+
 ## 0.1.41 — 2026-08-07
 
 ### Patch changes

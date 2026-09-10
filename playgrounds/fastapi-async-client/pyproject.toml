@@ -1,0 +1,15 @@
+[project]
+name = "fastapi-async-client-playground"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0",
+    "posthog[async]",
+    "uvicorn[standard]>=0.24.0",
+]
+
+[tool.uv]
+exclude-newer = "7 days"
+
+[tool.uv.sources]
+posthog = { path = "../..", editable = true }

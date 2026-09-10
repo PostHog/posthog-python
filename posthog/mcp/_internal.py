@@ -62,10 +62,23 @@ class MCPAnalyticsData:
     session_id: str = ""
     session_source: str = "generated"  # "generated" | "mcp" | "token"
     last_mcp_session_id: Optional[str] = None
+    # Set once we've warned that an HTTP request resolved with no session id — the
+    # signature of a stateless server whose mint middleware never attached. Warned
+    # a single time per server so the log isn't flooded on every request.
+    warned_no_stateless_session: bool = False
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
+    # True only when PostHog added llm_model to this tool's advertised schema.
+    # Missing/False fails closed so an application-owned field is never read or stripped.
+    tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)
+    # Which tools got `_mcp_instructions` declared on their advertised output
+    # schema at tools/list. Only those may be mirrored into on a call — writing
+    # an undeclared key fails the customer's whole result under
+    # `additionalProperties: false`. Absent means "never served a listing for
+    # this tool", which fails closed.
+    tool_output_instructions: Dict[str, bool] = field(default_factory=dict)
     # Bounded FIFO of sessions we've emitted $mcp_initialize for, so a long-lived
     # server can't accumulate one entry per session forever.
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
@@ -132,6 +145,24 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+def _captured_extra(extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Project ``extra`` down to JSON-safe scalars before it is captured.
+
+    Callbacks (``identify``, ``event_properties``, ``intent_fallback``) receive
+    the full dict — on MCP SDK v2 that includes the raw request ``ctx`` so hosts
+    can read headers. Captured event parameters must not: the sanitizer leaves
+    opaque objects untouched and truncation stringifies them, which would ship
+    whatever the object's repr carries (headers, auth material, transport state)
+    to PostHog without key-based redaction."""
+    if extra is None:
+        return None
+    return {
+        key: value
+        for key, value in extra.items()
+        if value is None or isinstance(value, (str, int, float, bool))
+    }
+
+
 async def handle_identify(
     data: MCPAnalyticsData,
     session_id: str,
@@ -170,7 +201,7 @@ async def handle_identify(
                 "session_id": session_id,
                 "resource_name": _get_request_resource_name(request),
                 "event_type": MCPAnalyticsEventType.IDENTIFY,
-                "parameters": {"request": request, "extra": extra},
+                "parameters": {"request": request, "extra": _captured_extra(extra)},
                 "timestamp": datetime.now(timezone.utc),
             }
     except Exception as error:  # noqa: BLE001
@@ -195,10 +226,15 @@ async def resolve_event_properties(
 
 
 def _get_request_resource_name(request: Any) -> str:
+    """The thing the request acts on: a tool/prompt ``name``, or the ``uri`` of a
+    resource read — which is the only name a ``resources/read`` request carries."""
     if not isinstance(request, dict):
         return "Unknown"
     params = request.get("params")
     if not isinstance(params, dict):
         return "Unknown"
-    name = params.get("name")
-    return name if isinstance(name, str) else "Unknown"
+    for key in ("name", "uri"):
+        value = params.get(key)
+        if isinstance(value, str):
+            return value
+    return "Unknown"

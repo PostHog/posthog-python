@@ -9,13 +9,11 @@ import pytest
 try:
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
     from openai.types.chat.chat_completion import Choice
-    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
-    from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
     from openai.types.chat.chat_completion_chunk import (
+        ChatCompletionChunk,
         ChoiceDelta,
-        ChoiceDeltaToolCall,
-        ChoiceDeltaToolCallFunction,
     )
+    from openai.types.chat.chat_completion_chunk import Choice as ChoiceChunk
     from openai.types.chat.chat_completion_message_tool_call import (
         ChatCompletionMessageToolCall,
         Function,
@@ -24,11 +22,11 @@ try:
     from openai.types.create_embedding_response import CreateEmbeddingResponse, Usage
     from openai.types.embedding import Embedding
     from openai.types.responses import (
+        ParsedResponse,
         Response,
+        ResponseFunctionToolCall,
         ResponseOutputMessage,
         ResponseOutputText,
-        ResponseFunctionToolCall,
-        ParsedResponse,
     )
     from openai.types.responses.parsed_response import (
         ParsedResponseOutputMessage,
@@ -48,13 +46,6 @@ except ImportError:
 pytestmark = pytest.mark.skipif(
     not OPENAI_AVAILABLE, reason="OpenAI package is not available"
 )
-
-
-@pytest.fixture
-def mock_client():
-    with patch("posthog.client.Client") as mock_client:
-        mock_client.privacy_mode = False
-        yield mock_client
 
 
 @pytest.fixture
@@ -246,106 +237,6 @@ def mock_openai_response_with_null_token_details():
             completion_tokens_details={"reasoning_tokens": None},
         ),
     )
-
-
-@pytest.fixture
-def streaming_tool_call_chunks():
-    return [
-        ChatCompletionChunk(
-            id="chunk1",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567890,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        role="assistant",
-                        tool_calls=[
-                            ChoiceDeltaToolCall(
-                                index=0,
-                                id="call_abc123",
-                                type="function",
-                                function=ChoiceDeltaToolCallFunction(
-                                    name="get_weather",
-                                    arguments='{"location": "',
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason=None,
-                )
-            ],
-        ),
-        ChatCompletionChunk(
-            id="chunk2",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567891,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        tool_calls=[
-                            ChoiceDeltaToolCall(
-                                index=0,
-                                id="call_abc123",
-                                type="function",
-                                function=ChoiceDeltaToolCallFunction(
-                                    arguments='San Francisco"',
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason=None,
-                )
-            ],
-        ),
-        ChatCompletionChunk(
-            id="chunk3",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567892,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        tool_calls=[
-                            ChoiceDeltaToolCall(
-                                index=0,
-                                id="call_abc123",
-                                type="function",
-                                function=ChoiceDeltaToolCallFunction(
-                                    arguments=', "unit": "celsius"}',
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason=None,
-                )
-            ],
-        ),
-        ChatCompletionChunk(
-            id="chunk4",
-            model="gpt-4",
-            object="chat.completion.chunk",
-            created=1234567893,
-            choices=[
-                ChoiceChunk(
-                    index=0,
-                    delta=ChoiceDelta(
-                        content="The weather in San Francisco is 15°C.",
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=CompletionUsage(
-                prompt_tokens=20,
-                completion_tokens=15,
-                total_tokens=35,
-            ),
-        ),
-    ]
 
 
 @pytest.fixture
@@ -2434,7 +2325,7 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
 
 
 def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_openai_response):
-    mock_client._use_ai_lane = True
+    mock_client.enable_full_ai_capture = True
     with patch(
         "openai.resources.chat.completions.Completions.create",
         return_value=mock_openai_response,
@@ -2447,12 +2338,12 @@ def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_openai_respo
         )
 
     mock_client.capture.assert_not_called()
-    assert mock_client._capture_ai.call_count == 1
-    assert mock_client._capture_ai.call_args[1]["event"] == "$ai_generation"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"
 
 
 def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_response):
-    mock_client._enable_multimodal_capture = True
+    mock_client.enable_full_ai_capture = True
     image = "data:image/jpeg;base64," + "A" * 64
 
     with patch(
@@ -2474,9 +2365,9 @@ def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_respon
         )
 
         mock_client.capture.assert_not_called()
-        assert mock_client._capture_ai.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client._capture_ai.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert props["$ai_input"][0]["content"][0]["image_url"]["url"] == image
@@ -2773,3 +2664,59 @@ async def test_async_provider_override_embeddings(mock_client, mock_embedding_re
     props = mock_client.capture.call_args[1]["properties"]
     assert props["$ai_provider"] == "perplexity"
     assert props["$ai_model"] == "text-embedding-3-small"
+
+
+def test_served_service_tier_lands_in_model_parameters(
+    mock_client, mock_openai_response
+):
+    mock_openai_response.service_tier = "flex"
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_model_parameters"]["service_tier"] == "flex"
+        assert props["$ai_service_tier"] == "flex"
+
+
+def test_response_without_service_tier_omits_it(mock_client, mock_openai_response):
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            posthog_distinct_id="test-id",
+        )
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert "service_tier" not in props["$ai_model_parameters"]
+        assert "$ai_service_tier" not in props
+
+
+def test_streaming_state_tracks_served_service_tier():
+    from types import SimpleNamespace
+
+    from posthog.ai.openai._streaming import (
+        _ChatCompletionsStreamState,
+        _ResponsesStreamState,
+    )
+
+    chat_state = _ChatCompletionsStreamState()
+    chat_state.process_chunk(SimpleNamespace(service_tier="flex", choices=[]))
+    assert chat_state.service_tier == "flex"
+
+    responses_state = _ResponsesStreamState()
+    responses_state.process_chunk(
+        SimpleNamespace(response=SimpleNamespace(service_tier="flex"), type="other")
+    )
+    assert responses_state.service_tier == "flex"

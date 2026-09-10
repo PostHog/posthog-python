@@ -6,6 +6,11 @@ flush logic can't drift between the FastMCP, low-level, PostHogMCP, and M4 tests
 
 import asyncio
 import concurrent.futures
+import importlib.metadata
+
+MCP_MAJOR = int(importlib.metadata.version("mcp").split(".")[0])
+"""Installed MCP SDK major. The suite runs under both 1.x and 2.x in CI; use
+this (and ``conftest.collect_ignore``) to scope tests coupled to one major."""
 
 
 class FakeClient:
@@ -52,3 +57,10 @@ def events_named(source, name):
     (reads ``.events``) or a raw list of event dicts (PostHogMCP tests)."""
     events = source.events if hasattr(source, "events") else source
     return [e for e in events if e["event"] == name]
+
+
+def listed_uris(response):
+    """The uris a captured ``$mcp_resources_list`` response advertises, whether it
+    listed static resources or templates."""
+    listed = response.get("resources") or response.get("resourceTemplates") or []
+    return [item.get("uri") or item.get("uriTemplate") for item in listed]

@@ -32,10 +32,10 @@ _MIME_HINT_KEYS = {"mime_type", "mimeType", "media_type", "mediaType", "format"}
 _MEDIA_URL_CONTAINER_KEYS = {"image_url", "imageUrl", "video_url", "videoUrl"}
 
 
-def _multimodal_capture_enabled(ph_client: Any = None) -> bool:
-    """Media passthrough: on only when the client opted into multimodal capture."""
+def _full_ai_capture_enabled(ph_client: Any = None) -> bool:
+    """Full AI capture: no truncation and media passthrough, on only when the client opted in."""
     return (
-        getattr(ph_client, "_enable_multimodal_capture", False) is True
+        getattr(ph_client, "enable_full_ai_capture", False) is True
     )  # is True: tolerate unspecced Mock clients whose auto-generated attrs are truthy
 
 
@@ -131,7 +131,7 @@ def _redact_string(
 def redact_media(
     value: Any, max_string_len: Optional[int] = None, ph_client: Any = None
 ) -> Any:
-    passthrough = _multimodal_capture_enabled(ph_client)
+    passthrough = _full_ai_capture_enabled(ph_client)
     stack: set = set()
 
     def walk(

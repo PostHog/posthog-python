@@ -1,6 +1,7 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,7 @@ def make_server():
 
     @server.tool()
     def add(a: int, b: int) -> int:
+        """Add two numbers."""
         return a + b
 
     @server.tool()
@@ -66,6 +68,23 @@ async def test_context_injection_can_be_disabled():
     assert "context" not in add_tool.inputSchema.get("properties", {})
 
 
+async def test_list_tools_injects_model_into_real_and_virtual_tools():
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(capture_model=True, report_missing=True),
+    )
+
+    result = await _list_tools(server)
+    tools = {tool.name: tool for tool in result.root.tools}
+
+    for name in ("add", "boom", "get_more_tools"):
+        assert "llm_model" in tools[name].inputSchema["properties"]
+        assert "llm_model" in tools[name].inputSchema["required"]
+
+
 # --- tools/call --------------------------------------------------------------
 
 
@@ -73,6 +92,9 @@ async def test_tool_call_captures_intent_and_strips_context():
     server = make_server()
     client = FakeClient()
     instrument(server, client)
+
+    # Prime the listing metadata used by the shared call lifecycle.
+    await _list_tools(server)
 
     received = {}
     original_add = server._tool_manager.get_tool("add").fn
@@ -95,12 +117,37 @@ async def test_tool_call_captures_intent_and_strips_context():
     assert len(calls) == 1
     props = calls[0]["properties"]
     assert props["$mcp_tool_name"] == "add"
+    assert props["$mcp_tool_description"] == "Add two numbers."
     assert props["$mcp_intent"] == "summing two numbers for the user's report"
     assert props["$mcp_intent_source"] == "context_parameter"
     assert props["$mcp_is_error"] is False
     assert "$mcp_duration_ms" in props
     # context is stripped from captured parameters too
     assert "context" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
+
+
+async def test_tool_call_captures_client_model_without_prior_listing():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(capture_model=True))
+
+    context = SimpleNamespace(
+        request_context=SimpleNamespace(
+            meta={"x-codex-turn-metadata": {"model": "gpt-5.6-sol"}}
+        )
+    )
+    result = await server._tool_manager.call_tool(
+        "add",
+        {"a": 2, "b": 3, "llm_model": "claude-opus-4-8"},
+        context=context,
+    )
+    await _flush()
+
+    assert result == 5
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert props["$mcp_llm_model"] == "gpt-5.6-sol"
+    assert props["$mcp_llm_model_source"] == "client_metadata"
+    assert "llm_model" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
 async def test_analytics_flush_drains_its_own_captures():
@@ -205,3 +252,49 @@ async def test_unsupported_server_returns_noop_handle():
     # graceful no-op: capture and flush do nothing and do not raise
     await handle.capture("anything")
     await handle.flush()
+
+
+async def test_callbacks_can_read_headers_through_the_helper():
+    """Same callback body as the v2 lane's equivalent test: `extra["ctx"]` is the
+    SDK's own per-request context on both majors, read via `get_request_headers`."""
+    from types import SimpleNamespace
+
+    from posthog.mcp import get_request_headers
+
+    server = make_server()
+    client = FakeClient()
+    seen = {}
+
+    def identify(request, extra):
+        seen["headers"] = get_request_headers(extra)
+        return None
+
+    instrument(server, client, MCPAnalyticsOptions(identify=identify))
+
+    # FastMCP hands the tool a Context whose .request_context carries the request.
+    context = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(headers={"Authorization": "Bearer t0ken"}),
+            session=SimpleNamespace(client_params=None),
+        )
+    )
+    await server._tool_manager.call_tool(
+        "add", {"a": 1, "b": 1, "context": "header read"}, context=context
+    )
+    await _flush()
+
+    assert seen["headers"] == {"authorization": "Bearer t0ken"}
+
+
+async def test_public_call_tool_entrypoint_still_works_outside_a_request():
+    """`FastMCP.call_tool()` is public API for in-process invocation, where there
+    is no request context. `Context.request_context` *raises* there, so reading
+    it unguarded would push an analytics error into the customer's tool path."""
+    server = make_server()
+    instrument(server, FakeClient())
+
+    result = await server.call_tool("add", {"a": 2, "b": 3, "context": "no request"})
+    await _flush()
+
+    text_blocks = [c.text for c in result[0] if getattr(c, "type", None) == "text"]
+    assert "5" in text_blocks

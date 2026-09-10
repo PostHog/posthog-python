@@ -11,7 +11,7 @@ import time
 import urllib.parse
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional, Union, overload
+from typing import Any, Dict, List, Literal, Optional, Union, overload
 
 from posthog.request import USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
@@ -20,6 +20,10 @@ log = logging.getLogger("posthog")
 
 APP_ENDPOINT = "https://us.posthog.com"
 DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
+# Backstop against a server whose pagination never terminates. 100 pages of the
+# default page size covers 10,000 prompts; past that get_all raises rather than
+# returning a truncated result.
+_MAX_PROMPT_LIST_PAGES = 100
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int], Optional[str]]
@@ -108,6 +112,48 @@ def _is_prompt_api_response(data: Any) -> bool:
     )
 
 
+def _row_resolves_label(row: Dict[str, Any], label: str) -> bool:
+    """Check that the server resolved this list row through the requested label.
+
+    An older server ignores the label param on the list endpoint and returns the
+    latest version of every prompt. A row that was resolved through a label
+    carries a matching name and version entry in its all_labels field.
+    """
+    all_labels = row.get("all_labels")
+    if not isinstance(all_labels, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and entry.get("name") == label
+        and entry.get("version") == row.get("version")
+        for entry in all_labels
+    )
+
+
+def _is_same_origin(url: str, host: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    expected = urllib.parse.urlsplit(host)
+    return (parsed.scheme, parsed.netloc) == (expected.scheme, expected.netloc)
+
+
+def _authentication_error(reference: str) -> Exception:
+    return Exception(
+        f"[PostHog Prompts] Authentication failed for {reference}. "
+        "The key may be missing, expired, or the wrong type. Prompt fetches "
+        "require a personal API key (starts with 'phx_'); a project secret "
+        "key is not accepted. Pass this key as personal_api_key when you "
+        "construct Prompts directly, or as secret_key when you configure the "
+        "PostHog client."
+    )
+
+
+def _access_denied_error(reference: str) -> Exception:
+    return Exception(
+        f"[PostHog Prompts] Access denied for {reference}. "
+        "Check that your personal_api_key has the correct permissions and the LLM prompts feature is enabled."
+    )
+
+
 class Prompts:
     """
     Fetch and compile LLM prompts from PostHog.
@@ -142,6 +188,9 @@ class Prompts:
         # Fetch the version a label currently points to
         prod_prompt = prompts.get('support-system-prompt', label='production')
 
+        # Fetch all prompts at a label in one request and warm the cache
+        prod_prompts = prompts.get_all(label='production')
+
         # Compile with variables
         system_prompt = prompts.compile(template, {
             'company': 'Acme Corp',
@@ -173,7 +222,9 @@ class Prompts:
                 failures are reported to PostHog error tracking via capture_exception().
         """
         self._default_cache_ttl_seconds = (
-            default_cache_ttl_seconds or DEFAULT_CACHE_TTL_SECONDS
+            default_cache_ttl_seconds
+            if default_cache_ttl_seconds is not None
+            else DEFAULT_CACHE_TTL_SECONDS
         )
         self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
         self._has_warned_deprecation = False
@@ -299,6 +350,85 @@ class Prompts:
                     return PromptResult(source="code_fallback", prompt=fallback)
                 return fallback
             raise
+
+    def get_all(self, *, label: str) -> Dict[str, PromptResult]:
+        """
+        Fetch every prompt that carries a label, in one batch.
+
+        Returns a dict mapping prompt name to :class:`PromptResult`, with each
+        prompt at the version the label points to. Prompts without the label
+        are not included.
+
+        Each fetched prompt is stored in the cache, so later
+        ``get(name, label=...)`` calls are served from cache within the TTL.
+        An app with many prompts can call this once per cache cycle instead of
+        making one ``get()`` request per prompt.
+
+        Args:
+            label: The label to resolve, e.g. 'production'.
+
+        Returns:
+            Dict of prompt name to PromptResult.
+
+        Raises:
+            Exception: If the request fails, or the server does not support
+                fetching prompts by label on the list endpoint (PostHog
+                releases from before September 2026).
+        """
+        try:
+            rows = self._fetch_prompt_list_from_api(label)
+        except Exception as error:
+            self._maybe_capture_error(error, name="*", version=None, label=label)
+            raise
+
+        now = time.time()
+        results: Dict[str, PromptResult] = {}
+        skipped: List[str] = []
+        for row in rows:
+            if not _is_prompt_api_response(row) or not _row_resolves_label(row, label):
+                skipped.append(str(row.get("name")) if isinstance(row, dict) else "?")
+                continue
+
+            config = _extract_config(row)
+            self._cache[_cache_key(row["name"], None, label)] = CachedPrompt(
+                prompt=row["prompt"],
+                fetched_at=now,
+                name=row["name"],
+                version=row["version"],
+                label=label,
+                config=config,
+            )
+            results[row["name"]] = PromptResult(
+                source="api",
+                prompt=row["prompt"],
+                name=row["name"],
+                version=row["version"],
+                label=label,
+                config=copy.deepcopy(config),
+            )
+
+        if rows and not results:
+            # Nothing resolved the label, so the server most likely ignored the
+            # label param and served latest versions. Caching those under the
+            # label would be the silent wrong-version failure labels exist to
+            # prevent, so fail loudly instead.
+            compat_error = Exception(
+                f'[PostHog Prompts] The server returned prompts, but none resolve label "{label}". '
+                "It may not support fetching prompts by label on the list endpoint yet. "
+                "Upgrade PostHog, or fetch prompts one by one with get()."
+            )
+            self._maybe_capture_error(compat_error, name="*", version=None, label=label)
+            raise compat_error
+
+        if skipped:
+            log.warning(
+                "[PostHog Prompts] Skipped %d prompt(s) that did not resolve label %r: %s",
+                len(skipped),
+                label,
+                ", ".join(skipped),
+            )
+
+        return results
 
     def _get_internal(
         self,
@@ -475,6 +605,96 @@ class Prompts:
         except Exception:
             log.debug("[PostHog Prompts] Failed to capture exception to error tracking")
 
+    def _require_credentials(self) -> None:
+        if not self._personal_api_key:
+            raise Exception(
+                "[PostHog Prompts] personal_api_key is required to fetch prompts. "
+                "Please provide it when initializing the Prompts instance."
+            )
+        if not self._project_api_key:
+            raise Exception(
+                "[PostHog Prompts] project_api_key is required to fetch prompts. "
+                "Please provide it when initializing the Prompts instance."
+            )
+
+    def _fetch_prompt_list_from_api(self, label: str) -> List[Dict[str, Any]]:
+        """
+        Fetch all prompts at a label from the paginated list endpoint.
+
+        Endpoint:
+            {host}/api/environments/@current/llm_prompts/
+            ?token={encoded_project_api_key}&label={label}&content=full
+        Auth: Bearer {personal_api_key}
+
+        Follows pagination links until the last page. Returns the raw rows.
+        """
+        self._require_credentials()
+
+        query = urllib.parse.urlencode(
+            {"token": self._project_api_key, "label": label, "content": "full"}
+        )
+        url: Optional[str] = (
+            f"{self._host}/api/environments/@current/llm_prompts/?{query}"
+        )
+        reference = f'prompts with label "{label}"'
+        headers = {
+            "Authorization": f"Bearer {self._personal_api_key}",
+            "User-Agent": USER_AGENT,
+        }
+
+        rows: List[Dict[str, Any]] = []
+        pages = 0
+        while url:
+            if pages >= _MAX_PROMPT_LIST_PAGES:
+                # A truncated result must not look complete: callers would cache
+                # a partial prompt set and treat missing prompts as unlabeled.
+                raise Exception(
+                    f"[PostHog Prompts] {reference} spans more than "
+                    f"{_MAX_PROMPT_LIST_PAGES} pages. Refusing to return an "
+                    "incomplete result."
+                )
+
+            response = _get_session().get(url, headers=headers, timeout=10)
+
+            if not response.ok:
+                if response.status_code == 401:
+                    raise _authentication_error(reference)
+                if response.status_code == 403:
+                    raise _access_denied_error(reference)
+                raise Exception(
+                    f"[PostHog Prompts] Failed to fetch {reference}: HTTP {response.status_code}"
+                )
+
+            try:
+                data = response.json()
+            except Exception:
+                raise Exception(
+                    f"[PostHog Prompts] Invalid response format for {reference}"
+                )
+
+            if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+                raise Exception(
+                    f"[PostHog Prompts] Invalid response format for {reference}"
+                )
+
+            rows.extend(data["results"])
+
+            # The Authorization header goes to every followed link, so a link
+            # off the configured host must never be requested.
+            next_url = data.get("next")
+            if next_url is not None and (
+                not isinstance(next_url, str)
+                or not _is_same_origin(next_url, self._host)
+            ):
+                raise Exception(
+                    f"[PostHog Prompts] Refusing to follow a pagination link off the "
+                    f"configured host while fetching {reference}."
+                )
+            url = next_url
+            pages += 1
+
+        return rows
+
     def _fetch_prompt_from_api(
         self, name: str, version: Optional[int] = None, label: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -499,16 +719,7 @@ class Prompts:
         Raises:
             Exception: If the prompt cannot be fetched
         """
-        if not self._personal_api_key:
-            raise Exception(
-                "[PostHog Prompts] personal_api_key is required to fetch prompts. "
-                "Please provide it when initializing the Prompts instance."
-            )
-        if not self._project_api_key:
-            raise Exception(
-                "[PostHog Prompts] project_api_key is required to fetch prompts. "
-                "Please provide it when initializing the Prompts instance."
-            )
+        self._require_credentials()
 
         encoded_name = urllib.parse.quote(name, safe="")
         query_params: Dict[str, Union[str, int]] = {"token": self._project_api_key}
@@ -532,11 +743,11 @@ class Prompts:
             if response.status_code == 404:
                 raise Exception(f"[PostHog Prompts] {prompt_title} not found")
 
+            if response.status_code == 401:
+                raise _authentication_error(prompt_reference)
+
             if response.status_code == 403:
-                raise Exception(
-                    f"[PostHog Prompts] Access denied for {prompt_reference}. "
-                    "Check that your personal_api_key has the correct permissions and the LLM prompts feature is enabled."
-                )
+                raise _access_denied_error(prompt_reference)
 
             raise Exception(
                 f"[PostHog Prompts] Failed to fetch {prompt_title}: HTTP {response.status_code}"

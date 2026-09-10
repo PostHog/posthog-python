@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 
 log = logging.getLogger("posthog")
@@ -31,6 +31,15 @@ def merge_provider_override(
     if posthog_provider_override is None:
         return posthog_properties
     return {**(posthog_properties or {}), "$ai_provider": posthog_provider_override}
+
+
+def _wrap_openai_resources(client: Any, wrappers: Mapping[str, type]) -> None:
+    """Save and replace available SDK resources using an explicit wrapper mapping."""
+    for resource_name, wrapper_type in wrappers.items():
+        original = getattr(client, resource_name, None)
+        setattr(client, f"_original_{resource_name}", original)
+        if original is not None:
+            setattr(client, resource_name, wrapper_type(client, original))
 
 
 def reset_fallback_warnings() -> None:

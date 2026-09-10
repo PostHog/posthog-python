@@ -12,6 +12,8 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
+from posthog.async_client import AsyncClient as AsyncClient
+from posthog.async_client import AsyncPosthog as AsyncPosthog
 from posthog.exception_capture import ExceptionCapture
 from posthog.contexts import (
     identify_context as inner_identify_context,
@@ -316,7 +318,8 @@ Attributes:
     debug: Enable verbose SDK logging and re-raise errors from public APIs.
     send: If False, queueing succeeds but events are not sent to PostHog.
     sync_mode: If True, send events synchronously instead of using background
-        worker threads.
+        worker threads. This blocks the calling thread; in asyncio applications
+        such as FastAPI, use ``AsyncPosthog`` instead.
     disabled: If True, disable captures and API requests. Useful in tests.
     secret_key: A Personal API Key or Project Secret API Key used for local
         feature flag evaluation and remote config payloads.
@@ -349,6 +352,12 @@ Attributes:
         feature flag definitions across workers.
     capture_exception_code_variables: Capture local variable values on exception
         stack frames.
+    capture_trace_context: When OpenTelemetry is installed and a valid span is
+        active at capture time, add its trace and span IDs as ``$trace_id`` and
+        ``$span_id`` properties to events captured with ``capture()`` and
+        ``capture_ai()``. Explicit ``$trace_id``/``$span_id`` values passed in
+        ``properties`` win. Exception events always attach these IDs regardless
+        of this setting. Defaults to False.
     code_variables_mask_patterns: Variable-name patterns to mask when capturing
         code variables.
     code_variables_ignore_patterns: Variable-name patterns to omit when capturing
@@ -401,17 +410,16 @@ flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvi
 # Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
 # then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
 capture_mode = None  # type: Optional[CaptureMode]
-# Internal, no stability guarantees. `_use_ai_lane` routes AI SDK wrapper events
-# through the dedicated AI capture lane; `_enable_multimodal_capture` additionally
-# skips media redaction (and implies the lane). Module attributes so the lazily
-# auto-instantiated default client can be configured without constructing it.
-# Like `debug`/`disabled`, these are authoritative for the default client:
-# `setup()` re-syncs them onto it on every call, overwriting direct assignments.
+# Routes AI SDK wrapper events through the dedicated AI capture lane, skips
+# truncation, and passes media unredacted. `privacy_mode` always wins.
+enable_full_ai_capture = False  # type: bool
+# Deprecated aliases for `enable_full_ai_capture`.
 _use_ai_lane = False  # type: bool
 _enable_multimodal_capture = False  # type: bool
 
 default_client = None  # type: Optional[Client]
 
+capture_trace_context = False
 capture_exception_code_variables = False
 code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -439,7 +447,8 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
         **kwargs: Optional arguments including:
             distinct_id: Unique identifier for the user
             properties: Dict of event properties
-            timestamp: When the event occurred
+            timestamp: When the event occurred. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: Unique identifier for this event. If omitted, one is generated
                 and returned. If provided, it must be a valid UUID string or
                 uuid.UUID instance; invalid values are ignored and replaced with
@@ -503,6 +512,41 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
     return _proxy("capture", event, **kwargs)
 
 
+def capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
+    """
+    Capture an AI event on the dedicated AI capture endpoint.
+
+    Beta: the signature is stable; operational limits (per-event size cap,
+    batching, endpoint) may change without notice.
+
+    Takes the same arguments and returns the same value as `capture()`: the
+    event UUID, or None when the event was not admitted (disabled client, or
+    dropped by `before_send`). The event is delivered on an isolated queue
+    with its own consumer pool and a higher per-event size cap, posting to
+    the dedicated AI ingestion endpoint. The payload is sent as given — no
+    redaction or truncation is applied here.
+
+    Args:
+        event: The event name, normally one of the `$ai_*` event names.
+        **kwargs: Same optional arguments as `capture()`.
+
+    Examples:
+        ```python
+        from posthog import capture_ai
+
+        uuid = capture_ai(
+            "$ai_generation",
+            distinct_id="user_123",
+            properties={"$ai_model": "gpt-5"},
+        )
+        ```
+
+    Category:
+        Events
+    """
+    return _proxy("capture_ai", event, **kwargs)
+
+
 def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
     """
     Set properties on a user record.
@@ -512,7 +556,8 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             distinct_id: Unique identifier for the user. Falls back to the
                 context distinct ID; if none exists, this call does nothing.
             properties: Dict of person properties to set.
-            timestamp: When the properties were set.
+            timestamp: When the properties were set. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: Unique identifier for this operation. If omitted, one is
                 generated and returned. If provided, it must be a valid UUID
                 string or uuid.UUID instance; invalid values are ignored and
@@ -544,7 +589,8 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
             distinct_id: Unique identifier for the user. Falls back to the
                 context distinct ID; if none exists, this call does nothing.
             properties: Dict of person properties to set only once.
-            timestamp: When the properties were set.
+            timestamp: When the properties were set. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: Unique identifier for this operation. If omitted, one is
                 generated and returned. If provided, it must be a valid UUID
                 string or uuid.UUID instance; invalid values are ignored and
@@ -571,7 +617,7 @@ def group_identify(
     group_type: str,
     group_key: str,
     properties: Optional[Dict[str, Any]] = None,
-    timestamp: Optional[datetime.datetime] = None,
+    timestamp: Optional[Union[datetime.datetime, str]] = None,
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
     distinct_id: Optional[ID_TYPES] = None,
@@ -585,7 +631,8 @@ def group_identify(
         group_key: Unique identifier of the group. Required - the call is
             dropped with a warning if it is missing or empty.
         properties: Properties to set on the group
-        timestamp: Optional timestamp for the event
+        timestamp: Optional timestamp for the event. UTC is preferred; non-UTC
+            datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
         distinct_id: Optional distinct ID of the user performing the action
@@ -618,7 +665,7 @@ def group_identify(
 def alias(
     previous_id: ID_TYPES,
     distinct_id: str,
-    timestamp: Optional[datetime.datetime] = None,
+    timestamp: Optional[Union[datetime.datetime, str]] = None,
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
 ) -> Optional[str]:
@@ -628,7 +675,8 @@ def alias(
     Args:
         previous_id: The unique ID of the user before
         distinct_id: The current unique id
-        timestamp: Optional timestamp for the event
+        timestamp: Optional timestamp for the event. UTC is preferred; non-UTC
+            datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
 
@@ -1036,12 +1084,15 @@ def evaluate_flags(
         groups: Mapping of group type to group key.
         person_properties: Person properties to use for evaluation.
         group_properties: Group properties keyed by group type.
-        only_evaluate_locally: If ``True``, never fall back to remote evaluation.
+        only_evaluate_locally: If ``True``, never fall back to remote evaluation and
+            omit flags that cannot be evaluated locally.
         disable_geoip: Whether to disable GeoIP lookup.
-        flag_keys: Optional list of flag keys. When provided, only these flags are
-            evaluated — the underlying ``/flags`` request asks the server for just
-            this subset, which makes the response smaller and the request cheaper.
-            Use this when you only need a handful of flags out of many.
+        flag_keys: Optional list that scopes local evaluation, the underlying ``/flags``
+            request, and the returned snapshot. When omitted or ``None``, all flags are evaluated.
+            An empty list returns an empty snapshot without evaluating flags. A requested key
+            absent from loaded local definitions is included in one remote fallback per
+            ``evaluate_flags`` call unless ``only_evaluate_locally`` is ``True``. If the server
+            also does not know the key, it is omitted from the snapshot.
         device_id: Optional device ID override. If not provided, falls back to the
             context device_id (which may be set via tracing headers). Used by
             experience-continuity flags to match users across distinct_id changes.
@@ -1219,6 +1270,7 @@ def setup() -> Client:
             enable_local_evaluation=enable_local_evaluation,
             flag_definition_cache_provider=flag_definition_cache_provider,
             capture_exception_code_variables=capture_exception_code_variables,
+            capture_trace_context=capture_trace_context,
             code_variables_mask_patterns=code_variables_mask_patterns,
             code_variables_ignore_patterns=code_variables_ignore_patterns,
             code_variables_mask_url_credentials=code_variables_mask_url_credentials,
@@ -1237,8 +1289,11 @@ def setup() -> Client:
     default_client.debug = debug
     default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)
-    default_client._use_ai_lane = bool(_use_ai_lane)
-    default_client._enable_multimodal_capture = bool(_enable_multimodal_capture)
+    default_client.enable_full_ai_capture = (
+        bool(enable_full_ai_capture)
+        or bool(_use_ai_lane)
+        or bool(_enable_multimodal_capture)
+    )
     # Metrics config is consumed lazily on first `.metrics` access, so late
     # module-attr assignment (e.g. a Django ready() hook running after something
     # already forced setup()) still applies until the metrics API is first used.

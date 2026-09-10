@@ -10,12 +10,13 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union, cast
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
+from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
 from posthog.capture_compression import (
@@ -77,10 +78,13 @@ from posthog.poller import Poller
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
+    USER_AGENT as _USER_AGENT,
     APIError,
     QuotaLimitError,
     RequestsConnectionError,
     RequestsTimeout,
+    _get as _get_with_identity,
+    _remote_config as _remote_config_with_identity,
     batch_post,
     determine_server_host,
     flags,
@@ -108,7 +112,8 @@ from posthog.utils import (
     RedisFlagCache,
     SizeLimitedDict,
     clean,
-    guess_timezone,
+    _normalize_timestamp,
+    guess_timezone as guess_timezone,
     system_context,
 )
 from posthog.version import VERSION
@@ -123,6 +128,71 @@ MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
+
+
+def _supports_lane_synchronization(queue) -> bool:
+    return all(
+        hasattr(queue, attribute)
+        for attribute in (
+            "mutex",
+            "not_empty",
+            "not_full",
+            "all_tasks_done",
+            "unfinished_tasks",
+            "_qsize",
+            "_get",
+        )
+    )
+
+
+def _new_lane_queue(maxsize: int) -> Queue:
+    """Return a safe queue, disabling the lane instead of raising on failure."""
+    log = logging.getLogger("posthog")
+    try:
+        queue: Queue = Queue(maxsize)
+    except Exception:
+        log.exception(
+            "Failed to initialize queue.Queue; disabling asynchronous capture for the lane"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    if _supports_lane_synchronization(queue):
+        return queue
+
+    monkey = sys.modules.get("gevent.monkey")
+    if monkey is None:
+        log.error(
+            "queue.Queue lacks the synchronization interface required by PostHog "
+            "and gevent.monkey is not loaded; disabling asynchronous capture for the lane"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    try:
+        if not monkey.is_object_patched("queue", "Queue"):
+            log.error(
+                "queue.Queue lacks the synchronization interface required by PostHog "
+                "but gevent does not report it as patched; disabling asynchronous "
+                "capture for the lane"
+            )
+            return cast(Queue, _DisabledLaneQueue(maxsize))
+
+        original_queue = monkey.get_original("queue", "Queue")
+        queue = cast(Queue, original_queue(maxsize))
+    except Exception:
+        log.exception(
+            "Failed to restore the original queue.Queue after gevent monkey-patching; "
+            "disabling asynchronous capture for the lane"
+        )
+        return cast(Queue, _DisabledLaneQueue(maxsize))
+
+    if _supports_lane_synchronization(queue):
+        return queue
+
+    log.error(
+        "The queue.Queue restored after gevent monkey-patching lacks the synchronization "
+        "interface required by PostHog; disabling asynchronous capture for the lane"
+    )
+    return cast(Queue, _DisabledLaneQueue(maxsize))
 
 
 def _get_atexit_deadline() -> float:
@@ -307,6 +377,7 @@ class _Lane:
         max_msg_size,
         capture_mode,
         capture_compression,
+        sdk_info,
         eager_start,
     ):
         self.name = name
@@ -324,10 +395,12 @@ class _Lane:
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
         self.capture_compression = capture_compression
+        self.sdk_info = sdk_info
         self._max_queue_size = max_queue_size
         self._thread_count = thread_count
         self._eager_start = eager_start
-        self.queue: Queue = Queue(max_queue_size)
+        self.queue: Queue = _new_lane_queue(max_queue_size)
+        self.available = not isinstance(self.queue, _DisabledLaneQueue)
         self.consumers: List[Consumer] = []
         self._started = False
         self._closed = False
@@ -335,11 +408,11 @@ class _Lane:
         self._start_lock = threading.Lock()
         self._sync_sends_done = threading.Condition(self._start_lock)
         self._drain_signal = _DrainSignal(self.queue)
-        if eager_start:
+        if eager_start and self.available:
             self.start()
 
     def _start_locked(self) -> None:
-        if self._started or self._closed:
+        if self._started or self._closed or not self.available:
             return
         for _ in range(self._thread_count):
             consumer = Consumer(
@@ -358,6 +431,7 @@ class _Lane:
                 capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
             )
+            consumer._sdk_info = self.sdk_info
             consumer._set_drain_signal(self._drain_signal)
             self.consumers.append(consumer)
 
@@ -377,7 +451,7 @@ class _Lane:
     def enqueue(self, msg) -> bool:
         """Atomically admit and queue `msg`, starting the lane on its first event."""
         with self._start_lock:
-            if self._closed:
+            if self._closed or not self.available:
                 return False
             self._start_locked()
             try:
@@ -549,13 +623,14 @@ class _Lane:
         the client's fork-visible lifecycle state. An eager open lane restarts
         immediately; a lazy lane returns to not-started and restarts on next use.
         """
-        self.queue = Queue(self._max_queue_size)
+        self.queue = _new_lane_queue(self._max_queue_size)
+        self.available = not isinstance(self.queue, _DisabledLaneQueue)
         self.reset_sync_send_state_after_fork()
         self._drain_signal = _DrainSignal(self.queue)
         self.consumers = []
         self._started = False
         self._closed = closed
-        if self._eager_start:
+        if self._eager_start and self.available:
             self.start()
 
 
@@ -633,6 +708,10 @@ class Client(object):
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
         metrics: Optional[dict] = None,
+        enable_full_ai_capture=False,
+        # Appended rather than grouped with the other `capture_*` options so
+        # existing positional arguments keep their slots.
+        capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
     ):
@@ -659,7 +738,9 @@ class Client(object):
             gzip: Whether to gzip event upload payloads.
             max_retries: Number of upload retries. Values below 0 are treated as 0.
             sync_mode: If True, send each event synchronously instead of using
-                background worker threads.
+                background worker threads. This blocks the calling thread; in
+                asyncio applications such as FastAPI, use ``AsyncPosthog``
+                instead.
             timeout: HTTP request timeout in seconds for event uploads.
             thread: Number of background consumer threads.
             poll_interval: Seconds between local feature flag definition refreshes.
@@ -693,6 +774,11 @@ class Client(object):
                 captured exceptions. Defaults to the current working directory.
             privacy_mode: For AI observability, capture usage metadata without
                 prompt inputs or outputs.
+            enable_full_ai_capture: Route PostHog AI wrapper events through
+                the dedicated AI capture endpoint and capture full AI content:
+                skips string truncation and passes media (base64/data URIs)
+                through unredacted. ``privacy_mode`` always wins. Defaults to
+                False.
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
@@ -703,6 +789,13 @@ class Client(object):
                 sharing feature flag definitions across workers.
             capture_exception_code_variables: Capture local variable values on
                 exception stack frames.
+            capture_trace_context: When OpenTelemetry is installed and a valid span is
+                active at capture time, add its trace and span IDs as ``$trace_id`` and
+                ``$span_id`` properties to events captured with ``capture()`` and
+                ``capture_ai()``, so they can be correlated with backend traces. Explicit
+                ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
+                events (``capture_exception``) always attach these IDs regardless of this
+                setting. Defaults to False.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -814,18 +907,21 @@ class Client(object):
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
         self._metrics_lock = threading.Lock()
-        # Internal, no stability guarantees. `_use_ai_lane` routes all AI SDK
-        # wrapper events through the dedicated AI lane; `_enable_multimodal_capture`
-        # additionally skips media redaction (and implies the lane). Both are
-        # read per event by wrapper-layer code, never by `capture()` itself.
-        self._use_ai_lane = bool(_use_ai_lane)
-        self._enable_multimodal_capture = bool(_enable_multimodal_capture)
+        # `_use_ai_lane` / `_enable_multimodal_capture` are deprecated aliases.
+        self.enable_full_ai_capture = (
+            enable_full_ai_capture is True
+            or _use_ai_lane is True
+            or _enable_multimodal_capture is True
+        )
         self.is_server = is_server
         self.historical_migration = historical_migration
         # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
         # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
         # applied once; V0 is the default and keeps upgrades transparent.
         self.capture_mode = _resolve_capture_mode(capture_mode)
+        self._library_id = "posthog-python"
+        self._library_version = VERSION
+        self._sdk_info = f"{self._library_id}/{self._library_version}"
         # v1-only request compression; falls back to the legacy `gzip` flag when
         # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
         self.capture_compression = _resolve_capture_compression(
@@ -850,6 +946,7 @@ class Client(object):
         # server reports it, so full events are the fail-safe.
         self._minimal_flag_called_events: bool = False
 
+        self.capture_trace_context = capture_trace_context
         self.capture_exception_code_variables = capture_exception_code_variables
         self.code_variables_mask_patterns = (
             code_variables_mask_patterns
@@ -945,6 +1042,7 @@ class Client(object):
             max_retries=self.max_retries,
             timeout=timeout,
             historical_migration=historical_migration,
+            sdk_info=self._sdk_info,
         )
         self._analytics_lane = _Lane(
             name="analytics",
@@ -980,6 +1078,19 @@ class Client(object):
 
         self._warn_if_duplicate_async_client()
 
+    def _set_library_identity(self, library_id: str, library_version: str) -> None:
+        """Override the SDK identity stamped on events and outbound requests."""
+        self._library_id = library_id
+        self._library_version = library_version
+        self._sdk_info = f"{library_id}/{library_version}"
+        for lane in self._lanes:
+            lane.sdk_info = self._sdk_info
+            for consumer in lane.consumers:
+                consumer._sdk_info = self._sdk_info
+
+    def _request_identity_kwargs(self) -> Dict[str, str]:
+        return {"_user_agent": self._sdk_info} if self._sdk_info != _USER_AGENT else {}
+
     @property
     def queue(self) -> Queue:
         """The analytics lane's queue (kept for backwards compatibility)."""
@@ -991,6 +1102,24 @@ class Client(object):
         if self.sync_mode:
             return None
         return [consumer for lane in self._lanes for consumer in lane.consumers]
+
+    @property
+    def _use_ai_lane(self) -> bool:
+        """Deprecated alias for `enable_full_ai_capture`."""
+        return self.enable_full_ai_capture
+
+    @_use_ai_lane.setter
+    def _use_ai_lane(self, value) -> None:
+        self.enable_full_ai_capture = value is True
+
+    @property
+    def _enable_multimodal_capture(self) -> bool:
+        """Deprecated alias for `enable_full_ai_capture`."""
+        return self.enable_full_ai_capture
+
+    @_enable_multimodal_capture.setter
+    def _enable_multimodal_capture(self, value) -> None:
+        self.enable_full_ai_capture = value is True
 
     def _warn_if_duplicate_async_client(self):
         if self.disabled or not self.send or self.sync_mode or not self.api_key:
@@ -1375,6 +1504,8 @@ class Client(object):
 
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
+        if self._sdk_info != _USER_AGENT:
+            request_data["_user_agent"] = self._sdk_info
 
         resp_data = flags(
             self.api_key,
@@ -1404,7 +1535,8 @@ class Client(object):
             event: The event name to capture.
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to include with the event.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1453,22 +1585,27 @@ class Client(object):
         return self._capture(event, self._analytics_lane, **kwargs)
 
     @no_throw()
-    def _capture_ai(
+    def capture_ai(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Capture an AI event on the dedicated AI lane.
+        """Capture an AI event on the dedicated AI capture endpoint.
 
-        Internal and experimental, with no stability guarantees: the signature
-        and lane behavior may change while the AI capture lane is validated on
-        PostHog's own traffic.
+        Beta: the signature is stable; operational limits (per-event size
+        cap, batching, endpoint) may change without notice.
 
-        Takes the same arguments and returns the same value as `capture()`,
-        but the event is queued on the AI lane, which posts to the dedicated
-        AI endpoint with its own consumer pool and per-event size cap.
+        Takes the same arguments and returns the same value as `capture()`:
+        the event UUID, or None when the event was not admitted (disabled
+        client, or dropped by `before_send`). The event is queued on an
+        isolated AI lane with its own consumer pool and a higher per-event
+        size cap, posting to the dedicated AI ingestion endpoint. The payload
+        is sent as given — no redaction or truncation is applied here.
+
+        Category:
+            Capture
         """
         if not event.startswith("$ai_"):
             self.log.debug(
-                "_capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
+                "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
                 event,
             )
         return self._capture(event, self._ai_lane, **kwargs)
@@ -1476,7 +1613,7 @@ class Client(object):
     def _capture(
         self, event: str, lane: _Lane, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Shared message-building body of `capture()` and `_capture_ai()`; `lane` picks the wire destination."""
+        """Shared message-building body of `capture()` and `capture_ai()`; `lane` picks the wire destination."""
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
@@ -1490,6 +1627,9 @@ class Client(object):
         property_allowlist = kwargs.get("_property_allowlist", None)
 
         properties = {**(properties or {}), **system_context()}
+
+        if self.capture_trace_context:
+            properties = {**_get_current_otel_span_properties(), **properties}
 
         properties = add_context_tags(properties)
         assert properties is not None  # Type hint for mypy
@@ -1651,7 +1791,8 @@ class Client(object):
         Args:
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1701,7 +1842,8 @@ class Client(object):
         Args:
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set once.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1761,7 +1903,8 @@ class Client(object):
             group_key: The unique identifier for the group. Required - the call
                 is dropped with a warning if it is missing or empty.
             properties: A dictionary of properties to set on the group.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -1834,7 +1977,8 @@ class Client(object):
             distinct_id: The new distinct ID to alias to. Falls back to the
                 context distinct ID; the call is dropped with a warning if
                 neither is available.
-            timestamp: The timestamp of the event.
+            timestamp: The timestamp of the event. UTC is preferred; non-UTC
+                datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
@@ -2118,6 +2262,21 @@ class Client(object):
         else:
             self.poller = None
 
+    def _normalize_event_uuid(self, msg):
+        # type: (...) -> None
+        """Ensure `msg["uuid"]` is a valid uuid string, generating one if missing or invalid."""
+        if "uuid" in msg:
+            uuid = msg.pop("uuid")
+            if uuid is not None:
+                try:
+                    msg["uuid"] = _stringify_event_uuid(uuid)
+                except ValueError as e:
+                    self.log.error("%s Falling back to a generated UUID.", e)
+
+        if "uuid" not in msg:
+            # Always send a uuid, so we can always return one
+            msg["uuid"] = stringify_id(uuid4())
+
     def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
@@ -2133,27 +2292,20 @@ class Client(object):
             timestamp = datetime.now(tz=timezone.utc)
 
         # add common
-        timestamp = guess_timezone(timestamp)
-        msg["timestamp"] = timestamp.isoformat()
+        try:
+            msg["timestamp"] = _normalize_timestamp(timestamp)
+        except ValueError:
+            self.log.warning(
+                "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+            )
+            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
-
-        if "uuid" not in msg:
-            # Always send a uuid, so we can always return one
-            msg["uuid"] = stringify_id(uuid4())
-
-        sent_uuid = msg["uuid"]
+        self._normalize_event_uuid(msg)
 
         if not msg.get("properties"):
             msg["properties"] = {}
-        msg["properties"]["$lib"] = "posthog-python"
-        msg["properties"]["$lib_version"] = VERSION
+        msg["properties"]["$lib"] = self._library_id
+        msg["properties"]["$lib_version"] = self._library_version
 
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
@@ -2192,7 +2344,12 @@ class Client(object):
                 msg = clean(modified_msg)
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
-                # Continue with the original message if callback fails
+                return None
+
+        # Re-normalized after before_send, which may have replaced or removed
+        # msg["uuid"], so the returned uuid always matches the wire event.
+        self._normalize_event_uuid(msg)
+        sent_uuid = msg["uuid"]
 
         self.log.debug("queueing: %s", msg)
 
@@ -2224,6 +2381,7 @@ class Client(object):
                         timeout=self.timeout,
                         max_retries=self.max_retries,
                         historical_migration=self.historical_migration,
+                        sdk_info=self._sdk_info,
                     )
                     return
 
@@ -2235,6 +2393,7 @@ class Client(object):
                     batch=[msg],
                     historical_migration=self.historical_migration,
                     path=lane.endpoint,
+                    **self._request_identity_kwargs(),
                 )
 
             if lane.run_sync_if_open(send_sync):
@@ -2250,7 +2409,14 @@ class Client(object):
             self.log.debug("enqueued %s.", msg["event"])
             return sent_uuid
 
-        if lane._closed:
+        if not lane.available:
+            self.log.warning(
+                "%s lane is unavailable because a compatible queue could not be "
+                "initialized, dropping event %s",
+                lane.name,
+                msg["event"],
+            )
+        elif lane._closed:
             self.log.warning(
                 "%s lane received event %s after shutdown, dropping it",
                 lane.name,
@@ -2786,12 +2952,14 @@ class Client(object):
 
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         try:
-            response = get(
+            request_get = _get_with_identity if self._request_identity_kwargs() else get
+            response = request_get(
                 personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
                 etag=request_etag,
+                **self._request_identity_kwargs(),
             )
 
             with self._flag_definition_publication_lock:
@@ -3726,12 +3894,18 @@ class Client(object):
             return None
 
         try:
-            return remote_config(
+            request_remote_config = (
+                _remote_config_with_identity
+                if self._request_identity_kwargs()
+                else remote_config
+            )
+            return request_remote_config(
                 self.personal_api_key,
                 self.api_key,
                 self.host,
                 key,
                 timeout=self.feature_flags_request_timeout_seconds,
+                **self._request_identity_kwargs(),
             )
         except Exception as e:
             self.log.exception(
@@ -3921,8 +4095,12 @@ class Client(object):
             only_evaluate_locally: If True, never fall back to remote evaluation —
                 flags that can't be evaluated locally are simply omitted from the snapshot.
             disable_geoip: Whether to disable GeoIP lookup.
-            flag_keys: Optional list of flag keys to scope the underlying ``/flags``
-                request to a subset.
+            flag_keys: Optional list that scopes local evaluation, the underlying
+                ``/flags`` request, and the returned snapshot. When omitted or ``None``, all
+                flags are evaluated. An empty list returns an empty snapshot without evaluating
+                flags. A requested key absent from loaded local definitions is included in one
+                remote fallback per ``evaluate_flags`` call unless ``only_evaluate_locally`` is
+                True. If the server also does not know the key, it is omitted from the snapshot.
             device_id: Optional device ID override. If not provided, falls back to the
                 context device_id (which may be set via tracing headers). Used by
                 experience-continuity flags to match users across distinct_id changes.
@@ -3961,6 +4139,15 @@ class Client(object):
             # is_enabled()/get_flag() on it won't emit events.
             return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
 
+        if flag_keys == []:
+            return FeatureFlagEvaluations(
+                host=host,
+                distinct_id=str(distinct_id),
+                flags={},
+                groups=groups,
+                disable_geoip=disable_geoip,
+            )
+
         person_properties, group_properties = (
             self._add_local_person_and_group_properties(
                 groups or {},
@@ -3969,6 +4156,7 @@ class Client(object):
             )
         )
         groups = groups or {}
+        requested_keys = set(flag_keys) if flag_keys else None
 
         records: Dict[str, _EvaluatedFlagRecord] = {}
         request_id: Optional[str] = None
@@ -3998,6 +4186,11 @@ class Client(object):
         feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
         local_flags = local_result.get("featureFlags") or {}
         local_payloads = local_result.get("featureFlagPayloads") or {}
+        if requested_keys and not requested_keys.issubset(local_flags):
+            # A requested flag may have been created since the last definitions poll.
+            # Ask /flags for the caller's original scope unless this is a local-only call.
+            fallback_to_server = True
+
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
             records[key] = _EvaluatedFlagRecord(
@@ -4041,6 +4234,8 @@ class Client(object):
                     response.get("minimalFlagCalledEvents") is True
                 )
                 for key, detail in response.get("flags", {}).items():
+                    if requested_keys is not None and key not in requested_keys:
+                        continue
                     if key in locally_evaluated_keys:
                         continue
                     payload = _parse_flag_payload(

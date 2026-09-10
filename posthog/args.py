@@ -31,7 +31,9 @@ class OptionalCaptureArgs(TypedDict):
             distinct_id is used, if available, otherwise a UUID is generated, and the event is marked
             as personless. Setting context-level distinct_id's is recommended.
         properties: Dictionary of properties to track with the event
-        timestamp: When the event occurred (defaults to current time)
+        timestamp: When the event occurred (defaults to current time). UTC is
+            preferred; non-UTC datetimes and parseable ISO timestamp strings are
+            converted to UTC.
         uuid: Unique identifier for this specific event. If not provided, one is generated. The event
             UUID is returned, so you can correlate it with actions in your app (like showing users an
             error ID if you capture an exception). If provided, it must be a valid UUID string or
@@ -73,7 +75,9 @@ class OptionalSetArgs(TypedDict):
             distinct_id is used, if available, otherwise this function does nothing. Setting
             context-level distinct_id's is recommended.
         properties: Dictionary of properties to set on the person
-        timestamp: When the properties were set (defaults to current time)
+        timestamp: When the properties were set (defaults to current time). UTC
+            is preferred; non-UTC datetimes and parseable ISO timestamp strings
+            are converted to UTC.
         uuid: Unique identifier for this operation. If not provided, one is generated. This
             UUID is returned, so you can correlate it with actions in your app. If provided,
             it must be a valid UUID string or uuid.UUID instance; invalid values are ignored
