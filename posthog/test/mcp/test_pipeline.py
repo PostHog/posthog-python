@@ -184,6 +184,17 @@ def test_sanitize_redacts_large_base64():
         ("Error: see resource:guide.", "Error: see resource:guide."),
         ("Meet at12:30 today", "Meet at12:30 today"),
         ("resource:guide", "resource:guide"),
+        # A colon-suffixed word in front of a URL is prose, not part of the
+        # address: the authority is where the address starts.
+        (
+            "Failed URL:https://fakeuser:fakepass@example.com/doc",
+            "Failed URL:https://%5Bredacted%5D@example.com/doc",
+        ),
+        (
+            "URL:https://example.com/x?token=fakesecret",
+            "URL:https://example.com/x?token=%5Bredacted%5D",
+        ),
+        ("Note:https://example.com/doc", "Note:https://example.com/doc"),
         (
             "https://example.com/o'reilly?token=fakesecret",
             "https://example.com/o'reilly?token=%5Bredacted%5D",
@@ -498,11 +509,17 @@ def test_redact_pii_is_not_quadratic_on_pathological_input():
             "https://example.com/guide?token=fakesecret",
             "https://example.com/guide?token=%5Bredacted%5D",
         ),
-        # An authority-less resource uri is redacted the same way.
+        # An authority-less resource uri is redacted the same way, whatever prose
+        # the authority-less pattern absorbed in front of it.
         (
             MCPAnalyticsEventType.MCP_RESOURCES_READ,
             "resource:guide?token=fakesecret",
             "resource:guide?token=%5Bredacted%5D",
+        ),
+        (
+            MCPAnalyticsEventType.MCP_RESOURCES_READ,
+            "see:resource:guide?token=fakesecret",
+            "see:resource:guide?token=%5Bredacted%5D",
         ),
     ],
 )

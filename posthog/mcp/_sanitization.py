@@ -55,6 +55,7 @@ _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 # authority is a data uri, which the bound must not eat — the binary-data branch
 # deliberately keeps those, and the field count is already bounded when parsing.
 _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
+_URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
@@ -100,6 +101,15 @@ def _sanitize_urls(text: str, *, nested: bool = True) -> str:
 def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
     if len(value) > _MAX_URL_LENGTH and _URL_AUTHORITY_PATTERN.match(value):
         return _REDACTED_VALUE
+    # A colon-suffixed word in front of a real URL (`Failed URL:https://...`) is
+    # absorbed by the authority-less pattern, and parsing the whole thing puts the
+    # address — userinfo included — in the path, where nothing redacts it. The
+    # address starts where the authority does; anything before that is prose.
+    authority = _URL_AUTHORITY_SEARCH.search(value)
+    if authority and authority.start() > 0:
+        return value[: authority.start()] + _sanitize_url(
+            value[authority.start() :], nested=nested, in_prose=in_prose
+        )
     url_text = value.rstrip(_URL_TRAILING_PUNCTUATION) if in_prose else value
     suffix = value[len(url_text) :]
     try:
