@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
 _REDACTED_VALUE = "[redacted]"
+_BINARY_DATA_MARKER = "[binary data redacted - not supported by PostHog MCP analytics]"
 _ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
 _SIZE_GATE = 10_240
@@ -308,8 +309,16 @@ def _should_redact_key(key: str) -> bool:
 
 
 def _sanitize_string(value: str) -> str:
-    if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
-        return "[binary data redacted - not supported by PostHog MCP analytics]"
+    if _is_binary_blob(value):
+        return _BINARY_DATA_MARKER
+    return _sanitize_text(value)
+
+
+def _is_binary_blob(value: str) -> bool:
+    return len(value) >= _SIZE_GATE and bool(_BASE64_PATTERN.match(value))
+
+
+def _sanitize_text(value: str) -> str:
     # Both credential passes run before the URL pass, because rewriting a URL
     # changes the text they match on: it percent-encodes `/`, hiding a
     # `?ref=/phx_...` token behind `%2F` from the `\bph` boundary, and it can grow
@@ -318,6 +327,22 @@ def _sanitize_string(value: str) -> str:
     # exposes a credential the detectors could have matched.
     value = _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value)
     return _sanitize_urls(_redact_secret_tokens(value))
+
+
+def sanitize_intent(value: Any) -> Any:
+    """Sanitize the agent-narrated intent: the binary gate, then structured PII,
+    then the same passes every captured string gets.
+
+    Order matters in both places. The binary gate runs first because splicing a
+    redaction into a base64 blob stops it looking like base64, and the blob would
+    then be captured almost whole instead of as the marker. PII runs before the
+    URL pass because a rewritten URL percent-encodes the `@` the email pattern
+    needs to see."""
+    if not isinstance(value, str):
+        return sanitize_captured_value(value)
+    if _is_binary_blob(value):
+        return _BINARY_DATA_MARKER
+    return _sanitize_text(redact_pii(value))
 
 
 def _sanitize_resource_name(value: Any) -> Any:
@@ -480,17 +505,12 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about
-    # the user. Strip structured PII (emails, phone numbers, IPs, cards, SSNs)
-    # first, while the narration is still raw: the generic pass rewrites any URL
-    # it finds, and a rewritten query percent-encodes `@`, which would hide
-    # `?email=alice@example.com` from the email pattern. Then redact it like any
-    # other captured value. PII redaction is scoped to the intent only —
-    # structured tool parameters and responses often hold the same shapes as
-    # legitimate data.
+    # the user. `sanitize_intent` redacts it like any other captured value and
+    # additionally strips structured PII (emails, phone numbers, IPs, cards,
+    # SSNs). PII redaction is scoped to the intent only — structured tool
+    # parameters and responses often hold the same shapes as legitimate data.
     if result.get("user_intent") is not None:
-        result["user_intent"] = sanitize_captured_value(
-            redact_pii(result["user_intent"])
-        )
+        result["user_intent"] = sanitize_intent(result["user_intent"])
 
     if result.get("llm_model") is not None:
         result["llm_model"] = sanitize_captured_value(result["llm_model"])

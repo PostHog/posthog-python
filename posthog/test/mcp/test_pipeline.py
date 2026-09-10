@@ -605,6 +605,13 @@ def test_sanitize_event_redacts_pii_from_intent():
             "Open https://example.com/?email=alice@example.com&token=fakesecret",
             "Open https://example.com/?email=%5Bredacted%5D&token=%5Bredacted%5D",
         ),
+        # The binary gate runs before PII: splicing a redaction into a base64 blob
+        # would stop it looking like base64, and the blob would be captured whole.
+        (
+            "base64-blob-with-a-card-shaped-run",
+            "AAAA/" * 2052 + "4111111111111111/AAA",
+            "[binary data redacted - not supported by PostHog MCP analytics]",
+        ),
     ],
 )
 def test_sanitize_event_composes_pii_and_token_redaction_on_intent(
