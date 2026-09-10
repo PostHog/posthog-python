@@ -11,7 +11,7 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
@@ -58,8 +58,10 @@ _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 # deliberately keeps those, and the field count is already bounded when parsing.
 _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
-# What separates one field from the next inside a query or fragment.
-_FIELD_STRUCTURE_CHARACTERS = "=&;?#"
+# What separates one field from the next inside a query or fragment. `?` and `#`
+# are not here: whether one of those divides a URL depends on where it sits, and
+# `_structural_delimiters` works that out per value.
+_FIELD_SEPARATORS = "=&;"
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`/`/`-delimited segment matches, which
@@ -146,16 +148,30 @@ def _authority_starts(value: str) -> List[Tuple[int, str]]:
     character seen before it. One forward pass: the cursor never moves backwards,
     so a value carrying thousands of addresses costs the same per character as one
     carrying a single address."""
+    delimiters = _structural_delimiters(value)
     starts: List[Tuple[int, str]] = []
     cursor = 0
     structural = ""
     for match in _URL_AUTHORITY_SEARCH.finditer(value):
         for index in range(cursor, match.start()):
-            if value[index] in _FIELD_STRUCTURE_CHARACTERS:
+            if value[index] in _FIELD_SEPARATORS or index in delimiters:
                 structural = value[index]
         cursor = match.start()
         starts.append((match.start(), structural))
     return starts
+
+
+def _structural_delimiters(value: str) -> Set[int]:
+    """The positions where a `?` or `#` actually divides the URL: the query's `?`,
+    the fragment's `#`, and the `?` that splits the fragment into head and tail.
+    Every other one is a character inside a value — `?token=pre?fix` has one `?`
+    of structure and one of credential."""
+    fragment = value.find("#")
+    query = value.find("?")
+    if fragment != -1 and (query == -1 or query > fragment):
+        query = -1
+    fragment_tail = value.find("?", fragment + 1) if fragment != -1 else -1
+    return {index for index in (query, fragment, fragment_tail) if index != -1}
 
 
 def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
@@ -227,7 +243,7 @@ def _rewrote_the_last_field(
     """Whether the URL ends in a field whose value was just redacted — the part it
     ends in being its fragment when it has one, its query otherwise."""
     if not url.fragment:
-        return bool(query) and sanitized_query[-1] != query[-1]
+        return _last_field_is_sensitive(query, sanitized_query)
     return tail_rewrote_last if "?" in url.fragment else head_rewrote_last
 
 
@@ -239,9 +255,20 @@ def _sanitize_fragment_part(text: str, *, nested: bool) -> Tuple[str, bool]:
     if "=" not in text:
         return _sanitize_fragment_text(text, nested=nested), False
     fields, sanitized = _sanitize_url_fields(text, nested=nested)
-    if sanitized == fields:
-        return text, False
-    return urlencode(sanitized), bool(fields) and sanitized[-1] != fields[-1]
+    return (
+        urlencode(sanitized) if sanitized != fields else text,
+        _last_field_is_sensitive(fields, sanitized),
+    )
+
+
+def _last_field_is_sensitive(fields: _UrlFields, sanitized: _UrlFields) -> bool:
+    """Whether the last field of a list carries a credential: its key is one of
+    the sensitive names, or its value was just rewritten. The key alone has to
+    count — an earlier pass may already have redacted the value, leaving the
+    comparison nothing to catch."""
+    if not fields:
+        return False
+    return _should_redact_query_key(fields[-1][0]) or sanitized[-1] != fields[-1]
 
 
 def _sanitize_fragment_text(text: str, *, nested: bool) -> str:

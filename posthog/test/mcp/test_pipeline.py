@@ -168,6 +168,12 @@ def test_sanitize_redacts_large_base64():
             "https://example.com/#password=prefix?token=x&page=1",
             "https://example.com/#password=%5Bredacted%5D?[redacted]",
         ),
+        # The head is byte-identical here — the PostHog-token pass had already
+        # redacted that value — so what marks the tail as suspect is the key.
+        (
+            "https://example.com/#password=phx_EXAMPLEONLYFAKEVALUE00000000000?private-suffix",
+            "https://example.com/#password=[redacted]?[redacted]",
+        ),
         ("https://example.com/#/docs/id=1", "https://example.com/#/docs/id=1"),
         # A field list whose key happens to start with a `/`; re-serializing the
         # redacted field percent-encodes that `/`.
@@ -294,6 +300,12 @@ def test_sanitize_redacts_large_base64():
         (
             "https://host/x?token=foo%20https://secret.test/private",
             "https://host/x?token=%5Bredacted%5D",
+        ),
+        # A second `?` inside a value is a character of that value, not a
+        # delimiter, so the address after it belongs to the token.
+        (
+            "https://example.com/?token=prefix?https://secret.example/private",
+            "https://example.com/?token=%5Bredacted%5D",
         ),
         (
             "https://example.com/?q=see,https://fakeuser:fakepass@x.test/doc",
