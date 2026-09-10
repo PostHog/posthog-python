@@ -7,6 +7,8 @@ string) behind ``add_request_handler``/``get_request_handler``. Handlers take
 converting to ``is_error`` results.
 """
 
+import json
+
 import pytest
 
 import mcp.types as mcp_types
@@ -18,11 +20,12 @@ from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    listed_uris,
 )
 from posthog.test.mcp._helpers_v2 import fake_ctx
 
 
-def make_server():
+def make_server(*, resource_error: bool = False, listing: str = "resources") -> Server:
     async def on_call_tool(ctx, params):
         if params.name == "boom":
             raise ValueError("explode")
@@ -58,12 +61,62 @@ def make_server():
             ]
         )
 
-    return Server(
+    server = Server(
         "test-low-v2",
         version="1.2.3",
         on_call_tool=on_call_tool,
         on_list_tools=on_list_tools,
     )
+
+    async def on_list_resources(ctx, params):
+        if listing == "error":
+            raise ValueError("listing unavailable")
+        return mcp_types.ListResourcesResult(
+            resources=[]
+            if listing == "empty"
+            else [
+                mcp_types.Resource(
+                    name="Guide", uri="file:///guide.md", mime_type="text/markdown"
+                )
+            ]
+        )
+
+    async def on_list_resource_templates(ctx, params):
+        return mcp_types.ListResourceTemplatesResult(
+            resource_templates=[
+                mcp_types.ResourceTemplate(
+                    name="Profile",
+                    uri_template="users://{user_id}/profile",
+                    mime_type="text/markdown",
+                )
+            ]
+        )
+
+    async def on_read_resource(ctx, params):
+        if resource_error:
+            raise ValueError(f"Cannot read {params.uri}")
+        return mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(
+                    uri=params.uri,
+                    mime_type="text/markdown",
+                    text="# Guide",
+                )
+            ]
+        )
+
+    server.add_request_handler(
+        "resources/list", mcp_types.PaginatedRequestParams, on_list_resources
+    )
+    server.add_request_handler(
+        "resources/templates/list",
+        mcp_types.PaginatedRequestParams,
+        on_list_resource_templates,
+    )
+    server.add_request_handler(
+        "resources/read", mcp_types.ReadResourceRequestParams, on_read_resource
+    )
+    return server
 
 
 async def _call_tool(server, name, arguments, ctx=None):
@@ -75,6 +128,11 @@ async def _call_tool(server, name, arguments, ctx=None):
 async def _list_tools(server, ctx=None):
     entry = server.get_request_handler("tools/list")
     return await entry.handler(ctx or fake_ctx(method="tools/list"), None)
+
+
+async def _resource_request(server, method, params=None, ctx=None):
+    entry = server.get_request_handler(method)
+    return await entry.handler(ctx or fake_ctx(method=method), params)
 
 
 # --- tools/list --------------------------------------------------------------
@@ -98,6 +156,169 @@ async def test_list_tools_injects_optional_context_and_captures():
     assert listed
     assert listed[0]["properties"]["$mcp_listed_tool_names"] == ["add"]
     assert listed[0]["properties"]["$mcp_server_name"] == "test-low-v2"
+
+
+@pytest.mark.parametrize(
+    "uri, captured_uri, resource_error",
+    [
+        ("file:///guide.md", "file:///guide.md", False),
+        (
+            "https://fakeuser:fakepass@example.com/guide",
+            "https://%5Bredacted%5D@example.com/guide",
+            False,
+        ),
+        (
+            "https://fakeuser:fakepass@example.com/guide",
+            "https://%5Bredacted%5D@example.com/guide",
+            True,
+        ),
+        (
+            "https://example.com/guide?token=fakesecret&chapter=intro",
+            "https://example.com/guide?token=%5Bredacted%5D&chapter=intro",
+            False,
+        ),
+        (
+            "https://example.com/guide?token=fakesecret&chapter=intro",
+            "https://example.com/guide?token=%5Bredacted%5D&chapter=intro",
+            True,
+        ),
+        (
+            "https://example.com/guide?access_token=fakeaccess&X-Amz-Credential=fakecredential&X-Amz-Signature=fakesignature",
+            "https://example.com/guide?access_token=%5Bredacted%5D&X-Amz-Credential=%5Bredacted%5D&X-Amz-Signature=%5Bredacted%5D",
+            False,
+        ),
+        (
+            "https://example.com/guide?access_token=fakeaccess&X-Amz-Credential=fakecredential&X-Amz-Signature=fakesignature",
+            "https://example.com/guide?access_token=%5Bredacted%5D&X-Amz-Credential=%5Bredacted%5D&X-Amz-Signature=%5Bredacted%5D",
+            True,
+        ),
+        (
+            "ui://guide/page?%74oken=fakesecret&TOKEN=fakeaccess&chapter=intro#section",
+            "ui://guide/page?token=%5Bredacted%5D&TOKEN=%5Bredacted%5D&chapter=intro#section",
+            False,
+        ),
+        (
+            "ui://guide/page?%74oken=fakesecret&TOKEN=fakeaccess&chapter=intro#section",
+            "ui://guide/page?token=%5Bredacted%5D&TOKEN=%5Bredacted%5D&chapter=intro#section",
+            True,
+        ),
+        # The PostHog-token pass runs before the URL is parsed, so the token is
+        # already `[redacted]` by then and the URL rewrite finds nothing left to
+        # change — the value keeps that literal form instead of being re-encoded.
+        (
+            "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
+            "https://example.com/guide?token=[redacted]",
+            False,
+        ),
+        (
+            "https://example.com/guide?token=phx_EXAMPLEONLYFAKEVALUE00000000000",
+            "https://example.com/guide?token=[redacted]",
+            True,
+        ),
+        # An MCP resource uri need not have an authority.
+        (
+            "resource:guide?token=fakesecret",
+            "resource:guide?token=%5Bredacted%5D",
+            False,
+        ),
+    ],
+)
+async def test_resource_discovery_and_read_are_captured(
+    uri: str, captured_uri: str, resource_error: bool
+) -> None:
+    server = make_server(resource_error=resource_error)
+    client = FakeClient()
+    instrument(server, client)
+
+    await _resource_request(server, "resources/list")
+    read = _resource_request(
+        server, "resources/read", mcp_types.ReadResourceRequestParams(uri=uri)
+    )
+    if resource_error:
+        with pytest.raises(ValueError) as caught:
+            await read
+        assert str(caught.value) == f"Cannot read {uri}"
+    else:
+        result = await read
+        assert result.contents[0].text == "# Guide"
+        assert str(result.contents[0].uri) == uri
+    await _flush()
+
+    assert len(_events(client, "$mcp_resources_list")) == 1
+    reads = _events(client, "$mcp_resource_read")
+    assert len(reads) == 1
+    props = reads[0]["properties"]
+    assert props["$mcp_resource_name"] == captured_uri
+    assert props["$mcp_parameters"]["request"]["params"]["uri"] == captured_uri
+    assert props["$mcp_is_error"] is resource_error
+    assert "$mcp_response" not in props
+    exceptions = _events(client, "$exception")
+    assert len(exceptions) == int(resource_error)
+    if resource_error:
+        assert exceptions[0]["properties"]["$mcp_resource_name"] == captured_uri
+    for secret in (
+        "phx_EXAMPLEONLYFAKEVALUE00000000000",
+        "fakeuser",
+        "fakepass",
+        "fakesecret",
+        "fakeaccess",
+        "fakecredential",
+        "fakesignature",
+    ):
+        assert secret not in json.dumps(client.events)
+    assert props["$mcp_protocol_version"] == "2026-07-28"
+
+
+@pytest.mark.parametrize(
+    "method, listing, listed",
+    [
+        ("resources/list", "resources", ["file:///guide.md"]),
+        ("resources/list", "empty", []),
+        ("resources/templates/list", "resources", ["users://{user_id}/profile"]),
+    ],
+)
+async def test_resource_listing_event_carries_the_listing(
+    method: str, listing: str, listed: list
+) -> None:
+    server = make_server(listing=listing)
+    client = FakeClient()
+    instrument(server, client)
+
+    await _resource_request(server, method)
+    await _flush()
+
+    events = _events(client, "$mcp_resources_list")
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$mcp_parameters"]["request"]["method"] == method
+    assert listed_uris(props["$mcp_response"]) == listed
+    # An empty listing is a legitimate answer (a template-only server lists no
+    # static resources), unlike an empty tools/list.
+    assert props["$mcp_is_error"] is False
+    assert props["$mcp_duration_ms"] >= 0
+    assert "$mcp_resource_name" not in props
+    assert not _events(client, "$exception")
+
+
+async def test_failed_resource_listing_is_captured() -> None:
+    server = make_server(listing="error")
+    client = FakeClient()
+    instrument(server, client)
+
+    with pytest.raises(ValueError, match="listing unavailable"):
+        await _resource_request(server, "resources/list")
+    await _flush()
+
+    events = _events(client, "$mcp_resources_list")
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$mcp_is_error"] is True
+    assert props["$mcp_duration_ms"] >= 0
+    assert "$mcp_response" not in props
+    assert "$mcp_resource_name" not in props
+    exceptions = _events(client, "$exception")
+    assert len(exceptions) == 1
+    assert "listing unavailable" in json.dumps(exceptions[0]["properties"])
 
 
 # --- tools/call --------------------------------------------------------------
@@ -200,13 +421,33 @@ async def test_late_registration_is_wrapped():
         "tools/call", mcp_types.CallToolRequestParams, late_call_tool
     )
 
+    async def late_read_resource(ctx, params):
+        return mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(uri=params.uri, text="late resource")
+            ]
+        )
+
+    server.add_request_handler(
+        "resources/read", mcp_types.ReadResourceRequestParams, late_read_resource
+    )
+
     result = await _call_tool(server, "anything", {"context": "late registration"})
+    resource = await _resource_request(
+        server,
+        "resources/read",
+        mcp_types.ReadResourceRequestParams(uri="file:///late.txt"),
+    )
     await _flush()
 
     assert result.content[0].text == "late ok"
+    assert resource.contents[0].text == "late resource"
     calls = _events(client, "$mcp_tool_call")
     assert len(calls) == 1
     assert calls[0]["properties"]["$mcp_tool_name"] == "anything"
+    reads = _events(client, "$mcp_resource_read")
+    assert len(reads) == 1
+    assert reads[0]["properties"]["$mcp_resource_name"] == "file:///late.txt"
 
 
 async def test_initialize_and_session_reuse_across_calls():

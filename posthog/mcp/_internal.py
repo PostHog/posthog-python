@@ -226,10 +226,15 @@ async def resolve_event_properties(
 
 
 def _get_request_resource_name(request: Any) -> str:
+    """The thing the request acts on: a tool/prompt ``name``, or the ``uri`` of a
+    resource read — which is the only name a ``resources/read`` request carries."""
     if not isinstance(request, dict):
         return "Unknown"
     params = request.get("params")
     if not isinstance(params, dict):
         return "Unknown"
-    name = params.get("name")
-    return name if isinstance(name, str) else "Unknown"
+    for key in ("name", "uri"):
+        value = params.get(key)
+        if isinstance(value, str):
+            return value
+    return "Unknown"

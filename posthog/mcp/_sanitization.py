@@ -11,12 +11,15 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
 _REDACTED_VALUE = "[redacted]"
+_BINARY_DATA_MARKER = "[binary data redacted - not supported by PostHog MCP analytics]"
+_ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
 _SIZE_GATE = 10_240
 _POSTHOG_TOKEN_PATTERN = re.compile(r"\bph[a-z]_[A-Za-z0-9_-]{20,}\b")
@@ -26,6 +29,315 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"private[-_]?key)$",
     re.IGNORECASE,
 )
+
+# No leading `\b`: a word boundary needs a non-word character before the scheme,
+# so `resource_https://user:pw@host` (an `_` before the scheme) would match
+# nothing and stay unredacted. Without it the leftmost match wins — `foo.https://x`
+# is read as scheme `foo.https`, which redacts the same credentials either way.
+# `'` is a valid URI sub-delimiter, so it stays IN the match (`/o'reilly?token=x`
+# must not be cut short of its query); `"`, `<` and `>` cannot appear unencoded in
+# a URI, so they still terminate it.
+#
+# The authority is optional — an MCP resource uri need not have one
+# (`resource:guide?token=...`, `file:/guide.md?token=...`), and `[^\s<>"]+`
+# absorbs a `//host` when there is one. That over-matches prose (`Error:foo`,
+# `at12:30`, `C:\path`), which is harmless: a match with nothing to redact is
+# returned byte-for-byte, never re-serialized.
+_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}:[^\s<>\"]+", re.IGNORECASE)
+# Prose puts URLs in sentences ("see https://x?sig=a, then retry"), in parentheses
+# and in single quotes, and the terminal class above swallows the punctuation that
+# closes them. It is split off before parsing and re-appended to whatever comes
+# back — including the `'` the pattern now keeps, since only a trailing one closes
+# a quote. A character set stripped with `rstrip` rather than an anchored
+# `[...]+$` pattern: backtracking that pattern over an interior run of punctuation
+# is quadratic, and the URL comes from an attacker-influenceable request.
+_URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
+# The length bound below caps parsing work on an attacker-shaped authority URL, so
+# it only applies to a match that opens with one. A match this long with no
+# authority is a data uri, which the bound must not eat — the binary-data branch
+# deliberately keeps those, and the field count is already bounded when parsing.
+_URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
+_URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
+# What separates one field from the next inside a query or fragment. `?` and `#`
+# are not here: whether one of those divides a URL depends on where it sits, and
+# `_structural_delimiters` works that out per value. Neither is `;` — fields are
+# parsed on `&` alone, so a `;` is a character of whatever value holds it.
+_FIELD_SEPARATORS = "=&"
+_MAX_URL_LENGTH = 8192
+_MAX_URL_QUERY_FIELDS = 128
+# A query key is sensitive when ANY `-`/`_`/`.`/`/`/`;`-delimited segment matches, which
+# covers the compound names credentials actually travel under: `private_token`,
+# `oauth_signature`, `id_token`, `subscription-key`, `X-Amz-Security-Token`.
+# Over-redacting a benign `sort_key` is the accepted trade for an analytics payload.
+_SENSITIVE_QUERY_SEGMENT_PATTERN = re.compile(
+    r"(^|[-_./;])(auth|token|secret|password|passwd|pwd|credential|signature|sig|"
+    r"key|hmac|sas|bearer|jwt|session|sessionid)([-_./;]|$)",
+    re.IGNORECASE,
+)
+# Matched whole rather than per segment: `code` (an OAuth authorization code) as a
+# segment would eat `country_code`, `zip_code` and `lang_code`.
+_SENSITIVE_QUERY_KEY_PATTERN = re.compile(
+    r"^(code|AWSAccessKeyId|GoogleAccessId|Policy)$",
+    re.IGNORECASE,
+)
+
+_UrlFields = List[Tuple[str, str]]
+
+
+def _should_redact_query_key(key: str) -> bool:
+    """Whether a URL query/fragment field's value must be dropped: the dict-key
+    rule, plus the two URL-only rules above."""
+    return bool(
+        _should_redact_key(key)
+        or _SENSITIVE_QUERY_SEGMENT_PATTERN.search(key)
+        or _SENSITIVE_QUERY_KEY_PATTERN.match(key)
+    )
+
+
+def _sanitize_urls(text: str, *, nested: bool = True) -> str:
+    # A string that IS one URL — a `$mcp_resource_name`, a `params.uri`, a query
+    # field's value — has no prose around it, so nothing at its end is punctuation
+    # closing a sentence: `?password=hunter2!!!` ends in the password itself.
+    if _URL_PATTERN.fullmatch(text):
+        return _sanitize_url(text, nested=nested, in_prose=False)
+    return _URL_PATTERN.sub(
+        lambda match: _sanitize_url(match.group(0), nested=nested, in_prose=True), text
+    )
+
+
+def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
+    return "".join(
+        _sanitize_single_url(piece, nested=nested, in_prose=in_prose)
+        for piece in _split_addresses(value)
+    )
+
+
+def _split_addresses(value: str) -> List[str]:
+    """Cut a match into the addresses it runs together.
+
+    One match can hold a prose word in front of the address (`URL:https://...`,
+    `a:b:https://...`) or several addresses joined without whitespace
+    (`/doc,https://...`, `/?download)[b](https://...`). Each address after the
+    first begins inside what would parse as its predecessor's path, query key or
+    fragment, none of which is redacted.
+
+    The exception is an address in value position (`?url=https://...`,
+    `?token=foo%20https://...`): it belongs to the field that holds it, and the
+    nested pass sanitizes it there — splitting it off would cut the field's value
+    in two and publish the tail. Only the fields region has values, so an address
+    before the first `?` or `#` is always its own, `=` in the path or not
+    (`/redirect=https://user:pw@host/doc`). Inside that region the nearest
+    structural character decides: a `=` puts the authority in a value, a field
+    separator — or nothing at all — starts a new address. One forward pass over
+    the match finds them all.
+    """
+    fields_start = min(
+        (value.index(char) for char in "?#" if char in value), default=len(value)
+    )
+    starts = [
+        start
+        for start, structural in _authority_starts(value)
+        if start > 0 and (start < fields_start or structural != "=")
+    ]
+    if not starts:
+        return [value]
+    return [value[begin:end] for begin, end in zip([0] + starts, starts + [len(value)])]
+
+
+def _authority_starts(value: str) -> List[Tuple[int, str]]:
+    """Every authority start in ``value``, each paired with the last structural
+    character seen before it. One forward pass: the cursor never moves backwards,
+    so a value carrying thousands of addresses costs the same per character as one
+    carrying a single address."""
+    query, fragment, fragment_tail = _structural_delimiters(value)
+    starts: List[Tuple[int, str]] = []
+    cursor = 0
+    structural = ""
+    for match in _URL_AUTHORITY_SEARCH.finditer(value):
+        for index in range(cursor, match.start()):
+            # The fragment's own `?` divides it only when a value is not already
+            # open: straight after a `=` that `?` may be a character of the value,
+            # and the address behind it belongs to the field — where the fragment
+            # split and its fail-closed rule can see the whole of it.
+            if (
+                value[index] in _FIELD_SEPARATORS
+                or index in (query, fragment)
+                or (index == fragment_tail and structural != "=")
+            ):
+                structural = value[index]
+        cursor = match.start()
+        starts.append((match.start(), structural))
+    return starts
+
+
+def _structural_delimiters(value: str) -> Tuple[int, int, int]:
+    """Where a `?` or `#` can divide the URL: the query's `?`, the fragment's `#`,
+    and the `?` that splits the fragment into head and tail (``-1`` for each one
+    the value does not have). Every other `?` or `#` is a character inside a value
+    — `?token=pre?fix` has one `?` of structure and one of credential."""
+    fragment = value.find("#")
+    query = value.find("?")
+    if fragment != -1 and (query == -1 or query > fragment):
+        query = -1
+    fragment_tail = value.find("?", fragment + 1) if fragment != -1 else -1
+    return query, fragment, fragment_tail
+
+
+def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
+    if len(value) > _MAX_URL_LENGTH and _URL_AUTHORITY_PATTERN.match(value):
+        return _REDACTED_VALUE
+    url_text = value.rstrip(_URL_TRAILING_PUNCTUATION) if in_prose else value
+    suffix = value[len(url_text) :]
+    try:
+        url = urlsplit(url_text)
+        query, sanitized_query = _sanitize_url_fields(url.query, nested=nested)
+        # A `?` inside a fragment splits it in two, and each half stands on its
+        # own: `#/callback?token=x` is text then fields, `#a=1?b=2` is fields
+        # twice. Shape cannot tell them apart — `#/token=x` looks like a route and
+        # is a field list — so each half is judged only on whether it holds a `=`.
+        head, separator, fragment_tail = url.fragment.partition("?")
+        sanitized_head, head_rewrote_last = _sanitize_fragment_part(head, nested=nested)
+        # A `?` can fall inside a credential (`#password=pre?fix`), and nothing
+        # here can tell that from a real boundary. When the head ends in a value
+        # just redacted, the tail may be the rest of it, so it goes too.
+        sanitized_tail, tail_rewrote_last = (
+            (_REDACTED_VALUE, True)
+            if head_rewrote_last and fragment_tail
+            else _sanitize_fragment_part(fragment_tail, nested=nested)
+        )
+        fragment = sanitized_head + separator + sanitized_tail
+        netloc = _redact_userinfo(url.netloc)
+        if (netloc, sanitized_query, fragment) == (
+            url.netloc,
+            query,
+            url.fragment,
+        ):
+            return value
+        # The split-off punctuation can be the tail of the credential rather than
+        # the sentence's: `?password=hunter2!!!` would come back as
+        # `?password=[redacted]!!!`. So when the last field of the part the URL
+        # ends in was rewritten, its punctuation goes with it. Losing a comma from
+        # the surrounding prose is the accepted cost.
+        if _rewrote_the_last_field(
+            url, query, sanitized_query, head_rewrote_last, tail_rewrote_last
+        ):
+            suffix = ""
+        # Only the part that changed is re-serialized, so an untouched query or
+        # fragment keeps its original encoding.
+        return (
+            urlunsplit(
+                (
+                    url.scheme,
+                    netloc,
+                    url.path,
+                    urlencode(sanitized_query)
+                    if sanitized_query != query
+                    else url.query,
+                    fragment,
+                )
+            )
+            + suffix
+        )
+    except ValueError:
+        return _REDACTED_VALUE + suffix
+
+
+def _rewrote_the_last_field(
+    url: SplitResult,
+    query: _UrlFields,
+    sanitized_query: _UrlFields,
+    head_rewrote_last: bool,
+    tail_rewrote_last: bool,
+) -> bool:
+    """Whether the URL ends in a field whose value was just redacted — the part it
+    ends in being its fragment when it has one, its query otherwise."""
+    if not url.fragment:
+        return _last_field_is_sensitive(query, sanitized_query)
+    return tail_rewrote_last if "?" in url.fragment else head_rewrote_last
+
+
+def _sanitize_fragment_part(text: str, *, nested: bool) -> Tuple[str, bool]:
+    """Sanitize one half of a fragment: the field pass when it holds a `=`, the
+    text pass otherwise. Also reports whether its last field was rewritten, which
+    is what tells the caller that trailing punctuation may belong to the
+    credential rather than to the surrounding prose."""
+    if "=" not in text:
+        return _sanitize_fragment_text(text, nested=nested), False
+    fields, sanitized = _sanitize_url_fields(text, nested=nested)
+    return (
+        urlencode(sanitized) if sanitized != fields else text,
+        _last_field_is_sensitive(fields, sanitized),
+    )
+
+
+def _last_field_is_sensitive(fields: _UrlFields, sanitized: _UrlFields) -> bool:
+    """Whether the last field of a list carries a credential: its key is one of
+    the sensitive names, or its value was just rewritten. The key alone has to
+    count — an earlier pass may already have redacted the value, leaving the
+    comparison nothing to catch."""
+    if not fields:
+        return False
+    return _should_redact_query_key(fields[-1][0]) or sanitized[-1] != fields[-1]
+
+
+def _sanitize_fragment_text(text: str, *, nested: bool) -> str:
+    """Sanitize the plain-text part of a fragment: a route prefix, or a fragment
+    that is not a field list. Text can carry an address of its own, and a match
+    ends at the first `#`, so this is the only pass that sees it. It gets the same
+    one-level budget as a nested field value — past it, text still carrying an
+    address is dropped rather than trusted, which is also what stops a
+    `#`-chained uri from recursing without end."""
+    if nested:
+        return _sanitize_urls(text, nested=False)
+    return _REDACTED_VALUE if _URL_PATTERN.search(text) else text
+
+
+def _redact_userinfo(netloc: str) -> str:
+    if "@" not in netloc:
+        return netloc
+    return "%5Bredacted%5D@" + netloc.rsplit("@", 1)[1]
+
+
+def _sanitize_url_fields(text: str, *, nested: bool) -> Tuple[_UrlFields, _UrlFields]:
+    """Parse a query (or fragment) and return both the original and the sanitized
+    fields, so the caller can tell whether anything was redacted. Only ``&``
+    separates fields — see ``_sanitize_url_field_value`` for the ``;`` a value can
+    carry — so the field bound counts ``&`` too."""
+    fields = parse_qsl(
+        text,
+        keep_blank_values=True,
+        max_num_fields=_MAX_URL_QUERY_FIELDS,
+    )
+    return fields, [
+        (key, _sanitize_url_field_value(key, value, nested=nested))
+        for key, value in fields
+    ]
+
+
+def _sanitize_url_field_value(key: str, value: str, *, nested: bool) -> str:
+    if _should_redact_query_key(key):
+        return _REDACTED_VALUE
+    # A `;` is a legacy field separator to some servers and an ordinary character
+    # to others, and the value alone cannot say which. Splitting on it would cut
+    # `password=pre;fix` in two and publish the second half, so instead the whole
+    # value goes whenever any `;`-separated piece of it names a credential.
+    if ";" in value and _names_a_credential(value):
+        return _REDACTED_VALUE
+    # A retained value can carry a URL of its own (a gateway's `?url=`). The budget
+    # for that is one level: sanitize the first, and drop any value still carrying
+    # a URL past it rather than trusting what we did not look inside.
+    if _URL_PATTERN.search(value):
+        return _sanitize_urls(value, nested=False) if nested else _REDACTED_VALUE
+    return value
+
+
+def _names_a_credential(value: str) -> bool:
+    """Whether any ``;``-separated piece of a field's value reads as a field of
+    its own with a sensitive name (``a=1;token=x``)."""
+    return any(
+        _should_redact_query_key(piece.partition("=")[0]) for piece in value.split(";")
+    )
+
 
 # PII redaction for the agent-narrated intent string only. $mcp_intent is free
 # text the calling LLM writes into the injected `context` argument, so it can
@@ -106,9 +418,60 @@ def _should_redact_key(key: str) -> bool:
 
 
 def _sanitize_string(value: str) -> str:
-    if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
-        return "[binary data redacted - not supported by PostHog MCP analytics]"
+    if _is_binary_blob(value):
+        return _BINARY_DATA_MARKER
+    return _sanitize_text(value)
+
+
+def _is_binary_blob(value: str) -> bool:
+    return len(value) >= _SIZE_GATE and bool(_BASE64_PATTERN.match(value))
+
+
+def _sanitize_text(value: str) -> str:
+    return _sanitize_urls(_redact_credentials(value))
+
+
+def _redact_credentials(value: str) -> str:
+    """Redact PostHog tokens, then any other word that reads as a credential.
+
+    Both run before the URL pass, because rewriting a URL changes the text they
+    match on: it percent-encodes `/`, hiding a `?ref=/phx_...` token behind `%2F`
+    from the `\bph` boundary, and it can grow a word past the length window the
+    entropy detector scans. Running the URL pass last loses nothing — it only
+    redacts or percent-encodes, so it never exposes a credential the detectors
+    could have matched."""
     return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+
+
+def sanitize_intent(value: Any) -> Any:
+    """Sanitize the agent-narrated intent: the binary gate, the credential passes,
+    structured PII, then URLs.
+
+    Every step sits where it does for a reason. The binary gate runs first
+    because splicing a redaction into a base64 blob stops it looking like base64,
+    and the blob would then be captured almost whole instead of as the marker.
+    Credentials run before PII because a PII pattern can cut a token in half — the
+    phone pattern reads `phx_AAAA-415-555-0142-AAAA` as a number and redacts only
+    the middle, leaving the token's halves in the payload. PII runs before the URL
+    pass because a rewritten URL percent-encodes the `@` the email pattern needs
+    to see."""
+    if not isinstance(value, str):
+        return sanitize_captured_value(value)
+    if _is_binary_blob(value):
+        return _BINARY_DATA_MARKER
+    return _sanitize_urls(redact_pii(_redact_credentials(value)))
+
+
+def _sanitize_resource_name(value: Any) -> Any:
+    """Sanitize a ``resource_name``: either an identifier (a tool or prompt name)
+    or a resource uri, so only the passes that matter for a uri run. The entropy
+    detector ``sanitize_captured_value`` applies to free text is deliberately left
+    out — it reads a name like ``Get_Organization_Memberships`` as a credential,
+    and a redacted name costs every per-tool metric the event exists for. A name
+    with no url in it comes back untouched."""
+    if not isinstance(value, str):
+        return value
+    return _sanitize_urls(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 
 def _redact_secret_tokens(value: str) -> str:
@@ -134,6 +497,13 @@ def _redact_secret_tokens(value: str) -> str:
 
 
 def _is_secret(word: str) -> bool:
+    # Judge the word without this sanitizer's own markers. A value can be
+    # sanitized twice (a response's content blocks are), and the marker's
+    # character mix is enough to push a short uri like
+    # `resource:guide?token=%5Bredacted%5D` over the entropy bar — dropping a
+    # value we had already made safe. Stripping the marker rather than skipping
+    # the word keeps a real credential written around one detectable.
+    word = word.replace(_ENCODED_REDACTED_VALUE, "").replace(_REDACTED_VALUE, "")
     try:
         from posthog.exception_utils import _looks_like_secret
 
@@ -247,16 +617,17 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("parameters") is not None:
         result["parameters"] = sanitize_captured_value(result["parameters"])
 
+    if result.get("resource_name") is not None:
+        result["resource_name"] = _sanitize_resource_name(result["resource_name"])
+
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about
-    # the user. Redact it like any other captured value, then strip structured
-    # PII (emails, phone numbers, IPs, cards, SSNs) rather than shipping it raw
-    # as $mcp_intent. PII redaction is scoped to the intent only — structured
-    # tool parameters and responses often hold the same shapes as legitimate data.
+    # the user. `sanitize_intent` redacts it like any other captured value and
+    # additionally strips structured PII (emails, phone numbers, IPs, cards,
+    # SSNs). PII redaction is scoped to the intent only — structured tool
+    # parameters and responses often hold the same shapes as legitimate data.
     if result.get("user_intent") is not None:
-        result["user_intent"] = redact_pii(
-            sanitize_captured_value(result["user_intent"])
-        )
+        result["user_intent"] = sanitize_intent(result["user_intent"])
 
     if result.get("llm_model") is not None:
         result["llm_model"] = sanitize_captured_value(result["llm_model"])

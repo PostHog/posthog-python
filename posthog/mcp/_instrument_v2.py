@@ -37,11 +37,15 @@ import mcp.types as mcp_types
 
 from ._context_parameters import schema_has_param
 from ._conversation_id import build_prompt_back
+from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
     collect_listed_tools,
     mutate_tool_schema,
     params_to_request_dict,
+    prepare_request,
+    record_resource_request,
+    resource_listing_response,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
@@ -68,6 +72,13 @@ _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 # injected `context` parameter per entry point (see _wrap_v2_list_tools).
 _CALL_METHOD = "tools/call"
 _LIST_METHOD = "tools/list"
+_RESOURCE_METHODS = {
+    "resources/list": MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+    # Templates are listings too: the captured request method separates
+    # `resources/templates/list` from `resources/list` on the same event.
+    "resources/templates/list": MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+    "resources/read": MCPAnalyticsEventType.MCP_RESOURCES_READ,
+}
 
 
 def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
@@ -86,6 +97,8 @@ def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
     )
     _wrap_tool_manager_call_v2(server, data)
     _wrap_v2_list_tools(low_level, data, context_required=True, high_level=server)
+    for method, event_type in _RESOURCE_METHODS.items():
+        _wrap_v2_resource_request(low_level, data, method, event_type)
     _patch_add_request_handler(low_level, data, wrap_call=False, high_level=server)
 
 
@@ -98,6 +111,8 @@ def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
     data.server_version = getattr(server, "version", None)
     _wrap_v2_call_tool(server, data)
     _wrap_v2_list_tools(server, data, context_required=False)
+    for method, event_type in _RESOURCE_METHODS.items():
+        _wrap_v2_resource_request(server, data, method, event_type)
     _patch_add_request_handler(server, data, wrap_call=True)
 
 
@@ -132,6 +147,8 @@ def _patch_add_request_handler(
                 context_required=high_level is not None,
                 high_level=high_level,
             )
+        elif method in _RESOURCE_METHODS:
+            _wrap_v2_resource_request(server, data, method, _RESOURCE_METHODS[method])
 
     setattr(add_request_handler, _WRAPPED_FLAG, True)
     server.add_request_handler = add_request_handler
@@ -463,6 +480,71 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
 
     setattr(handler, _WRAPPED_FLAG, True)
     _replace_handler(server, _CALL_METHOD, handler, entry.params_type)
+
+
+def _wrap_v2_resource_request(
+    server: Any, data: MCPAnalyticsData, method: str, event_type: str
+) -> None:
+    entry = server.get_request_handler(method)
+    if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
+        return
+    original = entry.handler
+
+    async def handler(ctx: Any, params: Any) -> Any:
+        token, client_name, client_version, protocol_version, mcp_session_id = (
+            _resolve_ctx(ctx)
+        )
+        request = params_to_request_dict(method, params, by_alias=True)
+        extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
+        try:
+            session_id = await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+            )
+        except Exception as error:  # noqa: BLE001 - analytics must not break resources
+            log(f"Warning: could not prepare resource analytics: {error}")
+            return await original(ctx, params)
+
+        start = time.monotonic()
+        try:
+            result = await original(ctx, params)
+        except Exception as error:
+            await record_resource_request(
+                data,
+                session_id,
+                event_type=event_type,
+                request=request,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            raise
+
+        await record_resource_request(
+            data,
+            session_id,
+            event_type=event_type,
+            request=request,
+            response=resource_listing_response(event_type, result),
+            duration_ms=(time.monotonic() - start) * 1000,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            extra=extra,
+        )
+        return result
+
+    setattr(handler, _WRAPPED_FLAG, True)
+    _replace_handler(server, method, handler, entry.params_type)
 
 
 # --- tools/list -------------------------------------------------------------------

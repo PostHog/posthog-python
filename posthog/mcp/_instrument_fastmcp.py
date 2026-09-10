@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 import mcp.types as mcp_types
 
 from ._conversation_id import build_prompt_back
+from ._instrument_lowlevel import _wrap_resource_requests
 from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
@@ -58,6 +59,9 @@ def instrument_fastmcp(server: Any, data: MCPAnalyticsData) -> None:
     data.server_version = getattr(getattr(server, "_mcp_server", None), "version", None)
     _wrap_tool_manager_call(server, data)
     _wrap_list_tools_handler(server, data)
+    low_level = getattr(server, "_mcp_server", None)
+    if low_level is not None:
+        _wrap_resource_requests(low_level, data)
 
 
 # --- tool call seam ----------------------------------------------------------
