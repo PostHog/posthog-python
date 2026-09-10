@@ -111,6 +111,14 @@ def test_sanitize_redacts_large_base64():
             "https://app.example.com/cb#access_token=%5Bredacted%5D&token_type=%5Bredacted%5D",
         ),
         ("https://example.com/doc#section-2", "https://example.com/doc#section-2"),
+        # A hash-routed URL puts the route in the fragment: it stays verbatim, and
+        # only what follows the first `?` is a field list.
+        (
+            "https://example.com/#/callback?token=fakesecret",
+            "https://example.com/#/callback?token=%5Bredacted%5D",
+        ),
+        ("https://example.com/#/docs?page=2", "https://example.com/#/docs?page=2"),
+        ("https://example.com/#/callback", "https://example.com/#/callback"),
         (
             "https://example.com/x?a=1;token=fakesecret",
             "https://example.com/x?a=1&token=%5Bredacted%5D",

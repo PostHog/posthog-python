@@ -121,9 +121,10 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
         query, sanitized_query = _sanitize_url_fields(url.query, nested=nested)
         # A fragment is only a field list when it looks like one; `#section-2` is
         # left byte-for-byte rather than re-serialized as `section-2=`.
+        route, fragment_fields = _split_fragment_route(url.fragment)
         fragment, sanitized_fragment = (
-            _sanitize_url_fields(url.fragment, nested=nested)
-            if "=" in url.fragment
+            _sanitize_url_fields(fragment_fields, nested=nested)
+            if "=" in fragment_fields
             else ([], [])
         )
         netloc = _redact_userinfo(url.netloc)
@@ -154,7 +155,7 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
                     urlencode(sanitized_query)
                     if sanitized_query != query
                     else url.query,
-                    urlencode(sanitized_fragment)
+                    route + urlencode(sanitized_fragment)
                     if sanitized_fragment != fragment
                     else url.fragment,
                 )
@@ -163,6 +164,17 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
         )
     except ValueError:
         return _REDACTED_VALUE + suffix
+
+
+def _split_fragment_route(fragment: str) -> Tuple[str, str]:
+    """Split a fragment into its route prefix and its fields. A hash-routed URL
+    (`#/callback?token=...`) puts the route in the fragment, and parsing the whole
+    thing as fields yields one key of `/callback?token` that matches nothing. The
+    route, up to and including the first `?`, stays verbatim."""
+    if "?" not in fragment:
+        return "", fragment
+    route, _, fields = fragment.partition("?")
+    return route + "?", fields
 
 
 def _split_at_second_address(value: str) -> Optional[int]:
