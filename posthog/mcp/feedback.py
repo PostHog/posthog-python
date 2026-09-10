@@ -104,8 +104,9 @@ _CORE_FEEDBACK_SCHEMA_PROPERTIES: Dict[str, Dict[str, Any]] = {
 # Extra-property names a host may not declare: the core fields themselves, the
 # names whose `$mcp_feedback_<key>` property would collide with a core property
 # (`type` -> `$mcp_feedback_type`, `tool` -> `$mcp_feedback_tool`), and the
-# SDK-injected analytics arguments, which are stripped before dispatch and so
-# would never reach the report.
+# SDK-injected analytics arguments — the report is parsed from the raw arguments
+# before those are stripped, so an extra by the same name would capture an
+# SDK-owned value.
 _RESERVED_EXTRA_PROPERTY_KEYS = frozenset(_CORE_FEEDBACK_SCHEMA_PROPERTIES) | {
     "type",
     "tool",
@@ -188,17 +189,46 @@ def _read_string(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _matches_extra_schema(value: Any, schema: Dict[str, Any]) -> bool:
+    """True when the value conforms to the declared fragment's ``type`` and
+    ``enum`` — the same advisory-schema enforcement the core fields get, so
+    ``extras`` only ever holds schema-conforming values and a misbehaving agent
+    shows up as absence rather than as an unexpected shape in the host's handler."""
+    if isinstance(value, list):
+        actual = "array"
+    elif value is None:
+        actual = "null"
+    elif isinstance(value, bool):
+        actual = "boolean"
+    elif isinstance(value, (int, float)):
+        actual = "number"
+    elif isinstance(value, str):
+        actual = "string"
+    else:
+        actual = "object"
+    declared = schema.get("type")
+    if declared != actual and not (declared == "integer" and actual == "number"):
+        return False
+    enum = schema.get("enum")
+    return not isinstance(enum, list) or value in enum
+
+
 def parse_feedback_report(
     args: Optional[Dict[str, Any]],
     options: Optional[CollectFeedbackOptions] = None,
 ) -> FeedbackReport:
     """Parse the raw ``send_feedback`` arguments into a typed report. Never raises:
     an invalid ``feedback_type`` falls back to ``other``, missing fields stay
-    ``None``, and only **declared** extras are lifted into ``extras`` — anything
-    the agent invented reaches the handler via ``raw`` and is never captured."""
+    ``None``, and only **declared** extras whose values match their declared
+    ``type``/``enum`` are lifted into ``extras`` — mismatches and anything the
+    agent invented reach the handler via ``raw`` only and are never captured."""
     raw = args or {}
     declared = (options.extra_properties if options is not None else None) or {}
-    extras = {key: raw[key] for key in declared if raw.get(key) is not None}
+    extras = {
+        key: raw[key]
+        for key, schema in declared.items()
+        if raw.get(key) is not None and _matches_extra_schema(raw[key], schema)
+    }
     feedback_type = raw.get("feedback_type")
     sentiment = raw.get("sentiment")
     task_completed = raw.get("task_completed")
@@ -275,8 +305,12 @@ def build_feedback_event_properties(report: FeedbackReport) -> JsonRecord:
             report.details
         )
     if report.tool_name:
+        # Nominally an identifier, but the schema can't stop an agent from
+        # writing prose into it — so it gets the same PII redaction as the
+        # other free text.
         properties[PostHogMCPAnalyticsProperty.FEEDBACK_TOOL] = _truncate_feedback_text(
-            sanitize_captured_value(report.tool_name), _MAX_FEEDBACK_TOOL_NAME_LENGTH
+            redact_pii(sanitize_captured_value(report.tool_name)),
+            _MAX_FEEDBACK_TOOL_NAME_LENGTH,
         )
     if report.task_completed is not None:
         properties[PostHogMCPAnalyticsProperty.FEEDBACK_TASK_COMPLETED] = (

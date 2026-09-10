@@ -159,7 +159,10 @@ class FeedbackReport:
     # The existing tool the feedback is about (the ``tool_name`` argument).
     tool_name: Optional[str] = None
     task_completed: Optional[bool] = None
-    # Values of the declared ``extra_properties`` fields.
+    # Values of the declared ``extra_properties`` fields that match their
+    # declared ``type``/``enum``. A value the agent sent with the wrong shape is
+    # left out (find it in ``raw`` if you need it), so these are safe to trust
+    # as declared.
     extras: JsonRecord = field(default_factory=dict)
     # The full raw arguments, for the handler only — never captured.
     raw: JsonRecord = field(default_factory=dict)

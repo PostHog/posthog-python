@@ -26,6 +26,7 @@ from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._instrumentation import drain_pending_sync, fire_and_forget
 from ._lib_identity import apply_mcp_lib_identity
+from .logger import log
 from ._model_parameters import (
     add_model_parameter_to_schema,
     can_inject_model_parameter,
@@ -93,6 +94,12 @@ class PostHogMCP(Client):
         # extra_required) instead of first surfacing it when a tools/list is served.
         if self._collect_feedback is not None:
             get_feedback_tool_descriptor(self._collect_feedback)
+            if self._collect_feedback.on_feedback is not None:
+                log(
+                    "Warning: collect_feedback.on_feedback is ignored on the PostHogMCP "
+                    "path - route reports from your dispatcher via "
+                    "prepare_tool_call().feedback_report instead."
+                )
         # Whether a failed tool call fans out an `$exception` sibling event. Distinct
         # from the inherited Client.enable_exception_autocapture (global uncaught-error
         # hook); this mirrors instrument()'s enable_exception_autocapture, default on.
@@ -328,10 +335,11 @@ class PostHogMCP(Client):
         event["protocol_version"] = protocol_version
         # Deliberately no `parameters`: the arguments are agent-narrated free
         # text, and the PII-redacted `$mcp_feedback_*` properties are the captured
-        # surface. Raw arguments would bypass that redaction.
+        # surface. Raw arguments would bypass that redaction. Feedback properties
+        # win over the caller's, matching the instrument() path's merge order.
         event["properties"] = {
-            **build_feedback_event_properties(report),
             **(properties or {}),
+            **build_feedback_event_properties(report),
         }
         _apply_intent(event, build_feedback_intent(report), "context_parameter")
         _apply_model(event, llm_model, llm_model_source)

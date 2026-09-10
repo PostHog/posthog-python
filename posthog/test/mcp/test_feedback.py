@@ -275,6 +275,43 @@ def test_properties_capture_declared_extras_only():
     assert "$mcp_feedback_invented" not in props
 
 
+def test_extras_must_match_declared_type_and_enum():
+    options = CollectFeedbackOptions(
+        extra_properties={
+            "score": {"type": "integer"},
+            "channel": {"type": "string", "enum": ["web", "app"]},
+        }
+    )
+    report = parse_feedback_report(
+        {
+            "feedback_type": "praise",
+            "summary": "Great tools.",
+            "score": "very high",
+            "channel": "email",
+        },
+        options,
+    )
+    # Mismatches stay out of extras and the captured properties; raw keeps them.
+    assert report.extras == {}
+    assert report.raw["score"] == "very high" and report.raw["channel"] == "email"
+    props = build_feedback_event_properties(report)
+    assert "$mcp_feedback_score" not in props and "$mcp_feedback_channel" not in props
+
+    conforming = parse_feedback_report(
+        {"feedback_type": "praise", "summary": "s", "score": 9, "channel": "web"},
+        options,
+    )
+    assert conforming.extras == {"score": 9, "channel": "web"}
+
+
+def test_tool_name_gets_pii_redaction():
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "tool_name": "ask jane@example.com"}
+    )
+    props = build_feedback_event_properties(report)
+    assert props["$mcp_feedback_tool"] == "ask [redacted]"
+
+
 def test_intent_joins_summary_and_details():
     report = parse_feedback_report(_REPORT_ARGS)
     assert (
@@ -659,7 +696,7 @@ async def test_posthogmcp_capture_feedback_event_shape():
         session_id="s1",
         llm_model="claude-opus-4-8",
         llm_model_source="self_reported",
-        properties={"host_prop": "kept"},
+        properties={"host_prop": "kept", "$mcp_feedback_type": "spoofed"},
     )
     await _flush()
 
@@ -667,12 +704,27 @@ async def test_posthogmcp_capture_feedback_event_shape():
     assert len(events) == 1
     props = events[0]["properties"]
     assert props["$mcp_resource_name"] == "send_feedback"
+    # Feedback properties win over the caller's, matching the instrument() path.
     assert props["$mcp_feedback_type"] == "missing_capability"
     assert props["$mcp_intent"].startswith(_REPORT_ARGS["summary"])
     assert props["$mcp_llm_model"] == "claude-opus-4-8"
     assert props["host_prop"] == "kept"
     assert "$mcp_parameters" not in props
     assert events[0]["distinct_id"] == "user_1"
+
+
+def test_posthogmcp_warns_when_on_feedback_is_set():
+    from posthog.mcp import set_logger
+
+    messages = []
+    set_logger(messages.append)
+    try:
+        make_client(
+            collect_feedback=CollectFeedbackOptions(on_feedback=lambda report: None)
+        )
+    finally:
+        set_logger(None)
+    assert any("on_feedback is ignored" in message for message in messages)
 
 
 def test_send_feedback_result_shape():
