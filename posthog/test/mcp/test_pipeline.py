@@ -184,8 +184,9 @@ def test_sanitize_redacts_large_base64():
         ("Error: see resource:guide.", "Error: see resource:guide."),
         ("Meet at12:30 today", "Meet at12:30 today"),
         ("resource:guide", "resource:guide"),
-        # A colon-suffixed word in front of a URL is prose, not part of the
-        # address: the authority is where the address starts.
+        # A match that holds a prose word in front of the address, or two addresses
+        # run together, is split at the second address and each part sanitized on
+        # its own — otherwise the second one hides in the first one's path.
         (
             "Failed URL:https://fakeuser:fakepass@example.com/doc",
             "Failed URL:https://%5Bredacted%5D@example.com/doc",
@@ -199,9 +200,18 @@ def test_sanitize_redacts_large_base64():
             "a:b:https://fakeuser:fakepass@example.com/doc",
             "a:b:https://%5Bredacted%5D@example.com/doc",
         ),
-        # ... but a URI whose own query carries a URL is not a prefix: parsing it
-        # whole is what redacts its password, and the nested pass handles the
-        # retained `url=` value.
+        (
+            "https://example.com/doc,https://fakeuser:fakepass@other.example.com/doc",
+            "https://example.com/doc,https://%5Bredacted%5D@other.example.com/doc",
+        ),
+        # The closing `)` goes with the redacted trailing field, by the rule above:
+        # punctuation after a rewritten last field may be the credential's own.
+        (
+            "[a](https://example.com/a)[b](https://example.com/b?token=fakesecret)",
+            "[a](https://example.com/a)[b](https://example.com/b?token=%5Bredacted%5D",
+        ),
+        # An authority after the first `?` is a query value, not a second address:
+        # the outer URI is parsed whole, which is what redacts its own password.
         (
             "file:/guide?password=fakepass&url=https://example.com",
             "file:///guide?password=%5Bredacted%5D&url=https%3A%2F%2Fexample.com",

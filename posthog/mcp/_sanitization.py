@@ -11,7 +11,7 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
@@ -56,9 +56,6 @@ _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 # deliberately keeps those, and the field count is already bounded when parsing.
 _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
-# A prose prefix is a run of colon-suffixed words: `URL:`, `a:b:`. Anything else
-# in front of an authority (a `?`, `/`, `=`) belongs to an outer URI, not to prose.
-_PROSE_PREFIX_PATTERN = re.compile(r"(?:[a-z][a-z0-9+.-]{0,63}:)+", re.IGNORECASE)
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
@@ -104,22 +101,18 @@ def _sanitize_urls(text: str, *, nested: bool = True) -> str:
 def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
     if len(value) > _MAX_URL_LENGTH and _URL_AUTHORITY_PATTERN.match(value):
         return _REDACTED_VALUE
-    # A colon-suffixed word in front of a real URL (`Failed URL:https://...`) is
-    # absorbed by the authority-less pattern, and parsing the whole thing puts the
-    # address — userinfo included — in the path, where nothing redacts it. The
-    # address starts where the authority does. This only holds when what precedes
-    # it really is prose: an outer URI whose query carries a URL
-    # (`file:/guide?password=x&url=https://...`) is no prefix at all, and parsing
-    # it whole is what redacts its own credentials.
-    authority = _URL_AUTHORITY_SEARCH.search(value)
-    if (
-        authority
-        and authority.start() > 0
-        and _PROSE_PREFIX_PATTERN.fullmatch(value[: authority.start()])
-    ):
-        return value[: authority.start()] + _sanitize_url(
-            value[authority.start() :], nested=nested, in_prose=in_prose
-        )
+    # One match can hold a prose word in front of the address (`URL:https://...`,
+    # `a:b:https://...`) or two addresses run together (`/doc,https://...`). Either
+    # way the second address begins inside what would parse as the first one's
+    # path, where nothing — its userinfo least of all — is redacted. So the match
+    # is split at that authority and each part sanitized on its own. An authority
+    # AFTER the first `?` or `#` is a query or fragment value instead, which the
+    # field pass already handles (a sensitive key, or the nested pass).
+    split = _split_at_second_address(value)
+    if split is not None:
+        return _sanitize_url(
+            value[:split], nested=nested, in_prose=in_prose
+        ) + _sanitize_url(value[split:], nested=nested, in_prose=in_prose)
     url_text = value.rstrip(_URL_TRAILING_PUNCTUATION) if in_prose else value
     suffix = value[len(url_text) :]
     try:
@@ -169,6 +162,22 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
         )
     except ValueError:
         return _REDACTED_VALUE + suffix
+
+
+def _split_at_second_address(value: str) -> Optional[int]:
+    """Where a second address starts inside ``value``, or None. Each half is
+    strictly shorter than the whole, so the split recursion terminates."""
+    boundary = min(
+        (value.index(char) for char in "?#" if char in value), default=len(value)
+    )
+    return next(
+        (
+            match.start()
+            for match in _URL_AUTHORITY_SEARCH.finditer(value)
+            if 0 < match.start() < boundary
+        ),
+        None,
+    )
 
 
 def _redact_userinfo(netloc: str) -> str:
