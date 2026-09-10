@@ -464,12 +464,29 @@ def test_sanitize_event_redacts_pii_from_intent():
     )
 
 
-def test_sanitize_event_composes_pii_and_token_redaction_on_intent():
-    event = {
-        "user_intent": "Rotating token phc_123456789012345678901234567890 for user carol@example.org."
-    }
-    result = sanitize_event(event)
-    assert result["user_intent"] == "Rotating token [redacted] for user [redacted]."
+@pytest.mark.parametrize(
+    "label, intent, expected",
+    [
+        (
+            "posthog-token-and-email",
+            "Rotating token phc_123456789012345678901234567890 for user carol@example.org.",
+            "Rotating token [redacted] for user [redacted].",
+        ),
+        # PII is stripped before the generic pass rewrites the URL: a rewritten
+        # query percent-encodes `@`, and `email=alice%40example.com` no longer
+        # looks like an email address. The host survives either way.
+        (
+            "email-inside-a-url",
+            "Open https://example.com/?email=alice@example.com&token=fakesecret",
+            "Open https://example.com/?email=%5Bredacted%5D&token=%5Bredacted%5D",
+        ),
+    ],
+)
+def test_sanitize_event_composes_pii_and_token_redaction_on_intent(
+    label: str, intent: str, expected: str
+) -> None:
+    result = sanitize_event({"user_intent": intent})
+    assert result["user_intent"] == expected
 
 
 def test_sanitize_event_does_not_redact_pii_shapes_from_structured_data():

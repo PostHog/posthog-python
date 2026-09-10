@@ -402,13 +402,16 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about
-    # the user. Redact it like any other captured value, then strip structured
-    # PII (emails, phone numbers, IPs, cards, SSNs) rather than shipping it raw
-    # as $mcp_intent. PII redaction is scoped to the intent only — structured
-    # tool parameters and responses often hold the same shapes as legitimate data.
+    # the user. Strip structured PII (emails, phone numbers, IPs, cards, SSNs)
+    # first, while the narration is still raw: the generic pass rewrites any URL
+    # it finds, and a rewritten query percent-encodes `@`, which would hide
+    # `?email=alice@example.com` from the email pattern. Then redact it like any
+    # other captured value. PII redaction is scoped to the intent only —
+    # structured tool parameters and responses often hold the same shapes as
+    # legitimate data.
     if result.get("user_intent") is not None:
-        result["user_intent"] = redact_pii(
-            sanitize_captured_value(result["user_intent"])
+        result["user_intent"] = sanitize_captured_value(
+            redact_pii(result["user_intent"])
         )
 
     if result.get("llm_model") is not None:
